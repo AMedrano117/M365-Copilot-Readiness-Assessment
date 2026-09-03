@@ -1,7 +1,7 @@
 """
 Microsoft Defender for Endpoint - Copilot & Agent Adoption Recommendation
 """
-from Core.new_recommendation import new_recommendation
+from Core.new_recommendation import new_recommendation, NOT_ASSESSED_STATUS
 from Core.friendly_names import get_friendly_sku_name
 
 def get_recommendation(sku_name, status="Success", client=None, defender_client=None, defender_insights=None):
@@ -15,6 +15,8 @@ def get_recommendation(sku_name, status="Success", client=None, defender_client=
     if status == "Success":
         observation = f"{feature_name} is active, protecting Copilot workloads"
         recommendation = ""
+        effective_status = status
+        effective_priority = ""
         
         # Enrich with incident and device metrics from pre-computed insights
         if defender_insights and defender_insights.available:
@@ -35,9 +37,17 @@ def get_recommendation(sku_name, status="Success", client=None, defender_client=
             
             if metrics:
                 observation += ". " + ", ".join(metrics)
-            else:
-                # Clean status - no incidents detected
+            elif defender_insights.source_was_read('incidents', 'alerts'):
+                # Clean status - the incident feed was read and came back empty
                 observation += ". No security incidents detected"
+            else:
+                # Incident data was never retrieved - do not report unread as clean
+                observation += ". Endpoint incident data could not be retrieved, so device threat status is unverified"
+                recommendation = ("Grant the assessment read access to Defender incidents and rerun, or review "
+                                  "endpoint incidents directly at security.microsoft.com. Devices where staff "
+                                  "use Copilot should be confirmed clean before broad rollout.")
+                effective_status = NOT_ASSESSED_STATUS
+                effective_priority = "Medium"
         
         return new_recommendation(
             service="Defender",
@@ -46,7 +56,8 @@ def get_recommendation(sku_name, status="Success", client=None, defender_client=
             recommendation=recommendation,
             link_text="Defender for Endpoint",
             link_url="https://learn.microsoft.com/microsoft-365/security/defender-endpoint/",
-            status=status
+            priority=effective_priority or "Medium",
+            status=effective_status
         )
     
     return new_recommendation(

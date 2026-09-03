@@ -1,7 +1,7 @@
 """
 Microsoft Teams - Copilot & Agent Adoption Recommendation
 """
-from Core.new_recommendation import new_recommendation
+from Core.new_recommendation import new_recommendation, NOT_ASSESSED_STATUS, CATEGORY_SCAN_COVERAGE
 from Core.friendly_names import get_friendly_sku_name
 from datetime import datetime, timedelta
 
@@ -103,7 +103,7 @@ async def get_recommendation(sku_name, status="Success", client=None, m365_insig
                 service="M365",
                 feature=f"{feature_name} - Activity Baseline",
                 observation="Teams activity data available, providing baseline metrics for measuring Copilot adoption impact",
-                recommendation="Establish baseline metrics before Copilot deployment: active users per day, meetings per user, chat messages per user, avg meeting duration. After Copilot rollout, measure impact: reduction in meeting time (via summaries), increase in async collaboration (via chat recaps), time saved on status updates. Target 20-30% reduction in meeting time and 15-20% increase in productive collaboration time. Use Teams analytics to identify power users vs low adopters, correlate with Copilot usage patterns.",
+                recommendation="Record active users, meetings, messages, meeting duration, and task-specific time before the pilot. Compare the same measures after rollout and use the tenant's own baseline and agreed success criteria rather than assumed industry percentages.",
                 link_text="Teams Activity Reports",
                 link_url="https://learn.microsoft.com/microsoft-365/admin/activity-reports/microsoft-teams-user-activity",
                 priority="Medium",
@@ -116,11 +116,12 @@ async def get_recommendation(sku_name, status="Success", client=None, m365_insig
                 service="M365",
                 feature=f"{feature_name} - Activity Baseline",
                 observation=f"Teams activity baseline could not be verified ({error_msg})",
-                recommendation="Manually establish Teams activity baseline in Microsoft 365 admin center > Reports > Microsoft Teams > User Activity. Before deploying Copilot, record: daily active users, meetings per user per week, chat messages per user, average meeting duration, time in meetings per user. After Copilot rollout, track same metrics to quantify productivity gains. Expect 20-30% reduction in meeting time (summaries reduce need for attendance), 15% increase in async work (chat becomes more effective), and improved meeting quality scores.",
+                recommendation="Optionally establish a Teams activity baseline in Microsoft 365 admin center before the pilot. Record measures tied to the approved use cases, then compare the same measures after rollout. This collection gap does not by itself block deployment.",
                 link_text="Teams Analytics Guide",
                 link_url="https://learn.microsoft.com/microsoft-365/admin/activity-reports/microsoft-teams-user-activity",
                 priority="Medium",
-                status="Success"
+                status="Insight",
+                disposition="Opportunity"
             )
     
     # NEW: Teams Activity Insights (if m365_insights available)

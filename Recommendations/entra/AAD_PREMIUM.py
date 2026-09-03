@@ -1,8 +1,9 @@
 """
 Microsoft Entra ID P1 - Copilot & Agent Adoption Recommendation
 """
-from Core.new_recommendation import new_recommendation
+from Core.new_recommendation import new_recommendation, NOT_ASSESSED_STATUS
 from Core.friendly_names import get_friendly_sku_name
+from .entra_insights import get_ca_recommendation
 
 def get_recommendation(sku_name, status="Success", client=None, entra_insights=None):
     """
@@ -49,7 +50,7 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
                 observation += ". " + ", ".join(metrics)
             
             # Generate proactive recommendations based on findings
-            recommendation_text = entra_insights.get('ca_recommendation', '')
+            recommendation_text = get_ca_recommendation(entra_insights)
         
         # Primary license check observation
         recommendations.append(new_recommendation(
@@ -66,7 +67,9 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
         if entra_insights and entra_insights.get('available'):
             # Observation 1: Conditional Access policy coverage
             total_policies = ca_metrics.get('total_policies', 0)
-            copilot_policies = ca_metrics.get('copilot_policies', 0)
+            require_mfa = ca_metrics.get('require_mfa', 0)
+            require_compliant_device = ca_metrics.get('require_compliant_device', 0)
+            block_legacy_auth = ca_metrics.get('block_legacy_auth', 0)
             
             if total_policies == 0:
                 # Action Required: No CA policies
@@ -80,24 +83,26 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
                     priority="High",
                     status="Action Required"
                 ))
-            elif copilot_policies == 0:
-                # Action Required: No Copilot-specific policies
+            elif not any((require_mfa, require_compliant_device, block_legacy_auth)):
+                # The resource name is not a reliable test of protection. Evaluate the controls
+                # detected in the policy inventory instead of requiring a policy named Copilot.
                 recommendations.append(new_recommendation(
                     service="Entra",
                     feature=feature_name,
-                    observation=f"{total_policies} Conditional Access policy(ies) configured, but none specifically target Copilot applications",
-                    recommendation="Create Copilot-specific Conditional Access policies targeting Microsoft 365 Copilot and Graph Connector applications. Apply stricter controls for AI access: require compliant devices, trusted locations, and MFA. Consider blocking Copilot access from unmanaged devices to prevent data exfiltration.",
-                    link_text="Conditional Access for Copilot",
+                    observation=f"{total_policies} Conditional Access policy(ies) were found, but the inventory did not detect MFA, compliant-device, or legacy-authentication controls",
+                    recommendation="Review policy assignments and grant controls using report-only mode. Protect Microsoft 365 and other Entra-integrated AI resources through appropriately scoped Conditional Access policies; do not rely on an application name containing 'Copilot' as proof of coverage.",
+                    link_text="Conditional Access target resources",
                     link_url="https://learn.microsoft.com/entra/identity/conditional-access/concept-conditional-access-cloud-apps",
                     priority="Medium",
                     status="Action Required"
                 ))
             else:
-                # Success: Copilot policies configured
+                # Success: relevant controls were detected. Assignment effectiveness still
+                # requires policy evaluation and is not inferred from a display name.
                 recommendations.append(new_recommendation(
                     service="Entra",
                     feature=feature_name,
-                    observation=f"{copilot_policies} Conditional Access policy(ies) protecting Copilot applications",
+                    observation=f"{total_policies} Conditional Access policy(ies) found; detected controls include {require_mfa} requiring MFA, {require_compliant_device} requiring compliant devices, and {block_legacy_auth} blocking legacy authentication",
                     recommendation="",
                     link_text="Conditional Access Best Practices",
                     link_url="https://learn.microsoft.com/entra/identity/conditional-access/plan-conditional-access",
@@ -108,8 +113,21 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
             total_users = mfa_metrics.get('total_users', 0)
             mfa_enabled = mfa_metrics.get('mfa_enabled_users', 0)
             mfa_percentage = (mfa_enabled / total_users * 100) if total_users > 0 else 0
-            
-            if mfa_percentage < 50:
+
+            if total_users == 0:
+                # No denominator means the MFA registration report was not readable. Reporting
+                # "0 of 0 users (0.0%)" as a finding invents a metric that was never measured.
+                recommendations.append(new_recommendation(
+                    service="Entra",
+                    feature=feature_name,
+                    observation="MFA enrollment could not be determined - the authentication methods registration report returned no users",
+                    recommendation="Grant the assessment Reports.Read.All and UserAuthenticationMethod.Read.All, then rerun. Until MFA coverage is measured, Copilot access cannot be assumed protected against credential theft. Meanwhile, review coverage directly in Entra ID > Authentication methods > Registration.",
+                    link_text="Authentication Methods Activity Report",
+                    link_url="https://learn.microsoft.com/entra/identity/authentication/howto-authentication-methods-activity",
+                    priority="High",
+                    status=NOT_ASSESSED_STATUS
+                ))
+            elif mfa_percentage < 50:
                 # Action Required: Low MFA adoption
                 recommendations.append(new_recommendation(
                     service="Entra",
@@ -194,28 +212,30 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
                 method_text = f" ({', '.join(method_details)})" if method_details else ""
                 
                 if passwordless_rate < 10:
-                    # Action Required: Very low passwordless adoption
+                    # Valuable identity hardening, but not a standalone AI deployment gate.
                     recommendations.append(new_recommendation(
                         service="Entra",
                         feature=feature_name,
-                        observation=f"Only {passwordless_rate:.1f}% of users ({total_passwordless}{method_text}) use passwordless authentication, leaving Copilot vulnerable to password attacks",
-                        recommendation="Deploy passwordless authentication (FIDO2 security keys, Windows Hello for Business, or Microsoft Authenticator app) to eliminate password-based attacks targeting Copilot access. Passwordless methods are phishing-resistant and significantly reduce credential theft risks. Use Conditional Access to require passwordless auth for high-value resources like Copilot. Start with pilot groups and expand based on user feedback.",
+                        observation=f"{passwordless_rate:.1f}% of users ({total_passwordless}{method_text}) use passwordless authentication",
+                        recommendation="Plan phishing-resistant authentication for administrators and high-risk users first, then expand based on risk and user readiness. Evaluate effective MFA and Conditional Access separately.",
                         link_text="Deploy Passwordless Authentication",
                         link_url="https://learn.microsoft.com/entra/identity/authentication/concept-authentication-passwordless",
                         priority="Medium",
-                        status="Action Required"
+                        status="Insight",
+                        disposition="Opportunity"
                     ))
                 elif passwordless_rate < 50:
-                    # Action Required: Moderate passwordless adoption
+                    # Optional hardening opportunity, not a standalone AI readiness gate.
                     recommendations.append(new_recommendation(
                         service="Entra",
                         feature=feature_name,
                         observation=f"{passwordless_rate:.1f}% of users ({total_passwordless}{method_text}) use passwordless authentication, making progress toward phishing-resistant Copilot access",
-                        recommendation=f"Continue passwordless rollout to reach 80%+ adoption. Focus on eliminating password-based authentication for Copilot users. Use Temporary Access Pass (TAP) to onboard users to Windows Hello or FIDO2. Consider requiring passwordless for executives and high-risk users accessing sensitive AI capabilities.",
+                        recommendation="Continue risk-based rollout of phishing-resistant authentication. Prioritize administrators and users with access to sensitive data; use Temporary Access Pass for onboarding where appropriate.",
                         link_text="Passwordless Deployment Guide",
                         link_url="https://learn.microsoft.com/entra/identity/authentication/howto-authentication-passwordless-deployment",
                         priority="Medium",
-                        status="Action Required"
+                        status="Insight",
+                        disposition="Opportunity"
                     ))
                 else:
                     # Success: High passwordless adoption
@@ -238,28 +258,30 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
                 groups_with_errors = group_metrics.get('groups_with_errors', 0)
                 
                 if copilot_groups == 0 and total_license_groups == 0:
-                    # Action Required: No group-based licensing
+                    # Operational optimization, not a security or AI prerequisite.
                     recommendations.append(new_recommendation(
                         service="Entra",
                         feature=feature_name,
-                        observation="No group-based licensing configured - Copilot licenses likely assigned manually to individual users",
-                        recommendation="Implement group-based licensing to automate Copilot license assignment and improve governance. Manual license assignment: 1) Creates administrative overhead for every new Copilot user, 2) Increases risk of orphaned licenses when users leave, 3) Lacks audit trail for compliance, 4) Cannot leverage dynamic groups for role-based access. Create security groups for Copilot users (e.g., 'Copilot-Sales', 'Copilot-Finance') and assign M365 licenses to groups. Use dynamic groups with rules like 'department equals Sales' to automatically assign/remove licenses based on user attributes. Configure license inheritance to cascade Copilot access to nested groups. This enables self-service access (users get Copilot when added to group), improves license reclamation, and provides clear governance model.",
+                        observation="No group-based license assignments were returned; individual assignment may be in use",
+                        recommendation="Consider group-based licensing if it improves joiner, mover, leaver administration and license reclamation. This is an operational choice, not proof of weak access control.",
                         link_text="Group-Based Licensing",
                         link_url="https://learn.microsoft.com/entra/identity/users/licensing-groups-assign",
                         priority="Medium",
-                        status="Action Required"
+                        status="Insight",
+                        disposition="Opportunity"
                     ))
                 elif copilot_groups == 0:
-                    # Action Required: Group licensing exists but not for Copilot
+                    # Operational optimization, not a security or AI prerequisite.
                     recommendations.append(new_recommendation(
                         service="Entra",
                         feature=feature_name,
                         observation=f"{total_license_groups} group(s) use license assignment, but none configured for Copilot licenses",
-                        recommendation=f"Extend group-based licensing to Copilot license management. You have {dynamic_groups} dynamic group(s) - leverage these for automated Copilot access. Create dedicated groups for Copilot users by department, role, or project. Benefits: 1) Automatic license assignment when users join groups, 2) Automatic removal when users transfer/leave, 3) Clear audit trail for compliance reviews, 4) Simplified license optimization and cost management. Start with pilot group for early adopters, then expand based on business units.",
+                        recommendation=f"Consider using the existing {dynamic_groups} dynamic group(s) to automate Copilot license lifecycle where membership rules match approved use cases.",
                         link_text="Assign Copilot Licenses to Groups",
                         link_url="https://learn.microsoft.com/entra/identity/users/licensing-groups-assign",
                         priority="Medium",
-                        status="Action Required"
+                        status="Insight",
+                        disposition="Opportunity"
                     ))
                 elif groups_with_errors > 0:
                     # Action Required: License assignment errors

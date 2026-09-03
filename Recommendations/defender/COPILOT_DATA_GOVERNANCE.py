@@ -257,6 +257,7 @@ def get_recommendation(purview_client=None, defender_client=None, defender_insig
         priority=importance,
         link_text="Purview for Copilot",
         link_url="https://learn.microsoft.com/purview/ai-microsoft-purview-copilot",
+        disposition="Reference",
         evidence_key="purview_policy_detail",
         evidence_summary="See Purview Policy Detail for the exact labels, policies, and governance objects reviewed for this data governance finding."
     )

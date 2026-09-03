@@ -1,6 +1,6 @@
 import asyncio
 from .get_recommendation import get_recommendation
-from .service_categorization import determine_service_type
+from .service_categorization import determine_service_type, resolve_plan_statuses
 from Recommendations.defender.defender_insights import DefenderInsights
 import sys
 from .spinner import get_timestamp, _stdout_lock
@@ -121,6 +121,10 @@ async def get_defender_info(client, defender_client=None, services_and_licenses=
     async_tasks = []
     added_features = set()
     
+    # Resolve each plan to its best status across every SKU: a plan disabled in one SKU
+    # but active in another is available to the tenant.
+    resolved_plans = resolve_plan_statuses(defender_plans)
+
     for lic in defender_plans:
         sku_name = lic.get('sku_part_number', 'Unknown')
         for plan in lic.get('service_plans', []):
@@ -135,7 +139,9 @@ async def get_defender_info(client, defender_client=None, services_and_licenses=
                 continue
             added_features.add(plan_name)
             
-            status = plan.get('status', 'Success')
+            resolution = resolved_plans.get(plan_name, {})
+            status = resolution.get('status', plan.get('status', 'Success'))
+            sku_name = resolution.get('sku_name', sku_name)
             # Generate recommendations for all service plans
             # Pass defender_client and defender_insights to enable API data enrichment
             rec = get_recommendation('defender', plan_name, sku_name, status, client=client, defender_client=defender_client, defender_insights=defender_insights)
@@ -146,18 +152,20 @@ async def get_defender_info(client, defender_client=None, services_and_licenses=
             else:
                 # Handle sync recommendations immediately
                 if isinstance(rec, list):
-                    recommendations.extend(rec)
+                    recommendations.extend(item for item in rec if item)
                 else:
-                    recommendations.append(rec)
+                    if rec:
+                        recommendations.append(rec)
     
     # Run all async recommendations in parallel
     if async_tasks:
         results = await asyncio.gather(*async_tasks)
         for result in results:
             if isinstance(result, list):
-                recommendations.extend(result)
+                recommendations.extend(item for item in result if item)
             else:
-                recommendations.append(result)
+                if result:
+                    recommendations.append(result)
     
     # ========== COPILOT-SPECIFIC RECOMMENDATIONS ==========
     # Generate cross-cutting Copilot security assessments that leverage

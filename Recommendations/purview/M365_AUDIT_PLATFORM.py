@@ -48,6 +48,7 @@ async def get_recommendation(sku_name, status="Success", client=None, purview_cl
                     service="Purview",
                     feature=f"{feature_name} - Audit Status",
                     observation=f"Audit logging ENABLED (Unified: Yes, Admin: {'Yes' if admin_enabled else 'No'}) - Copilot activities are logged",
+                    finding_key="purview.audit.state",
                     recommendation="Verify Copilot event logging: 1) Search audit log in Purview for 'Copilot' activities, 2) Confirm events captured: file access by Copilot, prompt submissions, AI responses with sensitive data, 3) Set retention to match compliance requirements (default 90 days, up to 10 years with Advanced Auditing), 4) Create alerts: unusual Copilot usage volumes, access to highly confidential content, after-hours AI activity. Export logs to SIEM for security correlation.",
                     link_text="Search Copilot Audit Logs",
                     link_url="https://learn.microsoft.com/purview/audit-log-search",

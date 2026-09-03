@@ -16,7 +16,7 @@ async def get_recommendation(sku_name, status="Success", client=None, purview_cl
         license_rec = new_recommendation(
             service="Purview",
             feature=feature_name,
-            observation=f"{feature_name} is active in {friendly_sku}, preventing Copilot from crossing compliance boundaries",
+            observation=f"{feature_name} is licensed through {friendly_sku}; licensing alone does not confirm that any separation policy is active",
             recommendation="",
             link_text="Information Barriers for AI Compliance",
             link_url="https://learn.microsoft.com/purview/information-barriers",
@@ -26,12 +26,13 @@ async def get_recommendation(sku_name, status="Success", client=None, purview_cl
         license_rec = new_recommendation(
             service="Purview",
             feature=feature_name,
-            observation=f"{feature_name} is {status} in {friendly_sku}, risking compliance violations through AI data sharing",
-            recommendation=f"Enable {feature_name} to enforce ethical walls that Copilot must respect. In financial services, legal firms, and other regulated industries, certain employees cannot share information (e.g., M&A teams working on competing deals, research and trading divisions). Information Barriers ensure that when Copilot searches for content or generates responses, it only accesses data the user is permitted to see, preventing the AI from becoming a conduit for inappropriate information flow. Critical for Copilot adoption in regulated environments.",
+            observation=f"{feature_name} is {status} in {friendly_sku}; applicability depends on documented ethical-wall or separation requirements",
+            recommendation="If the organization has regulatory or contractual separation requirements, validate whether Information Barriers is the appropriate control and scope it to those segments. Do not treat this optional capability as a universal AI prerequisite.",
             link_text="Information Barriers for AI Compliance",
             link_url="https://learn.microsoft.com/purview/information-barriers",
-            priority="High",
-            status=status
+            priority="Medium",
+            status="Insight",
+            disposition="Opportunity"
         )
     
     # Check deployment status from PowerShell data
@@ -64,12 +65,13 @@ async def get_recommendation(sku_name, status="Success", client=None, purview_cl
             deployment_rec = new_recommendation(
                     service="Purview",
                     feature=f"{feature_name} - Policy Status",
-                    observation="Information Barriers license active but NO policies configured - Copilot can cross ethical walls",
-                    recommendation="Deploy Information Barrier policies for Copilot compliance. Define segments and barriers: 1) M&A teams on competing deals cannot share via Copilot, 2) Research/trading divisions maintain ethical wall through AI, 3) Legal teams on opposing cases keep data separated, 4) Regulatory compliance groups in financial services. Without barriers, Copilot becomes information leak vector across restricted groups. Configure in Purview > Information barriers.",
+                    observation="Information Barriers is licensed but no policies are configured; this is a gap only when the organization has defined separation requirements",
+                    recommendation="Confirm whether ethical-wall, conflict-of-interest, or regulated separation requirements apply. If they do, design and test scoped Information Barrier segments before affected users receive AI access.",
                     link_text="Configure Information Barriers",
                     link_url="https://learn.microsoft.com/purview/information-barriers-policies",
-                    priority="High",
-                    status="Success"
+                    priority="Medium",
+                    status="Insight",
+                    disposition="Opportunity"
             )
             deployment_recs.append(deployment_rec)
     

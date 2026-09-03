@@ -113,18 +113,20 @@ async def get_copilot_studio_info(client, services_and_licenses=None, pp_client=
             else:
                 # Handle sync recommendations immediately
                 if isinstance(rec, list):
-                    recommendations.extend(rec)
+                    recommendations.extend(item for item in rec if item)
                 else:
-                    recommendations.append(rec)
+                    if rec:
+                        recommendations.append(rec)
     
     # Run all async recommendations in parallel
     if async_tasks:
         results = await asyncio.gather(*async_tasks)
         for result in results:
             if isinstance(result, list):
-                recommendations.extend(result)
+                recommendations.extend(item for item in result if item)
             else:
-                recommendations.append(result)
+                if result:
+                    recommendations.append(result)
     
     return {
         'available': True,

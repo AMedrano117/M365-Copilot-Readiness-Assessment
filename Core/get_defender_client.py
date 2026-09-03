@@ -45,7 +45,13 @@ async def get_defender_client(tenant_id, graph_client):
             self.available = False
             self.graph_security_available = False
             self.defender_api_available = False
-            
+
+            # Per-dataset fetch outcome, keyed by Graph Security task name (alerts, incidents,
+            # risky_users, ...). True only when that specific query returned data. Without this
+            # a failed query is indistinguishable from a genuinely empty result, and downstream
+            # recommendations report "no threats detected" when nothing was ever read.
+            self.data_sources = {}
+
             # Activation status flags
             self.activation_needed = False
             self.activation_message = ""
@@ -204,6 +210,7 @@ async def get_defender_client(tenant_id, graph_client):
                     with _stdout_lock:
                         print(f"[{get_timestamp()}] ⚠️  Graph Security API ({key}): HTTP {e.status_code}")
                 graph_results[key] = None
+                client.data_sources[key] = False
             elif isinstance(result, Exception):
                 error_msg = str(result)
                 if 'not provisioned' in error_msg.lower():
@@ -214,8 +221,10 @@ async def get_defender_client(tenant_id, graph_client):
                     with _stdout_lock:
                         print(f"[{get_timestamp()}] ⚠️  Graph Security API ({key}): {str(result)[:100]}")
                 graph_results[key] = None
+                client.data_sources[key] = False
             else:
                 graph_results[key] = result
+                client.data_sources[key] = True
                 client.graph_security_available = True
         
         # Progress display disabled
@@ -634,11 +643,13 @@ async def get_defender_client(tenant_id, graph_client):
                     with _stdout_lock:
                         print(f"[{get_timestamp()}] ⚠️  Defender API ({key}): {str(response)[:100]}")
                 defender_results[key] = None
+                client.data_sources[key] = False
             elif hasattr(response, 'status_code'):
                 if response.status_code == 200:
                     json_data = response.json()
                     defender_results[key] = json_data
                     client.defender_api_available = True
+                    client.data_sources[key] = True
                     
                     # Count items returned
                     item_count = 0
@@ -652,26 +663,32 @@ async def get_defender_client(tenant_id, graph_client):
                     
                     print(f"[{get_timestamp()}] ✓ Defender API ({key}): Success - {item_count} items returned")
                 elif response.status_code == 403:
-                    # 403 Forbidden - track silently (recommendation will report this)
-                    client.activation_needed = True
-                    if not client.activation_message:
-                        client.activation_message = "Microsoft Defender for Endpoint API access denied - likely no devices onboarded"
+                    # A forbidden response proves only that this collector could not read the
+                    # endpoint. It does not prove that Defender is unprovisioned or that no
+                    # devices are onboarded.
                     defender_results[key] = None
+                    client.data_sources[key] = False
                 elif response.status_code == 404:
                     # 404 Not Found - track silently (recommendation will report this)
                     client.missing_features.append(key)
                     defender_results[key] = None
+                    client.data_sources[key] = False
                 else:
                     defender_results[key] = None
+                    client.data_sources[key] = False
             else:
                 defender_results[key] = None
+                client.data_sources[key] = False
         
         # Progress display disabled
         successful_defender = sum(1 for v in defender_results.values() if v is not None and not isinstance(v, Exception))
         
         # Show single summary message
         if successful_defender == 0:
-            print(f"[{get_timestamp()}] ⚠️  Defender API: 0/{len(defender_tasks)} datasets fetched (permissions not granted or no devices onboarded)")
+            print(
+                f"[{get_timestamp()}] ⚠️  Defender API: 0/{len(defender_tasks)} datasets fetched "
+                "(collector access unavailable; no tenant-state conclusion inferred)"
+            )
         else:
             print(f"[{get_timestamp()}] ✓ Defender API: {successful_defender}/{len(defender_tasks)} datasets fetched")
         

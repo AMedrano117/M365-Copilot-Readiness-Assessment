@@ -48,6 +48,7 @@ async def get_recommendation(sku_name, status="Success", client=None, purview_cl
                     service="Purview",
                     feature=f"{feature_name} - Analytics Usage",
                     observation=f"{total_cases} eDiscovery cases configured ({active_cases} active) - Analytics available for review",
+                    finding_key="purview.ediscovery.case_configuration",
                     recommendation=f"Use eDiscovery Analytics on Copilot content: 1) Apply themes to categorize Copilot meeting summaries by topic, 2) Use near-duplicate detection on AI-generated reports, 3) Analyze email threads that reference Copilot outputs, 4) Identify key custodians based on Copilot usage patterns. This reduces manual review time when AI content is part of legal discovery. Review in Purview > eDiscovery > Premium > Analytics.",
                     link_text="eDiscovery Analytics",
                     link_url="https://learn.microsoft.com/purview/ediscovery-analyze-data-in-review-set",
@@ -59,11 +60,11 @@ async def get_recommendation(sku_name, status="Success", client=None, purview_cl
             deployment_rec = new_recommendation(
                     service="Purview",
                     feature=f"{feature_name} - Analytics Usage",
-                    observation="eDiscovery Analytics license active but NO eDiscovery cases configured",
-                    recommendation="Create eDiscovery cases to preserve Copilot-related content for legal discovery: 1) Place custodians on hold to preserve their Copilot chat history, 2) Search for Teams meeting transcripts analyzed by Copilot, 3) Identify documents created/edited with AI assistance. Use Analytics to find relevant AI interactions faster. Configure in Purview > eDiscovery.",
-                    link_text="Create eDiscovery Cases",
+                    observation="No eDiscovery cases were present at collection time; cases should exist only for active legal or investigation matters",
+                    finding_key="purview.ediscovery.case_configuration",
+                    recommendation="",
+                    link_text="Manage eDiscovery Cases",
                     link_url="https://learn.microsoft.com/purview/ediscovery-create-and-manage-cases",
-                    priority="Medium",
                     status="Success"
             )
             deployment_recs.append(deployment_rec)

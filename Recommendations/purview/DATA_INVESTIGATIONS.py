@@ -58,11 +58,11 @@ async def get_recommendation(sku_name, status="Success", client=None, purview_cl
                 deployment_rec = new_recommendation(
                     service="Purview",
                     feature=f"{feature_name} - Configuration",
-                    observation="Data Investigations license is active but NO eDiscovery cases are configured",
-                    recommendation="Create eDiscovery cases to prepare for Copilot-related security investigations. Set up cases BEFORE incidents occur to establish processes for: 1) Investigating suspicious Copilot usage by compromised accounts, 2) Reconstructing what sensitive data was accessed via AI during security breaches, 3) Identifying users who may have used Copilot to exfiltrate confidential information, 4) Meeting legal/compliance requirements for data access auditing. Create cases in Purview compliance portal > eDiscovery > Standard cases. Include custodians who use Copilot heavily and define search queries that capture AI interactions, generated content, and accessed documents. Use Get-ComplianceCase to verify setup.",
-                    link_text="Create eDiscovery Cases",
+                    observation="No eDiscovery cases were present at collection time; cases should exist only for active legal or investigation matters",
+                    finding_key="purview.ediscovery.case_configuration",
+                    recommendation="",
+                    link_text="Manage eDiscovery Cases",
                     link_url="https://learn.microsoft.com/purview/ediscovery-standard-get-started",
-                    priority="Medium",
                     status="Success"
                 )
                 deployment_recs.append(deployment_rec)

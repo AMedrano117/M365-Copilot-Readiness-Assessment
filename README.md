@@ -1,6 +1,11 @@
-# Automated Readiness Assessment for Microsoft 365 Copilot and Agents
+# Enterprise AI Readiness Assessment for the Microsoft 365 Data Estate
 
-Microsoft 365 Copilot represents a transformative shift in workplace productivity through AI-powered assistance. This automated assessment tool helps organizations evaluate their readiness for deploying Microsoft 365 Copilot and AI agents by analyzing licensing, security posture, compliance configurations, and infrastructure across the M365 ecosystem.
+This automated assessment helps organizations evaluate the Microsoft 365 foundation used by Microsoft 365 Copilot, AI agents, and external AI services that receive or connect to M365 data. It analyzes tenant evidence across identity, content access, data protection, application consent, endpoints, threats, licensing, and adoption.
+
+The report distinguishes actionable tenant conditions from optional adoption opportunities,
+verified controls, and data the assessment could not read. See [METHODOLOGY.md](METHODOLOGY.md)
+for decision rules, evidence standards, and the boundary for ChatGPT, Claude, Cursor, and other
+external AI providers.
 
 ## Assessing Copilot Readiness
 
@@ -67,11 +72,18 @@ There are multiple design area evaluations implemented in Automated Readiness As
 
 ## Assessment Report
 
-The assessment generates detailed reports in both CSV and Excel formats, providing a comprehensive view of your Microsoft 365 Copilot readiness across all evaluated service areas:
+The assessment generates a decision-oriented HTML report and detailed CSV/Excel evidence. The
+HTML report leads with deployment actions; inventory and engineer detail remain available without
+overwhelming the main decision:
 
 ![Assessment Report Output](Media/ReportHTMLOutput1.png)
 
 The report includes:
+- **Disposition**: Action, Opportunity, Assurance, Coverage, or Reference
+- **Readiness Stage**: Before pilot, before broad rollout, pilot condition, optimize, or maintain
+- **Impact Area**: Identity, data protection, content access, endpoint, threat, agent, adoption, or licensing
+- **AI Applicability**: M365 Copilot, AI agents/connected apps, or all AI using M365 data
+- **Evidence Basis and Confidence**: Tenant evidence, tenant observation, license signal, or not verified
 - **Service Area**: M365, Entra, Defender, Purview, Power Platform, or Copilot Studio
 - **Feature**: Configuration domain (Licensing, Security, Compliance, Governance)
 - **Status**: Current state (Compliant, Warning, Not Configured)
@@ -80,6 +92,17 @@ The report includes:
 - **Recommendation**: Specific action to improve Copilot readiness
 
 Reports are timestamped (e.g., `m365_recommendations_20260106_143106.csv`) to track progress across multiple assessment runs.
+
+### Data exposure and oversharing
+
+The Data Exposure service analyzes completed SharePoint Advanced Management Data Access
+Governance and Microsoft Purview DSPM exports. It checks explicit Anyone, EEEU/Everyone,
+organization-wide, external, potentially overshared, ownerless, sensitive, and unlabeled-content
+signals. It does not infer oversharing from file or site volume.
+
+Because Microsoft runs these scans asynchronously, the tool reuses recent exports and records a
+Coverage item—with enablement, scan, export, and rerun instructions—when a scan is missing, stale,
+unreadable, or undated. See [RUN.md](RUN.md#data-exposure-and-oversharing-reports) for usage.
 
 ## Next Steps
 

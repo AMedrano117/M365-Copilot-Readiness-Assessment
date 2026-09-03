@@ -257,6 +257,7 @@ def get_recommendation(defender_client=None, purview_client=None, defender_insig
         priority=importance,
         link_text="Copilot Security",
         link_url="https://learn.microsoft.com/microsoft-365-copilot/microsoft-365-copilot-security",
+        disposition="Reference",
         evidence_key="app_access_detail;defender_incident_detail;defender_device_detail;purview_policy_detail",
         evidence_summary="See the App Access Detail, Defender Incident Detail, Defender Device Detail, and Purview Policy Detail tabs for the exact objects behind this posture assessment."
     )

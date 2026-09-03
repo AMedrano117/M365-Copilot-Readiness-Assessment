@@ -1,7 +1,7 @@
 """
 Microsoft Defender XDR - Copilot & Agent Adoption Recommendation
 """
-from Core.new_recommendation import new_recommendation
+from Core.new_recommendation import new_recommendation, NOT_ASSESSED_STATUS
 from Core.friendly_names import get_friendly_sku_name
 
 def get_recommendation(sku_name, status="Success", defender_client=None, defender_insights=None):
@@ -15,6 +15,8 @@ def get_recommendation(sku_name, status="Success", defender_client=None, defende
     if status == "Success":
         observation = f"{feature_name} is active, protecting Copilot workloads"
         recommendation = ""
+        effective_status = status
+        effective_priority = ""
         
         # Enrich with XDR security metrics from pre-computed insights
         if defender_insights and defender_insights.available:
@@ -33,9 +35,18 @@ def get_recommendation(sku_name, status="Success", defender_client=None, defende
             
             if metrics:
                 observation += ". " + ", ".join(metrics)
-            else:
-                # Clean status - no incidents or identity risks
+            elif defender_insights.source_was_read('incidents', 'alerts'):
+                # Clean status - the incident feed was read and came back empty
                 observation += ". No security incidents detected"
+            else:
+                # Incident data was never retrieved - do not report unread as clean
+                observation += ". Security incident data could not be retrieved, so threat status is unverified"
+                recommendation = ("Grant the assessment read access to Microsoft Defender XDR incidents "
+                                  "(SecurityIncident.Read.All) and rerun, or review incidents directly at "
+                                  "security.microsoft.com. Copilot readiness cannot be signed off while the "
+                                  "incident feed is unreadable.")
+                effective_status = NOT_ASSESSED_STATUS
+                effective_priority = "Medium"
         
         return new_recommendation(
             service="Defender",
@@ -44,7 +55,8 @@ def get_recommendation(sku_name, status="Success", defender_client=None, defende
             recommendation=recommendation,
             link_text="Defender XDR",
             link_url="https://learn.microsoft.com/microsoft-365/security/defender/",
-            status=status
+            priority=effective_priority or "Medium",
+            status=effective_status
         )
     
     return new_recommendation(

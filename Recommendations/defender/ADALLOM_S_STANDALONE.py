@@ -32,7 +32,8 @@ def get_recommendation(sku_name, status="Success", client=None, defender_client=
             recommendation=recommendation,
             link_text="Cloud Apps",
             link_url="https://learn.microsoft.com/defender-cloud-apps/what-is-defender-for-cloud-apps",
-            status=status
+            status=status,
+            finding_key="entra.app_consent.high_impact_grants"
         )
     
     return new_recommendation(

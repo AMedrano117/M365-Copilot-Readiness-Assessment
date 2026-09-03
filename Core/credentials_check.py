@@ -54,9 +54,12 @@ def check_credentials(env_file=None):
         missing.append('TENANT_ID')
     if not os.environ.get('CLIENT_ID'):
         missing.append('CLIENT_ID')
-    if not os.environ.get('CLIENT_SECRET'):
-        missing.append('CLIENT_SECRET')
-    
+
+    # Either auth method is acceptable. Certificate auth is preferred because it avoids
+    # keeping a long-lived secret in a plaintext file.
+    if not (os.environ.get('CERTIFICATE_PATH') or os.environ.get('CLIENT_SECRET')):
+        missing.append('CERTIFICATE_PATH or CLIENT_SECRET')
+
     return missing
 
 
@@ -72,7 +75,9 @@ def validate_credentials_or_exit(get_timestamp_func, env_file=None):
         print()
         print("To use this tool, you need to configure Azure credentials:")
         print("  1. Run: .\\setup-service-principal.ps1")
-        print("  2. Or create an environment file with TENANT_ID, CLIENT_ID, and CLIENT_SECRET")
+        print("  2. Or create an environment file with TENANT_ID, CLIENT_ID, and either")
+        print("     CERTIFICATE_PATH (plus CERTIFICATE_PASSWORD if the file is protected)")
+        print("     or CLIENT_SECRET")
         if env_file:
             print(f"  3. Requested environment file: {resolve_env_file_path(env_file)}")
         print()

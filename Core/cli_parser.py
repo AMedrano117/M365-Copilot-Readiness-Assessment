@@ -26,6 +26,7 @@ Examples:
   python main.py --services M365 Entra Defender
   python main.py --tenant-id "your-tenant-id" --services Purview
   python main.py --env-file .env.prod --services Purview
+  python main.py --sam-report sam-permissions.csv --dspm-report dspm-assessment.csv
         '''
     )
     parser.add_argument(
@@ -62,6 +63,20 @@ Examples:
         choices=['excel', 'csv', 'both'],
         default='excel',
         help='Recommendation export format: excel=Excel primary with CSV fallback if needed, csv=CSV only, both=generate both Excel and CSV'
+    )
+    parser.add_argument(
+        '--sam-report',
+        action='append',
+        default=[],
+        metavar='PATH',
+        help='SharePoint Advanced Management Data Access Governance export. Repeat for multiple reports or supply a directory.'
+    )
+    parser.add_argument(
+        '--dspm-report',
+        action='append',
+        default=[],
+        metavar='PATH',
+        help='Microsoft Purview DSPM data-risk assessment export. Repeat for multiple reports or supply a directory.'
     )
     parser.add_argument(
         '--purview-auth-mode',

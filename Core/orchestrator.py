@@ -31,7 +31,15 @@ async def resolve_tenant_name(client, tenant_id):
         pass
     return tenant_id
 
-async def orchestrate(tenant_id, services=None, interactive_auth='auto', open_html_report=False, report_format='excel'):
+async def orchestrate(
+    tenant_id,
+    services=None,
+    interactive_auth='auto',
+    open_html_report=False,
+    report_format='excel',
+    sam_report_paths=None,
+    dspm_report_paths=None,
+):
     """Orchestrate gathering of service information and service plans.
     
     Args:
@@ -102,7 +110,10 @@ async def orchestrate(tenant_id, services=None, interactive_auth='auto', open_ht
             copilot_studio_info,
             tenant_name=tenant_name,
             open_html_report=open_html_report,
-            report_format=report_format
+            report_format=report_format,
+            sam_report_paths=sam_report_paths,
+            dspm_report_paths=dspm_report_paths,
+            data_exposure_enabled=(run_m365 or run_purview),
         )
         
     except CredentialUnavailableError as e:

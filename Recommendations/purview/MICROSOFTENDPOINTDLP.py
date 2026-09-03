@@ -16,22 +16,27 @@ async def get_recommendation(sku_name, status="Success", client=None, purview_cl
         license_rec = new_recommendation(
             service="Purview",
             feature=feature_name,
-            observation=f"{feature_name} is active in {friendly_sku}, protecting against data exfiltration through Copilot outputs",
+            observation=f"{feature_name} is licensed through {friendly_sku}; licensing alone does not confirm endpoint or browser enforcement",
             recommendation="",
             link_text="Endpoint DLP for Copilot Security",
             link_url="https://learn.microsoft.com/purview/endpoint-dlp-learn-about",
-            status=status
+            status=status,
+            impact_area="Endpoint & browser controls",
+            ai_applicability="External and managed AI"
         )
     else:
         license_rec = new_recommendation(
             service="Purview",
             feature=feature_name,
-            observation=f"{feature_name} is {status} in {friendly_sku}, leaving AI-generated sensitive data unprotected on endpoints",
-            recommendation=f"Enable {feature_name} to prevent users from copying sensitive information from Copilot responses to personal email, USB drives, or unapproved cloud storage. When Copilot retrieves confidential data (financial reports, customer PII, trade secrets) and presents it to users, Endpoint DLP ensures that information cannot leave the corporate environment through copy/paste, screenshots, or file transfers. This addresses the unique risk that AI assistants make it very easy to aggregate and exfiltrate large amounts of sensitive data quickly.",
+            observation=f"{feature_name} is {status} in {friendly_sku}; sensitive-data sharing to external AI sites was not protected by this capability",
+            recommendation="If employees may use browser-based or desktop AI services with M365 data, evaluate Endpoint DLP or an equivalent egress control. Confirm device onboarding, browser coverage, supported activities, and tested enforcement before broad use.",
             link_text="Endpoint DLP for Copilot Security",
             link_url="https://learn.microsoft.com/purview/endpoint-dlp-learn-about",
-            priority="High",
-            status=status
+            priority="Medium",
+            status="Insight",
+            disposition="Opportunity",
+            impact_area="Endpoint & browser controls",
+            ai_applicability="External and managed AI"
         )
     
     # Check deployment status from PowerShell data
@@ -52,7 +57,9 @@ async def get_recommendation(sku_name, status="Success", client=None, purview_cl
                     link_text="Manage Endpoint DLP Policies",
                     link_url="https://learn.microsoft.com/purview/endpoint-dlp-using",
                     priority="Low",
-                    status="Success"
+                    status="Success",
+                    impact_area="Endpoint & browser controls",
+                    ai_applicability="External and managed AI"
                 )
                 deployment_recs.append(deployment_rec)
             elif total_policies > 0:
@@ -60,11 +67,13 @@ async def get_recommendation(sku_name, status="Success", client=None, purview_cl
                     service="Purview",
                     feature=f"{feature_name} - Configuration",
                     observation=f"DLP policies exist ({total_policies} total) but NONE are configured for endpoint protection",
-                    recommendation=f"You have {total_policies} DLP policy/policies but none target endpoints. Create endpoint-scoped policies to prevent Copilot data exfiltration: 1) Block users from copying sensitive Copilot responses to USB drives, personal email, or unauthorized cloud storage, 2) Prevent exfiltration when Copilot retrieves customer PII, financial data, or intellectual property, 3) Monitor file transfers of AI-generated documents to personal devices, 4) Restrict printing/screenshots of confidential Copilot outputs. Configure in Purview compliance portal > Data loss prevention > Policies > Create policy > Select 'Devices' location. Apply policies to all Windows endpoints where Copilot is used. Use Get-DlpCompliancePolicy to verify endpoint coverage.",
+                    recommendation=f"Decide which sensitive data may be pasted or uploaded to external AI services, then add tested endpoint/browser DLP coverage for managed devices. Start in audit or warn mode, validate representative browser and file-upload scenarios, and move confirmed high-risk events to blocking. Existing M365-location DLP policies ({total_policies}) do not establish endpoint coverage.",
                     link_text="Create Endpoint DLP Policies",
                     link_url="https://learn.microsoft.com/purview/endpoint-dlp-getting-started",
-                    priority="High",
-                    status="Success"
+                    priority="Medium",
+                    status="Attention Required",
+                    impact_area="Endpoint & browser controls",
+                    ai_applicability="External and managed AI"
                 )
                 deployment_recs.append(deployment_rec)
             else:
@@ -72,11 +81,13 @@ async def get_recommendation(sku_name, status="Success", client=None, purview_cl
                     service="Purview",
                     feature=f"{feature_name} - Configuration",
                     observation="Endpoint DLP license is active but NO DLP policies are configured",
-                    recommendation="Create Endpoint DLP policies BEFORE users start exfiltrating Copilot-generated sensitive data. Deploy policies to: 1) Block copying confidential Copilot responses to personal email, USB drives, or unauthorized cloud storage, 2) Prevent users from taking screenshots of sensitive AI outputs, 3) Restrict printing financial reports or customer data that Copilot aggregates, 4) Monitor file transfers when users export Copilot summaries to personal devices. Start with high-value content types (SSN, credit card numbers, financial data, customer PII) and expand to trade secrets and intellectual property. Configure in Purview compliance portal > Data loss prevention > Policies. Use Get-DlpCompliancePolicy to verify deployment.",
+                    recommendation="Before broad use of external AI services with organizational data, define sensitive-data egress rules and deploy tested endpoint/browser DLP or an equivalent control. Begin with audit or warn mode and validate supported paste and upload scenarios before enforcing blocks.",
                     link_text="Deploy Endpoint DLP",
                     link_url="https://learn.microsoft.com/purview/endpoint-dlp-getting-started",
-                    priority="Critical",
-                    status="Success"
+                    priority="High",
+                    status="Action Required",
+                    impact_area="Endpoint & browser controls",
+                    ai_applicability="External and managed AI"
                 )
                 deployment_recs.append(deployment_rec)
     

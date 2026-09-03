@@ -1,6 +1,6 @@
 import asyncio
 from .get_recommendation import get_recommendation
-from .service_categorization import determine_service_type
+from .service_categorization import determine_service_type, resolve_plan_statuses
 from .get_purview_client import get_purview_client
 import sys
 from .spinner import get_timestamp, _stdout_lock
@@ -96,6 +96,10 @@ async def get_purview_info(client, services_and_licenses=None, purview_client=No
     async_tasks = []
     added_features = set()
     
+    # Resolve each plan to its best status across every SKU: a plan disabled in one SKU
+    # but active in another is available to the tenant.
+    resolved_plans = resolve_plan_statuses(purview_plans)
+
     for lic in purview_plans:
         sku_name = lic.get('sku_part_number', 'Unknown')
         for plan in lic.get('service_plans', []):
@@ -110,7 +114,9 @@ async def get_purview_info(client, services_and_licenses=None, purview_client=No
                 continue
             added_features.add(plan_name)
             
-            status = plan.get('status', 'Success')
+            resolution = resolved_plans.get(plan_name, {})
+            status = resolution.get('status', plan.get('status', 'Success'))
+            sku_name = resolution.get('sku_name', sku_name)
             # Generate recommendations for all service plans
             # Pass purview_client to enable deployment-aware recommendations
             rec = get_recommendation('purview', plan_name, sku_name, status, client=client, purview_client=purview_client)
@@ -121,18 +127,20 @@ async def get_purview_info(client, services_and_licenses=None, purview_client=No
             else:
                 # Handle sync recommendations immediately
                 if isinstance(rec, list):
-                    recommendations.extend(rec)
+                    recommendations.extend(item for item in rec if item)
                 else:
-                    recommendations.append(rec)
+                    if rec:
+                        recommendations.append(rec)
     
     # Run all async recommendations in parallel
     if async_tasks:
         results = await asyncio.gather(*async_tasks)
         for result in results:
             if isinstance(result, list):
-                recommendations.extend(result)
+                recommendations.extend(item for item in result if item)
             else:
-                recommendations.append(result)
+                if result:
+                    recommendations.append(result)
     
     # Build response with deployment data if available
     response = {

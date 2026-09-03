@@ -64,6 +64,7 @@ async def get_recommendation(sku_name, status="Success", client=None, purview_cl
                     service="Purview",
                     feature=f"{feature_name} - Auto-Classification",
                     observation="Azure Information Protection P2 license active but NO sensitivity labels configured for auto-classification",
+                    finding_key="purview.sensitivity_labels.deployed",
                     recommendation="Deploy sensitivity labels with automatic classification rules: 1) Confidential (auto-detect PII in Copilot responses), 2) Financial (keyword-based detection in AI summaries), 3) Trade Secrets (pattern matching for proprietary info), 4) Customer Data (regex for customer identifiers). Without auto-labeling, users manually classify Copilot outputs - often incorrectly. Configure in Purview > Information protection > Auto-labeling.",
                     link_text="Configure Auto-Labeling",
                     link_url="https://learn.microsoft.com/purview/apply-sensitivity-label-automatically",

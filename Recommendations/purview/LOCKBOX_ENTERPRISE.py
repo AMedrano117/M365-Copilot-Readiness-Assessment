@@ -58,12 +58,14 @@ async def get_recommendation(sku_name, status="Success", client=None, purview_cl
                 deployment_rec = new_recommendation(
                     service="Purview",
                     feature=f"{feature_name} - Configuration",
-                    observation="Customer Lockbox license active but feature is DISABLED in tenant settings",
-                    recommendation="Enable Customer Lockbox in Microsoft 365 admin center: Settings > Security & privacy > Customer lockbox > Edit > Enable. Once enabled, Microsoft Support must request your approval before accessing Copilot conversation histories, meeting transcripts, or AI-indexed content during troubleshooting. Designated approvers can accept/reject requests. Critical for maintaining data sovereignty and compliance in regulated industries.",
+                    observation="Customer Lockbox is licensed but disabled; explicit customer approval is not required for eligible Microsoft support access requests",
+                    finding_key="purview.customer_lockbox.state",
+                    recommendation="Evaluate Customer Lockbox against contractual, regulatory, and support-access requirements. Enable it when explicit approval for eligible support access is required; it is not a universal AI deployment prerequisite.",
                     link_text="Enable Customer Lockbox",
                     link_url="https://learn.microsoft.com/purview/customer-lockbox-requests#enable-customer-lockbox",
-                    priority="Medium",
-                    status="Success"
+                    priority="Low",
+                    status="Insight",
+                    disposition="Opportunity"
                 )
                 deployment_recs.append(deployment_rec)
     

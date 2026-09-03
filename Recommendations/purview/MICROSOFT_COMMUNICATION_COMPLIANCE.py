@@ -53,6 +53,7 @@ async def get_recommendation(sku_name, status="Success", client=None, purview_cl
                     service="Purview",
                     feature=f"{feature_name} - Policy Status",
                     observation=f"{total_policies} Communication Compliance policies configured ({len(enabled_policies)} enabled): {policy_names}",
+                    finding_key="purview.communication_compliance.policies",
                     recommendation=f"Verify policies monitor Copilot-specific scenarios: 1) Inappropriate prompts (requesting harmful/fraudulent content), 2) Data exposure attempts (asking Copilot to reveal confidential info), 3) Compliance violations (using AI to draft non-compliant communications), 4) Jailbreak attempts (trying to bypass AI safety controls). Review policies in Purview portal to ensure coverage for AI interactions. Currently {len(enabled_policies)}/{total_policies} policies active.",
                     link_text="Communication Compliance Policies",
                     link_url="https://learn.microsoft.com/purview/communication-compliance-policies",

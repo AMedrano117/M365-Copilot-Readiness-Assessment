@@ -46,6 +46,7 @@ async def get_recommendation(sku_name, status="Success", client=None, purview_cl
                     service="Purview",
                     feature=f"{feature_name} - Configuration",
                     observation="Azure Rights Management (Azure RMS) is ENABLED - documents accessed by Copilot can be encrypted with rights management",
+                    finding_key="purview.rms.state",
                     recommendation="Azure RMS is properly enabled. Ensure rights management policies protect Copilot-accessed content: 1) Configure sensitivity labels to automatically apply encryption when Copilot accesses confidential documents, 2) Set rights policies that persist even when content is summarized or copied via AI, 3) Restrict forwarding/copying of emails containing Copilot-generated sensitive summaries, 4) Apply usage rights (view-only, no-print, no-copy) to documents created through AI assistance. This ensures that even if Copilot makes sensitive data discoverable, rights management controls prevent unauthorized access. Use Get-IRMConfiguration to verify Azure RMS is active and Get-Label to review label-based protection policies.",
                     link_text="Configure Rights Management",
                     link_url="https://learn.microsoft.com/azure/information-protection/configure-policy",
@@ -61,8 +62,8 @@ async def get_recommendation(sku_name, status="Success", client=None, purview_cl
                     recommendation="CRITICAL: Enable Azure Rights Management immediately to activate document encryption capabilities. Without Azure RMS enabled, the AIP Premium P1 license cannot encrypt documents, apply usage rights, or protect sensitive content accessed by Copilot. To enable: Connect to Exchange Online PowerShell and run 'Set-IRMConfiguration -AzureRMSLicensingEnabled $true'. Once enabled, configure sensitivity labels to automatically encrypt: 1) Documents containing financial data that Copilot processes, 2) Emails with customer PII summarized by AI, 3) Confidential files accessed through Copilot searches, 4) AI-generated content containing trade secrets. Azure RMS ensures encrypted content remains protected even when Copilot makes it more discoverable. Use Get-IRMConfiguration to verify activation.",
                     link_text="Enable Azure Rights Management",
                     link_url="https://learn.microsoft.com/azure/information-protection/activate-service",
-                    priority="Critical",
-                    status="Success"
+                    priority="High",
+                    status="Critical"
                 )
                 deployment_recs.append(deployment_rec)
     

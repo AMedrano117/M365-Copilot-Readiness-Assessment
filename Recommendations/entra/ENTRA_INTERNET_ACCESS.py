@@ -2,7 +2,7 @@
 Microsoft Entra Internet Access - Enhanced with Secure Web Gateway Analysis
 Provides license check + traffic monitoring + web filtering for AI services and Copilot.
 """
-from Core.new_recommendation import new_recommendation
+from Core.new_recommendation import new_recommendation, CATEGORY_SCAN_COVERAGE
 from Core.friendly_names import get_friendly_sku_name
 
 def get_recommendation(sku_name, status="Success", client=None, entra_insights=None):
@@ -55,7 +55,8 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
             link_text="Global Secure Access Overview",
             link_url="https://learn.microsoft.com/entra/global-secure-access/overview-what-is-global-secure-access",
             priority="Medium",
-            status=status
+            status=status,
+            disposition="Opportunity"
         ))
     
     # ========================================
@@ -76,7 +77,8 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
                 link_text="What is Global Secure Access?",
                 link_url="https://learn.microsoft.com/entra/global-secure-access/overview-what-is-global-secure-access",
                 priority="Medium",
-                status="Not Licensed"
+                status="Not Licensed",
+                disposition="Opportunity"
             ))
             return observations
         elif network_status == 'PermissionDenied':
@@ -89,7 +91,9 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
                 link_text="NetworkAccessPolicy Permission Reference",
                 link_url="https://learn.microsoft.com/graph/permissions-reference#networkaccesspolicyreadall",
                 priority="Low",
-                status="Permission Required"
+                status="Permission Required",
+                category=CATEGORY_SCAN_COVERAGE,
+                disposition="Coverage"
             ))
             return observations
         elif network_status == 'Error':
@@ -112,7 +116,8 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
                 link_text="Configure Web Content Filtering",
                 link_url="https://learn.microsoft.com/entra/global-secure-access/how-to-configure-web-content-filtering",
                 priority="Medium",
-                status=status
+                status="Insight",
+                disposition="Opportunity"
             ))
         
         # Filtering policies configured - show metrics
@@ -152,7 +157,8 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
                 link_text="Configure Traffic Forwarding",
                 link_url="https://learn.microsoft.com/entra/global-secure-access/how-to-manage-forwarding-profiles",
                 priority="Medium",
-                status=status
+                status="Insight",
+                disposition="Opportunity"
             ))
         
         # Traffic forwarding configured - show what's enabled

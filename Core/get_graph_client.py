@@ -1,4 +1,4 @@
-from azure.identity import ClientSecretCredential
+from azure.identity import CertificateCredential, ClientSecretCredential
 from msgraph import GraphServiceClient
 import httpx
 import logging
@@ -23,8 +23,63 @@ def _load_env(env_path=None):
 
 def _ensure_env_loaded():
     """Load credentials from the selected environment file when needed."""
-    if not all([os.getenv('TENANT_ID'), os.getenv('CLIENT_ID'), os.getenv('CLIENT_SECRET')]):
+    has_secret = bool(os.getenv('CLIENT_SECRET'))
+    has_certificate = bool(os.getenv('CERTIFICATE_PATH'))
+    if not (os.getenv('TENANT_ID') and os.getenv('CLIENT_ID') and (has_secret or has_certificate)):
         _load_env()
+
+
+CREDENTIAL_HELP = (
+    "Missing required environment variables. Ensure the .env file contains TENANT_ID, CLIENT_ID "
+    "and ONE of:\n"
+    "  CERTIFICATE_PATH=<path to .pem or .pfx>   (optionally CERTIFICATE_PASSWORD)\n"
+    "  CLIENT_SECRET=<your-client-secret>\n"
+    "Run setup-service-principal.ps1 to create these credentials."
+)
+
+
+def _build_credential(tenant_id=None):
+    """Build a service principal credential from the environment.
+
+    Certificate auth is used when CERTIFICATE_PATH is set, because it avoids keeping a
+    long-lived secret in a plaintext file. Falls back to CLIENT_SECRET otherwise, so existing
+    setups keep working unchanged.
+
+    Returns:
+        tuple: (credential, auth_method_name)
+    """
+    _ensure_env_loaded()
+
+    tenant_id = tenant_id or os.getenv('TENANT_ID')
+    client_id = os.getenv('CLIENT_ID')
+    certificate_path = os.getenv('CERTIFICATE_PATH')
+    client_secret = os.getenv('CLIENT_SECRET')
+
+    if not (tenant_id and client_id):
+        raise ValueError(CREDENTIAL_HELP)
+
+    if certificate_path:
+        certificate_path = os.path.expanduser(os.path.expandvars(certificate_path))
+        if not os.path.exists(certificate_path):
+            raise ValueError(
+                f"CERTIFICATE_PATH points to a file that does not exist: {certificate_path}"
+            )
+        password = os.getenv('CERTIFICATE_PASSWORD') or None
+        return CertificateCredential(
+            tenant_id=tenant_id,
+            client_id=client_id,
+            certificate_path=certificate_path,
+            password=password.encode() if isinstance(password, str) else password,
+        ), 'certificate'
+
+    if client_secret:
+        return ClientSecretCredential(
+            tenant_id=tenant_id,
+            client_id=client_id,
+            client_secret=client_secret,
+        ), 'client secret'
+
+    raise ValueError(CREDENTIAL_HELP)
 
 # Module-level cache for clients
 _graph_client = None
@@ -50,33 +105,18 @@ async def get_graph_client(tenant_id=None, silent=False):
 
     _ensure_env_loaded()
     
-    # Get credentials from environment
-    tenant_id = tenant_id or os.getenv('TENANT_ID')
-    client_id = os.getenv('CLIENT_ID')
-    client_secret = os.getenv('CLIENT_SECRET')
-    
-    if not all([tenant_id, client_id, client_secret]):
-        raise ValueError(
-            "Missing required environment variables. Ensure .env file contains:\n"
-            "  TENANT_ID=<your-tenant-id>\n"
-            "  CLIENT_ID=<your-app-id>\n"
-            "  CLIENT_SECRET=<your-client-secret>\n"
-            "Run setup-service-principal.ps1 to create these credentials."
-        )
-    
     from .spinner import get_timestamp
+
+    # Create credential using service principal (certificate or client secret)
+    if _credential is None:
+        _credential, auth_method = _build_credential(tenant_id)
+    else:
+        auth_method = 'certificate' if os.getenv('CERTIFICATE_PATH') else 'client secret'
+
     if not silent:
-        print(f"[{get_timestamp()}] ℹ️     Authenticating with service principal...")
+        print(f"[{get_timestamp()}] ℹ️     Authenticating with service principal ({auth_method})...")
         import sys
         sys.stdout.flush()
-    
-    # Create credential using service principal
-    if _credential is None:
-        _credential = ClientSecretCredential(
-            tenant_id=tenant_id,
-            client_id=client_id,
-            client_secret=client_secret
-        )
     
     # Create Graph client
     _graph_client = GraphServiceClient(
@@ -101,22 +141,8 @@ def get_shared_credential():
     if _credential is not None:
         return _credential
 
-    _ensure_env_loaded()
-    
-    # Get credentials from environment
-    tenant_id = os.getenv('TENANT_ID')
-    client_id = os.getenv('CLIENT_ID')
-    client_secret = os.getenv('CLIENT_SECRET')
-    
-    if not all([tenant_id, client_id, client_secret]):
-        raise ValueError("Missing credentials in .env file. Run setup-service-principal.ps1 first.")
-    
-    _credential = ClientSecretCredential(
-        tenant_id=tenant_id,
-        client_id=client_id,
-        client_secret=client_secret
-    )
-    
+    _credential, _ = _build_credential()
+
     return _credential
 
 def get_power_platform_credential():

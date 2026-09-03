@@ -171,3 +171,69 @@ def determine_service_type(plan_name):
     # Use exact plan name lookup from SERVICE_PLAN_MAPPING
     # Uppercase for case-insensitive matching
     return SERVICE_PLAN_MAPPING.get(plan_name.upper(), 'm365')
+
+
+# Service plans for products Microsoft has retired. When one of these is still provisioned the
+# assessment reports a real migration gap. When it is Disabled the tenant is already where it
+# should be, so there is nothing to recommend - previously the tool emitted a High priority
+# "migrate to Teams" card for a plan that was already switched off.
+RETIRED_PLANS = {
+    'MCOIMP',                 # Skype for Business Online (Plan 1) - retired July 2021
+    'MCOSTANDARD',            # Skype for Business Online (Plan 2) - retired July 2021
+    'MCOSTANDARD_GOV',        # Skype for Business Online (Plan 2, Gov) - retired
+    'DESKLESS',               # Microsoft StaffHub - retired 2020
+    'KAIZALA_STANDALONE',     # Microsoft Kaizala - retired August 2023
+    'KAIZALA_O365_P1',
+    'KAIZALA_O365_P2',
+    'KAIZALA_O365_P3',
+}
+
+# Provisioning statuses ordered best to worst. Used to resolve a service plan that appears in
+# more than one SKU: a plan enabled anywhere in the tenant is available to the tenant.
+_STATUS_RANK = {
+    'success': 0,
+    'pendinginput': 1,
+    'pendingactivation': 2,
+    'pendingprovisioning': 3,
+    'suspended': 4,
+    'deleted': 5,
+    'disabled': 6,
+}
+
+
+def resolve_plan_statuses(license_info, plans_key='service_plans'):
+    """Collapse service plans that appear in several SKUs to their best status.
+
+    A plan can be Disabled in one SKU and active in another - OneDrive for Business is commonly
+    switched off in a Teams-only SKU while fully licensed through E3/E5. Reporting the first
+    status encountered produced findings like "OneDrive for Business (Plan 2) is Disabled,
+    restricting Copilot's access to personal documents" for tenants actively using OneDrive.
+
+    Args:
+        license_info: list of SKU dicts, each with 'sku_part_number' and a list of plans
+        plans_key: key holding the plan list ('service_plans', or a service-scoped variant such
+            as 'entra_service_plans')
+
+    Returns:
+        dict mapping service plan name -> {'status': str, 'sku_name': str}, where the status is
+        the best one seen across all SKUs and sku_name is the SKU it came from.
+    """
+    resolved = {}
+    for license_entry in license_info or []:
+        if not isinstance(license_entry, dict):
+            continue
+        sku_name = license_entry.get('sku_part_number', 'Unknown')
+        for plan in license_entry.get(plans_key, []) or []:
+            if not isinstance(plan, dict):
+                continue
+            plan_name = plan.get('name')
+            if not plan_name:
+                continue
+            status = plan.get('status', 'Success') or 'Success'
+            rank = _STATUS_RANK.get(str(status).strip().lower(), 99)
+            existing = resolved.get(plan_name)
+            if existing is None or rank < existing['rank']:
+                resolved[plan_name] = {'status': status, 'sku_name': sku_name, 'rank': rank}
+
+    return {name: {'status': v['status'], 'sku_name': v['sku_name']}
+            for name, v in resolved.items()}

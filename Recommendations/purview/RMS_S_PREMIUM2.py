@@ -46,6 +46,7 @@ async def get_recommendation(sku_name, status="Success", client=None, purview_cl
                     service="Purview",
                     feature=f"{feature_name} - Configuration",
                     observation="Azure Rights Management (Azure RMS) is ENABLED - advanced automatic classification and protection is available for Copilot-accessed content",
+                    finding_key="purview.rms.state",
                     recommendation="Azure RMS is properly enabled, unlocking Premium P2's advanced capabilities. Configure automatic classification and protection for Copilot scenarios: 1) Deploy trainable classifiers to detect when Copilot outputs contain industry-specific sensitive data (medical records, legal briefs, financial models), 2) Use automatic labeling with encryption for AI-generated content containing PII or confidential business information, 3) Apply usage rights (view-only, no-forward) to documents that Copilot creates from multiple sensitive sources, 4) Enable content scanning to discover existing unprotected files that Copilot might access. Premium P2's machine learning can identify sensitive content patterns in Copilot outputs that rule-based systems miss. Use Get-IRMConfiguration to verify Azure RMS status and configure auto-labeling policies in Purview compliance portal.",
                     link_text="Configure Advanced Protection",
                     link_url="https://learn.microsoft.com/purview/apply-sensitivity-label-automatically",
@@ -61,8 +62,8 @@ async def get_recommendation(sku_name, status="Success", client=None, purview_cl
                     recommendation="CRITICAL: Enable Azure Rights Management immediately to unlock Premium P2's advanced automatic classification and machine learning capabilities. Without Azure RMS, you cannot use trainable classifiers, automatic labeling with encryption, or advanced analytics - effectively wasting the Premium P2 investment. To enable: Connect to Exchange Online PowerShell and run 'Set-IRMConfiguration -AzureRMSLicensingEnabled $true'. Once enabled, Premium P2 provides: 1) Trainable classifiers that detect sensitive content in Copilot outputs using machine learning, 2) Automatic encryption of AI-generated documents containing confidential patterns, 3) Content scanning to discover unprotected files Copilot might access, 4) Advanced analytics showing how Copilot interacts with protected content. Enable Azure RMS NOW to protect against data leaks through AI-assisted content discovery. Use Get-IRMConfiguration to verify activation.",
                     link_text="Enable Azure Rights Management",
                     link_url="https://learn.microsoft.com/azure/information-protection/activate-service",
-                    priority="Critical",
-                    status="Success"
+                    priority="High",
+                    status="Critical"
                 )
                 deployment_recs.append(deployment_rec)
     

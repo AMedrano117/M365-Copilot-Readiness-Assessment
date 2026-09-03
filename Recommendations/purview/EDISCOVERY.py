@@ -64,11 +64,11 @@ async def get_recommendation(sku_name, status="Success", client=None, purview_cl
                 deployment_rec = new_recommendation(
                     service="Purview",
                     feature=f"{feature_name} - Readiness",
-                    observation="No eDiscovery cases currently active - ensure readiness for Copilot-related legal matters",
-                    recommendation="Prepare eDiscovery capability for Copilot before legal need arises: 1) Document procedures for collecting Copilot interaction logs, 2) Train legal/IT teams on searching AI-generated content, 3) Test case creation and data collection workflow, 4) Identify custodian mailboxes where Copilot usage is relevant to business areas at legal risk. When litigation occurs, Copilot conversation histories and AI-accessed documents may be discoverable - having established processes prevents delays and ensures compliance with discovery obligations.",
-                    link_text="eDiscovery Planning",
+                    observation="No eDiscovery cases were present at collection time; cases should exist only for active legal or investigation matters",
+                    finding_key="purview.ediscovery.case_configuration",
+                    recommendation="",
+                    link_text="Manage eDiscovery Cases",
                     link_url="https://learn.microsoft.com/purview/ediscovery-plan",
-                    priority="Low",
                     status="Success"
                 )
                 deployment_recs.append(deployment_rec)

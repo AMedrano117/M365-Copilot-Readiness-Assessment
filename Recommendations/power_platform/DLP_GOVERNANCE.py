@@ -2,7 +2,7 @@
 DLP Policy Governance - Copilot Extensibility Impact Assessment
 This is a pseudo-feature to assess DLP policy impact on Copilot plugin development
 """
-from Core.new_recommendation import new_recommendation
+from Core.new_recommendation import new_recommendation, NOT_ASSESSED_STATUS, CATEGORY_SCAN_COVERAGE
 
 async def get_recommendation(sku_name, status="Success", client=None, pp_client=None, pp_insights=None):
     """
@@ -19,7 +19,8 @@ async def get_recommendation(sku_name, status="Success", client=None, pp_client=
             link_text="DLP Policy Review",
             link_url="https://learn.microsoft.com/power-platform/admin/wp-data-loss-prevention",
             priority="Medium",
-            status="Success"
+            status=NOT_ASSESSED_STATUS,
+            category=CATEGORY_SCAN_COVERAGE
         )]
     
     dlp_summary = pp_client.dlp_summary
