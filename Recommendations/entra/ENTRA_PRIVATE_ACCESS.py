@@ -1,7 +1,7 @@
 """
 Microsoft Entra Private Access - Copilot & Agent Adoption Recommendation
 """
-from Core.new_recommendation import new_recommendation
+from Core.new_recommendation import new_recommendation, CATEGORY_SCAN_COVERAGE
 from Core.friendly_names import get_friendly_sku_name
 
 def get_recommendation(sku_name, status="Success", client=None, entra_insights=None):
@@ -42,7 +42,8 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
             link_text="Zero-Trust Network for AI",
             link_url="https://learn.microsoft.com/entra/global-secure-access/",
             priority="Medium",
-            status=status
+            status=status,
+            disposition="Opportunity"
         ))
     
     # Configuration observation (if entra_insights available)
@@ -59,7 +60,8 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
                 link_text="What is Global Secure Access?",
                 link_url="https://learn.microsoft.com/entra/global-secure-access/overview-what-is-global-secure-access",
                 priority="Medium",
-                status="Not Licensed"
+                status="Not Licensed",
+                disposition="Opportunity"
             ))
         elif private_status == 'PermissionDenied':
             observations.append(new_recommendation(
@@ -70,7 +72,9 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
                 link_text="NetworkAccessPolicy Permission Reference",
                 link_url="https://learn.microsoft.com/graph/permissions-reference#networkaccesspolicyreadall",
                 priority="Low",
-                status="Permission Required"
+                status="Permission Required",
+                category=CATEGORY_SCAN_COVERAGE,
+                disposition="Coverage"
             ))
         elif private_status == 'Success':
             total_connectors = private_summary.get('total_connectors', 0)
@@ -96,7 +100,8 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
                     link_text="Deploy Private Access Connectors",
                     link_url="https://learn.microsoft.com/entra/global-secure-access/how-to-configure-connectors",
                     priority="Medium",
-                    status=status
+                    status="Insight",
+                    disposition="Opportunity"
                 ))
     
     return observations

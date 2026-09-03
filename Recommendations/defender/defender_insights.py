@@ -19,9 +19,13 @@ class DefenderInsights:
         
         # Check availability
         self.graph_security_available = hasattr(defender_client, 'graph_security_available') and defender_client.graph_security_available
-        self.defender_api_available = defender_client.available if hasattr(defender_client, 'available') else False
+        self.defender_api_available = getattr(defender_client, 'defender_api_available', False)
         self.available = self.graph_security_available or self.defender_api_available
-        
+
+        # Per-dataset fetch outcome from the client. Used to tell "query returned zero" apart
+        # from "query never succeeded" so we never report an unread dataset as clean.
+        self.data_sources = getattr(defender_client, 'data_sources', {}) or {}
+
         if not self.available:
             return
         
@@ -126,6 +130,21 @@ class DefenderInsights:
     def has_identity_risks(self):
         """Check if there are identity risks"""
         return len(self.identity_metrics) > 0 if self.available else False
+
+    def source_was_read(self, *dataset_keys):
+        """True only if at least one of the named Graph Security datasets was fetched.
+
+        Callers use this before stating that nothing was found. When it returns False the
+        dataset was never successfully read, so the correct report is "Not Assessed" rather
+        than "no threats detected".
+        """
+        if not self.available:
+            return False
+        if not self.data_sources:
+            # Client predates per-dataset tracking: fall back to overall availability so
+            # behaviour degrades to the previous (optimistic) reporting rather than breaking.
+            return True
+        return any(self.data_sources.get(key, False) for key in dataset_keys)
 
 
 def get_oauth_metrics(defender_client):

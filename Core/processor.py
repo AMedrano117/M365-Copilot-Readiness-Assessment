@@ -13,7 +13,8 @@ from .evidence_layer import build_evidence_bundle
 
 
 def collect_all_recommendations(m365_recommendations, entra_info, purview_info, 
-                                defender_info, power_platform_info, copilot_studio_info):
+                                defender_info, power_platform_info, copilot_studio_info,
+                                data_exposure_info=None):
     """Collect all recommendations from different services."""
     all_recommendations = []
     all_recommendations.extend(m365_recommendations)
@@ -22,6 +23,8 @@ def collect_all_recommendations(m365_recommendations, entra_info, purview_info,
     all_recommendations.extend(defender_info.get('recommendations', []))
     all_recommendations.extend(power_platform_info.get('recommendations', []))
     all_recommendations.extend(copilot_studio_info.get('recommendations', []))
+    if data_exposure_info:
+        all_recommendations.extend(data_exposure_info.get('recommendations', []))
     return all_recommendations
 
 
@@ -82,17 +85,30 @@ def export_tabular_reports(all_recommendations, report_tenant_name, report_forma
 def process_and_print_all_information(m365_result, entra_info, 
                                       purview_info, defender_info, power_platform_info, 
                                       copilot_studio_info, tenant_name=None, open_html_report=False,
-                                      report_format='excel'):
+                                      report_format='excel', sam_report_paths=None,
+                                      dspm_report_paths=None, data_exposure_enabled=True):
     """Process all service information and generate recommendations."""
     # Unpack M365 results
     (m365_info, m365_recommendations) = m365_result
     
     print("\n" + "="*80)
     
+    from .data_exposure_assessment import build_data_exposure_assessment
+    data_exposure_info = build_data_exposure_assessment(
+        sam_report_paths=sam_report_paths,
+        dspm_report_paths=dspm_report_paths,
+        enabled=data_exposure_enabled,
+    )
+    if data_exposure_info.get('operator_messages'):
+        from .spinner import get_timestamp
+        for message in data_exposure_info['operator_messages']:
+            print(f"[{get_timestamp()}] ℹ️  {message}")
+
     # Collect all recommendations
     all_recommendations = collect_all_recommendations(
         m365_recommendations, entra_info, purview_info, 
-        defender_info, power_platform_info, copilot_studio_info
+        defender_info, power_platform_info, copilot_studio_info,
+        data_exposure_info,
     )
     report_tenant_name = resolve_report_tenant_name(tenant_name, entra_info)
     
@@ -106,6 +122,7 @@ def process_and_print_all_information(m365_result, entra_info,
             defender_info,
             power_platform_info,
             copilot_studio_info,
+            data_exposure_info,
         )
         all_recommendations = evidence_bundle['recommendations']
         csv_path, excel_path = export_tabular_reports(

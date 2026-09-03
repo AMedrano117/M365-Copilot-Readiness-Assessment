@@ -3,7 +3,6 @@ OneDrive for Business (Plan 2) - Copilot & Agent Adoption Recommendation
 """
 from Core.new_recommendation import new_recommendation
 from Core.friendly_names import get_friendly_sku_name
-from azure.core.exceptions import HttpResponseError
 
 async def get_deployment_status(client):
     """
@@ -60,13 +59,14 @@ async def get_deployment_status(client):
             'provisioned_drives': estimated_total,
             'sampled': True
         }
-    except HttpResponseError as e:
-        if e.status_code == 401:
-            return {'available': False, 'reason': 'Authentication failed (requires User.Read.All permission)'}
-        if e.status_code == 403:
-            return {'available': False, 'reason': 'Permission denied (requires User.Read.All permission)'}
-        return {'available': False, 'reason': f'API error {e.status_code}'}
     except Exception as e:
+        status_code = getattr(e, "status_code", None)
+        if status_code == 401:
+            return {'available': False, 'reason': 'Authentication failed (requires User.Read.All permission)'}
+        if status_code == 403:
+            return {'available': False, 'reason': 'Permission denied (requires User.Read.All permission)'}
+        if status_code is not None:
+            return {'available': False, 'reason': f'API error {status_code}'}
         error_type = type(e).__name__
         return {'available': False, 'reason': f'{error_type}: Insufficient permissions'}
 

@@ -5,6 +5,9 @@ Engineer follow-up evidence bundle builder.
 from collections import OrderedDict, defaultdict
 from datetime import datetime
 
+from .friendly_names import get_friendly_plan_name, get_friendly_sku_name
+from .assessment_model import enrich_assessment_records
+
 
 SHEET_DEFINITIONS = OrderedDict([
     ("app_access_detail", {
@@ -43,6 +46,12 @@ SHEET_DEFINITIONS = OrderedDict([
         "default_note": "See Purview Policy Detail for the policies, labels, and compliance objects reviewed for this recommendation.",
         "preview_columns": ["Object Type", "Name", "Enabled", "Mode"],
     }),
+    ("data_exposure_detail", {
+        "title": "Data Exposure Detail",
+        "appendix_title": "Appendix: Data Exposure and Oversharing Detail",
+        "default_note": "See Data Exposure Detail for the SAM/DSPM source, freshness, affected location, and explicit risk signals supporting this finding.",
+        "preview_columns": ["Detail Type", "Source", "Site Name", "Risk Signals", "Severity"],
+    }),
     ("defender_incident_detail", {
         "title": "Defender Incident Detail",
         "appendix_title": "Appendix: Defender Incident Detail",
@@ -67,6 +76,12 @@ SHEET_DEFINITIONS = OrderedDict([
         "default_note": "See M365 Activity Detail for the workload metrics and usage baselines referenced by this recommendation.",
         "preview_columns": ["Workload", "Metric", "Value", "Detail"],
     }),
+    ("service_plan_inventory", {
+        "title": "Service Plan Inventory",
+        "appendix_title": "Appendix: Service Plan Inventory",
+        "default_note": "See Service Plan Inventory for the full list of licensed service plans and their provisioning status.",
+        "preview_columns": ["SKU", "Service Plan", "Provisioning Status", "Assessed"],
+    }),
 ])
 
 
@@ -77,6 +92,7 @@ SERVICE_PREFIXES = {
     "Purview": "PUR",
     "Power Platform": "PPL",
     "Copilot Studio": "CST",
+    "Data Exposure": "DEX",
 }
 
 
@@ -199,6 +215,92 @@ def _activity_band(count, available):
     return "High"
 
 
+_PRIORITY_RANK = {"High": 0, "Medium": 1, "Low": 2, "": 3}
+
+# Statuses ordered by how much attention they demand, used to keep the most serious framing when
+# two cards describing one condition are merged.
+_STATUS_RANK_FOR_MERGE = {
+    "critical": 0, "action required": 1, "attention required": 2, "warning": 3,
+    "not assessed": 4, "disabled": 5, "pendingactivation": 6, "pendinginput": 7,
+    "insight": 8, "success": 9,
+}
+
+
+def _merge_rank(recommendation):
+    priority = _PRIORITY_RANK.get(recommendation.get("Priority", ""), 3)
+    status = _STATUS_RANK_FOR_MERGE.get(
+        str(recommendation.get("Status", "") or "").strip().lower(), 99
+    )
+    return (priority, status)
+
+
+def deduplicate_findings(recommendations):
+    """Collapse cards that describe the same tenant condition.
+
+    One condition often reaches the report several times because several licences grant the
+    control that was checked: eDiscovery cases are evaluated by three service plans, Customer
+    Lockbox by two, the risky OAuth apps by five. Each emitted its own card, so a reader saw one
+    issue as several - sometimes with different severities for the identical action.
+
+    Two passes:
+      1. Explicit - cards sharing a FindingKey are the same condition by construction.
+      2. Exact text - identical Service, Observation and Recommendation cannot be two findings.
+
+    The highest-severity card in a group survives and gains a "Also licensed via" note listing
+    the other contributing features, so nothing about licensing coverage is lost.
+    """
+    if not recommendations:
+        return recommendations
+
+    groups = OrderedDict()
+    for recommendation in recommendations:
+        finding_key = str(recommendation.get("FindingKey", "") or "").strip()
+        if finding_key:
+            # Finding keys identify tenant conditions, not producing modules.  Allow the same
+            # underlying condition to collapse when Entra and Defender both surface it.
+            key = ("finding", finding_key)
+        else:
+            key = (
+                "text",
+                recommendation.get("Service", ""),
+                str(recommendation.get("Observation", "") or "").strip(),
+                str(recommendation.get("Recommendation", "") or "").strip(),
+            )
+        groups.setdefault(key, []).append(recommendation)
+
+    merged = []
+    for members in groups.values():
+        if len(members) == 1:
+            merged.append(members[0])
+            continue
+
+        winner = dict(min(members, key=_merge_rank))
+        others = [
+            str(m.get("Feature", "") or "")
+            for m in members
+            if str(m.get("Feature", "") or "") != str(winner.get("Feature", "") or "")
+        ]
+        seen = []
+        for feature in others:
+            if feature and feature not in seen:
+                seen.append(feature)
+        if seen:
+            winner["AlsoLicensedVia"] = "; ".join(seen)
+
+        # Preserve every evidence bucket the group referenced.
+        evidence_keys = []
+        for member in members:
+            for key in _split_evidence_keys(member.get("EvidenceKey", "")):
+                if key not in evidence_keys:
+                    evidence_keys.append(key)
+        if evidence_keys:
+            winner["EvidenceKey"] = "; ".join(evidence_keys)
+
+        merged.append(winner)
+
+    return merged
+
+
 def assign_recommendation_ids(recommendations):
     per_service_counter = defaultdict(int)
     enriched = []
@@ -224,7 +326,11 @@ def build_evidence_bundle(
     defender_info,
     power_platform_info,
     copilot_studio_info,
+    data_exposure_info=None,
 ):
+    # Collapse duplicate findings before IDs are assigned, so identifiers are stable and
+    # sequential across the report the reader actually sees.
+    recommendations = deduplicate_findings(recommendations)
     recommendations = assign_recommendation_ids(recommendations)
 
     m365_info, _ = m365_result
@@ -244,10 +350,12 @@ def build_evidence_bundle(
         ("conditional_access_detail", lambda: _build_conditional_access_sheet(entra_client)),
         ("guest_access_detail", lambda: _build_guest_access_sheet(entra_client)),
         ("purview_policy_detail", lambda: _build_purview_policy_sheet(purview_client)),
+        ("data_exposure_detail", lambda: _build_data_exposure_sheet(data_exposure_info)),
         ("defender_incident_detail", lambda: _build_defender_incident_sheet(defender_client)),
         ("defender_device_detail", lambda: _build_defender_device_sheet(defender_client)),
         ("power_platform_detail", lambda: _build_power_platform_sheet(pp_client)),
         ("m365_activity_detail", lambda: _build_m365_activity_sheet(m365_client)),
+        ("service_plan_inventory", lambda: _build_service_plan_inventory_sheet(m365_info)),
     ]
 
     for key, builder in builders:
@@ -263,12 +371,19 @@ def build_evidence_bundle(
 
     recommendations = _apply_explicit_evidence_fallbacks(recommendations, sheets)
     recommendations = _resolve_recommendation_evidence(recommendations, sheets)
+    recommendations = enrich_assessment_records(recommendations)
     _link_sheet_rows_to_recommendations(sheets, recommendations)
 
     evidence_index = [{
         "RecommendationId": recommendation.get("RecommendationId", ""),
         "Service": recommendation.get("Service", ""),
+        "Disposition": recommendation.get("Disposition", ""),
+        "Readiness Stage": recommendation.get("ReadinessStage", ""),
+        "Impact Area": recommendation.get("ImpactArea", ""),
+        "AI Applicability": recommendation.get("AIApplicability", ""),
         "Feature": recommendation.get("Feature", ""),
+        "Evidence Basis": recommendation.get("EvidenceBasis", ""),
+        "Confidence": recommendation.get("Confidence", ""),
         "Evidence Available": recommendation.get("EvidenceAvailable", "No"),
         "Workbook Tab": recommendation.get("EvidenceSheet", ""),
         "Engineer Follow-Up": recommendation.get("EvidenceSummary", ""),
@@ -289,6 +404,70 @@ def build_evidence_bundle(
         "sheets": sheets,
         "evidence_index": evidence_index,
         "appendix_sections": appendix_sections,
+    }
+
+
+def _build_data_exposure_sheet(data_exposure_info):
+    if not isinstance(data_exposure_info, dict):
+        return None
+
+    rows = []
+    sources = data_exposure_info.get("sources", {}) or {}
+    for source_key, source in sources.items():
+        if not isinstance(source, dict) or not source.get("files_loaded"):
+            continue
+        source_name = "SharePoint Advanced Management" if source_key == "sam" else "Microsoft Purview DSPM"
+        rows.append({
+            "RecommendationId": "",
+            "Flagged By": "",
+            "Detail Type": "Source Summary",
+            "Source": source_name,
+            "Source File": f"{source.get('files_loaded', 0)} file(s)",
+            "Source Sheet": "",
+            "Workload": "SharePoint / OneDrive",
+            "Site Name": "",
+            "Site URL": "",
+            "Item URL": "",
+            "Owner": "",
+            "Sensitivity Label": "",
+            "Risk Signals": f"{sum((source.get('signals') or {}).values()):,} explicit signal(s)",
+            "Signal Count": sum((source.get("signals") or {}).values()),
+            "Severity": "",
+            "Freshness": str(source.get("freshness", "") or "").title(),
+            "Report Date": source.get("latest_report_date", ""),
+            "Records Read": source.get("records_read", 0),
+            "Max Age (Days)": source.get("max_age_days", ""),
+        })
+
+    for evidence_row in data_exposure_info.get("evidence_rows", []) or []:
+        row = dict(evidence_row)
+        row["Detail Type"] = "Risk Evidence"
+        row["Freshness"] = ""
+        row["Report Date"] = ""
+        row["Records Read"] = ""
+        row["Max Age (Days)"] = ""
+        rows.append(row)
+
+    if not rows:
+        return None
+
+    total_records = sum(
+        int(source.get("records_read", 0) or 0)
+        for source in sources.values()
+        if isinstance(source, dict)
+    )
+    details = [
+        "Only explicit fields from Microsoft Purview DSPM and SharePoint Advanced Management exports are treated as exposure evidence; usage volume alone is not a risk signal.",
+        "Source Summary rows record report freshness and volume. Risk Evidence rows identify the affected sites or items and the signal found in the authoritative export.",
+    ]
+    if data_exposure_info.get("evidence_truncated"):
+        details.append(
+            "The workbook is limited to the first 25,000 risk rows; headline counts include every parsed record."
+        )
+    return {
+        "rows": rows,
+        "summary": f"{total_records:,} SAM/DSPM record(s) were parsed; {len(data_exposure_info.get('evidence_rows', []) or []):,} risk evidence row(s) are included.",
+        "details": details,
     }
 
 
@@ -402,23 +581,38 @@ def _build_app_access_sheet(entra_client, defender_client):
     activity_by_app = activity_summary.get("by_app", {})
     activity_available = bool(activity_summary.get("available"))
     defender_risk_by_app = _build_defender_app_risk_index(defender_client)
+    tenant_id = _iso_text(getattr(entra_client, "tenant_id", "")).lower()
 
     app_index = {}
 
     for service_principal in service_principals:
         app_id = _iso_text(_safe_get(service_principal, "appId"))
-        if not app_id:
+        service_principal_id = _iso_text(_safe_get(service_principal, "id"))
+        if not service_principal_id:
             continue
-        key = app_id.lower()
+        key = service_principal_id.lower()
         publisher_name = _iso_text(_safe_get(service_principal, "publisherName"))
+        verified_publisher = _safe_get(service_principal, "verifiedPublisher")
+        verified_name = _iso_text(_safe_get(verified_publisher, "displayName")) if verified_publisher else ""
+        verified_id = _iso_text(_safe_get(verified_publisher, "verifiedPublisherId")) if verified_publisher else ""
+        principal_type = _iso_text(_safe_get(service_principal, "servicePrincipalType"))
+        owner_tenant = _iso_text(_safe_get(service_principal, "appOwnerOrganizationId")).lower()
+        if tenant_id and owner_tenant == tenant_id:
+            publisher_verified = "Internal"
+        elif verified_name or verified_id or publisher_name.lower().startswith("microsoft") or principal_type.lower() == "managedidentity":
+            publisher_verified = "Yes"
+        elif owner_tenant:
+            publisher_verified = "No"
+        else:
+            publisher_verified = "Unknown"
         app_index.setdefault(
             key,
             {
                 "app_id": app_id,
-                "service_principal_id": _iso_text(_safe_get(service_principal, "id")),
+                "service_principal_id": service_principal_id,
                 "display_name": _iso_text(_safe_get(service_principal, "displayName")) or app_id,
                 "publisher_name": publisher_name,
-                "publisher_verified": "No" if not publisher_name or publisher_name.lower() == "unverified" else "Yes",
+                "publisher_verified": publisher_verified,
                 "consent_types": set(),
                 "permission_types": set(),
                 "scopes": set(),
@@ -427,18 +621,18 @@ def _build_app_access_sheet(entra_client, defender_client):
         )
 
     for grant in oauth_grants:
-        app_id = _iso_text(_safe_get(grant, "clientId"))
-        if not app_id:
+        client_id = _iso_text(_safe_get(grant, "clientId"))
+        if not client_id:
             continue
-        key = app_id.lower()
+        key = client_id.lower()
         app_record = app_index.setdefault(
             key,
             {
-                "app_id": app_id,
-                "service_principal_id": "",
-                "display_name": app_id,
+                "app_id": "",
+                "service_principal_id": client_id,
+                "display_name": client_id,
                 "publisher_name": "",
-                "publisher_verified": "No",
+                "publisher_verified": "Unknown",
                 "consent_types": set(),
                 "permission_types": set(),
                 "scopes": set(),
@@ -472,11 +666,11 @@ def _build_app_access_sheet(entra_client, defender_client):
                 high_privilege_reasons.append(scope)
 
         is_high_privilege = bool(high_privilege_reasons)
-        is_unverified = app_record["publisher_verified"] == "No"
+        is_unverified = app_record["publisher_verified"] == "No" and bool(app_record["consent_types"])
         scope_count = len(normalized_scopes)
         over_privileged = scope_count > 10
 
-        defender_risk = defender_risk_by_app.get(app_record["app_id"].lower(), {})
+        defender_risk = defender_risk_by_app.get(app_record["app_id"].lower(), {}) if app_record["app_id"] else {}
         defender_severity = defender_risk.get("severity", "")
         if defender_risk.get("over_privileged"):
             over_privileged = True
@@ -486,14 +680,6 @@ def _build_app_access_sheet(entra_client, defender_client):
             flagged_because.append("High-privilege delegated permissions")
         if is_unverified:
             flagged_because.append("Unverified publisher")
-        if graph_access:
-            flagged_because.append("Microsoft Graph access")
-        if mail_access:
-            flagged_because.append("Mail access")
-        if files_access:
-            flagged_because.append("Files access")
-        if sites_access:
-            flagged_because.append("Sites access")
         if over_privileged:
             flagged_because.append("Over-privileged consent footprint")
         if defender_severity:
@@ -502,7 +688,7 @@ def _build_app_access_sheet(entra_client, defender_client):
         if not flagged_because:
             continue
 
-        activity_record = activity_by_app.get(app_record["app_id"].lower(), {})
+        activity_record = activity_by_app.get(app_record["app_id"].lower(), {}) if app_record["app_id"] else {}
         activity_count = int(activity_record.get("activity_count", 0) or 0)
         last_activity = _iso_text(activity_record.get("last_activity"))
         activity_band = _activity_band(activity_count, activity_available)
@@ -556,10 +742,14 @@ def _build_app_access_sheet(entra_client, defender_client):
 
     return {
         "rows": rows,
-        "summary": f"{len(rows)} unique application(s) were flagged across {total_flag_instances} counted risk instance(s).",
+        "summary": (
+            f"{len(rows)} application(s) were carried into focused follow-up; "
+            f"{total_flag_instances} high-privilege or unverified-publisher grant instance(s) "
+            "contributed to headline findings."
+        ),
         "details": [
-            "The review merged enterprise application inventory, delegated permission grants, and OAuth risk indicators into one application access inventory.",
-            "Rows show the exact app, granted scopes, publisher state, and the specific reasons the app was carried into engineer follow-up detail.",
+            "The review merged enterprise application inventory, delegated permission grants, and OAuth risk indicators into a focused application follow-up list.",
+            "Routine Graph access alone is not treated as a finding. Rows are included only when high-impact scopes, an unverified external publisher, an unusually broad consent footprint, or a Defender OAuth risk signal is present.",
             activity_note,
         ],
     }
@@ -579,13 +769,13 @@ def _build_admin_role_sheet(entra_client):
         rows.append({
             "RecommendationId": "",
             "Flagged By": "",
-            "Assignment Type": "Permanent Active",
+            "Assignment Type": "Active (Duration Unverified)",
             "Principal ID": _iso_text(_safe_get(assignment, "principalId")),
             "Role Definition ID": _iso_text(_safe_get(assignment, "roleDefinitionId")),
             "Directory Scope ID": _iso_text(_safe_get(assignment, "directoryScopeId")),
             "Start Date": _iso_text(_safe_get(assignment, "startDateTime")),
-            "End Date": _iso_text(_safe_get(assignment, "endDateTime")) or "Permanent",
-            "Reason Flagged": "Standing privileged assignment",
+            "End Date": _iso_text(_safe_get(assignment, "endDateTime")) or "Not present on role assignment object",
+            "Reason Flagged": "Active assignment; duration must be determined from its assignment schedule",
         })
 
     for assignment in eligible_assignments:
@@ -602,16 +792,21 @@ def _build_admin_role_sheet(entra_client):
         })
 
     for assignment in time_bound_assignments:
+        schedule_info = _safe_get(assignment, "scheduleInfo") or {}
+        expiration = _safe_get(schedule_info, "expiration") or {}
+        expiration_type = _iso_text(_safe_get(expiration, "type"))
+        end_date = _iso_text(_safe_get(expiration, "endDateTime"))
+        is_permanent = "noexpiration" in expiration_type.lower().replace("_", "")
         rows.append({
             "RecommendationId": "",
             "Flagged By": "",
-            "Assignment Type": "Time-Bound Active",
+            "Assignment Type": "Permanent Active" if is_permanent else "Time-Bound Active",
             "Principal ID": _iso_text(_safe_get(assignment, "principalId")),
             "Role Definition ID": _iso_text(_safe_get(assignment, "roleDefinitionId")),
             "Directory Scope ID": _iso_text(_safe_get(assignment, "directoryScopeId")),
             "Start Date": _iso_text(_safe_get(assignment, "startDateTime")),
-            "End Date": _iso_text(_safe_get(assignment, "endDateTime")),
-            "Reason Flagged": "Active privileged assignment with schedule",
+            "End Date": end_date or ("Permanent" if is_permanent else "Unclassified"),
+            "Reason Flagged": "Standing privileged assignment" if is_permanent else "Active privileged assignment with schedule",
         })
 
     rows.sort(key=lambda row: (str(row.get("Assignment Type", "")).lower(), str(row.get("Principal ID", "")).lower()))
@@ -1101,5 +1296,97 @@ def _build_m365_activity_sheet(m365_client):
         "details": [
             "The workbook captures workload-level baselines rather than per-user detail because those are the metrics currently present in the reviewed source content.",
             "These rows give the follow-up engineer the workload counts behind activity-driven M365 recommendations without changing the recommendation wording.",
+        ],
+    }
+
+
+def _assessed_plan_names():
+    """Service plan names that have a dedicated recommendation module.
+
+    Anything outside this set is inventory only: the assessment records that it is licensed but
+    makes no Copilot-specific claim about it, because no module exists to evaluate it.
+    """
+    from pathlib import Path as _Path
+
+    helper_modules = {
+        "m365_insights", "entra_insights", "defender_insights", "purview_insights",
+        "pp_insights", "__init__",
+    }
+    assessed = set()
+    recommendations_root = _Path(__file__).resolve().parent.parent / "Recommendations"
+    for service_dir in recommendations_root.iterdir():
+        if not service_dir.is_dir() or service_dir.name.startswith("__"):
+            continue
+        for module_path in service_dir.glob("*.py"):
+            if module_path.stem not in helper_modules:
+                assessed.add(module_path.stem.upper())
+    return assessed
+
+
+def _build_service_plan_inventory_sheet(m365_info):
+    """Full licensed service plan inventory.
+
+    Plans without a dedicated recommendation module used to produce a boilerplate card each
+    ("X is active ... providing infrastructure and services that M365 Copilot depends on"),
+    which dominated the report without saying anything. Those cards are suppressed; this sheet
+    keeps the underlying inventory so nothing is lost, and marks which plans were actually
+    evaluated against Copilot criteria.
+    """
+    if not isinstance(m365_info, dict):
+        return None
+
+    licenses = m365_info.get("licenses") or []
+    if not licenses:
+        return None
+
+    assessed = _assessed_plan_names()
+    rows = []
+    for license_entry in licenses:
+        if not isinstance(license_entry, dict):
+            continue
+        sku_raw = license_entry.get("sku_part_number", "") or "Unknown"
+        sku_friendly = get_friendly_sku_name(sku_raw)
+        for plan in license_entry.get("service_plans", []) or []:
+            if not isinstance(plan, dict):
+                continue
+            plan_name = str(plan.get("name", "") or "")
+            if not plan_name:
+                continue
+            was_assessed = plan_name.upper() in assessed
+            rows.append({
+                "RecommendationId": "",
+                "Flagged By": "",
+                "SKU": sku_friendly,
+                "SKU Part Number": sku_raw,
+                "Service Plan": get_friendly_plan_name(plan_name),
+                "Service Plan Name": plan_name,
+                "Provisioning Status": str(plan.get("status", "") or "Unknown"),
+                "Assessed": "Yes" if was_assessed else "No",
+                "Reason Flagged": (
+                    "Evaluated against Copilot readiness criteria" if was_assessed
+                    else "Licensed; inventory only - no Copilot-specific criteria defined"
+                ),
+            })
+
+    if not rows:
+        return None
+
+    rows.sort(key=lambda row: (str(row.get("SKU", "")).lower(),
+                               str(row.get("Service Plan", "")).lower()))
+
+    assessed_count = sum(1 for row in rows if row["Assessed"] == "Yes")
+    seats = sum(int(entry.get("enabled") or 0) for entry in licenses if isinstance(entry, dict))
+
+    return {
+        "rows": rows,
+        "summary": (
+            f"{len(rows)} licensed service plan(s) across {len(licenses)} SKU(s) "
+            f"({seats} seat(s) enabled). {assessed_count} plan(s) were evaluated against Copilot "
+            f"readiness criteria; the remaining {len(rows) - assessed_count} are recorded as "
+            f"inventory only."
+        ),
+        "details": [
+            "Every licensed service plan is listed here with its provisioning status, so the licensing picture is complete even though only Copilot-relevant plans generate findings.",
+            "Plans marked Assessed = No have no Copilot-specific criteria defined, so the assessment makes no claim about them beyond the fact that they are licensed.",
         ],
     }

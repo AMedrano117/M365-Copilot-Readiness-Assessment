@@ -1,7 +1,7 @@
 """
 Power Automate for Office 365 (Plan 3) - Copilot & Agent Adoption Recommendation
 """
-from Core.new_recommendation import new_recommendation
+from Core.new_recommendation import new_recommendation, NOT_ASSESSED_STATUS, CATEGORY_SCAN_COVERAGE
 from Core.friendly_names import get_friendly_sku_name
 
 async def get_deployment_status(pp_insights):
@@ -138,7 +138,8 @@ async def get_recommendation(sku_name, status="Success", client=None, pp_client=
                 link_text="Copilot Extensibility with Power Automate",
                 link_url="https://learn.microsoft.com/power-automate/copilot-overview",
                 priority="Medium",
-                status="Success"
+                status=NOT_ASSESSED_STATUS,
+                category=CATEGORY_SCAN_COVERAGE
             )
         
         return [license_rec, deployment_rec]

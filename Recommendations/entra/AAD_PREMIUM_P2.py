@@ -1,8 +1,9 @@
 """
 Microsoft Entra ID P2 - Copilot & Agent Adoption Recommendation
 """
-from Core.new_recommendation import new_recommendation
+from Core.new_recommendation import new_recommendation, NOT_ASSESSED_STATUS
 from Core.friendly_names import get_friendly_sku_name
+from .entra_insights import build_pim_metrics, entra_source_was_read
 
 def get_recommendation(sku_name, status="Success", client=None, entra_insights=None):
     """
@@ -49,7 +50,7 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
                 observation += ". " + ", ".join(metrics)
             
             # Generate proactive recommendations based on findings
-            recommendation_text = entra_insights.get('pim_recommendation', '')
+            _, recommendation_text = build_pim_metrics(entra_insights)
         
         # Primary license check observation
         recommendations.append(new_recommendation(
@@ -66,26 +67,43 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
         if entra_insights and entra_insights.get('available'):
             # Observation 1: PIM configuration status
             permanent_count = pim_metrics.get('permanent_admins_count', 0)
+            permanent_global_admins = pim_metrics.get('permanent_global_admins', 0)
             if permanent_count > 0:
-                # Action Required: Permanent admins need PIM
+                # Role assignment schedules explicitly marked no-expiration are standing.
                 recommendations.append(new_recommendation(
                     service="Entra",
                     feature=feature_name,
-                    observation=f"{permanent_count} admin(s) have permanent elevated privileges, increasing risk for Copilot administrative actions",
-                    recommendation=f"Configure Privileged Identity Management (PIM) to require just-in-time activation for admin roles managing Copilot services. This reduces the attack surface for AI workload administration.",
+                    observation=(
+                        f"{permanent_count} active directory role assignment schedule(s) have no expiration"
+                        + (f", including {permanent_global_admins} Global Administrator assignment(s)" if permanent_global_admins else "")
+                    ),
+                    recommendation="Review the named principals and roles in Admin Role Detail. Convert standing assignments to PIM eligibility or time-bound activation where operationally feasible, retaining documented emergency-access exceptions.",
                     link_text="Configure PIM for Copilot Admins",
                     link_url="https://learn.microsoft.com/entra/id-governance/privileged-identity-management/pim-configure",
-                    priority="High",
+                    priority="High" if permanent_global_admins else "Medium",
                     status="Action Required",
                     evidence_key="admin_role_detail",
                     evidence_summary="See Admin Role Detail for the privileged assignments that support this PIM follow-up."
                 ))
-            else:
-                # Success: No permanent admins (positive finding)
+            elif not entra_source_was_read(entra_insights, 'role_assignment_schedules'):
                 recommendations.append(new_recommendation(
                     service="Entra",
                     feature=feature_name,
-                    observation="No permanent admin roles detected, all administrative access uses just-in-time activation",
+                    observation="Privileged role assignment schedules could not be read, so standing-versus-time-bound administrative access is unverified",
+                    recommendation="Grant RoleManagement.Read.Directory and rerun, or review active and eligible assignments in Privileged Identity Management before broad AI rollout.",
+                    link_text="Review PIM Assignments",
+                    link_url="https://learn.microsoft.com/entra/id-governance/privileged-identity-management/pim-how-to-add-role-to-user",
+                    priority="Medium",
+                    status="Not Assessed",
+                    disposition="Coverage",
+                    evidence_key="admin_role_detail",
+                    evidence_summary="Active role assignments were not treated as permanent without schedule-expiration evidence."
+                ))
+            else:
+                recommendations.append(new_recommendation(
+                    service="Entra",
+                    feature=feature_name,
+                    observation="No no-expiration active role assignment schedules were returned by the assessed PIM endpoint",
                     recommendation="",
                     link_text="PIM Best Practices",
                     link_url="https://learn.microsoft.com/entra/id-governance/privileged-identity-management/pim-configure",
@@ -97,16 +115,18 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
             # Observation 2: Access Review configuration status
             active_reviews = access_review_metrics.get('total_active_reviews', 0)
             if active_reviews == 0:
-                # Action Required: Missing access reviews
+                # Access reviews are useful lifecycle governance, but their absence does not by
+                # itself prove that AI or M365 access is inappropriate.
                 recommendations.append(new_recommendation(
                     service="Entra",
                     feature=feature_name,
-                    observation="No active access reviews configured for user access governance",
-                    recommendation="Implement periodic access reviews for users with Copilot licenses and admin roles. Regular reviews ensure only authorized users maintain access to AI assistants and prevent license waste.",
+                    observation="No active access reviews were returned for user access governance",
+                    recommendation="Consider periodic reviews for privileged roles, guests, and AI entitlement groups where manual lifecycle controls are insufficient. Confirm the population and risk before creating campaigns.",
                     link_text="Configure Access Reviews",
                     link_url="https://learn.microsoft.com/entra/id-governance/access-reviews-overview",
                     priority="Medium",
-                    status="Action Required",
+                    status="Insight",
+                    disposition="Opportunity",
                     evidence_key="access_review_detail",
                     evidence_summary="See Access Review Detail for the current review definitions and cadence available for engineer follow-up."
                 ))
@@ -140,8 +160,20 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
                     priority="High" if high_risk > 0 else "Medium",
                     status="Action Required"
                 ))
+            elif not entra_source_was_read(entra_insights, 'risky_users', 'risk_detections'):
+                # Identity Protection data was never read - do not report unread as clean
+                recommendations.append(new_recommendation(
+                    service="Entra",
+                    feature=feature_name,
+                    observation="Identity Protection risk data could not be retrieved, so account risk is unverified",
+                    recommendation="Grant the assessment IdentityRiskyUser.Read.All and IdentityRiskEvent.Read.All, then rerun. Compromised accounts are a primary route to Copilot data exfiltration, so risk status should be confirmed before broad rollout. Meanwhile review Entra ID Protection > Risky users directly.",
+                    link_text="Identity Protection Risk Reports",
+                    link_url="https://learn.microsoft.com/entra/id-protection/howto-identity-protection-investigate-risk",
+                    priority="Medium",
+                    status=NOT_ASSESSED_STATUS
+                ))
             else:
-                # Success: No risky users (positive finding)
+                # Success: risk data was read and came back empty (positive finding)
                 recommendations.append(new_recommendation(
                     service="Entra",
                     feature=feature_name,
@@ -158,16 +190,18 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
             guests_with_licenses = b2b_metrics.get('guests_with_licenses', 0)
             
             if guests_with_licenses > 0:
-                # Action Required: Guests have Copilot access
+                # An M365 license does not prove Copilot entitlement or inappropriate content
+                # access. Surface this for scoped review without declaring a security failure.
                 recommendations.append(new_recommendation(
                     service="Entra",
                     feature=feature_name,
-                    observation=f"{guests_with_licenses} of {total_guests} guest users have M365 licenses, potentially accessing Copilot with sensitive organizational data",
-                    recommendation=f"Review {guests_with_licenses} guest user(s) with M365 licenses to verify Copilot access is intentional and appropriate. Guest users (B2B) can: 1) Use Copilot to search/summarize content they have access to (including shared Teams/SharePoint), 2) Generate content visible to internal users, 3) Access organizational knowledge through AI that may exceed intended collaboration scope. Implement quarterly access reviews for guest users, restrict guest access to specific sites/teams, and use sensitivity labels to prevent Copilot from accessing highly confidential content shared with guests. Consider dedicated guest licenses without Copilot for external collaboration scenarios.",
+                    observation=f"{guests_with_licenses} of {total_guests} guest users have an M365 license; this does not by itself prove Copilot entitlement or inappropriate data access",
+                    recommendation=f"Verify that the {guests_with_licenses} licensed guest account(s) still need their assigned products and content permissions. Review actual site, team, and group access separately.",
                     link_text="Manage Guest Access",
                     link_url="https://learn.microsoft.com/entra/external-id/what-is-b2b",
                     priority="Medium",
-                    status="Action Required",
+                    status="Insight",
+                    disposition="Opportunity",
                     evidence_key="guest_access_detail",
                     evidence_summary="See Guest Access Detail for the guest objects, licensing state, and external collaboration settings that support this finding."
                 ))
@@ -196,16 +230,18 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
             if guest_invite_setting == 'Unknown':
                 pass  # Skip if data not available
             elif 'admins' not in guest_invite_setting.lower() and 'limited' not in guest_invite_setting.lower():
-                # Action Required: Permissive guest invites
+                # Invitation eligibility is not the same as resource access. Treat this as a
+                # governance choice and review actual sharing/permissions separately.
                 recommendations.append(new_recommendation(
                     service="Entra",
                     feature=feature_name,
-                    observation=f"Guest user invitations are configured as '{guest_invite_setting}', allowing broad external access to Copilot-searchable content",
-                    recommendation="Restrict guest user invitations to admins and specific users only to control external access to content that Copilot can search. Current permissive settings allow any user to invite guests who could access shared Teams channels, SharePoint sites, and OneDrive files - all searchable by Copilot. Unrestricted guest access risks: 1) Copilot exposing internal content to external users via AI summaries, 2) Guests discovering sensitive data through Copilot search beyond intended sharing, 3) Loss of data governance and compliance. Configure External collaboration settings to 'Only users assigned to specific admin roles can invite guest users' or implement guest access approval workflows.",
+                    observation=f"Guest invitation eligibility is configured as '{guest_invite_setting}'; invited guests still require explicit resource access",
+                    recommendation="Confirm that the invitation model matches collaboration policy. If tighter sponsorship is required, limit invitation rights or add approval; validate actual SharePoint, Teams, and group permissions independently.",
                     link_text="Configure External Collaboration",
                     link_url="https://learn.microsoft.com/entra/external-id/external-collaboration-settings-configure",
                     priority="Medium",
-                    status="Action Required",
+                    status="Insight",
+                    disposition="Opportunity",
                     evidence_key="guest_access_detail",
                     evidence_summary="See Guest Access Detail for the invitation restrictions and guest inventory associated with this external collaboration setting."
                 ))
@@ -228,30 +264,26 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
             partner_count = b2b_metrics.get('partner_configurations', 0)
             
             if not cross_tenant_configured:
-                # Action Required: No cross-tenant policies
                 recommendations.append(new_recommendation(
                     service="Entra",
                     feature=feature_name,
-                    observation="Cross-tenant access settings not configured, allowing unrestricted B2B collaboration with external organizations accessing Copilot content",
-                    recommendation="Configure cross-tenant access policies to control B2B collaboration with specific partner organizations and restrict Copilot data exposure. Without cross-tenant controls: 1) Users from any external org can access your Copilot-searchable content via B2B, 2) No control over which external tenants can collaborate, 3) Cannot enforce MFA or compliant devices for external users accessing Copilot content, 4) Risk of unintended data sharing through AI-powered search/summaries. Implement cross-tenant access settings to: allow/block specific partner organizations, require MFA for external users, restrict access to specific apps/resources. Essential for regulated industries and multi-tenant Copilot deployments.",
+                    observation="No named cross-tenant partner configuration was returned; Entra default inbound and outbound settings apply",
+                    recommendation="",
                     link_text="Cross-Tenant Access Settings",
                     link_url="https://learn.microsoft.com/entra/external-id/cross-tenant-access-overview",
-                    priority="Medium",
-                    status="Action Required",
+                    status="Success",
                     evidence_key="guest_access_detail",
                     evidence_summary="See Guest Access Detail for the cross-tenant configuration state and guest collaboration context behind this finding."
                 ))
             elif partner_count == 0:
-                # Action Required: Cross-tenant configured but no partners defined
                 recommendations.append(new_recommendation(
                     service="Entra",
                     feature=feature_name,
-                    observation="Cross-tenant access settings enabled but no partner organizations configured - default settings apply to all external tenants",
-                    recommendation="Define specific partner organization policies to control which external tenants can collaborate and access Copilot content. With default settings only: 1) All external organizations have the same access level, 2) Cannot enforce different MFA requirements per partner, 3) Cannot block specific high-risk tenants, 4) No granular control over app access per partner. Add trusted partner organizations with specific inbound/outbound policies, require MFA for external users, and block risky tenants. Review Microsoft's recommended baseline policy.",
+                    observation="Cross-tenant access uses the configured default settings; no partner-specific overrides were returned",
+                    recommendation="",
                     link_text="Configure Partner Organizations",
                     link_url="https://learn.microsoft.com/entra/external-id/cross-tenant-access-settings-b2b-collaboration",
-                    priority="Medium",
-                    status="Action Required",
+                    status="Success",
                     evidence_key="guest_access_detail",
                     evidence_summary="See Guest Access Detail for the cross-tenant access configuration and partner-policy counts supporting this observation."
                 ))
@@ -273,14 +305,30 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
             consent_metrics = entra_insights.get('consent_summary', {})
             user_consent_allowed = consent_metrics.get('user_consent_allowed', False)
             admin_consent_required = consent_metrics.get('admin_consent_required', False)
-            
-            if user_consent_allowed and not admin_consent_required:
+            data_sources = entra_insights.get('data_sources', {}) or {}
+            consent_policy_read = data_sources.get('consent_policies', False)
+
+            if not consent_policy_read:
+                recommendations.append(new_recommendation(
+                    service="Entra",
+                    feature=feature_name,
+                    observation="Application consent policy settings could not be read, so the user-versus-admin consent boundary is unverified",
+                    recommendation="Grant Policy.Read.All and rerun, or verify user consent settings and the admin-consent workflow directly in Entra.",
+                    link_text="Configure User Consent",
+                    link_url="https://learn.microsoft.com/entra/identity/enterprise-apps/configure-user-consent",
+                    priority="Medium",
+                    status="Not Assessed",
+                    disposition="Coverage",
+                    evidence_key="app_access_detail",
+                    evidence_summary="Application grants remain available for review, but the tenant consent-policy conclusion was not collected."
+                ))
+            elif user_consent_allowed and not admin_consent_required:
                 # Action Required: User consent enabled
                 recommendations.append(new_recommendation(
                     service="Entra",
                     feature=feature_name,
                     observation="User consent enabled for applications, allowing users to grant apps access to Copilot-generated content and M365 data without admin review",
-                    recommendation="Disable user consent and require admin approval for all application permissions to prevent unauthorized apps from accessing Copilot data. With user consent enabled, employees can: 1) Grant malicious apps access to their emails, files, Teams messages - all searchable by Copilot, 2) Approve apps that extract Copilot prompts/responses via Graph API, 3) Inadvertently share organizational knowledge with third-party services, 4) Create compliance violations (GDPR, HIPAA) through unvetted integrations. Configure consent settings to 'Do not allow user consent' and enable admin consent workflow so IT can review app permissions before granting access. This ensures only vetted applications interact with Copilot-accessible data.",
+                    recommendation="Apply a risk-based app-consent policy. Limit user consent to verified publishers and low-impact delegated permissions where appropriate, require admin review for higher-impact scopes, and operate an admin-consent workflow. Review existing grants and recent activity before revocation.",
                     link_text="Configure User Consent",
                     link_url="https://learn.microsoft.com/entra/identity/enterprise-apps/configure-user-consent",
                     priority="High",
@@ -302,54 +350,78 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
                     evidence_summary="See App Access Detail for the reviewed application grants and publishers associated with current app access."
                 ))
             else:
-                # Unable to determine consent settings - likely API permission issue
                 recommendations.append(new_recommendation(
                     service="Entra",
                     feature=feature_name,
-                    observation="Application consent settings could not be verified - review tenant configuration to ensure proper app governance for Copilot data access",
-                    recommendation="Review application consent policies in Entra ID to ensure user consent is appropriately restricted. Verify that: 1) Users cannot consent to apps accessing organizational data without admin review, 2) Admin consent workflow is enabled for user requests, 3) Only verified publishers and low-risk permissions are allowed for user consent (if enabled). This prevents unauthorized apps from accessing emails, files, and other content searchable by Copilot.",
+                    observation="The assessed consent policy did not identify either an allowed user-consent policy or an admin-only consent boundary",
+                    recommendation="Review the current consent policy identifiers and confirm that higher-impact permissions require administrator approval.",
                     link_text="Configure User Consent",
                     link_url="https://learn.microsoft.com/entra/identity/enterprise-apps/configure-user-consent",
                     priority="Medium",
-                    status="Action Required",
+                    status="Insight",
+                    disposition="Opportunity",
                     evidence_key="app_access_detail",
-                    evidence_summary="See App Access Detail for the existing application grants and publishers that remain relevant to follow-up even when consent policy verification was incomplete."
+                    evidence_summary="See App Access Detail for the existing application grants and publishers associated with this policy review."
                 ))
             
             # Observation 8: Risky Application Permissions
             high_privilege_apps = consent_metrics.get('high_privilege_apps', 0)
             unverified_publishers = consent_metrics.get('unverified_publishers', 0)
-            apps_with_graph = consent_metrics.get('apps_with_graph_access', 0)
-            apps_with_mail = consent_metrics.get('apps_with_mail_access', 0)
-            apps_with_files = consent_metrics.get('apps_with_files_access', 0)
             
-            if high_privilege_apps > 0 or unverified_publishers > 0:
+            app_grants_read = data_sources.get('oauth_grants', False) and data_sources.get('service_principals', False)
+            if not app_grants_read:
+                recommendations.append(new_recommendation(
+                    service="Entra",
+                    feature=feature_name,
+                    observation="Enterprise application grants or publisher metadata could not be read, so connected-app access to Microsoft 365 data is unverified",
+                    recommendation="Grant Application.Read.All and DelegatedPermissionGrant.Read.All (or the documented equivalent), then rerun and review exact scopes and recent activity.",
+                    link_text="Review Enterprise Applications",
+                    link_url="https://learn.microsoft.com/entra/identity/enterprise-apps/overview",
+                    priority="Medium",
+                    status="Not Assessed",
+                    disposition="Coverage",
+                    evidence_key="app_access_detail",
+                    evidence_summary="The application inventory or delegated grant dataset was unavailable; no clean app-governance conclusion is supported."
+                ))
+            elif high_privilege_apps > 0:
                 risk_details = []
                 if high_privilege_apps > 0:
                     risk_details.append(f"{high_privilege_apps} with high-privilege permissions")
                 if unverified_publishers > 0:
                     risk_details.append(f"{unverified_publishers} from unverified publishers")
-                if apps_with_graph > 0:
-                    risk_details.append(f"{apps_with_graph} accessing Graph API (Copilot data)")
-                
                 recommendations.append(new_recommendation(
                     service="Entra",
                     feature=feature_name,
-                    observation=f"Risky applications detected: {', '.join(risk_details)} - potential unauthorized access to Copilot-generated content",
-                    recommendation=f"Audit and restrict {high_privilege_apps + unverified_publishers} risky application(s) with access to M365 data and Copilot content. High-privilege apps can: 1) Read all emails and extract Copilot summaries ({apps_with_mail} apps with Mail.Read), 2) Access all SharePoint files and Copilot-indexed documents ({apps_with_files} apps with Files.Read), 3) Query Graph API to retrieve Copilot prompts and responses ({apps_with_graph} apps with Graph access), 4) Operate as unverified publishers without Microsoft validation ({unverified_publishers} apps). Review each app's permissions in Azure AD > Enterprise Applications > Permissions, revoke excessive permissions, and remove unnecessary apps. Implement app governance policies to detect risky permission grants automatically. Critical for preventing data exfiltration through third-party integrations.",
+                    observation=f"Application grants requiring review were detected: {', '.join(risk_details)}",
+                    recommendation="Review the flagged enterprise applications, their owners, grant type, exact scopes, publisher, business purpose, and recent activity. Remove unused grants and reduce scopes where the evidence shows access exceeds the documented need; do not revoke solely from the aggregate count.",
                     link_text="App Governance",
                     link_url="https://learn.microsoft.com/defender-cloud-apps/app-governance-manage-app-governance",
                     priority="High",
                     status="Action Required",
+                    finding_key="entra.app_consent.high_impact_grants",
                     evidence_key="app_access_detail",
                     evidence_summary="See App Access Detail for the exact risky applications, granted scopes, count logic, and available 30-day activity."
+                ))
+            elif unverified_publishers > 0:
+                recommendations.append(new_recommendation(
+                    service="Entra",
+                    feature=feature_name,
+                    observation=f"{unverified_publishers} externally owned application(s) with delegated grants did not return verified-publisher metadata",
+                    recommendation="Confirm the publisher, business owner, granted scopes, and recent use before expanding AI integrations. Publisher verification is a review signal, not proof that an application is malicious.",
+                    link_text="Publisher Verification",
+                    link_url="https://learn.microsoft.com/entra/identity-platform/publisher-verification-overview",
+                    priority="Medium",
+                    status="Insight",
+                    disposition="Opportunity",
+                    evidence_key="app_access_detail",
+                    evidence_summary="See App Access Detail for the affected applications and exact delegated scopes."
                 ))
             else:
                 # Success: No risky apps
                 recommendations.append(new_recommendation(
                     service="Entra",
                     feature=feature_name,
-                    observation="No high-risk applications detected, all apps accessing M365 data have appropriate permissions and verified publishers",
+                    observation="The assessed grant rules did not flag high-impact permissions or unverified publishers; this does not replace application-owner review",
                     recommendation="",
                     link_text="App Governance",
                     link_url="https://learn.microsoft.com/defender-cloud-apps/app-governance-manage-app-governance",
@@ -369,21 +441,21 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
                 recurring_reviews = access_review_metrics.get('recurring_reviews', 0)
                 
                 if total_reviews == 0:
-                    # Action Required: No access reviews configured
+                    # Optional lifecycle control unless a scoped requirement exists.
                     recommendations.append(new_recommendation(
                         service="Entra",
                         feature=feature_name,
-                        observation="No access reviews configured - Copilot license assignments and privileged access not recertified",
-                        recommendation="Implement quarterly access reviews for Copilot governance. Without reviews: 1) Former employees retain Copilot access after role changes, 2) Licenses remain assigned to inactive users (wasted cost), 3) Guest users maintain access to Copilot-searchable content indefinitely, 4) No compliance audit trail for who approved continued access. Configure reviews for: 1) Groups with Copilot licenses (quarterly recertification of members), 2) Guest user access to Teams/SharePoint (remove stale external accounts), 3) Privileged roles (Copilot admins, Teams admins - monthly reviews). Use automated approval for active users, require justification for continued access to high-value resources. Essential for SOC 2, ISO 27001, and cost optimization.",
+                        observation="No access review definitions were returned",
+                        recommendation="Consider recurring reviews for privileged roles, guests, and AI entitlement groups where lifecycle risk or compliance requirements justify them. Do not create reviews solely to increase an assessment score.",
                         link_text="Configure Access Reviews",
                         link_url="https://learn.microsoft.com/entra/id-governance/deploy-access-reviews",
                         priority="Medium",
-                        status="Action Required",
+                        status="Insight",
+                        disposition="Opportunity",
                         evidence_key="access_review_detail",
                         evidence_summary="See Access Review Detail for the current review definitions and missing cadence relevant to this governance gap."
                     ))
                 elif recurring_reviews == 0:
-                    # Action Required: Only one-time reviews
                     recommendations.append(new_recommendation(
                         service="Entra",
                         feature=feature_name,
@@ -392,21 +464,22 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
                         link_text="Create Recurring Reviews",
                         link_url="https://learn.microsoft.com/entra/id-governance/create-access-review",
                         priority="Medium",
-                        status="Action Required",
+                        status="Insight",
+                        disposition="Opportunity",
                         evidence_key="access_review_detail",
                         evidence_summary="See Access Review Detail for the one-time and recurring review definitions supporting this recommendation."
                     ))
                 elif group_reviews == 0:
-                    # Action Required: No group membership reviews for Copilot licenses
                     recommendations.append(new_recommendation(
                         service="Entra",
                         feature=feature_name,
                         observation=f"{total_reviews} access review(s) active ({recurring_reviews} recurring), but no group membership reviews for Copilot license governance",
-                        recommendation=f"Add access reviews for groups that assign Copilot licenses to ensure only authorized users maintain access. Current reviews cover: {role_reviews} role(s), {guest_reviews} guest access. Missing: quarterly reviews of Copilot license groups to: 1) Recertify each member still needs Copilot access, 2) Remove users who changed roles or left organization, 3) Reclaim licenses for cost optimization, 4) Provide audit trail for compliance. Target groups with pattern 'Copilot-*' or 'M365-E5-*', assign managers as reviewers, enable auto-removal of denied users. Saves ~15-20% on license costs by removing inactive assignments.",
+                        recommendation=f"If Copilot license groups are used, consider recurring membership reviews where manager attestation adds value. Current reviews cover {role_reviews} role scope(s) and {guest_reviews} guest scope(s).",
                         link_text="Review Group Memberships",
                         link_url="https://learn.microsoft.com/entra/id-governance/create-access-review",
                         priority="Medium",
-                        status="Action Required",
+                        status="Insight",
+                        disposition="Opportunity",
                         evidence_key="access_review_detail",
                         evidence_summary="See Access Review Detail for the review scopes currently present and where group-review coverage is missing."
                     ))

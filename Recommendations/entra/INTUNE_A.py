@@ -4,6 +4,7 @@ Provides license check + device compliance state + CA integration for Copilot de
 """
 from Core.new_recommendation import new_recommendation
 from Core.friendly_names import get_friendly_sku_name
+from Recommendations.entra.entra_insights import entra_source_was_read
 
 def get_recommendation(sku_name, status="Success", client=None, entra_insights=None):
     """
@@ -56,7 +57,21 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
     # ========================================
     # OBSERVATION 2: Device Compliance State
     # ========================================
-    if entra_insights and status == "Success":
+    devices_read = entra_source_was_read(entra_insights, "managed_devices")
+    if entra_insights and status == "Success" and not devices_read:
+        observations.append(new_recommendation(
+            service="Entra",
+            feature=feature_name,
+            observation="Managed-device inventory could not be read, so device enrollment and compliance coverage are unverified",
+            recommendation="Grant DeviceManagementManagedDevices.Read.All and rerun, or verify Intune enrollment and compliance directly before making an endpoint-readiness decision.",
+            link_text="Device Inventory Permissions",
+            link_url="https://learn.microsoft.com/graph/api/intune-devices-manageddevice-list",
+            priority="Medium",
+            status="Not Assessed",
+            disposition="Coverage"
+        ))
+
+    if entra_insights and status == "Success" and devices_read:
         device_summary = entra_insights.get('device_summary', {})
         total_devices = device_summary.get('total_managed_devices', 0)
         compliant_devices = device_summary.get('compliant_devices', 0)
@@ -104,7 +119,7 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
     # ========================================
     # OBSERVATION 3: CA Integration Check
     # ========================================
-    if entra_insights and status == "Success":
+    if entra_insights and status == "Success" and devices_read:
         device_summary = entra_insights.get('device_summary', {})
         ca_requires_compliance = device_summary.get('ca_requires_compliance', False)
         total_devices = device_summary.get('total_managed_devices', 0)

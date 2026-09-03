@@ -12,16 +12,32 @@ from .spinner import get_timestamp, _stdout_lock
 from datetime import datetime, timedelta
 
 def _get_attr(obj, attr_name, default=''):
-    """Helper to safely get attribute from SDK object with snake_case conversion"""
+    """Safely read a field from either a Graph SDK model object or a plain dict.
+
+    Graph collections reach us in both shapes: the SDK path yields model objects with
+    snake_case attributes, while the raw-HTTP path yields camelCase dicts. Callers must not
+    assume one or the other - assuming dicts previously raised AttributeError mid-loop, which
+    was swallowed by the surrounding except and silently zeroed the resulting counters.
+    """
     if obj is None:
         return default
-    # Try direct attribute access first
+
+    import re
+    snake_case = re.sub(r'(?<!^)(?=[A-Z])', '_', attr_name).lower()
+
+    # Dict shape (raw HTTP / JSON responses): try camelCase then snake_case
+    if isinstance(obj, dict):
+        for key in (attr_name, snake_case):
+            if key in obj:
+                value = obj.get(key)
+                if value is not None:
+                    return value
+        return default
+
+    # SDK model object: try direct attribute access, then snake_case
     value = getattr(obj, attr_name, None)
     if value is not None:
         return value
-    # Try snake_case version (e.g., grantControls -> grant_controls)
-    import re
-    snake_case = re.sub(r'(?<!^)(?=[A-Z])', '_', attr_name).lower()
     value = getattr(obj, snake_case, None)
     return value if value is not None else default
 
@@ -122,6 +138,13 @@ async def get_entra_client(graph_client, tenant_id=None):
     class EntraClient:
         def __init__(self):
             self.available = False
+            self.tenant_id = tenant_id
+
+            # Per-dataset fetch outcome, keyed by phase-1 task name (risky_users, auth_methods,
+            # role_assignments, ...). True only when that specific query returned data, so that a
+            # failed query is never reported downstream as a clean result.
+            self.data_sources = {}
+
             
             # Conditional Access
             self.ca_policies = []
@@ -190,6 +213,7 @@ async def get_entra_client(graph_client, tenant_id=None):
                 'permanent_assignments': 0,
                 'permanent_global_admins': 0,
                 'permanent_privileged_roles': 0,
+                'unclassified_active_assignments': 0,
                 'eligible_assignments': 0,
                 'pim_enabled_roles': 0,
                 'roles_with_only_permanent': 0
@@ -455,7 +479,7 @@ async def get_entra_client(graph_client, tenant_id=None):
             # Service principals
             from msgraph.generated.service_principals.service_principals_request_builder import ServicePrincipalsRequestBuilder
             query_params = ServicePrincipalsRequestBuilder.ServicePrincipalsRequestBuilderGetQueryParameters(
-                select=["id", "appId", "displayName", "publisherName", "appRoles", "oauth2PermissionScopes"],
+                select=["id", "appId", "displayName", "publisherName", "verifiedPublisher", "appOwnerOrganizationId", "servicePrincipalType", "appRoles", "oauth2PermissionScopes"],
                 top=500
             )
             request_config = ServicePrincipalsRequestBuilder.ServicePrincipalsRequestBuilderGetRequestConfiguration(query_parameters=query_params)
@@ -510,6 +534,11 @@ async def get_entra_client(graph_client, tenant_id=None):
         if phase1_tasks:
             results = await asyncio.gather(*phase1_tasks.values(), return_exceptions=True)
             phase1_results = dict(zip(phase1_tasks.keys(), results))
+            # A task counts as read only when it neither raised nor returned nothing.
+            for _task_name, _task_result in phase1_results.items():
+                client_obj.data_sources[_task_name] = bool(
+                    _task_result is not None and not isinstance(_task_result, Exception)
+                )
         
         # Process Conditional Access Policies
         ca_response = phase1_results.get('ca_policies')
@@ -629,15 +658,14 @@ async def get_entra_client(graph_client, tenant_id=None):
         risky_response = phase1_results.get('risky_users')
         if risky_response and not isinstance(risky_response, Exception):
             try:
-                risky_data = risky_response.json() if hasattr(risky_response, 'json') else risky_response
-                risky_users = risky_data.get('value', []) if isinstance(risky_data, dict) else []
+                risky_users = _extract_response_items(risky_response)
                 client_obj.risky_users = risky_users
                 
                 client_obj.risk_summary['risky_users_total'] = len(risky_users)
                 
                 for user in risky_users:
-                    risk_level = user.get('riskLevel', '').lower()
-                    risk_state = user.get('riskState', '').lower()
+                    risk_level = str(_get_attr(user, 'riskLevel', '') or '').lower()
+                    risk_state = str(_get_attr(user, 'riskState', '') or '').lower()
                     
                     if risk_level == 'high':
                         client_obj.risk_summary['risky_users_high'] += 1
@@ -691,15 +719,8 @@ async def get_entra_client(graph_client, tenant_id=None):
                 global_admin_role = '62e90394-69f5-4237-9190-012177145e10'
                 
                 for assignment in assignments:
-                    role_def_id = assignment.get('roleDefinitionId', '')
-                    
-                    # Check if permanent (no end date in assignment schedule)
-                    # For now, count all role_assignments as permanent (vs eligible in schedules)
-                    client_obj.pim_summary['permanent_assignments'] += 1
-                    
-                    if global_admin_role in role_def_id:
-                        client_obj.pim_summary['permanent_global_admins'] += 1
-                
+                    role_def_id = str(_get_attr(assignment, 'roleDefinitionId', '') or '')
+
             except Exception as e:
                 with _stdout_lock:
                     print(f"[{get_timestamp()}] ⚠️  Entra: Role assignments parse error: {e}")
@@ -724,8 +745,23 @@ async def get_entra_client(graph_client, tenant_id=None):
             try:
                 schedules = _extract_response_items(role_sched_response)
                 client_obj.role_assignment_schedules = schedules
-                
-                client_obj.pim_summary['total_time_bound_assignments'] = len(schedules)
+
+                global_admin_role = '62e90394-69f5-4237-9190-012177145e10'
+                for schedule in schedules:
+                    schedule_info = _get_attr(schedule, 'scheduleInfo', {}) or {}
+                    expiration = _get_attr(schedule_info, 'expiration', {}) or {}
+                    expiration_type = str(_get_attr(expiration, 'type', '') or '').lower()
+                    end_date = _get_attr(expiration, 'endDateTime', None)
+                    role_def_id = str(_get_attr(schedule, 'roleDefinitionId', '') or '')
+
+                    if 'noexpiration' in expiration_type.replace('_', ''):
+                        client_obj.pim_summary['permanent_assignments'] += 1
+                        if global_admin_role in role_def_id:
+                            client_obj.pim_summary['permanent_global_admins'] += 1
+                    elif end_date or 'after' in expiration_type:
+                        client_obj.pim_summary['total_time_bound_assignments'] += 1
+                    else:
+                        client_obj.pim_summary['unclassified_active_assignments'] += 1
                 
             except Exception as e:
                 with _stdout_lock:
@@ -761,9 +797,9 @@ async def get_entra_client(graph_client, tenant_id=None):
                         client_obj.access_review_summary['guest_user_reviews'] += 1
                     
                     # Check recurrence
-                    settings = review.get('settings', {})
-                    recurrence = settings.get('recurrence', {})
-                    if recurrence and recurrence.get('pattern'):
+                    settings = _get_attr(review, 'settings', None)
+                    recurrence = _get_attr(settings, 'recurrence', None) if settings else None
+                    if recurrence and _get_attr(recurrence, 'pattern', None):
                         client_obj.access_review_summary['recurring_reviews'] += 1
                     else:
                         client_obj.access_review_summary['one_time_reviews'] += 1
@@ -776,14 +812,13 @@ async def get_entra_client(graph_client, tenant_id=None):
         devices_response = phase1_results.get('managed_devices')
         if devices_response and not isinstance(devices_response, Exception):
             try:
-                devices_data = devices_response.json() if hasattr(devices_response, 'json') else devices_response
-                devices = devices_data.get('value', []) if isinstance(devices_data, dict) else []
+                devices = _extract_response_items(devices_response)
                 client_obj.managed_devices = devices
                 
                 client_obj.device_summary['total_managed'] = len(devices)
                 
                 for device in devices:
-                    compliance = device.get('complianceState', '').lower()
+                    compliance = str(_get_attr(device, 'complianceState', '') or '').lower()
                     if compliance == 'compliant':
                         client_obj.device_summary['compliant'] += 1
                     elif compliance == 'noncompliant':
@@ -793,13 +828,13 @@ async def get_entra_client(graph_client, tenant_id=None):
                     elif compliance == 'error':
                         client_obj.device_summary['error'] += 1
                     
-                    ownership = device.get('managedDeviceOwnerType', '').lower()
+                    ownership = str(_get_attr(device, 'managedDeviceOwnerType', '') or '').lower()
                     if ownership == 'company':
                         client_obj.device_summary['corporate_owned'] += 1
                     elif ownership == 'personal':
                         client_obj.device_summary['personal_byod'] += 1
                     
-                    os = device.get('operatingSystem', '').lower()
+                    os = str(_get_attr(device, 'operatingSystem', '') or '').lower()
                     if 'windows' in os:
                         client_obj.device_summary['windows'] += 1
                     elif 'ios' in os:
@@ -842,17 +877,17 @@ async def get_entra_client(graph_client, tenant_id=None):
                 
                 for group in groups:
                     # Check for errors
-                    license_state = group.get('licenseProcessingState', {})
-                    if license_state and license_state.get('state') == 'ProcessingFailed':
+                    license_state = _get_attr(group, 'licenseProcessingState', {}) or {}
+                    if license_state and _get_attr(license_state, 'state', '') == 'ProcessingFailed':
                         client_obj.group_licensing_summary['groups_with_errors'] += 1
                     
                     # Check group type
-                    group_types = group.get('groupTypes', [])
+                    group_types = _get_attr(group, 'groupTypes', []) or []
                     if 'DynamicMembership' in group_types:
                         client_obj.group_licensing_summary['dynamic_groups'] += 1
                     
                     # Check for Copilot licenses (approximate - would need SKU lookup)
-                    display_name = group.get('displayName', '').upper()
+                    display_name = str(_get_attr(group, 'displayName', '') or '').upper()
                     if any(keyword in display_name for keyword in copilot_sku_keywords):
                         client_obj.group_licensing_summary['copilot_license_groups'] += 1
                 
@@ -884,76 +919,94 @@ async def get_entra_client(graph_client, tenant_id=None):
         cross_tenant_response = phase1_results.get('cross_tenant_policy')
         if cross_tenant_response and not isinstance(cross_tenant_response, Exception):
             try:
-                policy_data = cross_tenant_response.json() if hasattr(cross_tenant_response, 'json') else cross_tenant_response
-                client_obj.cross_tenant_access_policy = policy_data if isinstance(policy_data, dict) else {}
+                client_obj.cross_tenant_access_policy = cross_tenant_response
                 
                 client_obj.b2b_summary['cross_tenant_access_configured'] = True
                 
                 # Get default settings
-                default = policy_data.get('default', {}) if isinstance(policy_data, dict) else {}
+                default = _get_attr(cross_tenant_response, 'default', {}) or {}
                 client_obj.b2b_summary['default_settings'] = default
                 
             except Exception as e:
                 with _stdout_lock:
                     print(f"[{get_timestamp()}] ⚠️  Entra: Cross-tenant policy parse error: {e}")
         
-        # Process Service Principals
+        # Process Service Principals. OAuth grant clientId/resourceId values are service-
+        # principal object IDs, not application IDs, so retain an object-ID index for joins.
+        service_principal_by_id = {}
         sp_response = phase1_results.get('service_principals')
         if sp_response and not isinstance(sp_response, Exception):
             try:
                 service_principals = _extract_response_items(sp_response)
                 client_obj.service_principals = service_principals
-                
                 client_obj.consent_summary['total_apps'] = len(service_principals)
-                
-                # Analyze app permissions
-                graph_app_id = '00000003-0000-0000-c000-000000000000'
-                
                 for sp in service_principals:
-                    app_roles = sp.get('appRoles', [])
-                    oauth_scopes = sp.get('oauth2PermissionScopes', [])
-                    publisher = sp.get('publisherName', '')
-                    
-                    # Check if unverified publisher
-                    if not publisher or publisher.lower() == 'unverified':
-                        client_obj.consent_summary['unverified_publishers'] += 1
-                    
-                    # Note: Full permission analysis requires cross-referencing with oauth2PermissionGrants
-                    # This is simplified for initial implementation
-                
+                    sp_id = str(_get_attr(sp, 'id', '') or '').lower()
+                    if sp_id:
+                        service_principal_by_id[sp_id] = sp
             except Exception as e:
                 with _stdout_lock:
                     print(f"[{get_timestamp()}] ⚠️  Entra: Service principals parse error: {e}")
-        
-        # Process OAuth Permission Grants
+
+        # Process OAuth Permission Grants and count unique client applications rather than
+        # grant rows. Publisher verification is evaluated only for apps with an actual grant;
+        # a blank publisher on an unused/local service principal is not a risk finding.
         oauth_response = phase1_results.get('oauth_grants')
         if oauth_response and not isinstance(oauth_response, Exception):
             try:
                 grants = _extract_response_items(oauth_response)
                 client_obj.oauth_permission_grants = grants
-                
-                client_obj.consent_summary['apps_with_delegated_permissions'] = len(grants)
-                
-                # Analyze for Graph API access, Mail, Files
-                graph_resource_id = '00000003-0000-0000-c000-000000000000'
-                
+
+                graph_app_id = '00000003-0000-0000-c000-000000000000'
+                delegated_clients = set()
+                graph_clients = set()
+                mail_clients = set()
+                files_clients = set()
+                high_privilege_clients = set()
+
                 for grant in grants:
-                    resource_id = _get_attr(grant, 'resourceId', '')
-                    scope = (_get_attr(grant, 'scope') or '').lower()
-                    
-                    if resource_id == graph_resource_id or 'graph' in scope:
-                        client_obj.consent_summary['apps_with_graph_access'] += 1
-                    
+                    client_id = str(_get_attr(grant, 'clientId', '') or '').lower()
+                    resource_id = str(_get_attr(grant, 'resourceId', '') or '').lower()
+                    scope = str(_get_attr(grant, 'scope', '') or '').lower()
+                    if not client_id:
+                        continue
+                    delegated_clients.add(client_id)
+
+                    resource_sp = service_principal_by_id.get(resource_id)
+                    resource_app_id = str(_get_attr(resource_sp, 'appId', '') or '').lower()
+                    if resource_app_id == graph_app_id:
+                        graph_clients.add(client_id)
                     if 'mail' in scope:
-                        client_obj.consent_summary['apps_with_mail_access'] += 1
+                        mail_clients.add(client_id)
                     if 'files' in scope or 'sharepoint' in scope:
-                        client_obj.consent_summary['apps_with_files_access'] += 1
-                    
-                    # High privilege detection (simplified)
-                    high_priv_scopes = ['mail.readwrite', 'files.readwrite', 'directory.readwrite']
-                    if any(priv in scope for priv in high_priv_scopes):
-                        client_obj.consent_summary['high_privilege_apps'] += 1
-                
+                        files_clients.add(client_id)
+                    if any(marker in scope for marker in ('mail.readwrite', 'files.readwrite', 'directory.readwrite')):
+                        high_privilege_clients.add(client_id)
+
+                unverified_external_clients = set()
+                tenant_id_normalized = str(tenant_id or '').lower()
+                for client_id in delegated_clients:
+                    sp = service_principal_by_id.get(client_id)
+                    if not sp:
+                        continue
+                    verified = _get_attr(sp, 'verifiedPublisher', None)
+                    verified_id = str(_get_attr(verified, 'verifiedPublisherId', '') or '')
+                    verified_name = str(_get_attr(verified, 'displayName', '') or '')
+                    owner_tenant = str(_get_attr(sp, 'appOwnerOrganizationId', '') or '').lower()
+                    publisher = str(_get_attr(sp, 'publisherName', '') or '')
+                    principal_type = str(_get_attr(sp, 'servicePrincipalType', '') or '').lower()
+                    is_internal = bool(tenant_id_normalized and owner_tenant == tenant_id_normalized)
+                    is_microsoft = publisher.lower().startswith('microsoft')
+                    is_managed_identity = principal_type == 'managedidentity'
+                    if not (verified_id or verified_name or is_internal or is_microsoft or is_managed_identity):
+                        unverified_external_clients.add(client_id)
+
+                client_obj.consent_summary['apps_with_delegated_permissions'] = len(delegated_clients)
+                client_obj.consent_summary['apps_with_graph_access'] = len(graph_clients)
+                client_obj.consent_summary['apps_with_mail_access'] = len(mail_clients)
+                client_obj.consent_summary['apps_with_files_access'] = len(files_clients)
+                client_obj.consent_summary['high_privilege_apps'] = len(high_privilege_clients)
+                client_obj.consent_summary['unverified_publishers'] = len(unverified_external_clients)
             except Exception as e:
                 with _stdout_lock:
                     print(f"[{get_timestamp()}] ⚠️  Entra: OAuth grants parse error: {e}")
@@ -1090,16 +1143,15 @@ async def get_entra_client(graph_client, tenant_id=None):
         signin_response = phase1_results.get('signin_logs')
         if signin_response and not isinstance(signin_response, Exception):
             try:
-                signin_data = signin_response.json() if hasattr(signin_response, 'json') else signin_response
-                signins = signin_data.get('value', []) if isinstance(signin_data, dict) else []
+                signins = _extract_response_items(signin_response)
                 client_obj.signin_logs = signins
                 
                 client_obj.signin_summary['total_signins_sampled'] = len(signins)
                 
                 for signin in signins:
-                    client_app = signin.get('clientAppUsed', '').lower()
-                    status = signin.get('status', {})
-                    error_code = status.get('errorCode', 0)
+                    client_app = str(_get_attr(signin, 'clientAppUsed', '') or '').lower()
+                    signin_status = _get_attr(signin, 'status', {}) or {}
+                    error_code = _get_attr(signin_status, 'errorCode', 0) or 0
                     
                     # Legacy auth detection
                     legacy_apps = ['pop', 'imap', 'smtp', 'activesync', 'other clients', 'exchange web services']
@@ -1107,18 +1159,18 @@ async def get_entra_client(graph_client, tenant_id=None):
                         client_obj.signin_summary['legacy_auth_attempts'] += 1
                     
                     # MFA
-                    auth_details = signin.get('authenticationDetails', [])
+                    auth_details = _get_attr(signin, 'authenticationDetails', []) or []
                     if auth_details:
                         for detail in auth_details:
-                            if detail.get('authenticationMethod') == 'MFA':
+                            if _get_attr(detail, 'authenticationMethod', '') == 'MFA':
                                 client_obj.signin_summary['mfa_required'] += 1
-                                if detail.get('succeeded'):
+                                if _get_attr(detail, 'succeeded', False):
                                     client_obj.signin_summary['mfa_success'] += 1
                                 else:
                                     client_obj.signin_summary['mfa_failure'] += 1
                     
                     # CA status
-                    ca_status = signin.get('conditionalAccessStatus', '').lower()
+                    ca_status = str(_get_attr(signin, 'conditionalAccessStatus', '') or '').lower()
                     if ca_status == 'success':
                         client_obj.signin_summary['ca_success'] += 1
                     elif ca_status == 'failure':
@@ -1129,7 +1181,7 @@ async def get_entra_client(graph_client, tenant_id=None):
                         client_obj.signin_summary['failed_signins'] += 1
                     
                     # Risky sign-ins
-                    risk_level = signin.get('riskLevelDuringSignIn', '').lower()
+                    risk_level = str(_get_attr(signin, 'riskLevelDuringSignIn', '') or '').lower()
                     if risk_level in ['high', 'medium']:
                         client_obj.signin_summary['risky_signins'] += 1
                 

@@ -47,6 +47,7 @@ async def get_recommendation(sku_name, status="Success", client=None, purview_cl
                     service="Purview",
                     feature=f"{feature_name} - Configuration",
                     observation="Azure RMS licensing is ENABLED - documents can be protected with persistent encryption",
+                    finding_key="purview.rms.state",
                     recommendation="Verify Azure RMS protects Copilot scenarios: 1) Test: apply 'Confidential' label to document > ask Copilot to summarize > verify summary inherits protection, 2) Ensure auto-labeling policies protect Copilot outputs containing sensitive patterns (SSN, credit cards), 3) Configure usage rights: prevent AI-generated content marked 'Internal Only' from external sharing, 4) Enable track & revoke for Copilot-created documents. Review protection templates in Azure portal.",
                     link_text="Azure RMS Configuration",
                     link_url="https://learn.microsoft.com/azure/information-protection/configure-policy",

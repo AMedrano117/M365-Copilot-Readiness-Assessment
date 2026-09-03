@@ -96,6 +96,7 @@ async def get_recommendation(sku_name, status="Success", client=None, purview_cl
                     service="Purview",
                     feature=f"{feature_name} - Configuration Status",
                     observation=f"Unified Audit Log is ENABLED (Admin Audit: {'Enabled' if admin_audit_enabled else 'Disabled'}) - Copilot events are being logged",
+                    finding_key="purview.audit.state",
                     recommendation="Verify Advanced Auditing configuration for Copilot: 1) Check audit log retention set to 10 years (not default 90 days) in Purview > Audit > Retention policies, 2) Confirm Copilot event types are captured (CopilotInteraction, PromptSubmitted, SensitiveDataAccessed), 3) Create audit alerts for high-risk patterns (excessive data access, unusual prompts), 4) Export to SIEM for correlation with security events. Review audit logs monthly for compliance reporting.",
                     link_text="Copilot Audit Policies",
                     link_url="https://learn.microsoft.com/purview/audit-log-retention-policies",

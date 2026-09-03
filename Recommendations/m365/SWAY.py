@@ -37,7 +37,7 @@ def get_recommendation(sku_name, status="Success", m365_insights=None):
     
     # NEW: Usage Context based on SharePoint files and active users
     if status == "Success" and m365_insights and m365_insights.get('sharepoint_report_available'):
-        total_files = m365_insights.get('total_files', 0)
+        total_files = m365_insights.get('sharepoint_total_files', 0)
         active_users = m365_insights.get('sharepoint_active_users', 0)
         
         if total_files >= 1000 and active_users >= 100:
@@ -62,7 +62,8 @@ def get_recommendation(sku_name, status="Success", m365_insights=None):
                 link_text="Create Your First Sway",
                 link_url="https://support.microsoft.com/sway",
                 priority="Low",
-                status="PendingInput"
+                status="Insight",
+                disposition="Opportunity"
             ))
         else:
             # Low content/users = focus on core content creation first
@@ -74,7 +75,8 @@ def get_recommendation(sku_name, status="Success", m365_insights=None):
                 link_text="SharePoint Content Planning",
                 link_url="https://learn.microsoft.com/sharepoint/plan-site-architecture",
                 priority="Low",
-                status="PendingInput"
+                status="Insight",
+                disposition="Opportunity"
             ))
 
     return recommendations

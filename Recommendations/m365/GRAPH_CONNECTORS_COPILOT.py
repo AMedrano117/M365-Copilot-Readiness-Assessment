@@ -3,7 +3,6 @@ Graph Connectors for Copilot - M365 Copilot & Agent Adoption Recommendation
 """
 from Core.new_recommendation import new_recommendation
 from Core.friendly_names import get_friendly_sku_name
-from azure.core.exceptions import HttpResponseError
 
 async def get_deployment_status(client):
     """
@@ -37,13 +36,17 @@ async def get_deployment_status(client):
             'connectors': connectors,
             'total_connectors': len(connectors)
         }
-    except HttpResponseError as e:
-        if e.status_code == 401:
-            return {'available': False, 'reason': 'Authentication failed (requires ExternalConnection.Read.All permission)'}
-        if e.status_code == 403:
-            return {'available': False, 'reason': 'Permission denied (requires ExternalConnection.Read.All permission)'}
-        return {'available': False, 'reason': f'API error {e.status_code}'}
     except Exception as e:
+        # Keep this module importable for offline report review and tests where the
+        # optional Azure SDK is not installed. Graph SDK HTTP errors expose a
+        # status_code attribute, so no concrete SDK exception type is required.
+        status_code = getattr(e, "status_code", None)
+        if status_code == 401:
+            return {'available': False, 'reason': 'Authentication failed (requires ExternalConnection.Read.All permission)'}
+        if status_code == 403:
+            return {'available': False, 'reason': 'Permission denied (requires ExternalConnection.Read.All permission)'}
+        if status_code is not None:
+            return {'available': False, 'reason': f'API error {status_code}'}
         # Simplified error message - just the error type
         error_type = type(e).__name__
         return {'available': False, 'reason': f'{error_type}: Insufficient permissions'}
@@ -124,12 +127,13 @@ async def get_recommendation(sku_name, status="Success", client=None, m365_insig
                 recommendations.append(new_recommendation(
                     service="M365",
                     feature="Graph Connectors Deployment",
-                    observation=f"ZERO Graph Connectors deployed - Copilot cannot access any external data sources",
-                    recommendation=f"URGENT: Deploy Graph Connectors to unlock Copilot's full potential. Without connectors, Copilot is limited to Microsoft 365 content only (SharePoint, OneDrive, Teams). Deploy connectors for critical systems like ServiceNow, Salesforce, Jira, custom databases, and file shares. This is a major gap preventing comprehensive AI assistance. Start with high-impact data sources where employees frequently search for information.",
-                    link_text="Deploy Connectors Now",
+                    observation="No Graph Connectors were returned; Copilot remains grounded in the Microsoft 365 sources users can already access",
+                    recommendation="If an approved use case requires an external repository, evaluate a connector for that named source, its permissions, index scope, ownership, and lifecycle. No connector is required solely to improve an assessment score.",
+                    link_text="Evaluate Graph Connectors",
                     link_url="https://learn.microsoft.com/graph/connecting-external-content-connectors-overview",
-                    priority="High",
-                    status="Warning"
+                    priority="Low",
+                    status="Insight",
+                    disposition="Opportunity"
                 ))
         elif deployment_data and not deployment_data.get('available'):
             # Could not verify - show actionable guidance instead of technical error
@@ -141,7 +145,8 @@ async def get_recommendation(sku_name, status="Success", client=None, m365_insig
                 link_text="Verify Graph Connectors Deployment",
                 link_url="https://admin.microsoft.com/Adminportal/Home#/MicrosoftSearch/connectors",
                 priority="Medium",
-                status="PendingInput"
+                status="Insight",
+                disposition="Opportunity"
             ))
         else:
             # No client provided - show actionable guidance
@@ -153,7 +158,8 @@ async def get_recommendation(sku_name, status="Success", client=None, m365_insig
                 link_text="Verify Graph Connectors Deployment",
                 link_url="https://admin.microsoft.com/Adminportal/Home#/MicrosoftSearch/connectors",
                 priority="Medium",
-                status="PendingInput"
+                status="Insight",
+                disposition="Opportunity"
             ))
     
     # RECOMMENDATION 3: Usage Context (NEW - based on m365_insights)

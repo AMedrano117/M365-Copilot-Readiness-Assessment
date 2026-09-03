@@ -83,31 +83,16 @@ def get_feature_recommendation(feature_name, sku_name, status="Success", client=
             return result
         return result
     
-    # Fallback for features without specific recommendations
-    from Core.friendly_names import get_friendly_plan_name
-    from Core.new_recommendation import new_recommendation
-    from Core.friendly_names import get_friendly_sku_name
-    
-    friendly_name = get_friendly_plan_name(feature_name)
-    friendly_sku = get_friendly_sku_name(sku_name)
-    if status == "Success":
-        return new_recommendation(
-            service="M365",
-            feature=friendly_name,
-            observation=f"{friendly_name} is active in {friendly_sku}, providing infrastructure and services that M365 Copilot depends on",
-            recommendation="",
-            link_text="Microsoft 365 Documentation",
-            link_url="https://learn.microsoft.com/microsoft-365/",
-            status=status
-        )
-    
-    return new_recommendation(
-        service="M365",
-        feature=friendly_name,
-        observation=f"{friendly_name} is {status} in {friendly_sku}, limiting Copilot capabilities",
-        recommendation=f"Enable {friendly_name} to provide collaboration, productivity, and knowledge management capabilities that enhance M365 Copilot effectiveness.",
-        link_text="Microsoft 365 Documentation",
-        link_url="https://learn.microsoft.com/microsoft-365/",
-        priority="Medium",
-        status=status
-    )
+    # No dedicated recommendation module exists for this service plan.
+    #
+    # These plans used to emit a boilerplate card each - "X is active in Y, providing
+    # infrastructure and services that M365 Copilot depends on" for Success, and "Enable X to
+    # provide collaboration, productivity, and knowledge management capabilities" for anything
+    # else. Both are unfounded: with no module, the assessment has no Copilot-specific criteria
+    # for the plan and cannot say whether it matters or whether enabling it would help. In a
+    # typical tenant this produced ~50 filler cards that crowded out real findings, and the
+    # "enable it" advice pointed at plans that were deliberately off or irrelevant.
+    #
+    # The plan is still recorded, with its provisioning status, in the Service Plan Inventory
+    # workbook tab (see Core/evidence_layer.py), so the licensing picture stays complete.
+    return None

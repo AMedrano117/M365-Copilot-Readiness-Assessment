@@ -1,6 +1,6 @@
 import asyncio
 from .get_recommendation import get_recommendation
-from .service_categorization import determine_service_type
+from .service_categorization import determine_service_type, resolve_plan_statuses
 from .spinner import get_timestamp, _stdout_lock
 from azure.core.exceptions import HttpResponseError
 
@@ -116,6 +116,10 @@ async def get_entra_info(client, services_and_licenses=None, entra_client=None):
     # Track features already added to avoid duplicates
     added_features = set()
     
+    # Resolve each plan to its best status across every SKU: a plan disabled in one SKU
+    # but active in another is available to the tenant.
+    resolved_plans = resolve_plan_statuses(entra_info.get('licenses', []), plans_key='entra_service_plans')
+
     for lic in entra_info.get('licenses', []):
         sku_name = lic.get('sku_part_number', 'Unknown')
         for plan in lic.get('entra_service_plans', []):
@@ -130,16 +134,19 @@ async def get_entra_info(client, services_and_licenses=None, entra_client=None):
                 continue
             added_features.add(plan_name)
             
-            status = plan.get('status', 'Success')
+            resolution = resolved_plans.get(plan_name, {})
+            status = resolution.get('status', plan.get('status', 'Success'))
+            sku_name = resolution.get('sku_name', sku_name)
             
             # Generate recommendations - pass pre-computed entra_insights
             rec = get_recommendation('entra', plan_name, sku_name, status, client=client, entra_insights=entra_insights)
             
             # Handle both single recommendations and lists
             if isinstance(rec, list):
-                recommendations.extend(rec)
+                recommendations.extend(item for item in rec if item)
             else:
-                recommendations.append(rec)
+                if rec:
+                    recommendations.append(rec)
     
     # Global Secure Access (Entra Internet Access) doesn't have a service plan
     # It's API-only, so manually invoke if we collected network access data

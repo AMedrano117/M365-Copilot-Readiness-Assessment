@@ -29,7 +29,14 @@ wheels/
 
 # Environment variables
 .env
-.env.local
+.env.*
+!.env.example
+
+# Local secrets and authentication material
+*.pem
+*.pfx
+*.p12
+*.key
 
 # Virtual environments
 venv/
@@ -38,3 +45,15 @@ ENV/
 
 # Generated reports and exports
 Reports/
+output/
+
+# Local collection and browser-test artifacts
+.cache/
+.playwright-cli/
+/el.open
+*.log
+
+# Test and coverage caches
+.pytest_cache/
+.coverage
+htmlcov/

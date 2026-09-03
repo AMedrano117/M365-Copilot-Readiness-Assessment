@@ -2,8 +2,9 @@
 Entra Identity Protection - Enhanced with Risk Detection Analysis
 Provides license check + risky user detection + risk-based policy recommendations for Copilot security.
 """
-from Core.new_recommendation import new_recommendation
+from Core.new_recommendation import new_recommendation, NOT_ASSESSED_STATUS
 from Core.friendly_names import get_friendly_sku_name
+from .entra_insights import entra_source_was_read
 
 def get_recommendation(sku_name, status="Success", client=None, entra_insights=None):
     """
@@ -88,7 +89,20 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
                 status=status
             ))
         
-        # No risky users - good security posture
+        # Identity Protection data was never read - do not report unread as clean
+        elif not entra_source_was_read(entra_insights, 'risky_users', 'risk_detections'):
+            observations.append(new_recommendation(
+                service="Entra",
+                feature=feature_name,
+                observation="Identity Protection risk data could not be retrieved, so account risk is unverified",
+                recommendation="Grant the assessment IdentityRiskyUser.Read.All and IdentityRiskEvent.Read.All, then rerun. Compromised accounts are a primary route to Copilot data exfiltration, so risk status should be confirmed before broad rollout. Meanwhile review Entra ID Protection > Risky users directly.",
+                link_text="Identity Protection Risk Reports",
+                link_url="https://learn.microsoft.com/entra/id-protection/howto-identity-protection-investigate-risk",
+                priority="Medium",
+                status=NOT_ASSESSED_STATUS
+            ))
+
+        # No risky users - risk data was read and came back empty
         else:
             observations.append(new_recommendation(
                 service="Entra",

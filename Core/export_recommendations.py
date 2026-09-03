@@ -18,14 +18,35 @@ PREFERRED_STATUS_ORDER = [
     "Warning",
     "PendingInput",
     "PendingActivation",
+    "Not Assessed",
     "Success",
     "Unknown",
 ]
 
+from .new_recommendation import (  # noqa: F401  (re-exported)
+    NOT_ASSESSED_STATUS,
+    CATEGORY_SCAN_COVERAGE,
+)
+from .assessment_model import (
+    CROSS_PLATFORM_MANUAL_CHECKS,
+    DISPOSITION_ACTION,
+    DISPOSITION_ASSURANCE,
+    DISPOSITION_COVERAGE,
+    DISPOSITION_OPPORTUNITY,
+    enrich_assessment_records,
+    summarize_readiness,
+)
+
 RECOMMENDATION_EXPORT_FIELDS = [
     "RecommendationId",
     "Service",
+    "Disposition",
+    "ReadinessStage",
+    "ImpactArea",
+    "AIApplicability",
+    "Category",
     "Feature",
+    "AlsoLicensedVia",
     "Status",
     "Priority",
     "Observation",
@@ -35,7 +56,44 @@ RECOMMENDATION_EXPORT_FIELDS = [
     "EvidenceAvailable",
     "EvidenceSheet",
     "EvidenceSummary",
+    "EvidenceBasis",
+    "Confidence",
 ]
+
+
+def summarize_finding(observation, max_length=110):
+    """Condense an observation into a scannable card heading.
+
+    Cards were titled by licence, so a reader scanning the Entra section saw "Microsoft Entra ID
+    P1" six times over six unrelated findings (Conditional Access coverage, MFA enrolment,
+    passwordless adoption, group-based licensing...). The licence is still shown, as a subtitle;
+    the heading now says what was actually found.
+    """
+    text = str(observation or "").strip()
+    if not text:
+        return ""
+
+    # Several observations open with a headline followed by a blank line and a breakdown
+    # ("Copilot Security Posture: NOT READY\n\n1 Critical Gaps: ..."). Keep the headline.
+    first_block = re.split(r"\n\s*\n", text, maxsplit=1)[0]
+    if first_block.strip():
+        text = first_block
+
+    # Drop markdown emphasis and collapse whitespace so headings stay on one line.
+    text = re.sub(r"\*\*(.+?)\*\*", r"\1", text, flags=re.DOTALL)
+    text = re.sub(r"\s+", " ", text).strip()
+    if not text:
+        return ""
+
+    # First sentence, avoiding common abbreviations and decimals that contain a period.
+    match = re.search(r"(?<![A-Z0-9])\.(?=\s+[A-Z(])", text)
+    if match:
+        text = text[:match.start()].strip()
+
+    if len(text) > max_length:
+        cut = text[:max_length].rsplit(" ", 1)[0].rstrip(" ,;:-")
+        text = f"{cut}…"
+    return text
 
 
 def sanitize_filename_component(value):
@@ -140,6 +198,8 @@ def export_to_csv(recommendations, filename=None, tenant_name=None):
     Returns:
         str: Path to created CSV file
     """
+    recommendations = enrich_assessment_records(recommendations)
+
     # Create Reports folder if it doesn't exist
     recommendations_dir = Path("Reports")
     recommendations_dir.mkdir(exist_ok=True)
@@ -161,7 +221,9 @@ def export_to_csv(recommendations, filename=None, tenant_name=None):
     fieldnames = RECOMMENDATION_EXPORT_FIELDS
 
     with open(filepath, 'w', newline='', encoding='utf-8') as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        # Recommendation dicts carry internal fields (EvidenceKey) that are not exported.
+        # Without extrasaction='ignore' DictWriter raises on every row.
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames, extrasaction='ignore')
         writer.writeheader()
         writer.writerows(recommendations)
     
@@ -178,6 +240,8 @@ def export_to_json(recommendations, filename=None, tenant_name=None):
     Returns:
         str: Path to created JSON file
     """
+    recommendations = enrich_assessment_records(recommendations)
+
     # Create Reports folder if it doesn't exist
     recommendations_dir = Path("Reports")
     recommendations_dir.mkdir(exist_ok=True)
@@ -226,6 +290,8 @@ def export_to_excel(recommendations, filename=None, tenant_name=None, evidence_b
     Returns:
         str: Path to created Excel file
     """
+    recommendations = enrich_assessment_records(recommendations)
+
     try:
         from openpyxl import Workbook
         from openpyxl.styles import Font, PatternFill, Alignment
@@ -272,7 +338,13 @@ def export_to_excel(recommendations, filename=None, tenant_name=None, evidence_b
     summary_headers = [
         "RecommendationId",
         "Service",
+        "Disposition",
+        "Readiness Stage",
+        "Impact Area",
+        "AI Applicability",
+        "Category",
         "Feature",
+        "Also Licensed Via",
         "Status",
         "Priority",
         "Observation",
@@ -282,13 +354,21 @@ def export_to_excel(recommendations, filename=None, tenant_name=None, evidence_b
         "Evidence Available",
         "Evidence Sheet",
         "Evidence Summary",
+        "Evidence Basis",
+        "Confidence",
     ]
     ws.append(summary_headers)
     for rec in recommendations:
         row = [
             rec.get("RecommendationId", ""),
             rec.get("Service", ""),
+            rec.get("Disposition", ""),
+            rec.get("ReadinessStage", ""),
+            rec.get("ImpactArea", ""),
+            rec.get("AIApplicability", ""),
+            rec.get("Category", ""),
             rec.get("Feature", ""),
+            rec.get("AlsoLicensedVia", ""),
             rec.get("Status", ""),
             rec.get("Priority", ""),
             rec.get("Observation", ""),
@@ -298,6 +378,8 @@ def export_to_excel(recommendations, filename=None, tenant_name=None, evidence_b
             rec.get("EvidenceAvailable", ""),
             rec.get("EvidenceSheet", ""),
             rec.get("EvidenceSummary", ""),
+            rec.get("EvidenceBasis", ""),
+            rec.get("Confidence", ""),
         ]
         ws.append(row)
 
@@ -305,7 +387,7 @@ def export_to_excel(recommendations, filename=None, tenant_name=None, evidence_b
         priority = rec.get("Priority", "")
         if priority in priority_colors:
             row_num = ws.max_row
-            priority_cell = ws.cell(row=row_num, column=5)
+            priority_cell = ws.cell(row=row_num, column=11)  # Priority column
             priority_cell.fill = PatternFill(start_color=priority_colors[priority], 
                                             end_color=priority_colors[priority], 
                                             fill_type="solid")
@@ -349,6 +431,8 @@ def export_to_html(recommendations, filename=None, tenant_name=None, evidence_bu
     Returns:
         str: Path to created HTML file
     """
+    recommendations = enrich_assessment_records(recommendations)
+
     recommendations_dir = Path("Reports")
     recommendations_dir.mkdir(exist_ok=True)
     
@@ -367,19 +451,28 @@ def export_to_html(recommendations, filename=None, tenant_name=None, evidence_bu
     generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     tenant_label = str(tenant_name or "Tenant name unavailable")
     workbook_label = Path(excel_path).name if excel_path else ""
-    high_priority = [r for r in recommendations if r.get("Priority") == "High"]
-    medium_priority = [r for r in recommendations if r.get("Priority") == "Medium"]
-    low_priority = [r for r in recommendations if r.get("Priority") == "Low"]
-    
+    # Keep unlike things in unlike lanes.  A healthy licensed feature is assurance evidence,
+    # not a finding; an adoption idea is not a security gap; and unread data is a coverage limit.
+    findings = [r for r in recommendations if r.get("Disposition") == DISPOSITION_ACTION]
+    opportunities = [r for r in recommendations if r.get("Disposition") == DISPOSITION_OPPORTUNITY]
+    assurances = [r for r in recommendations if r.get("Disposition") == DISPOSITION_ASSURANCE]
+    coverage_items = [r for r in recommendations if r.get("Disposition") == DISPOSITION_COVERAGE]
+    readiness = summarize_readiness(recommendations)
+
+    high_priority = [r for r in findings if r.get("Priority") == "High"]
+    medium_priority = [r for r in findings if r.get("Priority") == "Medium"]
+    low_priority = [r for r in findings if r.get("Priority") == "Low"]
+    not_assessed = coverage_items
+
     services = {}
-    for rec in recommendations:
+    for rec in findings:
         service = rec.get("Service", "Unknown")
         if service not in services:
             services[service] = []
         services[service].append(rec)
 
     status_values = sort_values_with_preferences(
-        [rec.get("Status", "Unknown") for rec in recommendations],
+        [rec.get("Status", "Unknown") for rec in findings],
         PREFERRED_STATUS_ORDER,
     )
     
@@ -396,12 +489,19 @@ def export_to_html(recommendations, filename=None, tenant_name=None, evidence_bu
             return f"status-{normalized}"
         if normalized in {"missing", "pendinginput", "pendingactivation"}:
             return "status-warning"
+        if normalized in {"not-assessed", "permission-required", "missing-prerequisite"}:
+            return "status-not-assessed"
         return "status-default"
     
     def paragraphize(text):
         safe = escape(str(text or ""))
         if not safe:
             return "<span class=\"muted\">Not provided</span>"
+        # Several recommendation modules use **bold** for emphasis. That markdown is meaningful
+        # in the CSV and Excel exports, so it stays in the source text and is rendered here
+        # instead - otherwise the asterisks reach the reader verbatim. Applied after escaping,
+        # so the inserted tags are the only markup in the result.
+        safe = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", safe, flags=re.DOTALL)
         return "<br>".join(safe.splitlines())
 
     def short_text(text):
@@ -446,6 +546,120 @@ def export_to_html(recommendations, filename=None, tenant_name=None, evidence_bu
             "</table>"
             "</div>"
         )
+
+    def render_compact_table(rows, columns):
+        if not rows:
+            return '<p class="muted">None identified.</p>'
+        header_html = "".join(f"<th>{escape(label)}</th>" for label, _ in columns)
+        body_rows = []
+        for row in rows:
+            cells = "".join(
+                f"<td>{paragraphize(row.get(key, ''))}</td>"
+                for _, key in columns
+            )
+            body_rows.append(f"<tr>{cells}</tr>")
+        return (
+            '<div class="appendix-preview"><table class="preview-table">'
+            f"<thead><tr>{header_html}</tr></thead>"
+            f"<tbody>{''.join(body_rows)}</tbody></table></div>"
+        )
+
+    priority_rank = {"High": 0, "Medium": 1, "Low": 2, "": 3}
+    opportunity_rows = sorted(
+        opportunities,
+        key=lambda item: (
+            priority_rank.get(str(item.get("Priority", "") or ""), 4),
+            str(item.get("Service", "") or ""),
+            str(item.get("Feature", "") or ""),
+        ),
+    )[:12]
+
+    opportunity_html = ""
+    if opportunities:
+        opportunity_html = f"""
+        <details class="secondary-panel" id="opportunities">
+          <summary>Adoption &amp; value opportunities ({len(opportunities)})</summary>
+          <div class="analysis-impact-note">
+            <strong>How these affect the analysis:</strong> They do not change the security and
+            governance readiness decision or the action counts. Tenant activity and service
+            availability are used only to identify plausible pilot groups, enablement gaps, and
+            use cases worth testing. Treat each item as a value hypothesis—not proof of ROI,
+            proof of safe data access, or a reason to enable AI broadly.
+          </div>
+          <p>The highest-priority 12 are shown here; the workbook contains the complete list.
+          Validate each opportunity with a named business owner, a narrow pilot population, a
+          measurable baseline, and an expand/stop decision.</p>
+          {render_compact_table(opportunity_rows, [
+              ("Service", "Service"),
+              ("Value hypothesis", "Feature"),
+              ("Tenant signal", "Observation"),
+              ("Pilot or enablement next step", "Recommendation"),
+          ])}
+        </details>
+        """
+
+    assurance_counts = {}
+    for item in assurances:
+        service = str(item.get("Service", "Unknown") or "Unknown")
+        assurance_counts[service] = assurance_counts.get(service, 0) + 1
+    assurance_rows = [
+        {"Service": service, "Count": count}
+        for service, count in sorted(assurance_counts.items())
+    ]
+    assurance_html = ""
+    if assurances:
+        assurance_html = f"""
+        <details class="secondary-panel" id="assurances">
+          <summary>Verified controls &amp; available capabilities ({len(assurances)})</summary>
+          <p>These items are supporting assurance or inventory—not recommendations and not
+          proof that every licensed capability is configured effectively. Full detail remains
+          available in the workbook.</p>
+          {render_compact_table(assurance_rows, [("Service", "Service"), ("Items", "Count")])}
+        </details>
+        """
+
+    manual_check_html = render_compact_table(
+        CROSS_PLATFORM_MANUAL_CHECKS,
+        [("Provider-side check", "control"), ("Evidence to collect", "verify"), ("Risk if missing", "why")],
+    )
+    scope_html = f"""
+    <section class="scope-panel" id="scope-boundary">
+      <h2>Assessment scope &amp; external AI validation: what this tool verifies</h2>
+      <p>This is a readiness assessment of the Microsoft 365 data estate, not a certification
+      of every AI product that may use its data.</p>
+      <div class="scope-boundary-grid">
+        <article>
+          <h3>Verified from the Microsoft 365 tenant</h3>
+          <p>The report uses collected evidence for identity and access, application grants,
+          M365 content exposure and governance, security controls, licensing, and workload
+          activity. Supported security and coverage results feed the M365 readiness decision.</p>
+        </article>
+        <article>
+          <h3>Requires a separate review for each external AI product</h3>
+          <p>Microsoft Graph cannot see the contracted or workspace settings inside ChatGPT,
+          Claude, Cursor, or another provider—for example training use, retention, residency,
+          provider roles and logs, or product-side connectors and agents.</p>
+        </article>
+      </div>
+      <div class="scope-decision-note">
+        <strong>How this affects approval:</strong> an incomplete provider review is not an M365
+        tenant failure, but that specific AI product and subscription tier are not yet validated
+        for deployment. Keep missing evidence as a coverage item; convert a failed control into
+        a deployment action. The final decision combines both reviews.
+      </div>
+      <details>
+        <summary>External AI approval checklist—complete once per product and subscription tier ({len(CROSS_PLATFORM_MANUAL_CHECKS)})</summary>
+        <p class="checklist-intro">For each row, record the product and tier reviewed, an owner,
+        the evidence location, review date, and a Pass / Fail / Not verified result.</p>
+        {manual_check_html}
+      </details>
+      <p class="reference-row">Current primary guidance:
+        <a href="https://learn.microsoft.com/microsoft-365/copilot/secure-govern-copilot-foundational-deployment-guidance" target="_blank" rel="noopener noreferrer">Microsoft secure data foundation</a> ·
+        <a href="https://learn.microsoft.com/purview/ai-other-apps" target="_blank" rel="noopener noreferrer">Purview for other AI apps</a> ·
+        <a href="https://learn.microsoft.com/entra/identity/conditional-access/concept-conditional-access-cloud-apps" target="_blank" rel="noopener noreferrer">Conditional Access target resources</a>
+      </p>
+    </section>
+    """
     
     service_sections = []
     service_nav_items = []
@@ -475,6 +689,8 @@ def export_to_html(recommendations, filename=None, tenant_name=None, evidence_bu
                 str(rec.get("Priority", "") or ""),
                 str(rec.get("Observation", "") or ""),
                 str(rec.get("Recommendation", "") or ""),
+                str(rec.get("ImpactArea", "") or ""),
+                str(rec.get("AIApplicability", "") or ""),
                 evidence_sheet,
                 evidence_summary,
             ]).lower()
@@ -498,21 +714,45 @@ def export_to_html(recommendations, filename=None, tenant_name=None, evidence_bu
                 </section>
                 """
             
+            raw_feature = str(rec.get("Feature", "") or "")
+            heading_text = summarize_finding(rec.get("Observation", "")) or raw_feature
+            card_heading = escape(heading_text)
+            # Only show the licence subtitle when the heading does not already name it.
+            feature_subtitle = ""
+            if raw_feature and not heading_text.lower().startswith(raw_feature.lower()[:28]):
+                feature_subtitle = f'<div class="card-subtitle">{feature}</div>'
+
+            also_licensed = str(rec.get("AlsoLicensedVia", "") or "").strip()
+            also_html = ""
+            if also_licensed:
+                also_html = f"""
+                <p class="muted also-licensed">Same condition is also covered by:
+                {escape(also_licensed)}</p>
+                """
+
             cards.append(f"""
             <article class="recommendation-card"
               data-service="{escape(str(service), quote=True)}"
               data-priority="{escape(priority_value, quote=True)}"
               data-status="{escape(status_value, quote=True)}"
+              data-impact="{escape(str(rec.get('ImpactArea', '') or ''), quote=True)}"
               data-search="{escape(search_blob, quote=True)}">
               <div class="card-header">
                 <div>
                   <div class="card-meta">{escape(recommendation_id) if recommendation_id else 'Recommendation'}</div>
-                  <h3>{feature}</h3>
+                  <h3>{card_heading}</h3>
+                  {feature_subtitle}
                 </div>
                 <div class="badge-row">
                   <span class="badge {priority_class(priority)}">{escape(str(priority))}</span>
                   <span class="badge {status_class(status)}">{escape(str(status))}</span>
                 </div>
+              </div>
+              <div class="assessment-meta">
+                <span>{escape(str(rec.get('ReadinessStage', '') or 'Planned improvement'))}</span>
+                <span>{escape(str(rec.get('ImpactArea', '') or 'Platform capability'))}</span>
+                <span>{escape(str(rec.get('AIApplicability', '') or 'Microsoft 365 data estate'))}</span>
+                <span>{escape(str(rec.get('EvidenceBasis', '') or 'Tenant observation'))} / {escape(str(rec.get('Confidence', '') or 'Medium'))} confidence</span>
               </div>
               <div class="card-body">
                 <section>
@@ -522,6 +762,7 @@ def export_to_html(recommendations, filename=None, tenant_name=None, evidence_bu
                 <section>
                   <h4>Recommendation</h4>
                   <p>{paragraphize(rec.get("Recommendation", ""))}</p>
+                  {also_html}
                 </section>
                 {evidence_html}
                 {link_html}
@@ -547,6 +788,41 @@ def export_to_html(recommendations, filename=None, tenant_name=None, evidence_bu
           </div>
         </section>
         """)
+
+    # Scan coverage: what this run could not inspect, and why. Rendered separately from tenant
+    # findings so the customer is not asked to action the assessment's own configuration.
+    coverage_html = ""
+    if coverage_items:
+        coverage_rows = []
+        for item in coverage_items:
+            link = ""
+            url = str(item.get("LinkUrl", "") or "").strip()
+            if url:
+                link = (f'<a href="{escape(url)}" target="_blank" rel="noopener noreferrer">'
+                        f'{escape(str(item.get("LinkText", "") or "Learn more"))}</a>')
+            coverage_rows.append(f"""
+              <tr>
+                <td>{escape(str(item.get("Service", "") or ""))}</td>
+                <td>{escape(str(item.get("Feature", "") or ""))}</td>
+                <td>{paragraphize(item.get("Observation", ""))}</td>
+                <td>{paragraphize(item.get("Recommendation", ""))}</td>
+                <td>{link}</td>
+              </tr>""")
+        coverage_html = f"""
+        <section class="coverage-panel" id="scan-coverage">
+          <h2>Scan Coverage ({len(coverage_items)})</h2>
+          <p class="coverage-intro">These entries describe limits of this assessment run, not
+          findings about the tenant. Each one is data the assessment could not read. They are
+          excluded from the finding counts above; resolving them and rerunning will widen
+          coverage.</p>
+          <div class="appendix-preview">
+            <table class="preview-table">
+              <thead><tr><th>Service</th><th>Area</th><th>What could not be assessed</th><th>How to resolve</th><th>Reference</th></tr></thead>
+              <tbody>{''.join(coverage_rows)}</tbody>
+            </table>
+          </div>
+        </section>
+        """
 
     appendix_html = ""
     appendix_sections = evidence_bundle.get("appendix_sections", []) if evidence_bundle else []
@@ -580,13 +856,16 @@ def export_to_html(recommendations, filename=None, tenant_name=None, evidence_bu
             """)
 
         appendix_html = f"""
-        <section class="appendix-panel">
-          <div class="appendix-intro">
-            <h2>Engineer Follow-Up Appendix</h2>
-            <p>This appendix points engineering follow-up work to the workbook tabs that hold the exact flagged objects, configuration rows, or workload baselines behind supported recommendations.</p>
+        <details class="appendix-panel" id="engineer-appendix">
+          <summary class="appendix-intro">
+            <span class="appendix-title">Engineer Follow-Up Appendix</span>
+            <span class="appendix-summary-copy">{len(appendix_sections)} evidence section(s) with
+            exact objects, configuration rows, and workbook references. Expand for engineering detail.</span>
+          </summary>
+          <div class="appendix-content">
+            {''.join(appendix_blocks)}
           </div>
-          {''.join(appendix_blocks)}
-        </section>
+        </details>
         """
     
     html = f"""<!DOCTYPE html>
@@ -594,7 +873,7 @@ def export_to_html(recommendations, filename=None, tenant_name=None, evidence_bu
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Microsoft 365 Copilot Readiness Recommendations</title>
+  <title>Enterprise AI Readiness Assessment - Microsoft 365 Data Estate</title>
   <style>
     :root {{
       --bg: #f4f6f8;
@@ -618,6 +897,8 @@ def export_to_html(recommendations, filename=None, tenant_name=None, evidence_bu
       --critical-bg: #fdebf1;
       --attention: #6b4eff;
       --attention-bg: #f1edff;
+      --unassessed: #4a5568;
+      --unassessed-bg: #eceff3;
       --shadow: 0 12px 30px rgba(23, 32, 42, 0.08);
     }}
 
@@ -684,6 +965,13 @@ def export_to_html(recommendations, filename=None, tenant_name=None, evidence_bu
       font-size: 2rem;
       font-weight: 700;
       line-height: 1;
+    }}
+
+    .summary-card .decision-effect {{
+      margin-top: 9px;
+      color: var(--muted);
+      font-size: 0.78rem;
+      line-height: 1.3;
     }}
 
     .service-section {{
@@ -960,6 +1248,24 @@ def export_to_html(recommendations, filename=None, tenant_name=None, evidence_bu
       color: var(--critical);
     }}
 
+    .card-subtitle {{
+      margin-top: 4px;
+      font-size: 0.88rem;
+      color: var(--muted);
+      font-weight: 600;
+    }}
+
+    .also-licensed {{
+      margin-top: 10px !important;
+      font-size: 0.86rem;
+    }}
+
+    .status-not-assessed {{
+      background: var(--unassessed-bg);
+      color: var(--unassessed);
+      border: 1px dashed var(--unassessed);
+    }}
+
     .status-default {{
       background: var(--surface-alt);
       color: var(--muted);
@@ -967,6 +1273,23 @@ def export_to_html(recommendations, filename=None, tenant_name=None, evidence_bu
 
     .card-body section + section {{
       margin-top: 16px;
+    }}
+
+    .assessment-meta {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: -4px 0 16px;
+    }}
+
+    .assessment-meta span {{
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: var(--surface-alt);
+      color: var(--muted);
+      padding: 4px 8px;
+      font-size: 0.76rem;
+      font-weight: 600;
     }}
 
     .card-body h4 {{
@@ -1002,13 +1325,111 @@ def export_to_html(recommendations, filename=None, tenant_name=None, evidence_bu
       margin-top: 18px;
     }}
 
+    .coverage-panel {{
+      margin-top: 32px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-left: 4px solid var(--unassessed);
+      border-radius: 20px;
+      padding: 24px;
+      box-shadow: var(--shadow);
+    }}
+
+    .decision-panel,
+    .scope-panel,
+    .secondary-panel {{
+      margin-top: 24px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 22px;
+      box-shadow: var(--shadow);
+    }}
+
+    .decision-panel {{
+      border-left: 5px solid var(--accent);
+    }}
+
+    .decision-panel h2,
+    .scope-panel h2 {{
+      margin: 0 0 8px;
+    }}
+
+    .decision-panel p,
+    .scope-panel > p,
+    .secondary-panel > p {{
+      margin: 0;
+      color: var(--muted);
+    }}
+
+    details > summary {{
+      cursor: pointer;
+      font-weight: 700;
+    }}
+
+    .scope-panel details {{
+      margin-top: 16px;
+    }}
+
+    .analysis-impact-note,
+    .scope-decision-note {{
+      margin: 16px 0;
+      padding: 14px 16px;
+      border-left: 4px solid var(--accent);
+      border-radius: 10px;
+      background: var(--surface-alt);
+      color: var(--text);
+      line-height: 1.55;
+    }}
+
+    .scope-boundary-grid {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 14px;
+      margin-top: 16px;
+    }}
+
+    .scope-boundary-grid article {{
+      padding: 16px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--surface-alt);
+    }}
+
+    .scope-boundary-grid h3 {{
+      margin: 0 0 8px;
+      font-size: 1rem;
+    }}
+
+    .scope-boundary-grid p,
+    .checklist-intro {{
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.5;
+    }}
+
+    .checklist-intro {{
+      padding-top: 10px;
+    }}
+
+    .coverage-panel h2 {{
+      margin: 0 0 8px;
+    }}
+
+    .coverage-intro {{
+      margin: 0 0 16px;
+      color: var(--muted);
+      max-width: 900px;
+    }}
+
     .appendix-panel {{
       margin-top: 32px;
-      display: grid;
-      gap: 18px;
     }}
 
     .appendix-intro {{
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: 20px;
@@ -1016,13 +1437,27 @@ def export_to_html(recommendations, filename=None, tenant_name=None, evidence_bu
       box-shadow: var(--shadow);
     }}
 
-    .appendix-intro h2 {{
-      margin: 0 0 8px;
+    .appendix-intro:focus-visible {{
+      outline: 3px solid rgba(0, 90, 156, 0.3);
+      outline-offset: 3px;
     }}
 
-    .appendix-intro p {{
-      margin: 0;
+    .appendix-title {{
+      color: var(--text);
+      font-size: 1.5rem;
+      line-height: 1.2;
+    }}
+
+    .appendix-summary-copy {{
       color: var(--muted);
+      font-weight: 400;
+      line-height: 1.5;
+    }}
+
+    .appendix-content {{
+      display: grid;
+      gap: 18px;
+      margin-top: 18px;
     }}
 
     .appendix-section {{
@@ -1161,14 +1596,20 @@ def export_to_html(recommendations, filename=None, tenant_name=None, evidence_bu
 <body>
   <div class="page">
     <section class="hero">
-      <h1>Microsoft 365 Copilot Readiness Recommendations</h1>
-      <p>Tenant: {escape(tenant_label)}<br>Generated on {escape(generated_at)}. This report groups recommendations by service and highlights priority so the next actions are easier to review and share.</p>
+      <h1>Enterprise AI Readiness Assessment</h1>
+      <p>Microsoft 365 data estate · Tenant: {escape(tenant_label)}<br>Generated on {escape(generated_at)}. Security and governance actions are separated from adoption opportunities, verified controls, and assessment coverage.</p>
+    </section>
+
+    <section class="decision-panel">
+      <h2>{escape(readiness['decision'])}</h2>
+      <p>{escape(readiness['rationale'])} This is a deployment decision for the assessed M365
+      foundation—not certification of any external AI provider or a guarantee that no risk exists.</p>
     </section>
 
     <section class="summary-grid">
       <article class="summary-card">
-        <div class="label">Total Recommendations</div>
-        <div class="value">{len(recommendations)}</div>
+        <div class="label">Actions</div>
+        <div class="value">{len(findings)}</div>
       </article>
       <article class="summary-card">
         <div class="label">High Priority</div>
@@ -1183,8 +1624,17 @@ def export_to_html(recommendations, filename=None, tenant_name=None, evidence_bu
         <div class="value">{len(low_priority)}</div>
       </article>
       <article class="summary-card">
-        <div class="label">Services Represented</div>
-        <div class="value">{len(services)}</div>
+        <div class="label">Coverage Gaps</div>
+        <div class="value">{len(not_assessed)}</div>
+      </article>
+      <article class="summary-card">
+        <div class="label">Adoption &amp; Value Opportunities</div>
+        <div class="value">{len(opportunities)}</div>
+        <div class="decision-effect">Optional · does not change readiness</div>
+      </article>
+      <article class="summary-card">
+        <div class="label">Assurance Items</div>
+        <div class="value">{len(assurances)}</div>
       </article>
     </section>
 
@@ -1228,22 +1678,26 @@ def export_to_html(recommendations, filename=None, tenant_name=None, evidence_bu
         </div>
       </div>
       <div class="filter-meta">
-        <div id="resultsCount">Showing {len(recommendations)} of {len(recommendations)} recommendations</div>
+        <div id="resultsCount">Showing {len(findings)} of {len(findings)} actions</div>
         <div>Use the quick links below to jump to a service section.</div>
       </div>
     </section>
 
     <section class="toc-panel">
-      <h2>Jump To Service</h2>
+      <h2>Actions by Service</h2>
       <div class="toc-grid">
         {''.join(service_nav_items)}
       </div>
     </section>
 
     {''.join(service_sections)}
+    {opportunity_html}
+    {assurance_html}
+    {coverage_html}
+    {scope_html}
     {appendix_html}
     <section id="emptyState" class="empty-state">
-      No recommendations match the current filters. Try clearing or broadening your search.
+      No actions match the current filters. Try clearing or broadening your search.
     </section>
   </div>
   <script>
@@ -1303,7 +1757,7 @@ def export_to_html(recommendations, filename=None, tenant_name=None, evidence_bu
           }}
         }});
 
-        resultsCount.textContent = `Showing ${{visibleCards}} of {len(recommendations)} recommendations`;
+        resultsCount.textContent = `Showing ${{visibleCards}} of {len(findings)} actions`;
         emptyState.style.display = visibleCards ? 'none' : 'block';
       }}
 
@@ -1408,27 +1862,39 @@ def print_recommendations_summary(recommendations, csv_path=None, excel_path=Non
     if tenant_name:
         print(f"Tenant: {tenant_name}")
     
+    recommendations = enrich_assessment_records(recommendations)
+    readiness = summarize_readiness(recommendations)
+    findings = [r for r in recommendations if r.get("Disposition") == DISPOSITION_ACTION]
+    opportunities = [r for r in recommendations if r.get("Disposition") == DISPOSITION_OPPORTUNITY]
+    assurances = [r for r in recommendations if r.get("Disposition") == DISPOSITION_ASSURANCE]
+    coverage_items = [r for r in recommendations if r.get("Disposition") == DISPOSITION_COVERAGE]
+
     # Group by priority
-    high_priority = [r for r in recommendations if r.get("Priority") == "High"]
-    medium_priority = [r for r in recommendations if r.get("Priority") == "Medium"]
-    low_priority = [r for r in recommendations if r.get("Priority") == "Low"]
-    
-    print(f"\nTotal Recommendations: {len(recommendations)}")
+    high_priority = [r for r in findings if r.get("Priority") == "High"]
+    medium_priority = [r for r in findings if r.get("Priority") == "Medium"]
+    low_priority = [r for r in findings if r.get("Priority") == "Low"]
+    print(f"\nDeployment decision: {readiness['decision']}")
+    print(f"  {readiness['rationale']}")
+    print(f"\nActions: {len(findings)}")
     print(f"  🔴 High Priority:   {len(high_priority)}")
     print(f"  🟡 Medium Priority: {len(medium_priority)}")
     print(f"  🟢 Low Priority:    {len(low_priority)}")
-    
+    print(f"  🔵 Opportunities:  {len(opportunities)}")
+    print(f"  ✓ Assurance items: {len(assurances)}")
+    if coverage_items:
+        print(f"  ⚪ Coverage gaps:   {len(coverage_items)} (unverified, not clean)")
+
     # Group by service
     services = {}
-    for rec in recommendations:
+    for rec in findings:
         service = rec.get("Service", "Unknown")
         if service not in services:
             services[service] = []
         services[service].append(rec)
-    
-    print(f"\nRecommendations by Service:")
+
+    print(f"\nActions by Service:")
     for service, recs in sorted(services.items()):
-        print(f"  • {service}: {len(recs)} recommendation(s)")
+        print(f"  • {service}: {len(recs)} action(s)")
     
     if excel_path:
         print(f"\nRecommendations exported to Excel: {excel_path}")

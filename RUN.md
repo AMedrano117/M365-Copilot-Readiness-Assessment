@@ -36,6 +36,24 @@ The following table shows what data is collected for each service and the APIs/c
 | **Power Platform** | User delegated | Power Platform Management API:<br/>- `/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments`<br/>- `/providers/Microsoft.PowerApps/apps`<br/>- `/providers/Microsoft.Flow/flows`<br/>- `/providers/Microsoft.PowerApps/aiModels` | Environments, environment DLP policies, Power Apps inventory, Power Automate flows, AI Builder models, connector usage |
 | **Copilot Studio** | User delegated | Power Platform Management API:<br/>- `/providers/Microsoft.BotService/botServices`<br/>- `/providers/Microsoft.Botframework/bots` | Copilot Studio agents, agent configurations, conversation analytics, authentication settings |
 
+## Data exposure and oversharing reports
+
+Microsoft completes SharePoint Advanced Management and Purview DSPM scans asynchronously. First
+check for a recent completed result and export it. Start a new Microsoft scan only when no current
+result exists, wait for completion, and pass the export to the assessment:
+
+```powershell
+python main.py --sam-report "C:\Reports\SAM" --dspm-report "C:\Reports\DSPM\assessment.csv"
+```
+
+Repeat either option to load multiple files. A directory loads supported CSV, TSV, JSON, and XLSX
+files. You can also set `SAM_DAG_REPORT_PATHS` and `DSPM_REPORT_PATHS` in the selected environment
+file. Missing, stale, or undated results are recorded in the report as Coverage items with the
+steps required to enable and run the corresponding Microsoft capability.
+
+Default freshness thresholds are 35 days for SAM and 8 days for DSPM. Override them with
+`SAM_REPORT_MAX_AGE_DAYS` and `DSPM_REPORT_MAX_AGE_DAYS` when your governance cadence differs.
+
 ## Deployment Steps
 
 ### 1. Install Python Dependencies

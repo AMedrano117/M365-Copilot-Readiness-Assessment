@@ -37,11 +37,11 @@ def get_recommendation(defender_client=None, defender_plans=None):
             service="Defender",
             feature=feature_name,
             observation=f"{activation_msg} - Security APIs unavailable despite having MTP (XDR) license",
-            recommendation="Activate Microsoft Defender XDR in the Security portal to enable unified security monitoring, threat detection, and incident response across your Microsoft 365 environment. This is required to access security data through APIs and protect Copilot workloads with advanced threat protection, prompt injection detection, and automated security responses.",
+            recommendation="Confirm the service is provisioned in security.microsoft.com, then rerun the assessment. If activation is required, complete it before relying on Defender telemetry for the AI rollout decision.",
             link_text="Activate Microsoft Defender XDR",
             link_url="https://security.microsoft.com",
-            priority="High",
-            status="Missing Prerequisite"
+            priority="Medium",
+            status="Action Required"
         )
     
     # Scenario 2: No XDR license but has other Defender features (Business Premium, E3)
@@ -54,8 +54,9 @@ def get_recommendation(defender_client=None, defender_plans=None):
             recommendation="Upgrade to Microsoft 365 E5 or add Microsoft Defender plan to get XDR (Extended Detection and Response) capabilities. XDR provides unified security monitoring across endpoints, identities, email, and cloud apps with advanced threat hunting, automated investigation, and AI-powered security responses essential for protecting Copilot workloads from sophisticated attacks.",
             link_text="Microsoft Defender XDR Licensing",
             link_url="https://learn.microsoft.com/microsoft-365/security/defender/microsoft-365-defender",
-            priority="High",
-            status="Missing"
+            priority="Low",
+            status="Insight",
+            disposition="Opportunity"
         )
     
     # Scenario 3: No Defender at all - this gets handled elsewhere in get_defender_info.py

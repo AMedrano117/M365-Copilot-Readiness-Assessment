@@ -233,6 +233,7 @@ def get_recommendation(defender_client=None, defender_insights=None):
         priority=importance,
         link_text="Advanced Hunting for Copilot",
         link_url="https://learn.microsoft.com/microsoft-365/security/defender/advanced-hunting-microsoft-365-copilot",
+        disposition="Reference",
         evidence_key="app_access_detail;defender_incident_detail",
         evidence_summary="See App Access Detail and Defender Incident Detail for the exact third-party app and incident records supporting this threat assessment."
     )

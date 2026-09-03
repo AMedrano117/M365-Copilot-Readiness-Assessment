@@ -50,6 +50,7 @@ async def get_recommendation(sku_name, status="Success", client=None, purview_cl
                     service="Purview",
                     feature=f"{feature_name} - Label Deployment",
                     observation=f"{total_labels} sensitivity labels configured, enabling automatic classification of Copilot-generated content",
+                    finding_key="purview.sensitivity_labels.deployed",
                     recommendation="Configure auto-labeling policies in Microsoft Purview for Copilot scenarios: 1) Auto-label documents containing financial data patterns when created via Copilot in Excel/Word, 2) Auto-apply 'Confidential' to emails drafted by Copilot that mention customer names or account numbers, 3) Use trainable classifiers to detect when Copilot summaries contain sensitive content types (legal, HR, M&A), 4) Set default label to 'General' for all Copilot outputs unless higher sensitivity detected. Test by asking Copilot to create document with financial data - verify auto-labeling applies correct classification. Use Get-Label to review deployed labels.",
                     link_text="Auto-Labeling for AI Content",
                     link_url="https://learn.microsoft.com/purview/apply-sensitivity-label-automatically",
@@ -76,11 +77,12 @@ async def get_recommendation(sku_name, status="Success", client=None, purview_cl
                     service="Purview",
                     feature=f"{feature_name} - Label Deployment",
                     observation=f"Information Protection Premium active but NO sensitivity labels configured - auto-labeling cannot function",
+                    finding_key="purview.sensitivity_labels.deployed",
                     recommendation=f"Immediately create and publish sensitivity labels - Premium's auto-labeling is useless without labels to apply. Deploy 4 baseline labels: 'Public', 'General', 'Confidential', 'Highly Confidential'. Then configure auto-labeling policies for Copilot outputs: detect financial patterns (credit cards, account numbers) → auto-apply 'Confidential', detect PII (SSN, passport numbers) → 'Highly Confidential', use trainable classifiers for industry-specific content. Without labels, Premium cannot automatically protect Copilot-generated content containing sensitive data. This creates significant data leak risk as users rely on AI to process confidential information. Deploy labels NOW. Use Get-Label to verify setup.",
                     link_text="Create Labels for Auto-Classification",
                     link_url="https://learn.microsoft.com/purview/create-sensitivity-labels",
-                    priority="Critical",
-                    status="Success"
+                    priority="High",
+                    status="Critical"
                 )
                 deployment_recs.append(deployment_rec)
     

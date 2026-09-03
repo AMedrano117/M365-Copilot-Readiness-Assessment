@@ -112,6 +112,7 @@ def extract_entra_insights_from_client(entra_client):
     signin_summary = getattr(entra_client, 'signin_summary', {})
     network_access_summary = getattr(entra_client, 'network_access_summary', {})
     private_access_summary = getattr(entra_client, 'private_access_summary', {})
+    data_sources = getattr(entra_client, 'data_sources', {}) or {}
     
     # Calculate derived metrics
     total_devices = device_summary.get('total_managed', 0)
@@ -125,7 +126,11 @@ def extract_entra_insights_from_client(entra_client):
     
     return {
         'available': True,
-        
+
+        # Which phase-1 datasets were actually read. Lets recommendations distinguish
+        # "query returned nothing" from "query never succeeded".
+        'data_sources': data_sources,
+
         # Conditional Access (#4)
         'ca_total': ca_summary.get('total', 0),
         'ca_enabled': ca_summary.get('enabled', 0),
@@ -175,6 +180,7 @@ def extract_entra_insights_from_client(entra_client):
         'permanent_assignments': pim_summary.get('permanent_assignments', 0),
         'permanent_global_admins': pim_summary.get('permanent_global_admins', 0),
         'permanent_privileged_roles': pim_summary.get('permanent_privileged_roles', 0),
+        'unclassified_active_assignments': pim_summary.get('unclassified_active_assignments', 0),
         'eligible_assignments': pim_summary.get('eligible_assignments', 0),
         'pim_enabled_roles': pim_summary.get('pim_enabled_roles', 0),
         'time_bound_assignments': pim_summary.get('total_time_bound_assignments', 0),
@@ -243,6 +249,7 @@ def extract_entra_insights_from_client(entra_client):
             'permanent_admins_count': pim_summary.get('permanent_assignments', 0),
             'eligible_admins_count': pim_summary.get('eligible_assignments', 0),
             'permanent_global_admins': pim_summary.get('permanent_global_admins', 0),
+            'unclassified_active_assignments': pim_summary.get('unclassified_active_assignments', 0),
             'pim_enabled_roles': pim_summary.get('pim_enabled_roles', 0)
         },
         'access_review_metrics': {
@@ -606,6 +613,22 @@ def build_observation_with_metrics(base_text, metrics, clean_status_text=""):
         return base_text + ". " + clean_status_text
     else:
         return base_text
+
+
+
+def entra_source_was_read(entra_insights, *dataset_keys):
+    """True only if at least one of the named Entra datasets was successfully fetched.
+
+    Call before stating that nothing was found. When it returns False the dataset was never
+    read, so the honest report is "Not Assessed" rather than "no risks detected".
+    """
+    if not entra_insights or not entra_insights.get('available'):
+        return False
+    sources = entra_insights.get('data_sources') or {}
+    if not sources:
+        # Client predates per-dataset tracking: degrade to previous behaviour rather than break.
+        return True
+    return any(sources.get(key, False) for key in dataset_keys)
 
 
 def get_ca_recommendation(entra_insights):

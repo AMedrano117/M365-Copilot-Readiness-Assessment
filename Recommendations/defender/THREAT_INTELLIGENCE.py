@@ -1,7 +1,7 @@
 """
 Microsoft Defender for Office 365 (Plan 2) - Copilot & Agent Adoption Recommendation
 """
-from Core.new_recommendation import new_recommendation
+from Core.new_recommendation import new_recommendation, NOT_ASSESSED_STATUS
 from Core.friendly_names import get_friendly_sku_name
 
 def get_recommendation(sku_name, status="Success", client=None, defender_client=None, defender_insights=None):
@@ -15,6 +15,8 @@ def get_recommendation(sku_name, status="Success", client=None, defender_client=
     if status == "Success":
         observation = f"{feature_name} is active, protecting Copilot workloads"
         recommendation = ""
+        effective_status = status
+        effective_priority = ""
         
         # Enrich with advanced threat intelligence from pre-computed insights
         if defender_insights and defender_insights.available:
@@ -30,9 +32,17 @@ def get_recommendation(sku_name, status="Success", client=None, defender_client=
             
             if metrics:
                 observation += ". " + ", ".join(metrics)
-            else:
-                # Clean status - no advanced threats
+            elif defender_insights.source_was_read('incidents', 'alerts', 'email_threats'):
+                # Clean status - the threat feeds were read and came back empty
                 observation += ". No advanced threats detected in last 30 days"
+            else:
+                # Threat data was never retrieved - do not report unread as clean
+                observation += ". Threat data could not be retrieved, so email and content threat status is unverified"
+                recommendation = ("Grant the assessment read access to Defender alerts and incidents and rerun, "
+                                  "or review threat activity directly at security.microsoft.com. Copilot reads "
+                                  "mail and files, so unverified email threat status is a live risk.")
+                effective_status = NOT_ASSESSED_STATUS
+                effective_priority = "Medium"
         
         return new_recommendation(
             service="Defender",
@@ -41,7 +51,8 @@ def get_recommendation(sku_name, status="Success", client=None, defender_client=
             recommendation=recommendation,
             link_text="Defender for Office 365",
             link_url="https://learn.microsoft.com/microsoft-365/security/office-365-security/mdo-about",
-            status=status
+            priority=effective_priority or "Medium",
+            status=effective_status
         )
     
     return new_recommendation(

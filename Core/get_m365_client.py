@@ -449,11 +449,17 @@ def extract_m365_insights_from_client(m365_client):
     if not m365_client or not m365_client.available:
         return {
             'available': False,
-            
+
+            # Cross-workload active user rollup
+            'total_active_users': 0,
+            'active_user_data_available': False,
+
             # Sites & SharePoint
             'total_sites': 0,
+            'sharepoint_total_sites': 0,
             'sharepoint_active_sites': 0,
             'sharepoint_total_files': 0,
+            'sharepoint_page_views': 0,
             'sharepoint_activity_rate': 0,
             
             # Users & Licensing
@@ -470,6 +476,7 @@ def extract_m365_insights_from_client(m365_client):
             # Teams Activity
             'teams_active_users': 0,
             'teams_total_meetings': 0,
+            'teams_total_messages': 0,
             'teams_avg_meetings_per_user': 0,
             'teams_avg_messages_per_user': 0,
             
@@ -485,6 +492,7 @@ def extract_m365_insights_from_client(m365_client):
             
             # Active Users (Latest Snapshot)
             'office365_active_users': 0,
+            'office_active_users': 0,
             'exchange_active_users': 0,
             'teams_active_users_snapshot': 0,
             'sharepoint_active_users': 0,
@@ -500,10 +508,38 @@ def extract_m365_insights_from_client(m365_client):
     onedrive_summary = getattr(m365_client, 'onedrive_summary', {})
     activations_summary = getattr(m365_client, 'activations_summary', {})
     active_users_summary = getattr(m365_client, 'active_users_summary', {})
-    
+
+    # Distinct active users across M365 workloads.
+    # The Office 365 active-user report is the aggregate source when available; when it is
+    # missing we fall back to the largest per-workload active count, which is a valid lower
+    # bound (a user active in email is active in M365). Recommendations use this both for
+    # observation text and for organization-size branching, so it must never silently be 0
+    # when any workload report did return data.
+    _workload_active_counts = [
+        active_users_summary.get('office_365_active', 0) or 0,
+        email_summary.get('active_users', 0) or 0,
+        teams_summary.get('active_users', 0) or 0,
+        active_users_summary.get('sharepoint_active', 0) or 0,
+        onedrive_summary.get('active_accounts', 0) or 0,
+    ]
+    total_active_users = max(_workload_active_counts)
+
+    # True when at least one usage report backed the active-user figure above. Consumers use
+    # this to tell "nobody is active" apart from "no report was returned".
+    active_user_data_available = bool(
+        active_users_summary.get('available', False)
+        or email_summary.get('available', False)
+        or teams_summary.get('available', False)
+        or onedrive_summary.get('available', False)
+    )
+
     insights = {
         'available': True,
-        
+
+        # Cross-workload active user rollup (see derivation above)
+        'total_active_users': total_active_users,
+        'active_user_data_available': active_user_data_available,
+
         # Sites & SharePoint
         'total_sites': sites_summary.get('total', 0),
         'site_names': sites_summary.get('site_names', []),
@@ -514,6 +550,9 @@ def extract_m365_insights_from_client(m365_client):
         'sharepoint_total_page_views': sharepoint_summary.get('total_page_views', 0),
         'sharepoint_activity_rate': sharepoint_summary.get('site_activity_rate', 0),
         'sharepoint_avg_files_per_site': sharepoint_summary.get('avg_files_per_site', 0),
+        # Aliases used by recommendation modules
+        'sharepoint_total_sites': sites_summary.get('total', 0),
+        'sharepoint_page_views': sharepoint_summary.get('total_page_views', 0),
         
         # Users & Licensing
         'total_users': users_summary.get('total', 0),
@@ -541,6 +580,11 @@ def extract_m365_insights_from_client(m365_client):
         'teams_total_calls': teams_summary.get('total_calls', 0),
         'teams_total_team_chat_messages': teams_summary.get('total_team_chat_messages', 0),
         'teams_total_private_messages': teams_summary.get('total_private_messages', 0),
+        # Alias used by recommendation modules: all Teams messages, channel plus private chat
+        'teams_total_messages': (
+            (teams_summary.get('total_team_chat_messages', 0) or 0)
+            + (teams_summary.get('total_private_messages', 0) or 0)
+        ),
         'teams_avg_meetings_per_user': teams_summary.get('avg_meetings_per_user', 0),
         'teams_avg_messages_per_user': teams_summary.get('avg_messages_per_user', 0),
         
@@ -566,6 +610,8 @@ def extract_m365_insights_from_client(m365_client):
         'active_users_report_available': active_users_summary.get('available', False),
         'active_users_report_period': active_users_summary.get('report_period', 'D30'),
         'office365_active_users': active_users_summary.get('office_365_active', 0),
+        # Alias used by recommendation modules
+        'office_active_users': active_users_summary.get('office_365_active', 0),
         'exchange_active_users': active_users_summary.get('exchange_active', 0),
         'teams_active_users_snapshot': active_users_summary.get('teams_active', 0),
         'sharepoint_active_users': active_users_summary.get('sharepoint_active', 0),

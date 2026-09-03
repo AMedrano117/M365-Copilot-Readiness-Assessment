@@ -1,7 +1,7 @@
 """
 Microsoft Defender for Identity - Copilot & Agent Adoption Recommendation
 """
-from Core.new_recommendation import new_recommendation
+from Core.new_recommendation import new_recommendation, NOT_ASSESSED_STATUS
 from Core.friendly_names import get_friendly_sku_name
 
 def get_recommendation(sku_name, status="Success", client=None, defender_client=None, defender_insights=None):
@@ -15,15 +15,26 @@ def get_recommendation(sku_name, status="Success", client=None, defender_client=
     if status == "Success":
         observation = f"{feature_name} is active, protecting Copilot workloads"
         recommendation = ""
+        effective_status = status
+        effective_priority = ""
         
         # Enrich with identity risk metrics from pre-computed insights
         if defender_insights and defender_insights.available:
             if defender_insights.has_identity_risks():
                 observation += ". " + ", ".join(defender_insights.identity_metrics)
                 recommendation = defender_insights.identity_recommendation
-            else:
-                # Clean status - no identity risks
+            elif defender_insights.source_was_read('risky_users', 'risky_sign_ins'):
+                # Clean status - identity risk data was read and came back empty
                 observation += ". No risky users or sign-ins detected"
+            else:
+                # Identity risk data was never retrieved - do not report unread as clean
+                observation += ". Identity risk data could not be retrieved, so account risk is unverified"
+                recommendation = ("Grant the assessment IdentityRiskyUser.Read.All and "
+                                  "IdentityRiskEvent.Read.All and rerun, or review risky users directly in "
+                                  "Entra ID Protection. Compromised accounts are a primary Copilot data "
+                                  "exfiltration path and cannot be left unchecked.")
+                effective_status = NOT_ASSESSED_STATUS
+                effective_priority = "Medium"
         
         return new_recommendation(
             service="Defender",
@@ -32,7 +43,8 @@ def get_recommendation(sku_name, status="Success", client=None, defender_client=
             recommendation=recommendation,
             link_text="Defender for Identity",
             link_url="https://learn.microsoft.com/defender-for-identity/what-is",
-            status=status
+            priority=effective_priority or "Medium",
+            status=effective_status
         )
     
     return new_recommendation(

@@ -2,7 +2,7 @@ from .get_recommendation import get_recommendation
 import sys
 from .spinner import get_timestamp, _stdout_lock
 from azure.core.exceptions import HttpResponseError
-from .service_categorization import determine_service_type
+from .service_categorization import determine_service_type, resolve_plan_statuses, RETIRED_PLANS
 from .get_m365_client import extract_m365_insights_from_client
 
 def process_m365_licenses(subscribed_skus):
@@ -74,42 +74,58 @@ async def get_m365_info(client, services_and_licenses=None, m365_client=None):
     async_tasks = []
     added_features = set()
     
+    # Resolve each plan to its best status across every SKU before generating anything. A plan
+    # can be Disabled in one SKU and active in another; reporting the first status encountered
+    # produced findings like "OneDrive for Business (Plan 2) is Disabled" for tenants who have
+    # OneDrive fully licensed through a different SKU.
+    resolved_plans = resolve_plan_statuses(license_info)
+
     for lic in license_info:
         sku_name = lic.get('sku_part_number', 'Unknown')
         for plan in lic.get('service_plans', []):
-            status = plan.get('status', 'Success')
             plan_name = plan.get('name', '')
-            
+
             # Skip features that belong to other services (they handle their own)
             service_type = determine_service_type(plan_name)
             if service_type != 'm365':
                 continue
-            
+
             # Skip if we've already added a recommendation for this service plan
             if plan_name in added_features:
                 continue
             added_features.add(plan_name)
-            
+
+            resolution = resolved_plans.get(plan_name, {})
+            status = resolution.get('status', plan.get('status', 'Success'))
+            resolved_sku = resolution.get('sku_name', sku_name)
+
+            # A retired product that is switched off is the desired end state, not a gap.
+            # Only report these while they are still provisioned.
+            if status != 'Success' and plan_name.upper() in RETIRED_PLANS:
+                continue
+
             # Generate recommendations only for M365-specific features
-            rec = get_recommendation('m365', plan_name, sku_name, status, client, m365_insights=m365_insights)
+            rec = get_recommendation('m365', plan_name, resolved_sku, status, client, m365_insights=m365_insights)
             
             # Collect async tasks for parallel execution
             if inspect.iscoroutine(rec):
                 async_tasks.append(rec)
             else:
-                # Handle sync recommendations immediately
+                # Handle sync recommendations immediately. None means the plan has no dedicated
+                # module and is inventory only - it is recorded in the Service Plan Inventory
+                # tab rather than emitted as a filler card.
                 if isinstance(rec, list):
-                    recommendations.extend(rec)
-                else:
+                    recommendations.extend(r for r in rec if r)
+                elif rec:
                     recommendations.append(rec)
-    
+
     # Run all async recommendations in parallel
     if async_tasks:
         results = await asyncio.gather(*async_tasks)
         for result in results:
             if isinstance(result, list):
-                recommendations.extend(result)
-            else:
+                recommendations.extend(r for r in result if r)
+            elif result:
                 recommendations.append(result)
     
     return license_info, recommendations

@@ -42,6 +42,8 @@ if __name__ == "__main__":
     interactive_auth = args.interactive_auth
     open_html_report = args.open_html_report
     report_format = args.report_format
+    sam_report_paths = args.sam_report
+    dspm_report_paths = args.dspm_report
 
     # Backward-compatible mapping from older, more specific flags.
     if args.interactive_collection_policy == 'skip':
@@ -61,7 +63,9 @@ if __name__ == "__main__":
                 services,
                 interactive_auth=interactive_auth,
                 open_html_report=open_html_report,
-                report_format=report_format
+                report_format=report_format,
+                sam_report_paths=sam_report_paths,
+                dspm_report_paths=dspm_report_paths,
             )
         )
     except ValueError as e:

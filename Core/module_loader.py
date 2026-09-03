@@ -30,7 +30,13 @@ class ModuleLoadingProgress:
             self.loaded_services += 1
             self.total_modules += module_count
             self.service_names.append(service_name)
-            
+
+            # A recommendation package can be imported without the orchestrator having called
+            # start() first - by tests, tooling, or a direct import. Drawing a progress bar is
+            # not worth crashing the import over, so skip rendering when no total was set.
+            if not self.started or self.total_services <= 0:
+                return
+
             # Calculate progress
             progress = self.loaded_services / self.total_services
             bar_length = 20

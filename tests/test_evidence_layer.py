@@ -7,17 +7,19 @@ from Core.evidence_layer import _build_app_access_sheet, build_evidence_bundle
 class EvidenceLayerTests(unittest.TestCase):
     def test_app_access_sheet_preserves_flag_count_and_activity_band(self):
         entra_client = SimpleNamespace(
+            tenant_id="tenant-local",
             service_principals=[
                 {
                     "id": "sp-1",
                     "appId": "app-1",
                     "displayName": "Risky App",
                     "publisherName": "",
+                    "appOwnerOrganizationId": "tenant-external",
                 }
             ],
             oauth_permission_grants=[
                 {
-                    "clientId": "app-1",
+                    "clientId": "sp-1",
                     "consentType": "AllPrincipals",
                     "scope": "Mail.ReadWrite Files.Read User.Read",
                 }
@@ -49,16 +51,18 @@ class EvidenceLayerTests(unittest.TestCase):
 
     def test_app_access_sheet_marks_activity_unavailable(self):
         entra_client = SimpleNamespace(
+            tenant_id="tenant-local",
             service_principals=[
                 {
                     "id": "sp-1",
                     "appId": "app-1",
                     "displayName": "Risky App",
                     "publisherName": "",
+                    "appOwnerOrganizationId": "tenant-external",
                 }
             ],
             oauth_permission_grants=[
-                {"clientId": "app-1", "consentType": "AllPrincipals", "scope": "Mail.ReadWrite"}
+                {"clientId": "sp-1", "consentType": "AllPrincipals", "scope": "Mail.ReadWrite"}
             ],
             app_activity_summary={"available": False, "by_app": {}, "reason": "Forbidden"},
         )
@@ -69,6 +73,45 @@ class EvidenceLayerTests(unittest.TestCase):
 
         self.assertEqual(row["Activity Band"], "Unavailable")
         self.assertEqual(row["Activity Count (30d)"], "")
+
+    def test_blank_publisher_without_a_grant_is_not_flagged(self):
+        entra_client = SimpleNamespace(
+            tenant_id="tenant-local",
+            service_principals=[{
+                "id": "sp-unused",
+                "appId": "app-unused",
+                "displayName": "Unused Local Object",
+                "publisherName": "",
+                "appOwnerOrganizationId": "tenant-local",
+            }],
+            oauth_permission_grants=[],
+            app_activity_summary={"available": False, "by_app": {}},
+        )
+
+        sheet = _build_app_access_sheet(entra_client, SimpleNamespace(oauth_apps=[]))
+        self.assertEqual(sheet["rows"], [])
+
+    def test_routine_graph_access_alone_is_not_flagged(self):
+        entra_client = SimpleNamespace(
+            tenant_id="tenant-local",
+            service_principals=[{
+                "id": "sp-routine",
+                "appId": "app-routine",
+                "displayName": "Routine Graph Client",
+                "publisherName": "Internal Publisher",
+                "appOwnerOrganizationId": "tenant-local",
+            }],
+            oauth_permission_grants=[{
+                "clientId": "sp-routine",
+                "consentType": "Principal",
+                "scope": "User.Read openid profile",
+            }],
+            app_activity_summary={"available": True, "by_app": {}},
+        )
+
+        sheet = _build_app_access_sheet(entra_client, SimpleNamespace(oauth_apps=[]))
+
+        self.assertEqual(sheet["rows"], [])
 
     def test_build_evidence_bundle_links_multi_sheet_recommendation(self):
         recommendations = [
@@ -91,17 +134,19 @@ class EvidenceLayerTests(unittest.TestCase):
 
         entra_info = {
             "_client": SimpleNamespace(
+                tenant_id="tenant-local",
                 service_principals=[
                     {
                         "id": "sp-1",
                         "appId": "app-1",
                         "displayName": "Risky App",
                         "publisherName": "",
+                        "appOwnerOrganizationId": "tenant-external",
                     }
                 ],
                 oauth_permission_grants=[
                     {
-                        "clientId": "app-1",
+                        "clientId": "sp-1",
                         "consentType": "AllPrincipals",
                         "scope": "Mail.ReadWrite Files.Read",
                     }

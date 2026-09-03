@@ -121,10 +121,42 @@ class ExportRecommendationsTests(unittest.TestCase):
 
         html = Path(html_path).read_text(encoding="utf-8")
         self.assertIn("Engineer Follow-Up Appendix", html)
+        self.assertIn('<details class="appendix-panel" id="engineer-appendix">', html)
+        self.assertIn('<summary class="appendix-intro">', html)
         self.assertIn("App Access Detail", html)
         self.assertIn("DEF-001", html)
         self.assertIn("Review the flagged apps and security signals before rollout.", html)
         self.assertIn("Workbook tab: App Access Detail in tenant_report.xlsx", html)
+
+    def test_export_to_html_explains_opportunity_and_external_ai_decision_effects(self):
+        recommendations = self._sample_recommendations() + [
+            {
+                "RecommendationId": "M365-001",
+                "Service": "M365",
+                "Feature": "Teams pilot opportunity",
+                "Status": "Insight",
+                "Priority": "Low",
+                "Observation": "Teams activity suggests a focused pilot population.",
+                "Recommendation": "Run a measured pilot with a named business owner.",
+            }
+        ]
+
+        html_path = export_to_html(
+            recommendations,
+            filename="decision_explanation.html",
+            tenant_name="Contoso",
+        )
+
+        html = Path(html_path).read_text(encoding="utf-8")
+        self.assertIn("Optional · does not change readiness", html)
+        self.assertIn("They do not change the security and\n            governance readiness decision", html)
+        self.assertIn("Value hypothesis", html)
+        self.assertIn("Pilot or enablement next step", html)
+        self.assertIn("Assessment scope &amp; external AI validation: what this tool verifies", html)
+        self.assertIn("Verified from the Microsoft 365 tenant", html)
+        self.assertIn("Requires a separate review for each external AI product", html)
+        self.assertIn("not yet validated\n        for deployment", html)
+        self.assertIn("complete once per product and subscription tier", html)
 
 
 if __name__ == "__main__":
