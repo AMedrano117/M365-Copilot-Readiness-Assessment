@@ -6,7 +6,9 @@ PIM, Access Reviews, Device Compliance, B2B settings, and Application Consent da
 Used for enhanced Entra observations focused on Copilot adoption.
 """
 import asyncio
+import base64
 import httpx
+import json
 from azure.core.exceptions import HttpResponseError
 from .spinner import get_timestamp, _stdout_lock
 from datetime import datetime, timedelta
@@ -57,6 +59,19 @@ async def _get_graph_http_client():
         },
         timeout=30.0
     )
+
+
+def _get_graph_token_roles():
+    """Return application roles in the current Graph token without logging token material."""
+    try:
+        from .get_graph_client import get_shared_credential
+
+        token = get_shared_credential().get_token('https://graph.microsoft.com/.default').token
+        payload = token.split('.')[1]
+        payload += '=' * (-len(payload) % 4)
+        return set(json.loads(base64.urlsafe_b64decode(payload)).get('roles', []))
+    except Exception:
+        return set()
 
 
 def _extract_response_items(response):
@@ -1304,12 +1319,24 @@ async def get_entra_client(graph_client, tenant_id=None):
         except httpx.HTTPStatusError as e:
             # HTTP error from beta API
             if e.response.status_code == 403:
-                client_obj.network_access_summary['status'] = 'PermissionDenied'
-                client_obj.network_access_summary['error'] = 'NetworkAccessPolicy.Read.All permission required'
-                client_obj.private_access_summary['status'] = 'PermissionDenied'
-                client_obj.private_access_summary['error'] = 'NetworkAccessPolicy.Read.All permission required'
-                with _stdout_lock:
-                    print(f"[{get_timestamp()}] ℹ️     Entra: Global Secure Access API access denied (requires NetworkAccessPolicy.Read.All permission)")
+                if 'NetworkAccess.Read.All' in _get_graph_token_roles():
+                    detail = (
+                        'Graph returned HTTP 403 even though NetworkAccess.Read.All is present; '
+                        'Global Secure Access may not be onboarded or available in this tenant'
+                    )
+                    client_obj.network_access_summary['status'] = 'Unavailable'
+                    client_obj.network_access_summary['error'] = detail
+                    client_obj.private_access_summary['status'] = 'Unavailable'
+                    client_obj.private_access_summary['error'] = detail
+                    with _stdout_lock:
+                        print(f"[{get_timestamp()}] ℹ️     Entra: Global Secure Access API is unavailable despite the required application permission; verify tenant onboarding and licensing")
+                else:
+                    client_obj.network_access_summary['status'] = 'PermissionDenied'
+                    client_obj.network_access_summary['error'] = 'NetworkAccess.Read.All permission required'
+                    client_obj.private_access_summary['status'] = 'PermissionDenied'
+                    client_obj.private_access_summary['error'] = 'NetworkAccess.Read.All permission required'
+                    with _stdout_lock:
+                        print(f"[{get_timestamp()}] ℹ️     Entra: Global Secure Access API access denied (requires NetworkAccess.Read.All permission)")
             elif e.response.status_code == 404:
                 client_obj.network_access_summary['status'] = 'NotLicensed'
                 client_obj.network_access_summary['error'] = 'Entra Suite license required'

@@ -356,6 +356,29 @@ class ScanCoverageSeparationTests(unittest.TestCase):
         self.assertTrue(all(item.get("Category") == "Scan Coverage" for item in permission_rows))
         self.assertTrue(all(item.get("Disposition") == "Coverage" for item in permission_rows))
 
+    def test_global_secure_access_403_with_permission_is_not_mislabeled_missing_permission(self):
+        from Recommendations.entra.ENTRA_INTERNET_ACCESS import (
+            get_recommendation as get_internet_access_recommendation,
+        )
+        from Recommendations.entra.ENTRA_PRIVATE_ACCESS import (
+            get_recommendation as get_private_access_recommendation,
+        )
+
+        insights = {
+            "network_access_summary": {"status": "Unavailable"},
+            "private_access_summary": {"status": "Unavailable"},
+        }
+        recommendations = (
+            get_internet_access_recommendation("TEST_SKU", entra_insights=insights)
+            + get_private_access_recommendation("TEST_SKU", entra_insights=insights)
+        )
+        coverage = [item for item in recommendations if item.get("Disposition") == "Coverage"]
+
+        self.assertEqual(len(coverage), 2)
+        self.assertTrue(all(item.get("Status") == "Not Assessed" for item in coverage))
+        self.assertTrue(all("even though NetworkAccess.Read.All is present" in item["Observation"] for item in coverage))
+        self.assertTrue(all("onboarded" in item["Recommendation"] for item in coverage))
+
     def test_missing_purview_collection_is_coverage_not_a_control_failure(self):
         from Recommendations.defender.COPILOT_DATA_GOVERNANCE import get_recommendation
 
@@ -435,6 +458,76 @@ class ScanCoverageSeparationTests(unittest.TestCase):
         self.assertIn('Clear-AzContext -Scope Process', ps_source)
         self.assertIn('"-AuthMode", ("Fresh" if auth_mode == "fresh" else "Auto")',
                       orchestrator_source)
+        self.assertIn('for executable_name in ("pwsh", "powershell")', orchestrator_source)
+
+    def test_setup_requests_permissions_required_by_exact_graph_endpoints(self):
+        setup_source = (REPO_ROOT / "setup-service-principal.ps1").read_text(encoding="utf-8")
+
+        self.assertIn(
+            '9e640839-a198-48fb-8b9a-013fd6f6cbcd"; Name = "Policy.Read.PermissionGrant',
+            setup_source,
+        )
+        self.assertIn(
+            'e30060de-caa5-4331-99d3-6ac6c966a9a4"; Name = "NetworkAccess.Read.All',
+            setup_source,
+        )
+
+    def test_permission_guidance_names_the_permission_used_by_each_call(self):
+        consent_source = (
+            REPO_ROOT / "Recommendations" / "entra" / "AAD_PREMIUM_P2.py"
+        ).read_text(encoding="utf-8")
+        internet_source = (
+            REPO_ROOT / "Recommendations" / "entra" / "ENTRA_INTERNET_ACCESS.py"
+        ).read_text(encoding="utf-8")
+        private_source = (
+            REPO_ROOT / "Recommendations" / "entra" / "ENTRA_PRIVATE_ACCESS.py"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("Policy.Read.PermissionGrant", consent_source)
+        self.assertIn("NetworkAccess.Read.All permission is not granted", internet_source)
+        self.assertIn("NetworkAccess.Read.All permission is not granted", private_source)
+
+    def test_power_platform_tokens_support_current_securestring_behavior(self):
+        ps_source = (
+            REPO_ROOT / "collect_power_platform_and_copilot_studio_data.ps1"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("function ConvertFrom-AzAccessToken", ps_source)
+        self.assertIn("$Token -is [System.Security.SecureString]", ps_source)
+        self.assertGreaterEqual(ps_source.count("Get-AzAccessToken -TenantId $TenantId"), 3)
+        self.assertIn("COLLECTION_WARNING:Power Platform", ps_source)
+
+    def test_purview_result_is_passed_into_defender_governance_analysis(self):
+        orchestrator_source = (
+            REPO_ROOT / "Core" / "orchestrator.py"
+        ).read_text(encoding="utf-8")
+        pipeline_source = (
+            REPO_ROOT / "Core" / "orchestrator_pipelines.py"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("purview_task = asyncio.create_task(pipelines['purview']())", orchestrator_source)
+        self.assertIn("pipelines['defender'](purview_task)", orchestrator_source)
+        self.assertIn("purview_result.get('_client')", pipeline_source)
+        self.assertIn(
+            "get_defender_info(client, defender_client, services_and_licenses, purview_client_for_defender)",
+            pipeline_source,
+        )
+
+    def test_collector_diagnostics_redact_tokens_and_secrets(self):
+        import os
+        from unittest import mock
+        from Core.orchestrator_powershell import _sanitize_collector_detail
+
+        with mock.patch.dict(os.environ, {"CLIENT_SECRET": "top-secret-value"}, clear=False):
+            sanitized = _sanitize_collector_detail(
+                "Authorization: Bearer eyJheader.payload.signature "
+                "client_secret=top-secret-value password=hunter2"
+            )
+
+        self.assertNotIn("eyJheader.payload.signature", sanitized)
+        self.assertNotIn("top-secret-value", sanitized)
+        self.assertNotIn("hunter2", sanitized)
+        self.assertIn("[REDACTED]", sanitized)
 
     def test_coverage_items_are_excluded_from_finding_counts(self):
         import os

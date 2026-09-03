@@ -102,12 +102,14 @@ Run the service principal setup script to create Azure AD app registration with 
    - IdentityRiskyUser.Read.All - Read risky users
    - IdentityRiskEvent.Read.All - Read risk events
    - Policy.Read.All - Read policies
+   - Policy.Read.PermissionGrant - Read permission grant policies used by tenant consent settings
    - RoleManagement.Read.Directory - Read directory roles
    - UserAuthenticationMethod.Read.All - Read authentication methods
    - AccessReview.Read.All - Read access reviews
    - DeviceManagementManagedDevices.Read.All - Read managed devices
    - DeviceManagementConfiguration.Read.All - Read device configurations
    - NetworkAccessPolicy.Read.All - Read network access policies
+   - NetworkAccess.Read.All - Read Global Secure Access filtering policies and forwarding profiles
    - Application.Read.All - Read applications
    - AuditLog.Read.All - Read audit logs
    - Reports.Read.All - Read usage reports
@@ -371,12 +373,34 @@ replace the signed-in user's Power Platform Administrator role.
 
 ### Cross-Tenant Permission Issues
 
-**Problem:** `NetworkAccessPolicy.Read.All permission is not granted to the service principal`
+**Problem:** `NetworkAccess.Read.All permission is not granted to the service principal`
 
 **Solution:** In the target tenant, add Microsoft Graph **application** permission
-`NetworkAccessPolicy.Read.All` to the app registration matching `CLIENT_ID`, and grant tenant-wide
-admin consent. Consent granted in a different tenant is not reused. The setup script includes this
-permission for new target-tenant deployments.
+`NetworkAccess.Read.All` to the app registration matching `CLIENT_ID`, and grant tenant-wide admin
+consent. The list operations used for filtering policies and forwarding profiles require this broad
+read permission; `NetworkAccessPolicy.Read.All` by itself does not authorize them. Consent granted
+in a different tenant is not reused. The setup script includes both permissions for target-tenant
+deployments.
+
+**Problem:** Application consent policy settings could not be read even though `Policy.Read.All`
+is granted.
+
+**Solution:** Add Microsoft Graph **application** permission `Policy.Read.PermissionGrant` and grant
+tenant-wide admin consent. `Policy.Read.All` can read the authorization policy, while the separate
+permission is required for the permission grant policy inventory used by this assessment.
+
+**Problem:** Global Secure Access still returns HTTP 403 after `NetworkAccess.Read.All` is present
+in a fresh application token.
+
+**Solution:** Do not add progressively broader Graph permissions. Confirm that the tenant is
+explicitly onboarded to Global Secure Access and has the required Entra Suite or standalone
+licensing. If the organization does not plan to use this optional control, retain the result as an
+assessment coverage limitation. The tool distinguishes this condition from a missing permission.
+
+Collector authentication and partial-data warnings are also written to
+`Reports\collector_diagnostics.log`. The log is ignored by Git and redacts bearer tokens, JWTs, and
+common secret values so it can be used for local troubleshooting without placing credentials in
+the repository.
 
 ### General Issues
 

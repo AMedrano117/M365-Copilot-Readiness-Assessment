@@ -313,7 +313,7 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
                     service="Entra",
                     feature=feature_name,
                     observation="Application consent policy settings could not be read, so the user-versus-admin consent boundary is unverified",
-                    recommendation="Grant Policy.Read.All and rerun, or verify user consent settings and the admin-consent workflow directly in Entra.",
+                    recommendation="Grant Microsoft Graph application permission Policy.Read.PermissionGrant to the app registration identified by CLIENT_ID, grant tenant-wide admin consent, wait for propagation, and rerun. Policy.Read.All covers the authorization policy but does not authorize the permission grant policy inventory used by this check. Alternatively, verify user consent settings and the admin-consent workflow directly in Entra.",
                     link_text="Configure User Consent",
                     link_url="https://learn.microsoft.com/entra/identity/enterprise-apps/configure-user-consent",
                     priority="Medium",

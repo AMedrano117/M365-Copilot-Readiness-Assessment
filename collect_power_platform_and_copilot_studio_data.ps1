@@ -33,6 +33,18 @@ function Write-ConditionalOutput {
     }
 }
 
+# Az.Accounts 14+ returns access tokens as SecureString. Convert only in memory so
+# the bearer value can be used by Invoke-RestMethod; never write the token to output.
+function ConvertFrom-AzAccessToken {
+    param($Token)
+
+    if ($Token -is [System.Security.SecureString]) {
+        return [System.Net.NetworkCredential]::new('', $Token).Password
+    }
+
+    return [string]$Token
+}
+
 if (-not $DataOnly) {
     Write-ConditionalOutput "================================================================" -Color Cyan
     Write-ConditionalOutput "Power Platform & Copilot Studio Data Collection" -Color Cyan
@@ -64,9 +76,12 @@ try {
     if ($AuthMode -ne "Fresh") {
         try {
             # Test connection by trying to get tenant details (lightweight call)
+            $probeToken = ConvertFrom-AzAccessToken (
+                (Get-AzAccessToken -TenantId $TenantId -ResourceUrl 'https://api.bap.microsoft.com' -WarningAction SilentlyContinue).Token
+            )
             $testCall = Invoke-RestMethod -Uri "https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments?api-version=2023-06-01" `
                 -Method Get `
-                -Headers @{Authorization = "Bearer $((Get-AzAccessToken -ResourceUrl 'https://api.bap.microsoft.com' -WarningAction SilentlyContinue).Token)"} `
+                -Headers @{Authorization = "Bearer $probeToken"} `
                 -ErrorAction Stop
             $connected = $true
             Write-ConditionalOutput "      > Already connected to Power Platform" -Color Cyan
@@ -107,8 +122,12 @@ Write-ConditionalOutput ""
 Write-ConditionalOutput "[2/3] Collecting Power Platform deployment data..." -Color Yellow
 
 # Get access tokens for Power Platform APIs
-$bapToken = (Get-AzAccessToken -ResourceUrl "https://api.bap.microsoft.com" -WarningAction SilentlyContinue).Token
-$flowToken = (Get-AzAccessToken -ResourceUrl "https://service.flow.microsoft.com" -WarningAction SilentlyContinue).Token
+$bapToken = ConvertFrom-AzAccessToken (
+    (Get-AzAccessToken -TenantId $TenantId -ResourceUrl "https://api.bap.microsoft.com" -WarningAction SilentlyContinue).Token
+)
+$flowToken = ConvertFrom-AzAccessToken (
+    (Get-AzAccessToken -TenantId $TenantId -ResourceUrl "https://service.flow.microsoft.com" -WarningAction SilentlyContinue).Token
+)
 
 $powerPlatformData = @{}
 $permissionFailures = @()
@@ -283,10 +302,14 @@ if ($envName) {
 # Step 3: Serialize and output data
 $powerPlatformData["permission_failures"] = $permissionFailures
 
+if ($permissionFailures.Count -gt 0) {
+    $failureList = $permissionFailures -join ", "
+    [Console]::Error.WriteLine("COLLECTION_WARNING:Power Platform:Unread data sources: $failureList")
+}
+
 if (-not $DataOnly) {
     Write-ConditionalOutput ""
     if ($permissionFailures.Count -gt 0) {
-        $failureList = $permissionFailures -join ", "
         Write-ConditionalOutput "Warning: Permission denied for $($permissionFailures.Count) data sources: $failureList" -Color Yellow
         Write-ConditionalOutput "    License recommendations will still be generated. Deployment recommendations limited." -Color Gray
         Write-ConditionalOutput ""

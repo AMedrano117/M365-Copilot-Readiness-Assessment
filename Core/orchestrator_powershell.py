@@ -4,14 +4,92 @@ import os
 import sys
 import json
 import hashlib
+import re
+import shutil
 import subprocess
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from .spinner import get_timestamp, _stdout_lock
 
 
 PURVIEW_CACHE_MAX_AGE_SECONDS = 8 * 60 * 60
+COLLECTOR_DIAGNOSTICS_PATH = (
+    Path(__file__).resolve().parent.parent / "Reports" / "collector_diagnostics.log"
+)
+
+
+def _sanitize_collector_detail(detail):
+    """Redact bearer tokens and common secret assignments from collector diagnostics."""
+    sanitized = str(detail or "")
+    sanitized = re.sub(r"(?i)(bearer\s+)[^\s,;]+", r"\1[REDACTED]", sanitized)
+    sanitized = re.sub(
+        r"(?i)((?:client[_-]?secret|access[_-]?token|refresh[_-]?token|password)\s*[:=]\s*)[^\s,;]+",
+        r"\1[REDACTED]",
+        sanitized,
+    )
+    sanitized = re.sub(r"\beyJ[A-Za-z0-9_-]{20,}(?:\.[A-Za-z0-9_-]+){1,2}\b", "[REDACTED_JWT]", sanitized)
+    for variable_name in ("CLIENT_SECRET", "AZURE_CLIENT_SECRET"):
+        secret = os.environ.get(variable_name, "")
+        if len(secret) >= 8:
+            sanitized = sanitized.replace(secret, "[REDACTED]")
+    return sanitized[:2000]
+
+
+def _record_collector_diagnostics(collector, lines):
+    """Append sanitized warnings/errors to the ignored local diagnostics log."""
+    sanitized_lines = []
+    for line in lines or []:
+        cleaned = _sanitize_collector_detail(line).strip()
+        if cleaned and cleaned not in sanitized_lines:
+            sanitized_lines.append(cleaned)
+    if not sanitized_lines:
+        return
+
+    try:
+        COLLECTOR_DIAGNOSTICS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        with COLLECTOR_DIAGNOSTICS_PATH.open("a", encoding="utf-8") as handle:
+            handle.write(f"[{timestamp}] {collector}\n")
+            for line in sanitized_lines:
+                handle.write(f"  {line}\n")
+    except OSError:
+        # Diagnostics are best-effort and must never prevent an assessment run.
+        pass
+
+
+def _launch_powershell(script_path, script_args):
+    """Launch PowerShell 7 when available, with Windows PowerShell as a fallback."""
+    candidates = []
+    for executable_name in ("pwsh", "powershell"):
+        executable = shutil.which(executable_name)
+        if executable and executable not in candidates:
+            candidates.append(executable)
+
+    if not candidates:
+        raise FileNotFoundError(
+            "PowerShell was not found. Install PowerShell 7 or enable Windows PowerShell in PATH."
+        )
+
+    last_error = None
+    for executable in candidates:
+        try:
+            return subprocess.Popen(
+                [executable, "-NoProfile", "-File", script_path, *script_args],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding='utf-8',
+                errors='replace',
+                bufsize=1,
+            )
+        except OSError as exc:
+            # Microsoft Store execution aliases can resolve via PATH even when the
+            # corresponding application is not installed. Try the next host.
+            last_error = exc
+
+    raise last_error
 
 
 def _format_age(seconds):
@@ -126,17 +204,12 @@ async def collect_power_platform_data(
     # Launch unified collector (PS1 files are in parent directory, not in Core)
     ps_script_path = os.path.join(os.path.dirname(__file__), "..", "collect_power_platform_and_copilot_studio_data.ps1")
     
-    process = subprocess.Popen(
+    process = _launch_powershell(
+        ps_script_path,
         [
-            "pwsh", "-File", ps_script_path, "-DataOnly", "-TenantId", tenant_id,
+            "-DataOnly", "-TenantId", tenant_id,
             "-AuthMode", ("Fresh" if auth_mode == "fresh" else "Auto"),
         ],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding='utf-8',
-        errors='replace',
-        bufsize=1
     )
     
     # Spinner control
@@ -199,6 +272,7 @@ async def collect_power_platform_data(
                     or line.startswith('AUTH_COMPLETE')
                     or line.startswith('AUTH_REUSED')
                     or line.startswith('AUTH_ERROR')
+                    or line.startswith('COLLECTION_WARNING')
                 ):
                     parts = line.split(':', 2)
                     event_type = parts[0]
@@ -222,11 +296,17 @@ async def collect_power_platform_data(
                             sys.stdout.write(f'[{get_timestamp()}]   ℹ️  Continuing Power Platform deployment collection...\n')
                             sys.stdout.flush()
                             start_spinner(spinner_message)
-                        else:
+                        elif event_type == 'AUTH_ERROR':
                             sys.stdout.write(f'[{get_timestamp()}]   ⚠️  {service_name} sign-in failed\n')
                             if service_details:
                                 sys.stdout.write(f'[{get_timestamp()}]   ℹ️  Authentication detail: {service_details}\n')
                             sys.stdout.flush()
+                        else:
+                            sys.stdout.write(f'[{get_timestamp()}]   ⚠️  {service_name} collection was incomplete\n')
+                            if service_details:
+                                sys.stdout.write(f'[{get_timestamp()}]   ℹ️  Collector detail: {service_details}\n')
+                            sys.stdout.flush()
+                            start_spinner(spinner_message)
         except Exception:
             pass
     
@@ -276,7 +356,10 @@ async def collect_power_platform_data(
         with _stdout_lock:
             sys.stdout.write(f'[{get_timestamp()}]   ✓ Data collection complete\n')
             sys.stdout.flush()
+        warnings = [line for line in stderr_lines if line.startswith('COLLECTION_WARNING')]
+        _record_collector_diagnostics('Power Platform', warnings)
     elif process.returncode != 0:
+        _record_collector_diagnostics('Power Platform', stderr_lines)
         with _stdout_lock:
             sys.stdout.write(f'[{get_timestamp()}]   ⚠️  Interactive Power Platform data collection unavailable; continuing with basic recommendations\n')
             sys.stdout.flush()
@@ -331,14 +414,9 @@ async def collect_purview_data_via_powershell(auth_mode='auto', tenant_id=None):
     # Invoke collect_purview_data.ps1 in DataOnly mode with real-time stderr streaming
     # PS1 files are in parent directory, not in Core
     ps_script = os.path.join(os.path.dirname(__file__), '..', 'collect_purview_data.ps1')
-    process = subprocess.Popen(
-        ['pwsh', '-File', ps_script, '-DataOnly', '-AuthMode', ('Fresh' if auth_mode == 'fresh' else 'Auto')],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding='utf-8',
-        errors='replace',
-        bufsize=1  # Line buffered
+    process = _launch_powershell(
+        ps_script,
+        ['-DataOnly', '-AuthMode', ('Fresh' if auth_mode == 'fresh' else 'Auto')],
     )
     
     # Spinner control
@@ -455,6 +533,7 @@ async def collect_purview_data_via_powershell(auth_mode='auto', tenant_id=None):
             if last_detail:
                 sys.stdout.write(f'[{get_timestamp()}]   ℹ️  Purview collector detail: {last_detail}\n')
             sys.stdout.flush()
+        _record_collector_diagnostics('Purview', stderr_lines)
         return False
     
     # Parse JSON output from PowerShell
@@ -499,6 +578,7 @@ async def collect_purview_data_via_powershell(auth_mode='auto', tenant_id=None):
             sys.stdout.flush()
         return True
     except (json.JSONDecodeError, ValueError) as e:
+        _record_collector_diagnostics('Purview', [*stderr_lines, str(e)])
         with _stdout_lock:
             sys.stdout.write(
                 f'[{get_timestamp()}]   ⚠️  Purview interactive collection returned unreadable output; continuing with license-based recommendations\n'

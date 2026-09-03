@@ -125,6 +125,7 @@ $graphPermissions = @(
     
     # Entra Enhanced Observations - Identity & Access Management
     @{ Id = "246dd0d5-5bd0-4def-940b-0421030a5b68"; Name = "Policy.Read.All" }
+    @{ Id = "9e640839-a198-48fb-8b9a-013fd6f6cbcd"; Name = "Policy.Read.PermissionGrant" }
     @{ Id = "483bed4a-2ad3-4361-a73b-c83ccdbdc53c"; Name = "RoleManagement.Read.Directory" }
     @{ Id = "38d9df27-64da-44fd-b7c5-a6fbac20248f"; Name = "UserAuthenticationMethod.Read.All" }
     @{ Id = "d07a8cc0-3d51-4b77-b3b0-32704d1f69fa"; Name = "AccessReview.Read.All" }
@@ -135,6 +136,7 @@ $graphPermissions = @(
     
     # Global Secure Access (Entra Internet Access) - Preview/Beta API - may not be available in all tenants
     @{ Id = "8a3d36bf-cb46-4bcc-bec9-8d92829dab84"; Name = "NetworkAccessPolicy.Read.All" }
+    @{ Id = "e30060de-caa5-4331-99d3-6ac6c966a9a4"; Name = "NetworkAccess.Read.All" }
     
     # Application & Consent Management
     @{ Id = "9a5d68dd-52b0-4cc2-bd40-abcf44ac3a30"; Name = "Application.Read.All" }

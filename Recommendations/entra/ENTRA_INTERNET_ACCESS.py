@@ -86,12 +86,26 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
             observations.append(new_recommendation(
                 service="Entra",
                 feature=feature_name,
-                observation="NetworkAccessPolicy.Read.All permission is not granted to the service principal",
-                recommendation="In this target tenant, add Microsoft Graph application permission NetworkAccessPolicy.Read.All to the app registration identified by CLIENT_ID, then grant tenant-wide admin consent. Consent granted in another tenant does not carry over. Wait for consent propagation and rerun the assessment. The setup-service-principal.ps1 script can configure and request consent when run by an authorized administrator in this tenant.",
-                link_text="NetworkAccessPolicy Permission Reference",
-                link_url="https://learn.microsoft.com/graph/permissions-reference#networkaccesspolicyreadall",
+                observation="NetworkAccess.Read.All permission is not granted to the service principal",
+                recommendation="In this target tenant, add Microsoft Graph application permission NetworkAccess.Read.All to the app registration identified by CLIENT_ID, then grant tenant-wide admin consent. The filteringPolicies and forwardingProfiles list calls require NetworkAccess.Read.All; NetworkAccessPolicy.Read.All alone is not sufficient for this inventory. Wait for consent propagation and rerun the assessment.",
+                link_text="Global Secure Access API Permissions",
+                link_url="https://learn.microsoft.com/graph/api/networkaccess-networkaccessroot-list-filteringpolicies?view=graph-rest-beta",
                 priority="Low",
                 status="Permission Required",
+                category=CATEGORY_SCAN_COVERAGE,
+                disposition="Coverage"
+            ))
+            return observations
+        elif network_status == 'Unavailable':
+            observations.append(new_recommendation(
+                service="Entra",
+                feature=feature_name,
+                observation="Global Secure Access configuration could not be read: Microsoft Graph returned HTTP 403 even though NetworkAccess.Read.All is present in the application token",
+                recommendation="Verify whether this tenant has been explicitly onboarded to Global Secure Access and has the required Entra Suite or standalone licensing. In the Entra admin center, open Global Secure Access and complete activation if the organization wants this optional control for monitoring or restricting external AI traffic. Then wait for provisioning and rerun. If the feature is intentionally not deployed, retain this as a coverage limitation; it does not by itself block a Microsoft 365 Copilot pilot.",
+                link_text="Global Secure Access Onboarding",
+                link_url="https://learn.microsoft.com/graph/api/resources/networkaccess-global-secure-access-api-overview?view=graph-rest-beta",
+                priority="Low",
+                status="Not Assessed",
                 category=CATEGORY_SCAN_COVERAGE,
                 disposition="Coverage"
             ))

@@ -96,12 +96,15 @@ async def orchestrate(
             interactive_plan=interactive_plan
         )
         
-        # Run independent service pipelines in parallel
+        # Run service pipelines in parallel. Defender can gather its own data while
+        # Purview runs, but waits for the Purview result before calculating the
+        # cross-service Copilot data-governance recommendation.
+        purview_task = asyncio.create_task(pipelines['purview']())
         (m365_result, entra_info, purview_info, defender_info, power_platform_info, copilot_studio_info) = await asyncio.gather(
             pipelines['m365'](),
             pipelines['entra'](),
-            pipelines['purview'](),
-            pipelines['defender'](),
+            purview_task,
+            pipelines['defender'](purview_task),
             pipelines['power_platform'](),
             pipelines['copilot_studio']()
         )

@@ -166,7 +166,7 @@ def create_pipelines(client, services_and_licenses, tenant_id, service_config, i
         except Exception as e:
             return {'available': False, 'recommendations': []}
     
-    async def defender_pipeline():
+    async def defender_pipeline(purview_result_task=None):
         """Defender: Gather client data, then process"""
         if not run_defender:
             return {'available': False, 'recommendations': []}
@@ -188,6 +188,10 @@ def create_pipelines(client, services_and_licenses, tenant_id, service_config, i
             
             from .get_defender_info import get_defender_info
             purview_client_for_defender = None
+            if purview_result_task is not None:
+                purview_result = await purview_result_task
+                if isinstance(purview_result, dict):
+                    purview_client_for_defender = purview_result.get('_client')
             result = await get_defender_info(client, defender_client, services_and_licenses, purview_client_for_defender)
             if isinstance(result, dict):
                 result['_client'] = defender_client
