@@ -35,26 +35,12 @@ Write-Host "====================================================================
 if (-not (Test-RequiredModules -ScriptType "Setup")) {
     exit 1
 }
-# Step 1: Check/Install Microsoft.Graph PowerShell
-Write-Info "Checking for Microsoft.Graph PowerShell module..."
-if (-not (Get-Module -ListAvailable -Name Microsoft.Graph.Applications)) {
-    Write-Warn "Microsoft.Graph module not found. Installing..."
-    try {
-        Install-Module Microsoft.Graph -Scope CurrentUser -Force -AllowClobber
-        Write-Success "Microsoft.Graph module installed"
-    } catch {
-        Write-Fail "Failed to install Microsoft.Graph module: $_"
-        exit 1
-    }
-} else {
-    Write-Success "Microsoft.Graph module found"
-}
-
 # Force import to avoid version conflicts
 Write-Info "Loading Microsoft.Graph modules..."
 try {
     Import-Module Microsoft.Graph.Authentication -Force
     Import-Module Microsoft.Graph.Applications -Force
+    Import-Module Microsoft.Graph.Identity.DirectoryManagement -Force
     Write-Success "Modules loaded"
 } catch {
     Write-Warn "Module import issue. Close PowerShell and run script in fresh session."

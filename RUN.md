@@ -23,6 +23,12 @@ Use the guidance below to run the Automated Readiness Assessment for Microsoft 3
 
 **Note:** It is recommended that Microsoft 365 Administrators run this assessment. Alternatively, assign the appropriate roles listed above to designated users who will perform the assessment.
 
+Permissions and role assignments are tenant-specific. When assessing a different tenant, the
+app registration identified by that tenant's `CLIENT_ID` must have its own application permissions
+and admin consent. The user completing Purview or Power Platform interactive authentication must
+also hold the delegated role in that target tenant. Local PowerShell modules and cached sign-ins are
+machine-specific.
+
 ## Data Collection Details
 
 The following table shows what data is collected for each service and the APIs/cmdlets used:
@@ -337,6 +343,40 @@ If your tenant has Defender licenses but has never accessed the portal:
 Install-Module -Name ExchangeOnlineManagement -Force
 Import-Module ExchangeOnlineManagement
 ```
+
+Rerun only the Purview collection with a new sign-in:
+
+```powershell
+python main.py --env-file .env --services Purview --interactive-auth fresh --report-format both
+```
+
+The signed-in user needs Compliance Administrator or equivalent read access in the target tenant.
+The collector uses both Security & Compliance PowerShell and Exchange Online, so two authentication
+events may be shown.
+
+### Power Platform Issues
+
+**Problem:** AI Builder inventory is reported as not assessed
+
+**Solution:** Install only the required authentication module, then rerun with a target-tenant
+Power Platform Administrator account:
+
+```powershell
+Install-Module Az.Accounts -Scope CurrentUser -Force
+python main.py --env-file .env --services "Power Platform" --interactive-auth fresh --report-format both
+```
+
+This is delegated Power Platform API collection; adding another Microsoft Graph permission does not
+replace the signed-in user's Power Platform Administrator role.
+
+### Cross-Tenant Permission Issues
+
+**Problem:** `NetworkAccessPolicy.Read.All permission is not granted to the service principal`
+
+**Solution:** In the target tenant, add Microsoft Graph **application** permission
+`NetworkAccessPolicy.Read.All` to the app registration matching `CLIENT_ID`, and grant tenant-wide
+admin consent. Consent granted in a different tenant is not reused. The setup script includes this
+permission for new target-tenant deployments.
 
 ### General Issues
 

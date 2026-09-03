@@ -98,7 +98,6 @@ async def get_m365_client(graph_client):
         
         # Execute all API calls in parallel with progress bar
         import sys
-        from .spinner import _stdout_lock, get_timestamp
         
         # Show initial progress bar
         with _stdout_lock:

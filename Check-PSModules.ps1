@@ -46,21 +46,23 @@ function Test-RequiredModules {
         }
         "PowerPlatform" {
             $modules = @(
-                @{Name = "Az.Accounts"; Install = "Install-Module Az -Scope CurrentUser"}
+                @{Name = "Az.Accounts"; Install = "Install-Module Az.Accounts -Scope CurrentUser -Force"}
             )
         }
         "Setup" {
             $modules = @(
-                @{Name = "Microsoft.Graph.Authentication"; Install = "Install-Module Microsoft.Graph -Scope CurrentUser -Force -AllowClobber"}
-                @{Name = "Microsoft.Graph.Applications"; Install = "Install-Module Microsoft.Graph -Scope CurrentUser -Force -AllowClobber"}
+                @{Name = "Microsoft.Graph.Authentication"; Install = "Install-Module Microsoft.Graph.Authentication -Scope CurrentUser -Force -AllowClobber"}
+                @{Name = "Microsoft.Graph.Applications"; Install = "Install-Module Microsoft.Graph.Applications -Scope CurrentUser -Force -AllowClobber"}
+                @{Name = "Microsoft.Graph.Identity.DirectoryManagement"; Install = "Install-Module Microsoft.Graph.Identity.DirectoryManagement -Scope CurrentUser -Force -AllowClobber"}
             )
         }
         "All" {
             $modules = @(
                 @{Name = "ExchangeOnlineManagement"; Install = "Install-Module ExchangeOnlineManagement -Scope CurrentUser"}
-                @{Name = "Az.Accounts"; Install = "Install-Module Az -Scope CurrentUser"}
-                @{Name = "Microsoft.Graph.Authentication"; Install = "Install-Module Microsoft.Graph -Scope CurrentUser -Force -AllowClobber"}
-                @{Name = "Microsoft.Graph.Applications"; Install = "Install-Module Microsoft.Graph -Scope CurrentUser -Force -AllowClobber"}
+                @{Name = "Az.Accounts"; Install = "Install-Module Az.Accounts -Scope CurrentUser -Force"}
+                @{Name = "Microsoft.Graph.Authentication"; Install = "Install-Module Microsoft.Graph.Authentication -Scope CurrentUser -Force -AllowClobber"}
+                @{Name = "Microsoft.Graph.Applications"; Install = "Install-Module Microsoft.Graph.Applications -Scope CurrentUser -Force -AllowClobber"}
+                @{Name = "Microsoft.Graph.Identity.DirectoryManagement"; Install = "Install-Module Microsoft.Graph.Identity.DirectoryManagement -Scope CurrentUser -Force -AllowClobber"}
             )
         }
     }

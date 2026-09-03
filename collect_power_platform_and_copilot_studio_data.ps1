@@ -5,7 +5,9 @@
 
 param(
     [switch]$DataOnly,  # If set, outputs JSON only (for Python subprocess invocation)
-    [string]$TenantId   # Azure AD Tenant ID
+    [string]$TenantId,  # Azure AD Tenant ID
+    [ValidateSet("Auto", "Fresh")]
+    [string]$AuthMode = "Auto"
 )
 
 # Set buffer width to prevent line wrapping issues when called from Python
@@ -50,19 +52,28 @@ if (-not $TenantId) {
 }
 
 try {
+    if ($AuthMode -eq "Fresh") {
+        # Keep authentication local to this process and prevent another tenant's
+        # cached Az context from being accepted by the connectivity probe.
+        Disable-AzContextAutosave -Scope Process | Out-Null
+        Clear-AzContext -Scope Process -Force -ErrorAction SilentlyContinue
+    }
+
     # Check if already connected
     $connected = $false
-    try {
-        # Test connection by trying to get tenant details (lightweight call)
-        $testCall = Invoke-RestMethod -Uri "https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments?api-version=2023-06-01" `
-            -Method Get `
-            -Headers @{Authorization = "Bearer $((Get-AzAccessToken -ResourceUrl 'https://api.bap.microsoft.com' -WarningAction SilentlyContinue).Token)"} `
-            -ErrorAction Stop
-        $connected = $true
-        Write-ConditionalOutput "      > Already connected to Power Platform" -Color Cyan
-        [Console]::Error.WriteLine("AUTH_REUSED:Power Platform Admin APIs")
-    } catch {
-        # Not connected, need to authenticate
+    if ($AuthMode -ne "Fresh") {
+        try {
+            # Test connection by trying to get tenant details (lightweight call)
+            $testCall = Invoke-RestMethod -Uri "https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments?api-version=2023-06-01" `
+                -Method Get `
+                -Headers @{Authorization = "Bearer $((Get-AzAccessToken -ResourceUrl 'https://api.bap.microsoft.com' -WarningAction SilentlyContinue).Token)"} `
+                -ErrorAction Stop
+            $connected = $true
+            Write-ConditionalOutput "      > Already connected to Power Platform" -Color Cyan
+            [Console]::Error.WriteLine("AUTH_REUSED:Power Platform Admin APIs")
+        } catch {
+            # Not connected, need to authenticate
+        }
     }
     
     if (-not $connected) {
@@ -74,7 +85,7 @@ try {
         # Connect to Azure account using device code authentication
         # This works reliably in subprocess scenarios
         # Do NOT pipe to Out-Null - we need to see the device code!
-        Connect-AzAccount -Tenant $TenantId -UseDeviceAuthentication -ErrorAction Stop -WarningAction SilentlyContinue
+        Connect-AzAccount -Tenant $TenantId -UseDeviceAuthentication -Scope Process -Force -ErrorAction Stop -WarningAction SilentlyContinue
         
         Write-ConditionalOutput "" 
         Write-ConditionalOutput "      > Authentication successful!" -Color Green
@@ -82,11 +93,12 @@ try {
     }
     
 } catch {
+    [Console]::Error.WriteLine("AUTH_ERROR:Power Platform Admin APIs:$($_.Exception.Message)")
     Write-ConditionalOutput "      X Connection failed: $($_.Exception.Message)" -Color Red
     Write-ConditionalOutput ""
     Write-ConditionalOutput "Please ensure you have:" -Color Yellow
-    Write-ConditionalOutput "  - Az PowerShell module installed (Install-Module Az)" -Color Yellow
-    Write-ConditionalOutput "  - Power Platform Administrator role assigned" -Color Yellow
+    Write-ConditionalOutput "  - Az.Accounts installed (Install-Module Az.Accounts -Scope CurrentUser -Force)" -Color Yellow
+    Write-ConditionalOutput "  - Power Platform Administrator assigned to the signed-in user in the target tenant" -Color Yellow
     exit 1
 }
 
@@ -269,6 +281,8 @@ if ($envName) {
 }
 
 # Step 3: Serialize and output data
+$powerPlatformData["permission_failures"] = $permissionFailures
+
 if (-not $DataOnly) {
     Write-ConditionalOutput ""
     if ($permissionFailures.Count -gt 0) {

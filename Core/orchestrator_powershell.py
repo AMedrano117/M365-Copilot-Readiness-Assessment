@@ -103,7 +103,12 @@ def _save_purview_cache(tenant_id, json_payload):
         pass
 
 
-async def collect_power_platform_data(tenant_id, run_power_platform, run_copilot_studio):
+async def collect_power_platform_data(
+    tenant_id,
+    run_power_platform,
+    run_copilot_studio,
+    auth_mode='auto',
+):
     """Launch unified Power Platform/Copilot Studio data collector.
     
     This ensures single authentication and data sharing between both services.
@@ -122,7 +127,10 @@ async def collect_power_platform_data(tenant_id, run_power_platform, run_copilot
     ps_script_path = os.path.join(os.path.dirname(__file__), "..", "collect_power_platform_and_copilot_studio_data.ps1")
     
     process = subprocess.Popen(
-        ["pwsh", "-File", ps_script_path, "-DataOnly", "-TenantId", tenant_id],
+        [
+            "pwsh", "-File", ps_script_path, "-DataOnly", "-TenantId", tenant_id,
+            "-AuthMode", ("Fresh" if auth_mode == "fresh" else "Auto"),
+        ],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -186,7 +194,12 @@ async def collect_power_platform_data(tenant_id, run_power_platform, run_copilot
                 if not line:
                     continue
                 stderr_lines.append(line)
-                if line.startswith('AUTH_PROMPT') or line.startswith('AUTH_COMPLETE') or line.startswith('AUTH_REUSED'):
+                if (
+                    line.startswith('AUTH_PROMPT')
+                    or line.startswith('AUTH_COMPLETE')
+                    or line.startswith('AUTH_REUSED')
+                    or line.startswith('AUTH_ERROR')
+                ):
                     parts = line.split(':', 2)
                     event_type = parts[0]
                     service_name = parts[1] if len(parts) > 1 else 'Power Platform'
@@ -204,11 +217,16 @@ async def collect_power_platform_data(tenant_id, run_power_platform, run_copilot
                             sys.stdout.write(f'[{get_timestamp()}]   ℹ️  Continuing Power Platform deployment collection...\n')
                             sys.stdout.flush()
                             start_spinner(spinner_message)
-                        else:
+                        elif event_type == 'AUTH_COMPLETE':
                             sys.stdout.write(f'[{get_timestamp()}]   ✅ {service_name} sign-in accepted\n')
                             sys.stdout.write(f'[{get_timestamp()}]   ℹ️  Continuing Power Platform deployment collection...\n')
                             sys.stdout.flush()
                             start_spinner(spinner_message)
+                        else:
+                            sys.stdout.write(f'[{get_timestamp()}]   ⚠️  {service_name} sign-in failed\n')
+                            if service_details:
+                                sys.stdout.write(f'[{get_timestamp()}]   ℹ️  Authentication detail: {service_details}\n')
+                            sys.stdout.flush()
         except Exception:
             pass
     
@@ -371,7 +389,12 @@ async def collect_purview_data_via_powershell(auth_mode='auto', tenant_id=None):
                 if not line:
                     continue
                 stderr_lines.append(line)
-                if line.startswith('AUTH_PROMPT') or line.startswith('AUTH_COMPLETE') or line.startswith('AUTH_REUSED'):
+                if (
+                    line.startswith('AUTH_PROMPT')
+                    or line.startswith('AUTH_COMPLETE')
+                    or line.startswith('AUTH_REUSED')
+                    or line.startswith('AUTH_ERROR')
+                ):
                     parts = line.split(':', 2)
                     event_type = parts[0]
                     service_name = parts[1] if len(parts) > 1 else 'Microsoft 365'
@@ -387,10 +410,14 @@ async def collect_purview_data_via_powershell(auth_mode='auto', tenant_id=None):
                             sys.stdout.write(f'[{get_timestamp()}]   ℹ️  Reusing an existing {service_name} session\n')
                             sys.stdout.write(f'[{get_timestamp()}]   ℹ️  Finalizing secure service connections...\n')
                             start_spinner('Finalizing secure service connections...')
-                        else:
+                        elif event_type == 'AUTH_COMPLETE':
                             sys.stdout.write(f'[{get_timestamp()}]   ✅ {service_name} sign-in accepted\n')
                             sys.stdout.write(f'[{get_timestamp()}]   ℹ️  Finalizing secure service connections...\n')
                             start_spinner('Finalizing secure service connections...')
+                        else:
+                            sys.stdout.write(f'[{get_timestamp()}]   ⚠️  {service_name} sign-in failed\n')
+                            if service_details:
+                                sys.stdout.write(f'[{get_timestamp()}]   ℹ️  Authentication detail: {service_details}\n')
                         sys.stdout.flush()
         except ValueError:
             # Pipe closed, thread can exit

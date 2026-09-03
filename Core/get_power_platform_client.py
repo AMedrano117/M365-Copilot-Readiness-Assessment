@@ -78,6 +78,8 @@ def load_power_platform_data_from_stdin():
     client.ai_models = raw_data.get('ai_models', [])
     client.dlp_policies = raw_data.get('dlp_policies', [])
     client.solutions = raw_data.get('solutions', [])
+    client.permission_failures = raw_data.get('permission_failures', [])
+    permission_failures = set(client.permission_failures)
     
     # Build environment summary
     client.environment_summary = {
@@ -217,6 +219,10 @@ def load_power_platform_data_from_stdin():
         'azure_ml': 0,
         'custom': 0
     }
+    if 'AI Models' in permission_failures or 'Environments' in permission_failures:
+        client.ai_model_summary['error'] = (
+            'Power Platform Admin APIs did not return a readable AI Builder model inventory'
+        )
     
     for model in client.ai_models:
         model_type = model.get('properties', {}).get('modelType', '').lower()
@@ -233,6 +239,10 @@ def load_power_platform_data_from_stdin():
         'environment_level': 0,
         'tenant_level': 0
     }
+    if 'DLP Policies' in permission_failures or 'Environments' in permission_failures:
+        client.dlp_summary['error'] = (
+            'Power Platform Admin APIs did not return readable DLP policy data'
+        )
     
     for policy in client.dlp_policies:
         scope = policy.get('properties', {}).get('scope', '').lower()

@@ -70,7 +70,12 @@ async def orchestrate(
         
         # PRE-FLIGHT: Launch unified Power Platform/Copilot Studio data collector if needed
         if interactive_plan['power_platform']['will_attempt']:
-            await collect_power_platform_data(tenant_id, run_power_platform, run_copilot_studio)
+            await collect_power_platform_data(
+                tenant_id,
+                run_power_platform,
+                run_copilot_studio,
+                auth_mode=interactive_auth,
+            )
         
         # Check if we need Graph client messages (only for Graph-based services)
         # PowerShell-based services still need client for licenses, but silently

@@ -87,7 +87,7 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
                 service="Entra",
                 feature=feature_name,
                 observation="NetworkAccessPolicy.Read.All permission is not granted to the service principal",
-                recommendation="Grant the NetworkAccessPolicy.Read.All API permission to enable Global Secure Access monitoring. This permission allows the tool to assess your web content filtering policies, traffic forwarding rules, and AI security controls. Run the setup-service-principal.ps1 script to configure required permissions, then rerun this assessment to generate Global Secure Access observations.",
+                recommendation="In this target tenant, add Microsoft Graph application permission NetworkAccessPolicy.Read.All to the app registration identified by CLIENT_ID, then grant tenant-wide admin consent. Consent granted in another tenant does not carry over. Wait for consent propagation and rerun the assessment. The setup-service-principal.ps1 script can configure and request consent when run by an authorized administrator in this tenant.",
                 link_text="NetworkAccessPolicy Permission Reference",
                 link_url="https://learn.microsoft.com/graph/permissions-reference#networkaccesspolicyreadall",
                 priority="Low",

@@ -3,7 +3,11 @@ Copilot Data Governance - Compliance & Protection Assessment
 Evaluates data governance readiness for Copilot using Purview policies,
 DLP rules, sensitivity labels, and data access controls.
 """
-from Core.new_recommendation import new_recommendation
+from Core.new_recommendation import (
+    CATEGORY_SCAN_COVERAGE,
+    NOT_ASSESSED_STATUS,
+    new_recommendation,
+)
 
 def get_recommendation(purview_client=None, defender_client=None, defender_insights=None):
     """
@@ -15,12 +19,14 @@ def get_recommendation(purview_client=None, defender_client=None, defender_insig
         return new_recommendation(
             service="Defender",
             feature="Copilot Data Governance",
-            status="Warning",
-            observation="Unable to assess Copilot data governance - Purview data not available. Run tool with: .\\collect_purview_data.ps1",
-            recommendation="Enable Microsoft Purview to assess and enforce data governance for Copilot. Includes DLP, sensitivity labels, retention policies, and information barriers.",
+            status=NOT_ASSESSED_STATUS,
+            observation="Copilot data governance was not assessed because live Purview policy data was not collected. This is an evidence gap, not proof that Purview controls are absent.",
+            recommendation="On the collection machine, install ExchangeOnlineManagement, then rerun with: python main.py --env-file .env --services Purview --interactive-auth fresh --report-format both. Sign in to the target tenant with a user assigned Compliance Administrator (or an equivalent role that can read the required policies). Complete both Security & Compliance and Exchange Online prompts. If authentication fails, use the collector detail in the terminal to resolve the local module, WAM, role, or tenant-selection issue.",
             priority="High",
             link_text="Purview for AI",
-            link_url="https://learn.microsoft.com/purview/ai-microsoft-purview"
+            link_url="https://learn.microsoft.com/purview/ai-microsoft-purview",
+            category=CATEGORY_SCAN_COVERAGE,
+            disposition="Coverage",
         )
     
     gaps = []

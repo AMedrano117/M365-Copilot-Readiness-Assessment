@@ -148,7 +148,7 @@ try {
     if (-not $ippsConnected) {
         Write-AuthStatus -Type "AUTH_PROMPT" -Service "Security & Compliance" -Details "Purview portal and compliance cmdlets"
         Write-Progress2 "      → Connecting to Security & Compliance..." -NoNewline
-        Connect-IPPSSession -ErrorAction Stop -WarningAction SilentlyContinue | Out-Null
+        Connect-IPPSSession -DisableWAM -ErrorAction Stop -WarningAction SilentlyContinue | Out-Null
         Write-Progress2 " ✓" -ForegroundColor Green
         # Output to stderr so Python can display in real-time
         Write-AuthStatus -Type "AUTH_COMPLETE" -Service "Security & Compliance"
@@ -169,7 +169,7 @@ try {
             # Not auto-connected, need to connect manually
             Write-AuthStatus -Type "AUTH_PROMPT" -Service "Exchange Online" -Details "Exchange Online cmdlets and organization settings"
             Write-Progress2 "      → Connecting to Exchange Online..." -NoNewline
-            Connect-ExchangeOnline -ShowBanner:$false -ErrorAction Stop -WarningAction SilentlyContinue | Out-Null
+            Connect-ExchangeOnline -DisableWAM -ShowBanner:$false -ErrorAction Stop -WarningAction SilentlyContinue | Out-Null
             Write-Progress2 " ✓" -ForegroundColor Green
             # Output to stderr so Python can display in real-time
             Write-AuthStatus -Type "AUTH_COMPLETE" -Service "Exchange Online"
@@ -180,7 +180,11 @@ try {
         Write-Progress2 "      ✓ Using existing connections" -ForegroundColor Green
     }
 } catch {
-    Write-Progress2 "      ✗ Connection failed: $($_.Exception.Message)" -ForegroundColor Red
+    $connectionError = $_.Exception.Message
+    if ($DataOnly) {
+        [Console]::Error.WriteLine("AUTH_ERROR:Purview:$connectionError")
+    }
+    Write-Progress2 "      ✗ Connection failed: $connectionError" -ForegroundColor Red
     Write-Progress2 ""
     Write-Progress2 "Please ensure you have:" -ForegroundColor Yellow
     Write-Progress2 "  - ExchangeOnlineManagement module installed" -ForegroundColor Yellow

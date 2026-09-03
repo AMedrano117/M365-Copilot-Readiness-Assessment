@@ -356,6 +356,86 @@ class ScanCoverageSeparationTests(unittest.TestCase):
         self.assertTrue(all(item.get("Category") == "Scan Coverage" for item in permission_rows))
         self.assertTrue(all(item.get("Disposition") == "Coverage" for item in permission_rows))
 
+    def test_missing_purview_collection_is_coverage_not_a_control_failure(self):
+        from Recommendations.defender.COPILOT_DATA_GOVERNANCE import get_recommendation
+
+        result = get_recommendation(purview_client=None)
+
+        self.assertEqual(result["Status"], "Not Assessed")
+        self.assertEqual(result["Category"], "Scan Coverage")
+        self.assertEqual(result["Disposition"], "Coverage")
+        self.assertIn("evidence gap", result["Observation"])
+        self.assertIn("--services Purview --interactive-auth fresh", result["Recommendation"])
+
+    def test_missing_ai_builder_inventory_is_coverage_not_zero_models(self):
+        from Recommendations.power_platform.AI_BUILDER_MODELS import get_recommendation
+
+        result = asyncio.run(
+            get_recommendation("TEST_SKU", pp_client=None, pp_insights=None)
+        )[0]
+
+        self.assertEqual(result["Status"], "Not Assessed")
+        self.assertEqual(result["Category"], "Scan Coverage")
+        self.assertEqual(result["Disposition"], "Coverage")
+        self.assertIn("does not mean", result["Observation"])
+        self.assertIn("Az.Accounts", result["Recommendation"])
+
+    def test_read_and_empty_ai_builder_inventory_remains_an_opportunity(self):
+        from Recommendations.power_platform.AI_BUILDER_MODELS import get_recommendation
+
+        class FakeClient:
+            ai_model_summary = {"total": 0}
+
+        result = asyncio.run(
+            get_recommendation(
+                "TEST_SKU",
+                pp_client=FakeClient(),
+                pp_insights={"ai_models_total": 0},
+            )
+        )[0]
+
+        self.assertNotEqual(result["Category"], "Scan Coverage")
+        self.assertNotEqual(result["Disposition"], "Coverage")
+        self.assertIn("No AI Builder models deployed", result["Observation"])
+
+    def test_power_platform_permission_failures_survive_json_loading(self):
+        import json
+        import os
+        from unittest import mock
+        from Core.get_power_platform_client import load_power_platform_data_from_stdin
+
+        payload = json.dumps({
+            "environments": [{}],
+            "ai_models": [],
+            "dlp_policies": [],
+            "permission_failures": ["AI Models", "DLP Policies"],
+        })
+        with mock.patch.dict(
+            os.environ,
+            {
+                "POWER_PLATFORM_DATA_SOURCE": "subprocess",
+                "POWER_PLATFORM_DATA_JSON": payload,
+            },
+            clear=False,
+        ):
+            client = load_power_platform_data_from_stdin()
+
+        self.assertIn("error", client.ai_model_summary)
+        self.assertIn("error", client.dlp_summary)
+
+    def test_power_platform_fresh_auth_is_forwarded_to_az_collector(self):
+        ps_source = (
+            REPO_ROOT / "collect_power_platform_and_copilot_studio_data.ps1"
+        ).read_text(encoding="utf-8")
+        orchestrator_source = (
+            REPO_ROOT / "Core" / "orchestrator_powershell.py"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn('[ValidateSet("Auto", "Fresh")]', ps_source)
+        self.assertIn('Clear-AzContext -Scope Process', ps_source)
+        self.assertIn('"-AuthMode", ("Fresh" if auth_mode == "fresh" else "Auto")',
+                      orchestrator_source)
+
     def test_coverage_items_are_excluded_from_finding_counts(self):
         import os
         import tempfile
