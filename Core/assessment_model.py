@@ -68,7 +68,7 @@ COVERAGE_LANGUAGE = re.compile(
 
 IMPACT_RULES = [
     ("Apps, connectors & agents", (
-        "oauth", "app consent", "enterprise application", "connector", "plugin", "mcp",
+        "oauth", "app consent", "user consent", "permission grant", "enterprise application", "connector", "plugin", "mcp",
         "copilot studio", "power virtual agent", "agent identity", "custom agent",
     )),
     ("Identity & access", (
@@ -284,20 +284,32 @@ def summarize_readiness(records):
     enriched = enrich_assessment_records(records)
     actions = [r for r in enriched if r.get("Disposition") == DISPOSITION_ACTION]
     coverage = [r for r in enriched if r.get("Disposition") == DISPOSITION_COVERAGE]
+    # Power Platform, Copilot Studio, and preview discovery are supplemental enrichment.
+    # Missing them narrows extensibility/usage visibility but must not lower the core M365
+    # security and governance deployment decision.
+    optional_coverage = [
+        r for r in coverage
+        if str(r.get("OptionalEvidence", "") or "").lower() == "yes"
+        or str(r.get("Service", "") or "") in {"Power Platform", "Copilot Studio", "Shadow AI"}
+    ]
+    decision_coverage = [r for r in coverage if r not in optional_coverage]
     critical = [r for r in actions if str(r.get("Status", "")).lower() == "critical"]
     high = [r for r in actions if r.get("Priority") == "High"]
     medium = [r for r in actions if r.get("Priority") == "Medium"]
 
     if critical:
         decision = "Not ready for pilot"
-        rationale = f"{len(critical)} critical condition(s) require remediation before AI access is expanded."
+        noun = "condition" if len(critical) == 1 else "conditions"
+        rationale = f"{len(critical)} critical {noun} require remediation before AI access is expanded."
     elif high:
         decision = "Pilot only — remediation required"
-        rationale = f"{len(high)} high-priority condition(s) should be closed before broad deployment."
+        noun = "condition" if len(high) == 1 else "conditions"
+        rationale = f"{len(high)} high-priority {noun} should be closed before broad deployment."
     elif medium:
         decision = "Controlled pilot with conditions"
-        rationale = f"No critical blockers were found; {len(medium)} medium-priority condition(s) remain."
-    elif coverage:
+        noun = "condition" if len(medium) == 1 else "conditions"
+        rationale = f"No critical blockers were found; {len(medium)} medium-priority {noun} remain."
+    elif decision_coverage:
         decision = "Assessment incomplete"
         rationale = "No blocking condition was found in the available data, but important areas were not verified."
     else:
@@ -309,6 +321,8 @@ def summarize_readiness(records):
         "rationale": rationale,
         "actions": actions,
         "coverage": coverage,
+        "decision_coverage": decision_coverage,
+        "optional_coverage": optional_coverage,
         "critical": critical,
         "high": high,
         "medium": medium,

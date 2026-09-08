@@ -46,7 +46,7 @@ def get_recommendation(sku_name, status="Success", m365_insights=None):
         obs_rec = new_recommendation(
             service="M365",
             feature=feature_name,
-            observation=f"Connector readiness: {total_active_users:,} users, {sharepoint_total_files:,} files, {teams_active_users:,} Teams users. Copilot Connectors ARE the extensibility layer - build custom plugins connecting Copilot to CRM, ERP, ServiceNow, custom databases. Agents can query external systems via natural language. Critical for enterprise AI where 80% of valuable data lives OUTSIDE M365.",
+            observation=f"Connector context: {total_active_users:,} active users, {sharepoint_total_files:,} SharePoint files, and {teams_active_users:,} Teams users were observed. These M365 volumes do not prove that an external repository needs a connector; that requires a named use case and source-system inventory.",
             recommendation="",
             link_text="Build Copilot Plugins",
             link_url="https://learn.microsoft.com/microsoft-365-copilot/extensibility/",

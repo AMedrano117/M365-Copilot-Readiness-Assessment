@@ -79,7 +79,7 @@ def get_recommendation(sku_name, status="Success", m365_insights=None):
                 service="M365",
                 feature=f"{feature_name} - Desktop Adoption",
                 observation=f"Low desktop Office adoption: Only {desktop_rate}% have desktop apps ({windows_users} Windows, {mac_users} Mac), {mobile_users} mobile-only. Limited Copilot capabilities",
-                recommendation="Deploy desktop Office apps to maximize Copilot value. Low desktop adoption means most users can't access full Copilot features in Word, Excel, PowerPoint, Outlook. Web and mobile have limited AI capabilities. Deploy desktop Office to knowledge workers, content creators, data analysts - roles that benefit most from Copilot. Target 70%+ desktop adoption for effective Copilot program.",
+                recommendation="Compare desktop, web, and mobile activity with the intended pilot use cases. Deploy or update desktop apps only for roles whose required Copilot features depend on them, then validate access and task outcomes before expanding.",
                 link_text="Office Deployment Guide",
                 link_url="https://learn.microsoft.com/deployoffice/deployment-guide-microsoft-365-apps",
                 priority="Medium",

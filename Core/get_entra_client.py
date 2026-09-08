@@ -6,10 +6,26 @@ PIM, Access Reviews, Device Compliance, B2B settings, and Application Consent da
 Used for enhanced Entra observations focused on Copilot adoption.
 """
 import asyncio
+import base64
 import httpx
+import json
 from azure.core.exceptions import HttpResponseError
 from .spinner import get_timestamp, _stdout_lock
 from datetime import datetime, timedelta
+
+MICROSOFT_OWNER_TENANT_IDS = {
+    'f8cdef31-a31e-4b4a-93e4-5f571e91255a',
+    '72f988bf-86f1-41af-91ab-2d7cd011db47',
+}
+MICROSOFT_FIRST_PARTY_APP_IDS = {
+    '00000002-0000-0000-c000-000000000000',
+    '00000003-0000-0000-c000-000000000000',
+    '00000002-0000-0ff1-ce00-000000000000',
+    '00000003-0000-0ff1-ce00-000000000000',
+    '08e18876-6177-487e-b8b5-cf950c1e598c',
+    '14d82eec-204b-4c2f-b7e8-296a70dab67e',
+    '1950a258-227b-4e31-a9cf-717495945fc2',
+}
 
 def _get_attr(obj, attr_name, default=''):
     """Safely read a field from either a Graph SDK model object or a plain dict.
@@ -41,6 +57,37 @@ def _get_attr(obj, attr_name, default=''):
     value = getattr(obj, snake_case, None)
     return value if value is not None else default
 
+
+def _apply_authorization_policy(client_obj, policy):
+    """Apply tenant authorization-policy fields without inferring assignments from definitions."""
+    client_obj.authorization_policy = policy
+    guest_setting = _get_attr(policy, 'allowInvitesFrom', 'Unknown')
+    client_obj.auth_policy_summary['guest_invite_setting'] = guest_setting
+    client_obj.b2b_summary['guest_invite_restrictions'] = guest_setting
+
+    default_perms = _get_attr(policy, 'defaultUserRolePermissions')
+    client_obj.auth_policy_summary['default_user_role_permissions'] = default_perms
+    if not default_perms:
+        return
+    client_obj.auth_policy_summary['allow_users_to_register_apps'] = _get_attr(
+        default_perms, 'allowedToCreateApps', False
+    )
+    assigned_policies = _get_attr(default_perms, 'permissionGrantPoliciesAssigned', None)
+    if assigned_policies is None:
+        assigned_policies = _get_attr(default_perms, 'permission_grant_policies_assigned', None)
+    if assigned_policies is None:
+        return
+
+    assigned_policies = list(assigned_policies or [])
+    user_consent_policies = [
+        str(value) for value in assigned_policies
+        if str(value).lower().startswith('managepermissiongrantsforself.')
+    ]
+    client_obj.consent_summary['consent_configuration_available'] = True
+    client_obj.consent_summary['assigned_user_consent_policies'] = user_consent_policies
+    client_obj.consent_summary['user_consent_allowed'] = bool(user_consent_policies)
+    client_obj.consent_summary['admin_consent_required'] = not bool(user_consent_policies)
+
 async def _get_graph_http_client():
     """Get HTTP client for Microsoft Graph API with bearer token"""
     from .get_graph_client import get_shared_credential
@@ -57,6 +104,19 @@ async def _get_graph_http_client():
         },
         timeout=30.0
     )
+
+
+def _get_graph_token_roles():
+    """Return application roles in the current Graph token without logging token material."""
+    try:
+        from .get_graph_client import get_shared_credential
+
+        token = get_shared_credential().get_token('https://graph.microsoft.com/.default').token
+        payload = token.split('.')[1]
+        payload += '=' * (-len(payload) % 4)
+        return set(json.loads(base64.urlsafe_b64decode(payload)).get('roles', []))
+    except Exception:
+        return set()
 
 
 def _extract_response_items(response):
@@ -79,7 +139,7 @@ def _extract_response_items(response):
     return []
 
 
-async def _fetch_graph_collection_via_http(path, params=None, max_pages=25):
+async def _fetch_graph_collection_via_http(path, params=None, max_pages=100, headers=None):
     """Fetch a Graph collection using raw HTTP to support endpoints missing in the SDK."""
     http_client = await _get_graph_http_client()
     results = []
@@ -89,12 +149,16 @@ async def _fetch_graph_collection_via_http(path, params=None, max_pages=25):
 
     try:
         while next_url and pages < max_pages:
-            response = await http_client.get(next_url, params=next_params)
+            response = await http_client.get(next_url, params=next_params, headers=headers)
             if response.status_code in (401, 403):
                 return {
                     'available': False,
+                    'availability_status': 'unavailable',
                     'status_code': response.status_code,
                     'value': [],
+                    'records_collected': len(results),
+                    'pages_collected': pages,
+                    'truncated': False,
                 }
 
             response.raise_for_status()
@@ -109,14 +173,48 @@ async def _fetch_graph_collection_via_http(path, params=None, max_pages=25):
 
         return {
             'available': True,
+            'availability_status': 'partial' if next_url else 'available',
             'truncated': bool(next_url),
             'value': results,
+            'records_collected': len(results),
+            'pages_collected': pages,
         }
     except Exception as exc:
         return {
             'available': False,
+            'availability_status': 'partial' if results else 'unavailable',
             'error': str(exc),
-            'value': [],
+            'value': results,
+            'records_collected': len(results),
+            'pages_collected': pages,
+            'truncated': bool(results),
+        }
+    finally:
+        await http_client.aclose()
+
+
+async def _fetch_graph_object_via_http(path):
+    """Fetch a Graph singleton while preserving the same collection-status contract."""
+    http_client = await _get_graph_http_client()
+    try:
+        response = await http_client.get(path)
+        if response.status_code in (401, 403):
+            return {
+                'available': False, 'availability_status': 'unavailable',
+                'status_code': response.status_code, 'object': None,
+                'records_collected': 0, 'pages_collected': 0, 'truncated': False,
+            }
+        response.raise_for_status()
+        return {
+            'available': True, 'availability_status': 'available',
+            'object': response.json(), 'records_collected': 1,
+            'pages_collected': 1, 'truncated': False,
+        }
+    except Exception as exc:
+        return {
+            'available': False, 'availability_status': 'unavailable',
+            'error': str(exc), 'object': None, 'records_collected': 0,
+            'pages_collected': 0, 'truncated': False,
         }
     finally:
         await http_client.aclose()
@@ -144,6 +242,8 @@ async def get_entra_client(graph_client, tenant_id=None):
             # role_assignments, ...). True only when that specific query returned data, so that a
             # failed query is never reported downstream as a clean result.
             self.data_sources = {}
+            self.collection_status = {}
+            self.role_definitions = []
 
             
             # Conditional Access
@@ -291,6 +391,8 @@ async def get_entra_client(graph_client, tenant_id=None):
                 'total_apps': 0,
                 'apps_with_delegated_permissions': 0,
                 'apps_with_application_permissions': 0,
+                'consent_configuration_available': False,
+                'assigned_user_consent_policies': [],
                 'user_consent_allowed': False,
                 'admin_consent_required': False,
                 'high_privilege_apps': 0,
@@ -518,6 +620,13 @@ async def get_entra_client(graph_client, tenant_id=None):
         except Exception:
             pass
 
+        # The paginated HTTP collectors below supersede the SDK coroutines above. Close the
+        # unstarted coroutine objects so compatibility construction cannot leak warnings.
+        for pending_call in phase1_tasks.values():
+            if hasattr(pending_call, 'close'):
+                pending_call.close()
+        phase1_tasks = {}
+
         try:
             phase1_tasks['app_signin_summary'] = _fetch_graph_collection_via_http(
                 "/beta/reports/getAzureADApplicationSignInSummary(period='D30')"
@@ -526,8 +635,45 @@ async def get_entra_client(graph_client, tenant_id=None):
                 "/beta/reports/servicePrincipalSignInActivities",
                 params={'$top': '999'}
             )
+            phase1_tasks['cross_tenant_policy'] = _fetch_graph_object_via_http(
+                "/v1.0/policies/crossTenantAccessPolicy/default"
+            )
+            phase1_tasks['authorization_policy'] = _fetch_graph_object_via_http(
+                "/v1.0/policies/authorizationPolicy"
+            )
         except Exception:
             pass
+
+        # Use one pagination-aware HTTP path for every collection that contributes to a
+        # finding or workbook count. The SDK calls above are retained as compatibility
+        # fallbacks for older generated clients, but these assignments deliberately replace
+        # them so a first page can never be mistaken for the complete tenant inventory.
+        seven_days_ago = (datetime.utcnow() - timedelta(days=7)).strftime('%Y-%m-%dT%H:%M:%SZ')
+        collection_requests = {
+            'ca_policies': ("/v1.0/identity/conditionalAccess/policies", {'$top': '999'}, None),
+            'auth_methods': ("/v1.0/reports/authenticationMethods/userRegistrationDetails", {'$top': '999'}, None),
+            # Several Entra APIs reject oversized $top values instead of silently capping
+            # them. Let Graph choose its documented default and follow every nextLink.
+            'risky_users': ("/v1.0/identityProtection/riskyUsers", {'$top': '500'}, None),
+            'risk_detections': ("/v1.0/identityProtection/riskDetections", {}, None),
+            'role_definitions': ("/v1.0/roleManagement/directory/roleDefinitions", {'$select': 'id,templateId,displayName,isBuiltIn'}, None),
+            # v1.0 documents expansion of principal. Role names are resolved from the
+            # separately paginated roleDefinitions collection.
+            'role_assignments': ("/v1.0/roleManagement/directory/roleAssignments", {'$expand': 'principal'}, None),
+            'role_eligibility_schedules': ("/v1.0/roleManagement/directory/roleEligibilitySchedules", {'$top': '999', '$expand': 'principal,roleDefinition'}, None),
+            'role_assignment_schedules': ("/v1.0/roleManagement/directory/roleAssignmentSchedules", {'$top': '999', '$expand': 'principal,roleDefinition'}, None),
+            'access_reviews': ("/v1.0/identityGovernance/accessReviews/definitions", {}, None),
+            'managed_devices': ("/v1.0/deviceManagement/managedDevices", {'$top': '999'}, None),
+            'compliance_policies': ("/v1.0/deviceManagement/deviceCompliancePolicies", {'$top': '999'}, None),
+            'groups': ("/v1.0/groups", {'$filter': 'assignedLicenses/$count ne 0', '$count': 'true', '$select': 'id,displayName,groupTypes,assignedLicenses,licenseProcessingState', '$top': '999'}, {'ConsistencyLevel': 'eventual'}),
+            'guests': ("/v1.0/users", {'$filter': "userType eq 'Guest'", '$select': 'id,displayName,userPrincipalName,createdDateTime,assignedLicenses', '$top': '999'}, None),
+            'service_principals': ("/v1.0/servicePrincipals", {'$select': 'id,appId,displayName,publisherName,verifiedPublisher,appOwnerOrganizationId,servicePrincipalType,appRoles,oauth2PermissionScopes', '$top': '999'}, None),
+            'oauth_grants': ("/v1.0/oauth2PermissionGrants", {'$top': '999'}, None),
+            'consent_policies': ("/v1.0/policies/permissionGrantPolicies", {'$top': '999'}, None),
+            'signin_logs': ("/v1.0/auditLogs/signIns", {'$filter': f'createdDateTime ge {seven_days_ago}', '$top': '999'}, None),
+        }
+        for task_name, (path, params, headers) in collection_requests.items():
+            phase1_tasks[task_name] = _fetch_graph_collection_via_http(path, params=params, headers=headers)
         
         # Execute all phase 1 tasks in parallel
         phase1_results = {}
@@ -536,16 +682,35 @@ async def get_entra_client(graph_client, tenant_id=None):
             phase1_results = dict(zip(phase1_tasks.keys(), results))
             # A task counts as read only when it neither raised nor returned nothing.
             for _task_name, _task_result in phase1_results.items():
-                client_obj.data_sources[_task_name] = bool(
-                    _task_result is not None and not isinstance(_task_result, Exception)
-                )
+                if isinstance(_task_result, dict) and 'available' in _task_result:
+                    _status = {
+                        'availability_status': _task_result.get('availability_status', 'available' if _task_result.get('available') else 'unavailable'),
+                        'available': bool(_task_result.get('available')),
+                        'records_collected': int(_task_result.get('records_collected', len(_extract_response_items(_task_result))) or 0),
+                        'pages_collected': int(_task_result.get('pages_collected', 1 if _task_result.get('available') else 0) or 0),
+                        'truncated': bool(_task_result.get('truncated')),
+                        'reason': _task_result.get('error', '') or (f"HTTP {_task_result.get('status_code')}" if _task_result.get('status_code') else ''),
+                    }
+                    client_obj.collection_status[_task_name] = _status
+                    client_obj.data_sources[_task_name] = _status['available'] and not _status['truncated']
+                else:
+                    _available = bool(_task_result is not None and not isinstance(_task_result, Exception))
+                    client_obj.data_sources[_task_name] = _available
+                    client_obj.collection_status[_task_name] = {
+                        'availability_status': 'available' if _available else 'unavailable',
+                        'available': _available,
+                        'records_collected': len(_extract_response_items(_task_result)) if _available else 0,
+                        'pages_collected': 1 if _available else 0,
+                        'truncated': False,
+                        'reason': '' if _available else type(_task_result).__name__ if isinstance(_task_result, Exception) else 'No response',
+                    }
         
         # Process Conditional Access Policies
         ca_response = phase1_results.get('ca_policies')
         if ca_response and not isinstance(ca_response, Exception):
             try:
                 # SDK returns collection response objects with .value property
-                policies = ca_response.value if hasattr(ca_response, 'value') else []
+                policies = _extract_response_items(ca_response)
                 client_obj.ca_policies = policies
                 
                 # Analyze policies
@@ -617,22 +782,23 @@ async def get_entra_client(graph_client, tenant_id=None):
         if auth_response and not isinstance(auth_response, Exception):
             try:
                 # SDK returns collection response objects with .value property
-                registrations = auth_response.value if hasattr(auth_response, 'value') else []
+                registrations = _extract_response_items(auth_response)
                 client_obj.auth_methods_registration = registrations
                 
                 client_obj.auth_summary['total_users'] = len(registrations)
                 
                 for user_reg in registrations:
-                    # SDK objects use attributes, not .get()
-                    is_mfa_registered = getattr(user_reg, 'is_mfa_registered', False)
-                    is_mfa_capable = getattr(user_reg, 'is_mfa_capable', False)
+                    # The pagination-aware HTTP path yields camelCase dictionaries while
+                    # older SDK fallbacks yield snake_case model objects.
+                    is_mfa_registered = bool(_get_attr(user_reg, 'isMfaRegistered', False))
+                    is_mfa_capable = bool(_get_attr(user_reg, 'isMfaCapable', False))
                     
                     if is_mfa_registered:
                         client_obj.auth_summary['mfa_registered'] += 1
                     if is_mfa_capable:
                         client_obj.auth_summary['mfa_capable'] += 1
                     
-                    methods = getattr(user_reg, 'methods_registered', []) or []
+                    methods = _get_attr(user_reg, 'methodsRegistered', []) or []
                     
                     # Check passwordless methods
                     passwordless_methods = ['microsoftAuthenticator', 'fido2', 'windowsHello']
@@ -692,7 +858,7 @@ async def get_entra_client(graph_client, tenant_id=None):
         if risk_det_response and not isinstance(risk_det_response, Exception):
             try:
                 # SDK returns collection response objects with .value property
-                detections = risk_det_response.value if hasattr(risk_det_response, 'value') else []
+                detections = _extract_response_items(risk_det_response)
                 client_obj.risk_detections = detections
                 
                 client_obj.risk_summary['risk_detections_total'] = len(detections)
@@ -706,6 +872,17 @@ async def get_entra_client(graph_client, tenant_id=None):
                 with _stdout_lock:
                     print(f"[{get_timestamp()}] ⚠️  Entra: Risk detections parse error: {e}")
         
+        # Process role definitions before assignments so built-in role template IDs and
+        # human-readable role names are available to both scoring and workbook evidence.
+        role_definition_by_id = {}
+        role_defs_response = phase1_results.get('role_definitions')
+        if role_defs_response and not isinstance(role_defs_response, Exception):
+            client_obj.role_definitions = _extract_response_items(role_defs_response)
+            for definition in client_obj.role_definitions:
+                definition_id = str(_get_attr(definition, 'id', '') or '').lower()
+                if definition_id:
+                    role_definition_by_id[definition_id] = definition
+
         # Process Role Assignments (PIM - Active/Permanent)
         role_assign_response = phase1_results.get('role_assignments')
         if role_assign_response and not isinstance(role_assign_response, Exception):
@@ -715,12 +892,6 @@ async def get_entra_client(graph_client, tenant_id=None):
                 
                 client_obj.pim_summary['total_active_assignments'] = len(assignments)
                 
-                # Global Admin role template ID
-                global_admin_role = '62e90394-69f5-4237-9190-012177145e10'
-                
-                for assignment in assignments:
-                    role_def_id = str(_get_attr(assignment, 'roleDefinitionId', '') or '')
-
             except Exception as e:
                 with _stdout_lock:
                     print(f"[{get_timestamp()}] ⚠️  Entra: Role assignments parse error: {e}")
@@ -752,11 +923,14 @@ async def get_entra_client(graph_client, tenant_id=None):
                     expiration = _get_attr(schedule_info, 'expiration', {}) or {}
                     expiration_type = str(_get_attr(expiration, 'type', '') or '').lower()
                     end_date = _get_attr(expiration, 'endDateTime', None)
-                    role_def_id = str(_get_attr(schedule, 'roleDefinitionId', '') or '')
+                    role_def_id = str(_get_attr(schedule, 'roleDefinitionId', '') or '').lower()
+                    role_definition = _get_attr(schedule, 'roleDefinition', {}) or role_definition_by_id.get(role_def_id, {})
+                    role_template_id = str(_get_attr(role_definition, 'templateId', '') or '').lower()
+                    role_name = str(_get_attr(role_definition, 'displayName', '') or '').lower()
 
                     if 'noexpiration' in expiration_type.replace('_', ''):
                         client_obj.pim_summary['permanent_assignments'] += 1
-                        if global_admin_role in role_def_id:
+                        if role_template_id == global_admin_role or role_def_id == global_admin_role or role_name == 'global administrator':
                             client_obj.pim_summary['permanent_global_admins'] += 1
                     elif end_date or 'after' in expiration_type:
                         client_obj.pim_summary['total_time_bound_assignments'] += 1
@@ -853,7 +1027,7 @@ async def get_entra_client(graph_client, tenant_id=None):
         if compliance_response and not isinstance(compliance_response, Exception):
             try:
                 # SDK returns collection response objects with .value property
-                policies = compliance_response.value if hasattr(compliance_response, 'value') else []
+                policies = _extract_response_items(compliance_response)
                 client_obj.compliance_policies = policies
                 
                 client_obj.device_summary['compliance_policies_total'] = len(policies)
@@ -867,7 +1041,7 @@ async def get_entra_client(graph_client, tenant_id=None):
         if groups_response and not isinstance(groups_response, Exception):
             try:
                 # SDK returns collection response objects with .value property
-                groups = groups_response.value if hasattr(groups_response, 'value') else []
+                groups = _extract_response_items(groups_response)
                 client_obj.groups_with_licenses = groups
                 
                 client_obj.group_licensing_summary['total_groups_with_licenses'] = len(groups)
@@ -900,14 +1074,14 @@ async def get_entra_client(graph_client, tenant_id=None):
         if guests_response and not isinstance(guests_response, Exception):
             try:
                 # SDK returns collection response objects with .value property
-                guests = guests_response.value if hasattr(guests_response, 'value') else []
+                guests = _extract_response_items(guests_response)
                 client_obj.guest_users = guests
                 
                 client_obj.b2b_summary['total_guests'] = len(guests)
                 
                 # Count guests with licenses
                 for guest in guests:
-                    licenses = getattr(guest, 'assigned_licenses', []) or []
+                    licenses = _get_attr(guest, 'assignedLicenses', []) or []
                     if licenses and len(licenses) > 0:
                         client_obj.b2b_summary['guests_with_licenses'] += 1
                 
@@ -919,12 +1093,17 @@ async def get_entra_client(graph_client, tenant_id=None):
         cross_tenant_response = phase1_results.get('cross_tenant_policy')
         if cross_tenant_response and not isinstance(cross_tenant_response, Exception):
             try:
-                client_obj.cross_tenant_access_policy = cross_tenant_response
+                cross_tenant_policy = (
+                    cross_tenant_response.get('object')
+                    if isinstance(cross_tenant_response, dict) and 'object' in cross_tenant_response
+                    else cross_tenant_response
+                )
+                client_obj.cross_tenant_access_policy = cross_tenant_policy
                 
                 client_obj.b2b_summary['cross_tenant_access_configured'] = True
                 
                 # Get default settings
-                default = _get_attr(cross_tenant_response, 'default', {}) or {}
+                default = _get_attr(cross_tenant_policy, 'default', {}) or {}
                 client_obj.b2b_summary['default_settings'] = default
                 
             except Exception as e:
@@ -995,8 +1174,12 @@ async def get_entra_client(graph_client, tenant_id=None):
                     owner_tenant = str(_get_attr(sp, 'appOwnerOrganizationId', '') or '').lower()
                     publisher = str(_get_attr(sp, 'publisherName', '') or '')
                     principal_type = str(_get_attr(sp, 'servicePrincipalType', '') or '').lower()
+                    app_id = str(_get_attr(sp, 'appId', '') or '').lower()
                     is_internal = bool(tenant_id_normalized and owner_tenant == tenant_id_normalized)
-                    is_microsoft = publisher.lower().startswith('microsoft')
+                    is_microsoft = (
+                        owner_tenant in MICROSOFT_OWNER_TENANT_IDS
+                        or app_id in MICROSOFT_FIRST_PARTY_APP_IDS
+                    )
                     is_managed_identity = principal_type == 'managedidentity'
                     if not (verified_id or verified_name or is_internal or is_microsoft or is_managed_identity):
                         unverified_external_clients.add(client_id)
@@ -1016,20 +1199,12 @@ async def get_entra_client(graph_client, tenant_id=None):
         if consent_pol_response and not isinstance(consent_pol_response, Exception):
             try:
                 # SDK returns collection response objects with .value property
-                policies = consent_pol_response.value if hasattr(consent_pol_response, 'value') else []
+                policies = _extract_response_items(consent_pol_response)
                 client_obj.permission_grant_policies = policies
                 
-                # Check if user consent is allowed
-                for policy in policies:
-                    policy_id = getattr(policy, 'id', '')
-                    if policy_id == 'managePermissionGrantsForSelf.microsoft-user-default-legacy':
-                        client_obj.consent_summary['user_consent_allowed'] = True
-                    elif policy_id == 'managePermissionGrantsForSelf.microsoft-user-default-low':
-                        client_obj.consent_summary['user_consent_allowed'] = True
-                
-                # If no user consent policy found, admin consent is required
-                if not client_obj.consent_summary['user_consent_allowed']:
-                    client_obj.consent_summary['admin_consent_required'] = True
+                # These are policy definitions, not proof that a policy is assigned to the
+                # default user role. The effective consent boundary is read from the tenant
+                # authorization policy below.
                 
             except Exception as e:
                 with _stdout_lock:
@@ -1114,6 +1289,8 @@ async def get_entra_client(graph_client, tenant_id=None):
         auth_pol_response = phase1_results.get('authorization_policy')
         if auth_pol_response and not isinstance(auth_pol_response, Exception):
             try:
+                if isinstance(auth_pol_response, dict) and 'object' in auth_pol_response:
+                    auth_pol_response = auth_pol_response.get('object')
                 # Authorization policy may return single object or collection
                 if hasattr(auth_pol_response, 'value'):
                     policies = auth_pol_response.value or []
@@ -1122,18 +1299,7 @@ async def get_entra_client(graph_client, tenant_id=None):
                     policy = auth_pol_response
                 
                 if policy:
-                    client_obj.authorization_policy = policy
-                    
-                    # Guest invite settings
-                    guest_setting = _get_attr(policy, 'allowInvitesFrom', 'Unknown')
-                    client_obj.auth_policy_summary['guest_invite_setting'] = guest_setting
-                    client_obj.b2b_summary['guest_invite_restrictions'] = guest_setting
-                    
-                    # Default user permissions
-                    default_perms = _get_attr(policy, 'defaultUserRolePermissions')
-                    client_obj.auth_policy_summary['default_user_role_permissions'] = default_perms
-                    if default_perms:
-                        client_obj.auth_policy_summary['allow_users_to_register_apps'] = _get_attr(default_perms, 'allowedToCreateApps', False)
+                    _apply_authorization_policy(client_obj, policy)
                 
             except Exception as e:
                 with _stdout_lock:
@@ -1210,13 +1376,13 @@ async def get_entra_client(graph_client, tenant_id=None):
                     
                     # Count FQDN and web category rules
                     for policy in policies:
-                        policy_rules = policy.get('policyRules', [])
+                        policy_rules = _get_attr(policy, 'policyRules', [])
                         if policy_rules:
                             for rule in policy_rules:
-                                destinations = rule.get('destinations', [])
+                                destinations = _get_attr(rule, 'destinations', [])
                                 if destinations:
                                     for dest in destinations:
-                                        dest_type = dest.get('@odata.type', '').lower()
+                                        dest_type = str(_get_attr(dest, '@odata.type', '')).lower()
                                         if 'fqdn' in dest_type:
                                             client_obj.network_access_summary['fqdn_rules_count'] += 1
                                         elif 'webcategory' in dest_type:
@@ -1304,12 +1470,24 @@ async def get_entra_client(graph_client, tenant_id=None):
         except httpx.HTTPStatusError as e:
             # HTTP error from beta API
             if e.response.status_code == 403:
-                client_obj.network_access_summary['status'] = 'PermissionDenied'
-                client_obj.network_access_summary['error'] = 'NetworkAccessPolicy.Read.All permission required'
-                client_obj.private_access_summary['status'] = 'PermissionDenied'
-                client_obj.private_access_summary['error'] = 'NetworkAccessPolicy.Read.All permission required'
-                with _stdout_lock:
-                    print(f"[{get_timestamp()}] ℹ️     Entra: Global Secure Access API access denied (requires NetworkAccessPolicy.Read.All permission)")
+                if 'NetworkAccess.Read.All' in _get_graph_token_roles():
+                    detail = (
+                        'Graph returned HTTP 403 even though NetworkAccess.Read.All is present; '
+                        'Global Secure Access may not be onboarded or available in this tenant'
+                    )
+                    client_obj.network_access_summary['status'] = 'Unavailable'
+                    client_obj.network_access_summary['error'] = detail
+                    client_obj.private_access_summary['status'] = 'Unavailable'
+                    client_obj.private_access_summary['error'] = detail
+                    with _stdout_lock:
+                        print(f"[{get_timestamp()}] ℹ️     Entra: Global Secure Access API is unavailable despite the required application permission; verify tenant onboarding and licensing")
+                else:
+                    client_obj.network_access_summary['status'] = 'PermissionDenied'
+                    client_obj.network_access_summary['error'] = 'NetworkAccess.Read.All permission required'
+                    client_obj.private_access_summary['status'] = 'PermissionDenied'
+                    client_obj.private_access_summary['error'] = 'NetworkAccess.Read.All permission required'
+                    with _stdout_lock:
+                        print(f"[{get_timestamp()}] ℹ️     Entra: Global Secure Access API access denied (requires NetworkAccess.Read.All permission)")
             elif e.response.status_code == 404:
                 client_obj.network_access_summary['status'] = 'NotLicensed'
                 client_obj.network_access_summary['error'] = 'Entra Suite license required'

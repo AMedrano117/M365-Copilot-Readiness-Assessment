@@ -77,17 +77,20 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
         compliant_devices = device_summary.get('compliant_devices', 0)
         non_compliant_devices = device_summary.get('non_compliant_devices', 0)
         
-        # No managed devices - BYOD risk
+        # An empty inventory is not proof that access is unmanaged. The tenant may
+        # use another MDM, browser/session controls, or network controls that this
+        # collector cannot see.
         if total_devices == 0:
             observations.append(new_recommendation(
                 service="Entra",
                 feature=feature_name,
-                observation="No managed devices detected - users may access Copilot from unmanaged BYOD devices",
-                recommendation="Enroll devices in Intune to enforce compliance policies for Copilot access. Unmanaged devices pose risks: 1) No encryption enforcement - Copilot data at risk if device lost, 2) No malware protection - keyloggers could capture AI prompts containing sensitive info, 3) No DLP controls - users can screenshot/copy Copilot responses to personal apps, 4) No remote wipe - cannot remove corporate data if employee leaves. Start with company-owned devices, then implement MAM (Mobile Application Management) for BYOD scenarios to protect Copilot within managed apps without full device control.",
+                observation="The Intune query returned no managed devices. This alone does not establish whether AI access is controlled or uncontrolled.",
+                recommendation="Confirm the tenant's endpoint control model (Intune, another MDM, browser/session controls, or network controls) and verify how it is enforced for Microsoft 365 before making an endpoint-readiness decision.",
                 link_text="Device Enrollment",
                 link_url="https://learn.microsoft.com/mem/intune/enrollment/",
                 priority="Medium",
-                status=status
+                status="Not Assessed",
+                disposition="Coverage"
             ))
         
         # Non-compliant devices detected

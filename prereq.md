@@ -21,7 +21,7 @@ python main.py
 ### Authentication Behavior
 
 - **Graph/Security APIs (M365, Entra, Defender):** Always uses browser authentication to ensure proper Security scopes
-- **Power Platform:** Prefers Azure CLI if logged in (`az login`), falls back to browser if needed
+- **Power Platform:** Optional enrichment. Prefer a unified inventory CSV; the preview inventory API is opt-in.
 - **Token Caching:** Your authentication is cached - only need to sign in once, not every run
 
 ### Why Browser Auth?
@@ -48,7 +48,7 @@ Browser authentication guarantees you explicitly consent to Security API permiss
 When authenticating (either CLI or browser), you need:
 - **For M365/Entra/Defender license data:** Any user account
 - **For Defender API enrichment:** Security Reader, Security Administrator, or Global Administrator
-- **For Power Platform:** Power Platform Administrator (requires interactive authentication)
+- **For Power Platform:** No role is required for core readiness. A supplied inventory CSV needs no live tenant role; the opt-in preview API uses tenant-scoped Power Platform Reader RBAC.
 - **For Purview:** Compliance Administrator or Global Administrator (requires interactive authentication via PowerShell)
 
 **Least Privilege Roles for PowerShell Collectors:**
@@ -56,33 +56,45 @@ When authenticating (either CLI or browser), you need:
 | Service | Minimum Role | What it Accesses |
 |---------|--------------|------------------|
 | **Purview** | Compliance Administrator | DLP policies, sensitivity labels, retention policies via Connect-IPPSSession cmdlets |
-| **Power Platform** | Power Platform Administrator | Environments, DLP policies, Power Apps, Power Automate flows, AI Builder models via Azure REST APIs |
+| **Power Platform legacy collector** | Power Platform Administrator (delegated user) | Per-environment DLP, apps, flows, and AI Builder details when the preferred inventory source is not used |
+| **Power Platform inventory API (preview)** | Power Platform Reader RBAC assigned to the service principal at `/tenants/{tenantId}` | Tenant-wide inventory of environments, apps, flows, agents, owners, regions, managed state, and connectors |
 
-**Note:** Both services require **delegated (user) authentication** - service principals are architecturally blocked by these APIs. Lower-privileged roles (e.g., Compliance Data Administrator for Purview read-only, Environment Administrator for Power Platform environment-scoped access) will not provide tenant-wide visibility required for comprehensive recommendations.
+**Note:** Purview PowerShell still requires delegated user authentication. Power Platform is supplemental: missing inventory is an extensibility coverage gap and cannot lower the core readiness result. The Power Platform inventory API and its Reader RBAC support are preview; use an exported inventory CSV when preview use is not approved.
 
 ### Service-Specific Authentication Notes
 
 **Power Platform & Purview:**
-These services require **interactive user authentication** via PowerShell due to API limitations:
-- Power Platform APIs don't support service principal authentication for admin endpoints
-- Purview cmdlets (Exchange Online Management) require delegated permissions
+- Purview cmdlets (Exchange Online Management) require delegated authentication.
+- The preferred Power Platform path is an inventory CSV, or the opt-in preview inventory API with tenant-scoped Power Platform Reader RBAC.
+- The legacy Power Platform collector remains available for delegated per-environment collection and now aggregates every readable environment.
 
 **To use Power Platform or Purview:**
 
 Run the respective PowerShell collector script first:
 ```powershell
-# Power Platform
-.\collect_power_platform_data.ps1
+# Power Platform legacy collector
+.\collect_power_platform_and_copilot_studio_data.ps1
 
 # Purview
 .\collect_purview_data.ps1
 ```
 
-These scripts will:
+The Purview and legacy Power Platform collectors will:
 1. Open a browser for authentication
 2. Collect the required data
 3. Automatically pass it to Python
-4. Generate recommendations!
+4. Generate recommendations.
+
+For the preferred Power Platform inventory paths, use either:
+
+```powershell
+python main.py --power-platform-inventory .\exports\power-platform-inventory.csv
+python main.py --preview-collectors power-platform
+```
+
+The preview API requires Power Platform Reader role ID
+`c886ad2e-27f7-4874-8381-5849b8d8a090` at `/tenants/{tenantId}`. Do not assign the
+Entra Power Platform Administrator directory role to the application.
 
 **Alternative**: Remove "Power Platform" or "Purview" from the `SERVICES` array in [params.py](params.py) to skip these services.
 

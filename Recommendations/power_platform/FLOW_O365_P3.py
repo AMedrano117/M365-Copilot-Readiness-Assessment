@@ -129,12 +129,12 @@ async def get_recommendation(sku_name, status="Success", client=None, pp_client=
                     status="Success"
                 )
         else:
-            # No Power Platform access - provide manual guidance
+            # No Power Platform evidence - preserve this as optional extensibility coverage.
             deployment_rec = new_recommendation(
                 service="Power Platform",
                 feature=f"{feature_name} - Integration Opportunities",
-                observation="Power Automate integration opportunities cannot be verified - requires Power Platform Administrator access",
-                recommendation="Request Power Platform Administrator role to assess deployment opportunities, or manually review in Power Platform admin center (admin.powerplatform.microsoft.com): 1) Identify workflows that can be triggered by Copilot prompts, 2) Map premium connectors needed for Copilot extensibility (SAP, Salesforce, ServiceNow, SQL Server), 3) Design custom plugins for line-of-business systems, 4) Create RPA flows for legacy apps. Priority scenarios: HR onboarding, customer data lookup, automated reports, approval routing. Target 5-10 high-value integrations in first 90 days.",
+                observation="Power Automate integration opportunities were not assessed because no tenant-wide Power Platform inventory was supplied or collected.",
+                recommendation="Optionally export the unified Power Platform inventory and rerun with --power-platform-inventory PATH. Alternatively, opt in to the preview inventory API with --preview-collectors power-platform after assigning tenant-scoped Power Platform Reader RBAC to the application. Use Power Platform Administrator only when an engineer chooses the deeper interactive per-environment collector. Treat returned flows and connectors as candidates to validate against named business processes, not automatic proof of AI value.",
                 link_text="Copilot Extensibility with Power Automate",
                 link_url="https://learn.microsoft.com/power-automate/copilot-overview",
                 priority="Medium",

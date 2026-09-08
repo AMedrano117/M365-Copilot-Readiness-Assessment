@@ -40,11 +40,15 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
             
             # Conditional Access metrics - only show positive findings
             if ca_metrics.get('total_policies', 0) > 0:
-                metrics.append(f"{ca_metrics['total_policies']} Conditional Access policy(ies) configured")
+                policy_count = ca_metrics['total_policies']
+                policy_label = "policy" if policy_count == 1 else "policies"
+                metrics.append(f"{policy_count} Conditional Access {policy_label} configured")
             
             # MFA metrics - only show positive findings
             if mfa_metrics.get('mfa_enabled_users', 0) > 0:
-                metrics.append(f"{mfa_metrics['mfa_enabled_users']} user(s) enrolled in MFA")
+                enrolled_count = mfa_metrics['mfa_enabled_users']
+                user_label = "user" if enrolled_count == 1 else "users"
+                metrics.append(f"{enrolled_count} {user_label} enrolled in MFA")
             
             if metrics:
                 observation += ". " + ", ".join(metrics)
@@ -67,9 +71,26 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
         if entra_insights and entra_insights.get('available'):
             # Observation 1: Conditional Access policy coverage
             total_policies = ca_metrics.get('total_policies', 0)
+            policy_label = "policy" if total_policies == 1 else "policies"
+            policy_verb = "was" if total_policies == 1 else "were"
             require_mfa = ca_metrics.get('require_mfa', 0)
             require_compliant_device = ca_metrics.get('require_compliant_device', 0)
             block_legacy_auth = ca_metrics.get('block_legacy_auth', 0)
+            verified_controls = []
+            if require_mfa:
+                verified_controls.append(f"{require_mfa} requiring MFA")
+            if require_compliant_device:
+                verified_controls.append(f"{require_compliant_device} requiring compliant devices")
+            if block_legacy_auth:
+                verified_controls.append(f"{block_legacy_auth} blocking legacy authentication")
+            if not verified_controls:
+                verified_control_text = ""
+            elif len(verified_controls) == 1:
+                verified_control_text = verified_controls[0]
+            elif len(verified_controls) == 2:
+                verified_control_text = " and ".join(verified_controls)
+            else:
+                verified_control_text = ", ".join(verified_controls[:-1]) + f", and {verified_controls[-1]}"
             
             if total_policies == 0:
                 # Action Required: No CA policies
@@ -89,7 +110,7 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
                 recommendations.append(new_recommendation(
                     service="Entra",
                     feature=feature_name,
-                    observation=f"{total_policies} Conditional Access policy(ies) were found, but the inventory did not detect MFA, compliant-device, or legacy-authentication controls",
+                    observation=f"{total_policies} Conditional Access {policy_label} {policy_verb} found, but the inventory did not detect MFA, compliant-device, or legacy-authentication controls",
                     recommendation="Review policy assignments and grant controls using report-only mode. Protect Microsoft 365 and other Entra-integrated AI resources through appropriately scoped Conditional Access policies; do not rely on an application name containing 'Copilot' as proof of coverage.",
                     link_text="Conditional Access target resources",
                     link_url="https://learn.microsoft.com/entra/identity/conditional-access/concept-conditional-access-cloud-apps",
@@ -102,7 +123,7 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
                 recommendations.append(new_recommendation(
                     service="Entra",
                     feature=feature_name,
-                    observation=f"{total_policies} Conditional Access policy(ies) found; detected controls include {require_mfa} requiring MFA, {require_compliant_device} requiring compliant devices, and {block_legacy_auth} blocking legacy authentication",
+                    observation=f"{total_policies} Conditional Access {policy_label} found; verified controls include {verified_control_text}",
                     recommendation="",
                     link_text="Conditional Access Best Practices",
                     link_url="https://learn.microsoft.com/entra/identity/conditional-access/plan-conditional-access",
@@ -132,8 +153,8 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
                 recommendations.append(new_recommendation(
                     service="Entra",
                     feature=feature_name,
-                    observation=f"Only {mfa_enabled} of {total_users} users ({mfa_percentage:.1f}%) enrolled in MFA, exposing Copilot to credential theft",
-                    recommendation="Enforce MFA registration for all users accessing Copilot. Use Conditional Access to require MFA for Microsoft 365 apps. Compromised accounts without MFA can access Copilot to exfiltrate organizational data through AI prompts. Aim for 100% MFA coverage.",
+                    observation=f"Only {mfa_enabled} of {total_users} users ({mfa_percentage:.1f}%) were enrolled in MFA.",
+                    recommendation="Require MFA registration for all in-scope users and use Conditional Access to enforce MFA for Microsoft 365. Track exceptions and reach full coverage before broad AI rollout.",
                     link_text="Configure MFA Requirements",
                     link_url="https://learn.microsoft.com/entra/identity/authentication/howto-mfa-getstarted",
                     priority="High",
@@ -171,7 +192,7 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
                 recommendations.append(new_recommendation(
                     service="Entra",
                     feature=feature_name,
-                    observation=f"{legacy_auth_count} legacy authentication sign-in(s) detected in the past 30 days, bypassing MFA and CA protections",
+                    observation=f"{legacy_auth_count} legacy authentication {'sign-in' if legacy_auth_count == 1 else 'sign-ins'} detected in the past 30 days, bypassing MFA and CA protections",
                     recommendation="Block legacy authentication protocols (IMAP, POP3, SMTP AUTH) using Conditional Access. Legacy auth bypasses MFA and cannot be protected by Conditional Access policies, creating a backdoor for attackers to access Copilot. Migrate apps to modern authentication (OAuth 2.0) and block legacy protocols tenant-wide.",
                     link_text="Block Legacy Authentication",
                     link_url="https://learn.microsoft.com/entra/identity/conditional-access/block-legacy-authentication",

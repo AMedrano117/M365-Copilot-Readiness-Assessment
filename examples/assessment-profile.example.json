@@ -1,0 +1,33 @@
+{
+  "version": "1.0",
+  "ai_products": [
+    {
+      "provider": "Microsoft",
+      "product": "Microsoft 365 Copilot",
+      "tier": "Enterprise"
+    }
+  ],
+  "use_cases": [
+    {
+      "name": "Draft customer project summaries",
+      "business_owner": "Professional Services",
+      "provider": "Microsoft",
+      "product": "Microsoft 365 Copilot",
+      "tier": "Enterprise",
+      "intended_users": ["Pilot group"],
+      "pilot_groups": ["AI-Pilot"],
+      "data_classifications": ["Internal", "Confidential"],
+      "regulated_workloads": [],
+      "can_read_m365_data": true,
+      "uses_connectors": false,
+      "can_invoke_tools": false,
+      "can_write": false,
+      "human_approval_required": true,
+      "approved_data": ["Project documents approved for the pilot"],
+      "prohibited_data": ["Restricted data"],
+      "required_outcome": "Improve first-draft quality without increasing disclosure incidents",
+      "risk_measurements": ["Unsupported statements", "Sensitive-data disclosures"],
+      "expand_stop_decision": "Expand only if the business owner accepts quality and risk results"
+    }
+  ]
+}

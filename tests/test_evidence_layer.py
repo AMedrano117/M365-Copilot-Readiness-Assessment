@@ -1,10 +1,136 @@
 import unittest
 from types import SimpleNamespace
 
-from Core.evidence_layer import _build_app_access_sheet, build_evidence_bundle
+from Core.evidence_layer import (
+    _build_app_access_sheet,
+    _build_app_consent_policy_sheet,
+    _build_authentication_sheet,
+    _build_identity_risk_sheet,
+    _apply_explicit_evidence_fallbacks,
+    build_evidence_bundle,
+)
+from Core.get_entra_client import _apply_authorization_policy, _get_attr
 
 
 class EvidenceLayerTests(unittest.TestCase):
+    def test_entra_fallback_uses_measured_condition_not_remediation_wording(self):
+        rows = [
+            {"Service": "Entra", "Feature": "Microsoft Entra ID P1", "Observation": "Only 7 of 10 users were enrolled in MFA.", "Recommendation": "Use Conditional Access."},
+            {"Service": "Entra", "Feature": "Microsoft Entra ID P2", "Observation": "Two risky users were detected.", "Recommendation": "Use risk-based Conditional Access."},
+            {"Service": "Entra", "Feature": "Microsoft Entra ID P1", "Observation": "Five Conditional Access policies require MFA.", "Recommendation": "Maintain them."},
+        ]
+        sheets = {
+            "authentication_detail": {},
+            "identity_risk_detail": {},
+            "conditional_access_detail": {},
+        }
+
+        resolved = _apply_explicit_evidence_fallbacks(rows, sheets)
+
+        self.assertEqual(resolved[0]["EvidenceKey"], "authentication_detail")
+        self.assertEqual(resolved[1]["EvidenceKey"], "identity_risk_detail")
+        self.assertEqual(resolved[2]["EvidenceKey"], "conditional_access_detail")
+
+    def test_authorization_policy_is_source_of_effective_user_consent_boundary(self):
+        client = SimpleNamespace(
+            authorization_policy={},
+            auth_policy_summary={},
+            b2b_summary={},
+            consent_summary={
+                "consent_configuration_available": False,
+                "assigned_user_consent_policies": [],
+                "user_consent_allowed": False,
+                "admin_consent_required": False,
+            },
+        )
+        policy = {
+            "allowInvitesFrom": "adminsAndGuestInviters",
+            "defaultUserRolePermissions": {
+                "allowedToCreateApps": False,
+                "permissionGrantPoliciesAssigned": [
+                    "managePermissionGrantsForSelf.microsoft-user-default-low"
+                ],
+            },
+        }
+
+        _apply_authorization_policy(client, policy)
+
+        self.assertTrue(client.consent_summary["consent_configuration_available"])
+        self.assertTrue(client.consent_summary["user_consent_allowed"])
+        self.assertFalse(client.consent_summary["admin_consent_required"])
+
+    def test_empty_default_user_consent_assignments_are_evidence_of_admin_boundary(self):
+        client = SimpleNamespace(
+            authorization_policy={
+                "defaultUserRolePermissions": {"permissionGrantPoliciesAssigned": []}
+            },
+            collection_status={
+                "authorization_policy": {"availability_status": "available"}
+            },
+        )
+
+        sheet = _build_app_consent_policy_sheet(client)
+
+        self.assertEqual(sheet["rows"][0]["Value"], "No")
+        self.assertIn("requires an administrator", sheet["summary"])
+
+    def test_identity_action_evidence_uses_aggregate_auth_and_risk_details(self):
+        client = SimpleNamespace(
+            collection_status={
+                "auth_methods": {"availability_status": "available"},
+                "risky_users": {"availability_status": "available"},
+                "risk_detections": {"availability_status": "available"},
+            },
+            auth_summary={
+                "total_users": 10, "mfa_registered": 7, "mfa_capable": 8,
+                "passwordless_enabled": 2,
+            },
+            risky_users=[{
+                "id": "user-object", "userDisplayName": "Test User",
+                "userPrincipalName": "test@example.com", "riskLevel": "medium",
+                "riskState": "atRisk", "riskLastUpdatedDateTime": "2026-09-01",
+            }],
+            risk_detections=[],
+        )
+
+        auth = _build_authentication_sheet(client)
+        risk = _build_identity_risk_sheet(client)
+
+        self.assertEqual(auth["rows"][1]["Value"], 7)
+        self.assertEqual(risk["rows"][0]["Object ID"], "user-object")
+        self.assertNotIn("User Principal Name", risk["preview_columns"] if "preview_columns" in risk else [])
+
+    def test_graph_field_reader_handles_http_and_sdk_shapes(self):
+        self.assertTrue(_get_attr({"isMfaRegistered": True}, "isMfaRegistered", False))
+        self.assertEqual(
+            _get_attr(SimpleNamespace(is_mfa_registered=True), "isMfaRegistered", False),
+            True,
+        )
+
+    def test_microsoft_owner_tenant_is_first_party_without_publisher_name(self):
+        entra_client = SimpleNamespace(
+            tenant_id="tenant-local",
+            service_principals=[{
+                "id": "sp-ms",
+                "appId": "08e18876-6177-487e-b8b5-cf950c1e598c",
+                "displayName": "SharePoint Online Web Client Extensibility",
+                "publisherName": "",
+                "appOwnerOrganizationId": "f8cdef31-a31e-4b4a-93e4-5f571e91255a",
+            }],
+            oauth_permission_grants=[{
+                "clientId": "sp-ms",
+                "consentType": "AllPrincipals",
+                "scope": "Files.ReadWrite.All",
+            }],
+            app_activity_summary={"available": False, "by_app": {}},
+        )
+
+        row = _build_app_access_sheet(entra_client, SimpleNamespace(oauth_apps=[]))["rows"][0]
+
+        self.assertEqual(row["Publisher Type"], "Microsoft first-party")
+        self.assertNotIn("Unverified publisher", row["Flagged Because"])
+        self.assertIn("Microsoft service tenant", row["Publisher Classification Basis"])
+
     def test_app_access_sheet_preserves_flag_count_and_activity_band(self):
         entra_client = SimpleNamespace(
             tenant_id="tenant-local",

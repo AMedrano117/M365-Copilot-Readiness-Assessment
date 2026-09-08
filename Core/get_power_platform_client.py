@@ -30,6 +30,61 @@ POWER_PLATFORM_SCOPE = "https://api.bap.microsoft.com/.default"
 FLOW_API_BASE = "https://api.flow.microsoft.com"
 FLOW_API_SCOPE = "https://service.flow.microsoft.com/.default"  # Different scope for Flow admin API
 
+
+class _MergedResponse:
+    """Small httpx-response adapter for resources collected across multiple environments."""
+
+    def __init__(self, status_code, payload, text=""):
+        self.status_code = status_code
+        self._payload = payload
+        self.text = text
+
+    def json(self):
+        return self._payload
+
+
+def _merge_environment_responses(resource_name, environment_results):
+    successful = []
+    errors = []
+    for environment_name, result in environment_results:
+        if isinstance(result, Exception):
+            errors.append(str(result))
+        elif result.status_code == 200:
+            successful.append((environment_name, result.json()))
+        else:
+            errors.append("{}: HTTP {}".format(environment_name, result.status_code))
+    if not successful:
+        return _MergedResponse(403 if any("403" in error for error in errors) else 500, {}, "; ".join(errors))
+
+    if resource_name == 'capacity':
+        storage = {}
+        for _, payload in successful:
+            for key, value in (payload.get('storage', {}) or {}).items():
+                try:
+                    storage[key] = storage.get(key, 0) + float(value or 0)
+                except (TypeError, ValueError):
+                    pass
+        return _MergedResponse(200, {'storage': storage}, "; ".join(errors))
+
+    values = []
+    seen = set()
+    for environment_name, payload in successful:
+        for item in payload.get('value', []) or []:
+            if not isinstance(item, dict):
+                continue
+            item = dict(item)
+            properties = dict(item.get('properties', {}) or {})
+            properties.setdefault('environmentId', environment_name)
+            item['properties'] = properties
+            identity = str(item.get('id') or item.get('name') or '')
+            dedupe_key = (resource_name, identity)
+            if identity and dedupe_key in seen:
+                continue
+            if identity:
+                seen.add(dedupe_key)
+            values.append(item)
+    return _MergedResponse(200, {'value': values}, "; ".join(errors))
+
 def load_power_platform_data_from_stdin():
     """
     Load Power Platform data from stdin or environment variable (when run via PowerShell script).
@@ -78,6 +133,17 @@ def load_power_platform_data_from_stdin():
     client.ai_models = raw_data.get('ai_models', [])
     client.dlp_policies = raw_data.get('dlp_policies', [])
     client.solutions = raw_data.get('solutions', [])
+    client.permission_failures = raw_data.get('permission_failures', [])
+    permission_failures = set(client.permission_failures)
+    client.power_platform_inventory = {
+        'available': False,
+        'reason': 'Optional unified inventory was not supplied. Enable Manage > Inventory, download the completed CSV, and pass --power-platform-inventory PATH.',
+        'source': 'Legacy Power Platform per-environment APIs',
+        'period': 'Current inventory',
+        'refresh_date': '',
+        'freshness': 'Unknown',
+        'stale': False,
+    }
     
     # Build environment summary
     client.environment_summary = {
@@ -217,6 +283,10 @@ def load_power_platform_data_from_stdin():
         'azure_ml': 0,
         'custom': 0
     }
+    if any(str(item).startswith('AI Models') for item in permission_failures) or 'Environments' in permission_failures:
+        client.ai_model_summary['error'] = (
+            'Power Platform Admin APIs did not return a readable AI Builder model inventory'
+        )
     
     for model in client.ai_models:
         model_type = model.get('properties', {}).get('modelType', '').lower()
@@ -233,6 +303,10 @@ def load_power_platform_data_from_stdin():
         'environment_level': 0,
         'tenant_level': 0
     }
+    if any(str(item).startswith('DLP Policies') for item in permission_failures) or 'Environments' in permission_failures:
+        client.dlp_summary['error'] = (
+            'Power Platform Admin APIs did not return readable DLP policy data'
+        )
     
     for policy in client.dlp_policies:
         scope = policy.get('properties', {}).get('scope', '').lower()
@@ -329,8 +403,8 @@ async def get_power_platform_client(tenant_id):
         except Exception as token_error:
             # Service principal may not have Power Platform API permissions
             print(f"[{get_timestamp()}] ⚠️  Power Platform token acquisition failed: {token_error}")
-            print(f"[{get_timestamp()}] ℹ️  Power Platform APIs require delegated permissions (interactive user auth)")
-            print(f"[{get_timestamp()}] ℹ️  Service principals need 'Power Platform Administrator' role assigned")
+            print(f"[{get_timestamp()}] ℹ️  Legacy Power Platform enrichment requires an authorized interactive admin session")
+            print(f"[{get_timestamp()}] ℹ️  Prefer a unified inventory CSV, or opt in to the preview API with tenant-scoped Power Platform Reader RBAC")
             import traceback
             if os.environ.get("ASSESSMENT_DEBUG") == "1":
                 traceback.print_exc()
@@ -382,7 +456,7 @@ async def get_power_platform_client(tenant_id):
             _pp_debug(f"[DEBUG] Non-200 status code: {env_response.status_code}")
             if env_response.status_code == 403:
                 # User doesn't have Power Platform Admin access
-                print(f"[{get_timestamp()}] ⚠️  403 Forbidden - Service principal lacks Power Platform Admin permissions")
+                print(f"[{get_timestamp()}] ⚠️  403 Forbidden - legacy Power Platform enrichment is not authorized")
                 print(f"[{get_timestamp()}] ℹ️  Response: {env_response.text[:200]}")
                 await client.aclose()
                 await flow_client.aclose()
@@ -402,33 +476,12 @@ async def get_power_platform_client(tenant_id):
         # Process environments (required)
         environments = env_response.json().get('value', [])
         
-        # Get the first available environment name (prefer default, then production, then any)
-        environment_name = None
-        if environments:
-            # Try to find default environment first
-            for env in environments:
-                env_type = env.get('properties', {}).get('environmentType', '').lower()
-                if 'default' in env_type:
-                    environment_name = env.get('name')
-                    break
-            
-            # If no default, use first production environment
-            if not environment_name:
-                for env in environments:
-                    env_type = env.get('properties', {}).get('environmentType', '').lower()
-                    if 'production' in env_type:
-                        environment_name = env.get('name')
-                        break
-            
-            # If still no environment, use first available
-            if not environment_name:
-                environment_name = environments[0].get('name')
-        
-        # Store environment name in client for features to use
-        client.environment_name = environment_name if environment_name else 'unknown'
-        
-        # Now fetch other resources using actual environment name
-        if environment_name:
+        environment_names = [env.get('name') for env in environments if env.get('name')]
+        client.environment_name = environment_names[0] if environment_names else 'unknown'
+
+        # Collect every environment. The previous implementation inspected only one preferred
+        # environment, which could omit most tenant apps, flows, policies, and models.
+        if environment_names:
             # Power Platform APIs are split across different base URLs:
             # - api.flow.microsoft.com for flows (uses beta admin endpoint)
             # - api.powerplatform.com for apps (uses environment subdomain)
@@ -437,44 +490,52 @@ async def get_power_platform_client(tenant_id):
             from .spinner import _stdout_lock
             with _stdout_lock:
                 print(f"[{get_timestamp()}] ℹ️  Fetching Power Platform deployment data...")
-                print(f"[{get_timestamp()}] [INFO]     Power Platform: Requesting 7 resource datasets...")
-            
-            # Format environment ID for powerplatform.com (removes hyphens)
-            env_id_for_apps = format_env_id_for_powerplatform_api(environment_name)
-            
-            api_tasks = {
-                'flows': flow_client.get(
-                    f"/providers/Microsoft.ProcessSimple/scopes/admin/environments/{environment_name}/v2/flows?api-version=2016-11-01-beta"
-                ),
-                'apps': client.get(
-                    f"https://{env_id_for_apps}.environment.api.powerplatform.com/powerapps/apps?api-version=1"
-                ),
-                'connections': client.get(
-                    f"/providers/Microsoft.PowerApps/scopes/admin/environments/{environment_name}/connections",
-                    params={"api-version": "2016-11-01"}
-                ),
-                'ai_models': client.get(
-                    f"/providers/Microsoft.PowerApps/environments/{environment_name}/aiModels",
-                    params={"api-version": "2024-05-01"}
-                ),
-                'dlp_policies': client.get(
-                    f"/providers/Microsoft.BusinessAppPlatform/environments/{environment_name}/dlpPolicies",
-                    params={"api-version": "2024-05-01"}
-                ),
-                'capacity': client.get(
-                    f"/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments/{environment_name}/capacity",
-                    params={"api-version": "2020-10-01"}
-                ),
-                'solutions': client.get(
-                    f"/providers/Microsoft.PowerApps/scopes/admin/environments/{environment_name}/solutions",
-                    params={"api-version": "2016-11-01"}
-                )
+                print(f"[{get_timestamp()}] [INFO]     Power Platform: Requesting 7 datasets across {len(environment_names)} environment(s)...")
+
+            api_tasks = []
+            task_metadata = []
+            for environment_name in environment_names:
+                env_id_for_apps = format_env_id_for_powerplatform_api(environment_name)
+                environment_tasks = {
+                    'flows': flow_client.get(
+                        f"/providers/Microsoft.ProcessSimple/scopes/admin/environments/{environment_name}/v2/flows?api-version=2016-11-01-beta"
+                    ),
+                    'apps': client.get(
+                        f"https://{env_id_for_apps}.environment.api.powerplatform.com/powerapps/apps?api-version=1"
+                    ),
+                    'connections': client.get(
+                        f"/providers/Microsoft.PowerApps/scopes/admin/environments/{environment_name}/connections",
+                        params={"api-version": "2016-11-01"}
+                    ),
+                    'ai_models': client.get(
+                        f"/providers/Microsoft.PowerApps/environments/{environment_name}/aiModels",
+                        params={"api-version": "2024-05-01"}
+                    ),
+                    'dlp_policies': client.get(
+                        f"/providers/Microsoft.BusinessAppPlatform/environments/{environment_name}/dlpPolicies",
+                        params={"api-version": "2024-05-01"}
+                    ),
+                    'capacity': client.get(
+                        f"/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments/{environment_name}/capacity",
+                        params={"api-version": "2020-10-01"}
+                    ),
+                    'solutions': client.get(
+                        f"/providers/Microsoft.PowerApps/scopes/admin/environments/{environment_name}/solutions",
+                        params={"api-version": "2016-11-01"}
+                    )
+                }
+                for resource_name, task in environment_tasks.items():
+                    task_metadata.append((resource_name, environment_name))
+                    api_tasks.append(task)
+
+            results = await asyncio.gather(*api_tasks, return_exceptions=True)
+            grouped = {name: [] for name in ('flows', 'apps', 'connections', 'ai_models', 'dlp_policies', 'capacity', 'solutions')}
+            for (resource_name, environment_name), result in zip(task_metadata, results):
+                grouped[resource_name].append((environment_name, result))
+            responses = {
+                resource_name: _merge_environment_responses(resource_name, environment_results)
+                for resource_name, environment_results in grouped.items()
             }
-            
-            # Execute all API calls in parallel
-            results = await asyncio.gather(*api_tasks.values(), return_exceptions=True)
-            
-            responses = dict(zip(api_tasks.keys(), results))
         else:
             # No environment name available - set empty responses
             responses = {}

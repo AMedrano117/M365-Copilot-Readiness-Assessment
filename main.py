@@ -44,6 +44,14 @@ if __name__ == "__main__":
     report_format = args.report_format
     sam_report_paths = args.sam_report
     dspm_report_paths = args.dspm_report
+    include_user_usage_detail = args.include_user_usage_detail
+    copilot_dashboard_export = args.copilot_dashboard_export
+    power_platform_inventory = args.power_platform_inventory
+    preview_collectors = args.preview_collectors
+    assessment_profile = args.assessment_profile
+    provider_evidence = args.provider_evidence
+    snapshot_json = args.snapshot_json
+    baseline = args.baseline
 
     # Backward-compatible mapping from older, more specific flags.
     if args.interactive_collection_policy == 'skip':
@@ -66,6 +74,14 @@ if __name__ == "__main__":
                 report_format=report_format,
                 sam_report_paths=sam_report_paths,
                 dspm_report_paths=dspm_report_paths,
+                include_user_usage_detail=include_user_usage_detail,
+                copilot_dashboard_export=copilot_dashboard_export,
+                power_platform_inventory=power_platform_inventory,
+                preview_collectors=preview_collectors,
+                assessment_profile=assessment_profile,
+                provider_evidence=provider_evidence,
+                snapshot_json=snapshot_json,
+                baseline=baseline,
             )
         )
     except ValueError as e:

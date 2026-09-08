@@ -2,32 +2,40 @@
 AI Builder Models - Copilot AI Capability Leverage
 This is a pseudo-feature to identify existing AI capabilities that can be leveraged in Copilot scenarios
 """
-from Core.new_recommendation import new_recommendation
+from Core.new_recommendation import (
+    CATEGORY_SCAN_COVERAGE,
+    NOT_ASSESSED_STATUS,
+    new_recommendation,
+)
 
 async def get_recommendation(sku_name, status="Success", client=None, pp_client=None, pp_insights=None):
     """
     Analyze AI Builder models for Copilot integration opportunities.
     This runs when any Power Platform license is active.
     """
-    # Fallback recommendation when data unavailable
-    if not pp_insights or pp_insights.get('ai_models_total', 0) == 0:
-        # Check if we have pp_client for error details
-        error_msg = "requires Power Platform Administrator access to identify existing AI capabilities for Copilot integration"
-        if pp_client and hasattr(pp_client, 'ai_model_summary') and 'error' in pp_client.ai_model_summary:
-            error_msg = pp_client.ai_model_summary.get('error', 'Unknown error')
+    ai_summary = getattr(pp_client, 'ai_model_summary', {}) if pp_client else {}
+
+    # An unread inventory is assessment coverage, not a successful zero-model result.
+    if not pp_client or not pp_insights or 'error' in ai_summary:
+        error_msg = ai_summary.get(
+            'error',
+            'live Power Platform deployment data was not collected with an authorized delegated account',
+        )
         
         return [new_recommendation(
             service="Power Platform",
             feature="AI Builder - Assessment Needed",
-            observation=f"AI Builder model inventory unavailable - {error_msg}",
-            recommendation="Request Power Platform Administrator role to assess AI Builder models: 1) Inventory existing models (document processing, predictions, text classification), 2) Identify which models are published and ready for Copilot integration, 3) Map model capabilities to Copilot scenarios (invoice processing, lead scoring, sentiment analysis), 4) Create Power Automate flows with HTTP triggers to expose models as Copilot plugins. AI Builder models significantly enhance Copilot intelligence - assess current inventory before building new capabilities.",
+            observation=f"AI Builder model inventory was not assessed: {error_msg}. This does not mean that the tenant has no AI Builder models.",
+            recommendation="Prefer a unified Power Platform inventory export supplied with --power-platform-inventory PATH, or explicitly opt in to the preview inventory collector after assigning tenant-scoped Power Platform Reader RBAC to the application. Use the deeper interactive Power Platform Administrator collection only when environment-level configuration review is required. Inventory is optional extensibility evidence and does not alter core readiness.",
             link_text="AI Builder Overview",
             link_url="https://learn.microsoft.com/ai-builder/overview",
-            priority="Low",
-            status="Success"
+            priority="Medium",
+            status=NOT_ASSESSED_STATUS,
+            category=CATEGORY_SCAN_COVERAGE,
+            disposition="Coverage",
         )]
     
-    total_models = pp_insights.get('ai_models_total', 0)
+    total_models = pp_insights.get('ai_models_total', ai_summary.get('total', 0))
     
     # No AI models - opportunity to build
     if total_models == 0:

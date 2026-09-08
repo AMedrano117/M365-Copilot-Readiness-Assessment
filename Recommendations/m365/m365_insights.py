@@ -78,7 +78,7 @@ def get_users_observation(m365_insights):
     
     total_users = m365_insights.get('total_users', 0)
     copilot_licensed = m365_insights.get('copilot_licensed_users', 0)
-    adoption_rate = m365_insights.get('copilot_adoption_rate', 0)
+    license_coverage = m365_insights.get('copilot_license_coverage')
     
     if total_users == 0:
         return "User data unavailable (User.Read.All permission may be missing)"
@@ -86,7 +86,9 @@ def get_users_observation(m365_insights):
     observation_parts = [f"{total_users} total users"]
     
     if copilot_licensed > 0:
-        observation_parts.append(f"{copilot_licensed} with Copilot licenses ({adoption_rate}% adoption)")
+        population = m365_insights.get('copilot_license_coverage_population', 'the estimated eligible population')
+        coverage_text = "coverage not calculated" if license_coverage is None else f"{license_coverage}% license coverage of {population}"
+        observation_parts.append(f"{copilot_licensed} with Copilot licenses ({coverage_text})")
     else:
         observation_parts.append("no Copilot licenses assigned yet")
     
@@ -108,19 +110,19 @@ def get_copilot_adoption_recommendation(m365_insights):
     
     total_users = m365_insights.get('total_users', 0)
     copilot_licensed = m365_insights.get('copilot_licensed_users', 0)
-    adoption_rate = m365_insights.get('copilot_adoption_rate', 0)
+    license_coverage = m365_insights.get('copilot_license_coverage')
     
     if total_users == 0:
         return ""
     
     if copilot_licensed == 0:
         return "Start Copilot pilot with 10-20 power users from different departments to validate value before broad rollout. Focus on users who create lots of content, attend many meetings, or need to synthesize information from multiple sources."
-    elif adoption_rate < 10:
-        return f"Expand Copilot deployment beyond current {copilot_licensed} users. Pilot phase is validating value - gather feedback, identify use cases with highest ROI, then scale to similar user profiles. Target 20-30% adoption within 6 months for meaningful organizational impact."
-    elif adoption_rate < 30:
-        return f"Continue measured rollout from current {adoption_rate}% adoption. Monitor usage metrics, identify champions in each business unit, and create adoption playbooks based on successful use cases. Aim for 50% adoption within 12 months."
-    elif adoption_rate < 60:
-        return f"Strong adoption at {adoption_rate}%. Focus on enabling remaining users - identify barriers (training needs, workflow integration, data gaps), address skepticism with ROI data from early adopters, and consider mandating for high-value scenarios."
+    elif license_coverage is not None and license_coverage < 10:
+        return f"Copilot licenses currently cover {license_coverage}% of the tenant-derived eligible-user estimate. Treat this as deployment reach, not adoption: validate active use, task quality, and a customer-defined outcome before expanding to similar roles."
+    elif license_coverage is not None and license_coverage < 30:
+        return f"Copilot licenses currently cover {license_coverage}% of the tenant-derived eligible-user estimate. Review the dedicated active-user and prompt reports, identify supported use cases, and expand only when the tenant's own success criteria are met."
+    elif license_coverage is not None and license_coverage < 60:
+        return f"Copilot licenses currently cover {license_coverage}% of the tenant-derived eligible-user estimate. Compare license assignment with active usage, address enablement barriers, and reclaim or reassign persistently unused licenses."
     
     return ""  # High adoption already achieved
 
@@ -189,7 +191,7 @@ def get_reports_recommendation(m365_insights):
         return f"Ensure Reports.Read.All permission is granted to access {', '.join(missing_reports)} usage data. Baseline metrics are critical for measuring Copilot's impact on productivity - meeting time reduction, email volume changes, content collaboration patterns."
     
     # If all reports available, provide ROI guidance
-    return "Establish baseline metrics before Copilot rollout: avg meeting duration, emails sent per user, documents created per week, time in collaborative work. After deployment, measure impact: 20-30% reduction in meeting time (via summaries), 15% reduction in email volume (via chat recaps), 25% increase in content reuse. Use these reports monthly to quantify Copilot ROI."
+    return "Establish use-case-specific baselines before rollout, such as task cycle time, quality review results, rework, or risk exceptions. After deployment, compare the same measures for the pilot cohort and apply a customer-approved expand, adjust, or stop decision. Workload volume alone does not demonstrate ROI."
 
 
 def has_sufficient_data_for_observations(m365_insights):
@@ -262,8 +264,11 @@ def get_copilot_licensed_count(m365_insights):
     return m365_insights.get('copilot_licensed_users', 0) if m365_insights else 0
 
 def get_copilot_adoption_percentage(m365_insights):
-    """Get Copilot license adoption rate as percentage"""
-    return m365_insights.get('copilot_adoption_rate', 0) if m365_insights else 0
+    """Compatibility accessor: returns license coverage, not active adoption."""
+    if not m365_insights:
+        return 0
+    value = m365_insights.get('copilot_license_coverage')
+    return value if value is not None else 0
 
 def is_user_data_sampled(m365_insights):
     """Check if user data is sampled (>999 users - only first 999 retrieved)"""

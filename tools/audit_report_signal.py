@@ -8,8 +8,13 @@ import argparse
 import html
 import json
 import re
+import sys
 from collections import Counter
 from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from Core.assessment_model import enrich_assessment_records
 
@@ -61,14 +66,14 @@ def parse_report(path):
     return enrich_assessment_records(records)
 
 
-def summarize(records):
+def summarize(records, html_source="", workbook=None):
     disposition_counts = Counter(record["Disposition"] for record in records)
     action_priorities = Counter(
         record.get("Priority") or "None"
         for record in records
         if record["Disposition"] == "Action"
     )
-    return {
+    result = {
         "total_cards": len(records),
         "dispositions": dict(sorted(disposition_counts.items())),
         "action_priorities": dict(sorted(action_priorities.items())),
@@ -76,15 +81,115 @@ def summarize(records):
             disposition_counts.get("Action", 0) / len(records), 3
         ) if records else 0,
     }
+    issues = []
+    if re.search(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", html_source, re.I):
+        issues.append("HTML contains a possible user identity (email address).")
+    if "Validation incomplete—do not use for deployment approval" in html_source:
+        issues.append("The report integrity gate is incomplete.")
+    declared = re.search(r'<div class="label">Actions</div>\s*<div class="value">(\d+)</div>', html_source)
+    if declared and int(declared.group(1)) != disposition_counts.get("Action", 0):
+        issues.append("HTML action headline does not match rendered action cards.")
+    if workbook:
+        try:
+            from openpyxl import load_workbook
+            book = load_workbook(workbook, read_only=True, data_only=True)
+            required = {
+                "Action Plan", "Evidence Index", "Collection Coverage", "Recommendations",
+                "Control Results", "Run Manifest", "Integrity Checks",
+            }
+            missing = sorted(required - set(book.sheetnames))
+            if missing:
+                issues.append("Workbook is missing required tabs: " + ", ".join(missing))
+
+            def rows_for(sheet_name):
+                if sheet_name not in book.sheetnames:
+                    return []
+                values = book[sheet_name].iter_rows(values_only=True)
+                headers = [str(value or "") for value in next(values, [])]
+                return [dict(zip(headers, row)) for row in values]
+
+            workbook_rows = rows_for("Recommendations")
+            if "Recommendations" in book.sheetnames:
+                html_ids = {row.get("RecommendationId") for row in records if row.get("RecommendationId")}
+                workbook_action_ids = {str(row.get("RecommendationId") or "") for row in workbook_rows if row.get("Disposition") == "Action"}
+                if html_ids != workbook_action_ids:
+                    issues.append("HTML and workbook action identifiers do not match.")
+
+            action_rows = rows_for("Action Plan")
+            workbook_action_ids = {
+                str(row.get("RecommendationId") or "")
+                for row in workbook_rows if row.get("Disposition") == "Action"
+            }
+            if action_rows and "Recommendation ID" in action_rows[0]:
+                action_plan_ids = {
+                    str(row.get("Recommendation ID") or "")
+                    for row in action_rows if row.get("Recommendation ID")
+                }
+                if action_plan_ids != workbook_action_ids:
+                    issues.append("Action Plan and Recommendations action identifiers do not match.")
+            else:
+                normalize = lambda value: re.sub(r"\s+", " ", str(value or "")).strip().lower()
+                action_plan_findings = Counter(
+                    normalize(row.get("What We Found")) for row in action_rows
+                    if row.get("What We Found")
+                )
+                workbook_action_findings = Counter(
+                    normalize(row.get("Observation")) for row in workbook_rows
+                    if row.get("Disposition") == "Action" and row.get("Observation")
+                )
+                if action_plan_findings != workbook_action_findings:
+                    issues.append("Action Plan findings do not match the Recommendations action register.")
+
+            evidence_rows = rows_for("Evidence Index")
+            evidence_ids = {str(row.get("RecommendationId") or "") for row in evidence_rows}
+            missing_action_evidence = sorted(workbook_action_ids - evidence_ids)
+            if missing_action_evidence:
+                issues.append("Executive actions are missing Evidence Index rows: " + ", ".join(missing_action_evidence))
+
+            control_ids = {str(row.get("Control ID") or "") for row in rows_for("Control Results")}
+            for row in workbook_rows:
+                if row.get("Disposition") != "Action":
+                    continue
+                recommendation_id = str(row.get("RecommendationId") or "Unidentified action")
+                control_id = str(row.get("Control ID") or "")
+                if not control_id or control_id not in control_ids:
+                    issues.append(f"Action {recommendation_id} is not mapped to a Control Results row.")
+
+            valid_states = {"available", "partial", "unavailable", "not_requested"}
+            for row in rows_for("Collection Coverage"):
+                state = str(row.get("State") or "").lower()
+                if state not in valid_states:
+                    issues.append(f"Collection source {row.get('Source')} has invalid state {row.get('State')!r}.")
+                if bool(row.get("Truncated")) and state == "available":
+                    issues.append(f"Truncated source {row.get('Source')} is incorrectly marked available.")
+
+            for row in rows_for("Integrity Checks"):
+                if str(row.get("Status") or "").lower() == "failed":
+                    issues.append("Workbook integrity gate reports failure: " + str(row.get("Issue") or ""))
+
+            for row in rows_for("Run Manifest"):
+                item, value = str(row.get("Item") or ""), str(row.get("Value") or "")
+                if item.lower().startswith("input:") and value.lower() not in {"", "not supplied"}:
+                    if "/" in value or "\\" in value:
+                        issues.append(f"Run Manifest input filename is not sanitized: {item}.")
+                if any(secret_word in item.lower() for secret_word in ("client secret", "access token", "refresh token")):
+                    issues.append(f"Run Manifest contains a credential field: {item}.")
+        except Exception as exc:
+            issues.append(f"Workbook could not be audited: {exc}")
+    result["audit_issues"] = issues
+    result["valid"] = not issues
+    return result
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("report", type=Path)
+    parser.add_argument("--workbook", type=Path, help="Optional workbook for cross-output consistency checks")
     parser.add_argument("--actions", action="store_true", help="List classified primary actions")
     args = parser.parse_args()
+    html_source = args.report.read_text(encoding="utf-8")
     records = parse_report(args.report)
-    print(json.dumps(summarize(records), indent=2))
+    print(json.dumps(summarize(records, html_source=html_source, workbook=args.workbook), indent=2))
     if args.actions:
         for record in records:
             if record["Disposition"] == "Action":

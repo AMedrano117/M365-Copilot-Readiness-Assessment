@@ -27,6 +27,11 @@ Examples:
   python main.py --tenant-id "your-tenant-id" --services Purview
   python main.py --env-file .env.prod --services Purview
   python main.py --sam-report sam-permissions.csv --dspm-report dspm-assessment.csv
+  python main.py --copilot-dashboard-export copilot-metrics.csv
+  python main.py --power-platform-inventory power-platform-inventory.csv
+  python main.py --preview-collectors shadow-ai
+  python main.py --assessment-profile assessment-profile.json --provider-evidence providers.csv
+  python main.py --baseline Reports/prior.xlsx --snapshot-json output/latest-snapshot.json
         '''
     )
     parser.add_argument(
@@ -77,6 +82,59 @@ Examples:
         default=[],
         metavar='PATH',
         help='Microsoft Purview DSPM data-risk assessment export. Repeat for multiple reports or supply a directory.'
+    )
+    parser.add_argument(
+        '--include-user-usage-detail',
+        action='store_true',
+        help='Include licensed-user Copilot activity in the restricted Excel evidence workbook. HTML remains aggregate-only.'
+    )
+    parser.add_argument(
+        '--copilot-dashboard-export',
+        type=str,
+        default=None,
+        metavar='PATH',
+        help='Optional CSV export from the Microsoft Copilot Dashboard for returning-user and usage-intensity evidence.'
+    )
+    parser.add_argument(
+        '--power-platform-inventory',
+        type=str,
+        default=None,
+        metavar='PATH',
+        help='Optional tenant-wide CSV export from Power Platform admin center Manage > Inventory.'
+    )
+    parser.add_argument(
+        '--preview-collectors',
+        choices=['none', 'power-platform', 'shadow-ai', 'all'],
+        default='none',
+        help='Opt in to supplemental Microsoft preview APIs. Preview data never changes the core readiness decision.'
+    )
+    parser.add_argument(
+        '--assessment-profile',
+        type=str,
+        default=None,
+        metavar='PATH',
+        help='Versioned JSON describing proposed AI products, users, use cases, data, actions, approvals, and outcome measures.'
+    )
+    parser.add_argument(
+        '--provider-evidence',
+        type=str,
+        default=None,
+        metavar='PATH',
+        help='CSV or XLSX register containing product-and-tier-specific external AI review evidence.'
+    )
+    parser.add_argument(
+        '--snapshot-json',
+        type=str,
+        default=None,
+        metavar='PATH',
+        help='Optionally write a machine-readable assessment snapshot. No snapshot is created by default.'
+    )
+    parser.add_argument(
+        '--baseline',
+        type=str,
+        default=None,
+        metavar='PATH',
+        help='Prior assessment workbook or snapshot JSON used to classify improvement since the baseline.'
     )
     parser.add_argument(
         '--purview-auth-mode',

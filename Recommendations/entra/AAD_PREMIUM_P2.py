@@ -70,12 +70,14 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
             permanent_global_admins = pim_metrics.get('permanent_global_admins', 0)
             if permanent_count > 0:
                 # Role assignment schedules explicitly marked no-expiration are standing.
+                schedule_label = "schedule" if permanent_count == 1 else "schedules"
+                admin_label = "assignment" if permanent_global_admins == 1 else "assignments"
                 recommendations.append(new_recommendation(
                     service="Entra",
                     feature=feature_name,
                     observation=(
-                        f"{permanent_count} active directory role assignment schedule(s) have no expiration"
-                        + (f", including {permanent_global_admins} Global Administrator assignment(s)" if permanent_global_admins else "")
+                        f"{permanent_count} active directory role assignment {schedule_label} have no expiration"
+                        + (f", including {permanent_global_admins} Global Administrator {admin_label}" if permanent_global_admins else "")
                     ),
                     recommendation="Review the named principals and roles in Admin Role Detail. Convert standing assignments to PIM eligibility or time-bound activation where operationally feasible, retaining documented emergency-access exceptions.",
                     link_text="Configure PIM for Copilot Admins",
@@ -150,11 +152,12 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
             if high_risk > 0 or medium_risk > 0:
                 # Action Required: Risky users detected
                 total_risky = high_risk + medium_risk
+                risky_user_label = "risky user" if total_risky == 1 else "risky users"
                 recommendations.append(new_recommendation(
                     service="Entra",
                     feature=feature_name,
-                    observation=f"{total_risky} risky user(s) detected ({high_risk} high-risk, {medium_risk} medium-risk) who may have access to Copilot services",
-                    recommendation="Review and remediate risky users immediately. Compromised accounts with Copilot access can lead to data exfiltration through AI prompts. Enable risk-based conditional access policies to block risky sign-ins automatically.",
+                    observation=f"{total_risky} {risky_user_label} detected in the tenant ({high_risk} high-risk, {medium_risk} medium-risk)",
+                    recommendation="Review the risky users and confirm remediation or dismissal in Identity Protection. Risky accounts can expose Microsoft 365 data and any connected AI services they are authorized to use. Use risk-based Conditional Access where appropriate to block or remediate risky sign-ins.",
                     link_text="Investigate Risky Users",
                     link_url="https://learn.microsoft.com/entra/id-protection/howto-identity-protection-investigate-risk",
                     priority="High" if high_risk > 0 else "Medium",
@@ -272,6 +275,7 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
                     link_text="Cross-Tenant Access Settings",
                     link_url="https://learn.microsoft.com/entra/external-id/cross-tenant-access-overview",
                     status="Success",
+                    disposition="Reference",
                     evidence_key="guest_access_detail",
                     evidence_summary="See Guest Access Detail for the cross-tenant configuration state and guest collaboration context behind this finding."
                 ))
@@ -284,6 +288,7 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
                     link_text="Configure Partner Organizations",
                     link_url="https://learn.microsoft.com/entra/external-id/cross-tenant-access-settings-b2b-collaboration",
                     status="Success",
+                    disposition="Reference",
                     evidence_key="guest_access_detail",
                     evidence_summary="See Guest Access Detail for the cross-tenant access configuration and partner-policy counts supporting this observation."
                 ))
@@ -297,6 +302,7 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
                     link_text="Cross-Tenant Access Settings",
                     link_url="https://learn.microsoft.com/entra/external-id/cross-tenant-access-overview",
                     status="Success",
+                    disposition="Reference",
                     evidence_key="guest_access_detail",
                     evidence_summary="See Guest Access Detail for the guest configuration and partner-policy inventory reviewed for this control."
                 ))
@@ -306,21 +312,24 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
             user_consent_allowed = consent_metrics.get('user_consent_allowed', False)
             admin_consent_required = consent_metrics.get('admin_consent_required', False)
             data_sources = entra_insights.get('data_sources', {}) or {}
-            consent_policy_read = data_sources.get('consent_policies', False)
+            consent_policy_read = (
+                data_sources.get('authorization_policy', False)
+                and consent_metrics.get('consent_configuration_available', False)
+            )
 
             if not consent_policy_read:
                 recommendations.append(new_recommendation(
                     service="Entra",
                     feature=feature_name,
-                    observation="Application consent policy settings could not be read, so the user-versus-admin consent boundary is unverified",
-                    recommendation="Grant Policy.Read.All and rerun, or verify user consent settings and the admin-consent workflow directly in Entra.",
+                    observation="The tenant authorization policy did not return the default user-role consent assignments, so the user-versus-admin consent boundary is unverified",
+                    recommendation="Confirm that the app registration identified by CLIENT_ID has Policy.Read.All with tenant-wide admin consent, wait for propagation, and rerun. Alternatively, verify the user-consent setting and admin-consent workflow directly in Entra.",
                     link_text="Configure User Consent",
                     link_url="https://learn.microsoft.com/entra/identity/enterprise-apps/configure-user-consent",
                     priority="Medium",
                     status="Not Assessed",
                     disposition="Coverage",
-                    evidence_key="app_access_detail",
-                    evidence_summary="Application grants remain available for review, but the tenant consent-policy conclusion was not collected."
+                    evidence_key="app_consent_policy_detail",
+                    evidence_summary="The authorization-policy consent assignments were unavailable, so no clean consent-boundary conclusion is supported."
                 ))
             elif user_consent_allowed and not admin_consent_required:
                 # Action Required: User consent enabled
@@ -333,8 +342,8 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
                     link_url="https://learn.microsoft.com/entra/identity/enterprise-apps/configure-user-consent",
                     priority="High",
                     status="Action Required",
-                    evidence_key="app_access_detail",
-                    evidence_summary="See App Access Detail for the application grants, flagged scopes, publisher state, and available activity behind this consent finding."
+                    evidence_key="app_consent_policy_detail; app_access_detail",
+                    evidence_summary="See Application Consent Policy for the effective default-user consent assignments and App Access Detail for existing grants."
                 ))
             elif admin_consent_required:
                 # Success: Admin consent required
@@ -346,8 +355,8 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
                     link_text="Admin Consent Workflow",
                     link_url="https://learn.microsoft.com/entra/identity/enterprise-apps/configure-admin-consent-workflow",
                     status="Success",
-                    evidence_key="app_access_detail",
-                    evidence_summary="See App Access Detail for the reviewed application grants and publishers associated with current app access."
+                    evidence_key="app_consent_policy_detail",
+                    evidence_summary="See Application Consent Policy for the effective default-user consent assignments returned by the tenant authorization policy."
                 ))
             else:
                 recommendations.append(new_recommendation(
@@ -360,8 +369,8 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
                     priority="Medium",
                     status="Insight",
                     disposition="Opportunity",
-                    evidence_key="app_access_detail",
-                    evidence_summary="See App Access Detail for the existing application grants and publishers associated with this policy review."
+                    evidence_key="app_consent_policy_detail",
+                    evidence_summary="See Application Consent Policy for the effective default-user consent assignments returned by the tenant authorization policy."
                 ))
             
             # Observation 8: Risky Application Permissions

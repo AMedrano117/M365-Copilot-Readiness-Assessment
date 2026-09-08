@@ -166,6 +166,11 @@ def print_interactive_collection_summary(interactive_plan):
                 f"Purview deployment collection: skipped ({purview_plan['skip_reason']}). "
                 "Continuing with license-based recommendations."
             )
+            if purview_plan['skip_reason'] == 'ExchangeOnlineManagement module not installed':
+                lines.append(
+                    "Install locally with: Install-Module ExchangeOnlineManagement "
+                    "-Scope CurrentUser -Force"
+                )
 
     pp_plan = interactive_plan['power_platform']
     if pp_plan['selected']:
@@ -178,6 +183,11 @@ def print_interactive_collection_summary(interactive_plan):
                 f"Power Platform/Copilot Studio deployment collection: skipped ({pp_plan['skip_reason']}). "
                 "Continuing with license/basic recommendations."
             )
+            if pp_plan['skip_reason'] == 'Az.Accounts module not installed':
+                lines.append(
+                    "Install locally with: Install-Module Az.Accounts -Scope CurrentUser -Force. "
+                    "The interactive user needs Power Platform Administrator in the target tenant."
+                )
 
     if not lines:
         return

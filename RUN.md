@@ -23,6 +23,12 @@ Use the guidance below to run the Automated Readiness Assessment for Microsoft 3
 
 **Note:** It is recommended that Microsoft 365 Administrators run this assessment. Alternatively, assign the appropriate roles listed above to designated users who will perform the assessment.
 
+Permissions and role assignments are tenant-specific. When assessing a different tenant, the
+app registration identified by that tenant's `CLIENT_ID` must have its own application permissions
+and admin consent. The user completing Purview or Power Platform interactive authentication must
+also hold the delegated role in that target tenant. Local PowerShell modules and cached sign-ins are
+machine-specific.
+
 ## Data Collection Details
 
 The following table shows what data is collected for each service and the APIs/cmdlets used:
@@ -96,12 +102,14 @@ Run the service principal setup script to create Azure AD app registration with 
    - IdentityRiskyUser.Read.All - Read risky users
    - IdentityRiskEvent.Read.All - Read risk events
    - Policy.Read.All - Read policies
+   - Policy.Read.PermissionGrant - Read permission grant policies used by tenant consent settings
    - RoleManagement.Read.Directory - Read directory roles
    - UserAuthenticationMethod.Read.All - Read authentication methods
    - AccessReview.Read.All - Read access reviews
    - DeviceManagementManagedDevices.Read.All - Read managed devices
    - DeviceManagementConfiguration.Read.All - Read device configurations
    - NetworkAccessPolicy.Read.All - Read network access policies
+   - NetworkAccess.Read.All - Read Global Secure Access filtering policies and forwarding profiles
    - Application.Read.All - Read applications
    - AuditLog.Read.All - Read audit logs
    - Reports.Read.All - Read usage reports
@@ -115,6 +123,11 @@ Run the service principal setup script to create Azure AD app registration with 
    - Printer.Read.All - Read printers
    - WorkplaceAnalytics-Reports.Read.All - Read workplace analytics
    - InformationProtectionPolicy.Read - Read information protection policies
+
+   `CloudApp-Discovery.Read.All` is deliberately **not** part of the default permission set. Add
+   it as an application permission and grant admin consent only when the tenant approves
+   `--preview-collectors shadow-ai` (or `all`). It provides aggregate Defender for Cloud Apps
+   discovery evidence; the report never requests discovered-user identities.
    
    **Microsoft Defender for Endpoint API:**
    - Machine.Read.All - Read machine data
@@ -165,6 +178,18 @@ python main.py --tenant-id "12345678-1234-1234-1234-123456789abc" --services Pur
 
 # All services for specific tenant (empty --services flag)
 python main.py --tenant-id "contoso.onmicrosoft.com" --services
+
+# Aggregate usage is automatic. Add restricted user detail to the Excel workbook only.
+python main.py --include-user-usage-detail --report-format both
+
+# Import optional supplemental exports (the tool does not start long-running exports).
+python main.py --copilot-dashboard-export .\exports\copilot-dashboard.csv
+python main.py --power-platform-inventory .\exports\power-platform-inventory.csv
+
+# Preview collectors are disabled by default.
+python main.py --preview-collectors shadow-ai
+python main.py --preview-collectors power-platform
+python main.py --preview-collectors all
 ```
 
 **Note:** Service names with spaces (`"Power Platform"`, `"Copilot Studio"`) must be enclosed in double quotes.
@@ -337,6 +362,88 @@ If your tenant has Defender licenses but has never accessed the portal:
 Install-Module -Name ExchangeOnlineManagement -Force
 Import-Module ExchangeOnlineManagement
 ```
+
+Rerun only the Purview collection with a new sign-in:
+
+```powershell
+python main.py --env-file .env --services Purview --interactive-auth fresh --report-format both
+```
+
+The signed-in user needs Compliance Administrator or equivalent read access in the target tenant.
+The collector uses both Security & Compliance PowerShell and Exchange Online, so two authentication
+events may be shown.
+
+### Power Platform Issues
+
+**Problem:** AI Builder inventory is reported as not assessed
+
+**Preferred solution:** In Power Platform admin center, open **Manage > Inventory**, enable the
+inventory feature if necessary, allow Microsoft to complete its inventory, export the tenant-wide
+CSV, and supply it without waiting for the assessment to run:
+
+```powershell
+python main.py --env-file .env --power-platform-inventory .\exports\power-platform-inventory.csv --report-format both
+```
+
+The alternative preview path is:
+
+```powershell
+python main.py --env-file .env --preview-collectors power-platform --report-format both
+```
+
+Assign the assessment service principal the tenant-scoped **Power Platform Reader** RBAC role
+(role ID `c886ad2e-27f7-4874-8381-5849b8d8a090`) at `/tenants/{tenantId}` first. This inventory API
+and its RBAC support are preview. Do not grant the application the Entra Power Platform
+Administrator directory role. The legacy delegated collector remains a fallback and aggregates
+all readable environments; Power Platform availability never changes the core readiness decision.
+
+### AI Usage and Shadow AI Issues
+
+**Problem:** Copilot usage or Microsoft 365 Apps readiness says permission missing
+
+**Solution:** Confirm the app registration identified by `CLIENT_ID` has the Microsoft Graph
+application permission `Reports.Read.All`, grant admin consent in the target tenant, obtain a fresh
+application token, and rerun. Unavailable data is reported as not assessed, never as zero usage.
+
+**Problem:** Shadow AI discovery is not assessed, has no stream, or returns HTTP 403
+
+**Solution:** This source is optional and preview. Add and consent the Microsoft Graph application
+permission `CloudApp-Discovery.Read.All`, then enable a Defender for Cloud Apps discovery source:
+Defender for Endpoint continuous report forwarding, a Cloud Discovery log stream, or Global Secure
+Access Shadow AI discovery. Allow Microsoft to populate the stream and rerun with
+`--preview-collectors shadow-ai`. Purview DSPM does not substitute for this source because DSPM
+measures data and prompt risk, not aggregate adoption of external AI services.
+
+### Cross-Tenant Permission Issues
+
+**Problem:** `NetworkAccess.Read.All permission is not granted to the service principal`
+
+**Solution:** In the target tenant, add Microsoft Graph **application** permission
+`NetworkAccess.Read.All` to the app registration matching `CLIENT_ID`, and grant tenant-wide admin
+consent. The list operations used for filtering policies and forwarding profiles require this broad
+read permission; `NetworkAccessPolicy.Read.All` by itself does not authorize them. Consent granted
+in a different tenant is not reused. The setup script includes both permissions for target-tenant
+deployments.
+
+**Problem:** Application consent policy settings could not be read even though `Policy.Read.All`
+is granted.
+
+**Solution:** Add Microsoft Graph **application** permission `Policy.Read.PermissionGrant` and grant
+tenant-wide admin consent. `Policy.Read.All` can read the authorization policy, while the separate
+permission is required for the permission grant policy inventory used by this assessment.
+
+**Problem:** Global Secure Access still returns HTTP 403 after `NetworkAccess.Read.All` is present
+in a fresh application token.
+
+**Solution:** Do not add progressively broader Graph permissions. Confirm that the tenant is
+explicitly onboarded to Global Secure Access and has the required Entra Suite or standalone
+licensing. If the organization does not plan to use this optional control, retain the result as an
+assessment coverage limitation. The tool distinguishes this condition from a missing permission.
+
+Collector authentication and partial-data warnings are also written to
+`Reports\collector_diagnostics.log`. The log is ignored by Git and redacts bearer tokens, JWTs, and
+common secret values so it can be used for local troubleshooting without placing credentials in
+the repository.
 
 ### General Issues
 

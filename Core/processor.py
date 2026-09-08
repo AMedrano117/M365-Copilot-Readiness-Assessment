@@ -10,6 +10,17 @@ from .export_recommendations import (
     print_recommendations_summary
 )
 from .evidence_layer import build_evidence_bundle
+from .assessment_model import summarize_readiness
+from .cross_provider_assessment import (
+    assess_provider_and_use_cases,
+    build_run_manifest,
+    compare_baseline,
+    evaluate_controls,
+    load_assessment_profile,
+    load_provider_evidence,
+    run_integrity_checks,
+    write_snapshot,
+)
 
 
 def collect_all_recommendations(m365_recommendations, entra_info, purview_info, 
@@ -86,7 +97,9 @@ def process_and_print_all_information(m365_result, entra_info,
                                       purview_info, defender_info, power_platform_info, 
                                       copilot_studio_info, tenant_name=None, open_html_report=False,
                                       report_format='excel', sam_report_paths=None,
-                                      dspm_report_paths=None, data_exposure_enabled=True):
+                                      dspm_report_paths=None, data_exposure_enabled=True,
+                                      assessment_profile=None, provider_evidence=None,
+                                      snapshot_json=None, baseline=None, enabled_collectors=None):
     """Process all service information and generate recommendations."""
     # Unpack M365 results
     (m365_info, m365_recommendations) = m365_result
@@ -124,7 +137,79 @@ def process_and_print_all_information(m365_result, entra_info,
             copilot_studio_info,
             data_exposure_info,
         )
-        all_recommendations = evidence_bundle['recommendations']
+        all_recommendations, control_results = evaluate_controls(evidence_bundle['recommendations'])
+        evidence_bundle['recommendations'] = all_recommendations
+        evidence_bundle['control_results'] = control_results
+
+        recommendation_by_id = {row.get('RecommendationId'): row for row in all_recommendations}
+        for row in evidence_bundle.get('evidence_index', []):
+            source = recommendation_by_id.get(row.get('RecommendationId'), {})
+            row['Control ID'] = source.get('ControlId', '')
+            row['Methodology Version'] = source.get('MethodologyVersion', '')
+            row['Finding Fingerprint'] = source.get('FindingFingerprint', '')
+
+        profile = load_assessment_profile(assessment_profile)
+        providers = load_provider_evidence(provider_evidence)
+        foundation = summarize_readiness(all_recommendations)
+        conclusions = assess_provider_and_use_cases(profile, providers, foundation['decision'])
+        evidence_bundle['assessment_profile'] = profile
+        evidence_bundle['provider_evidence'] = providers
+        evidence_bundle['conclusions'] = conclusions
+
+        m365_client = m365_info.get('_client') if isinstance(m365_info, dict) else None
+        entra_client = entra_info.get('_client') if isinstance(entra_info, dict) else None
+        source_statuses = {}
+        if entra_client:
+            source_statuses.update(getattr(entra_client, 'collection_status', {}) or {})
+        if m365_client:
+            source_statuses.update({f'm365_{key}': value for key, value in (getattr(m365_client, 'collection_status', {}) or {}).items()})
+            for name in ('copilot_usage', 'm365_app_readiness', 'copilot_dashboard', 'shadow_ai_usage'):
+                evidence = getattr(m365_client, name, None)
+                if isinstance(evidence, dict):
+                    source_statuses[name] = evidence
+        for source_name, source in (data_exposure_info.get('sources', {}) or {}).items():
+            if isinstance(source, dict):
+                source_statuses[f'data_exposure_{source_name}'] = {
+                    'availability_status': source.get('status', 'available' if source.get('files_loaded') else 'not_requested'),
+                    'records_collected': source.get('records_read', 0),
+                    'pages_collected': '',
+                    'truncated': bool(data_exposure_info.get('evidence_truncated')),
+                    'reason': source.get('reason', ''),
+                }
+        evidence_bundle['source_statuses'] = source_statuses
+        evidence_bundle['run_manifest'] = build_run_manifest(
+            report_tenant_name,
+            {
+                'SAM reports': sam_report_paths,
+                'DSPM reports': dspm_report_paths,
+                'Copilot dashboard': getattr(m365_client, 'copilot_dashboard', {}).get('filename', '') if m365_client else '',
+                'Power Platform inventory': getattr(
+                    power_platform_info.get('_client') if isinstance(power_platform_info, dict) else None,
+                    'power_platform_inventory', {},
+                ).get('filename', '') if isinstance(power_platform_info, dict) else '',
+                'Assessment profile': assessment_profile,
+                'Provider evidence': provider_evidence,
+                'Baseline': baseline,
+            },
+            enabled_collectors or [],
+            source_statuses,
+        )
+        evidence_bundle['baseline_comparison'] = compare_baseline(all_recommendations, control_results, baseline)
+        evidence_bundle['integrity'] = run_integrity_checks(all_recommendations, evidence_bundle)
+
+        if snapshot_json:
+            snapshot_path = write_snapshot(snapshot_json, {
+                'methodology_version': evidence_bundle['run_manifest']['methodology_version'],
+                'assessment_version': evidence_bundle['run_manifest']['assessment_version'],
+                'tenant': report_tenant_name,
+                'generated_at': evidence_bundle['run_manifest']['generated_at'],
+                'conclusions': conclusions,
+                'control_results': control_results,
+                'recommendations': all_recommendations,
+                'collection_coverage': source_statuses,
+                'integrity': evidence_bundle['integrity'],
+            })
+            print(f"Snapshot JSON: {snapshot_path}")
         csv_path, excel_path = export_tabular_reports(
             all_recommendations,
             report_tenant_name,

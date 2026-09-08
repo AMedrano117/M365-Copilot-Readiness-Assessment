@@ -33,6 +33,19 @@ class ExportRecommendationsTests(unittest.TestCase):
                 "EvidenceAvailable": "Yes",
                 "EvidenceSheet": "App Access Detail",
                 "EvidenceSummary": "See App Access Detail for the flagged applications, reasons, and available activity.",
+            },
+            {
+                "RecommendationId": "ENT-001",
+                "Service": "Entra",
+                "Feature": "Conditional Access",
+                "Status": "Success",
+                "Priority": "",
+                "Observation": "Conditional Access requires MFA for administrative access.",
+                "Recommendation": "",
+                "EvidenceAvailable": "Yes",
+                "EvidenceBasis": "Tenant evidence",
+                "Disposition": "Assurance",
+                "ImpactArea": "Identity & access",
             }
         ]
 
@@ -99,10 +112,23 @@ class ExportRecommendationsTests(unittest.TestCase):
         )
 
         workbook = load_workbook(excel_path)
-        self.assertEqual(workbook.sheetnames[:3], ["Recommendations", "Evidence Index", "App Access Detail"])
+        self.assertEqual(workbook.sheetnames[:5], [
+            "Action Plan", "Evidence Index", "Collection Coverage", "App Access Detail", "Recommendations",
+        ])
         self.assertEqual(len(workbook["Recommendations"].tables), 1)
         self.assertEqual(len(workbook["Evidence Index"].tables), 1)
         self.assertEqual(len(workbook["App Access Detail"].tables), 1)
+        for worksheet in workbook.worksheets:
+            if worksheet.tables:
+                self.assertIsNone(worksheet.auto_filter.ref)
+
+        action_headers = [cell.value for cell in workbook["Action Plan"][1]]
+        self.assertEqual(action_headers, [
+            "Priority", "What We Found", "Recommended Action",
+            "Owner", "Target Date", "Completion Evidence",
+        ])
+        self.assertNotIn("Recommendation ID", action_headers)
+        self.assertNotIn("Control ID", action_headers)
 
         headers = [cell.value for cell in workbook["App Access Detail"][1]]
         self.assertIn("RecommendationId", headers)
@@ -120,6 +146,15 @@ class ExportRecommendationsTests(unittest.TestCase):
         )
 
         html = Path(html_path).read_text(encoding="utf-8")
+        action_plan = html.split('id="action-plan"', 1)[1].split("</section>", 1)[0]
+        self.assertIn("What we found", action_plan)
+        self.assertIn("What to do", action_plan)
+        self.assertNotIn("Control ID", action_plan)
+        self.assertNotIn("DEF-001", action_plan)
+        self.assertIn("What the tenant is doing well", html)
+        self.assertIn("What is working", html)
+        self.assertIn("Why it helps AI readiness", html)
+        self.assertNotIn("Run manifest and collection outcomes", html)
         self.assertIn("Engineer Follow-Up Appendix", html)
         self.assertIn('<details class="appendix-panel" id="engineer-appendix">', html)
         self.assertIn('<summary class="appendix-intro">', html)
@@ -148,14 +183,14 @@ class ExportRecommendationsTests(unittest.TestCase):
         )
 
         html = Path(html_path).read_text(encoding="utf-8")
-        self.assertIn("Optional · does not change readiness", html)
-        self.assertIn("They do not change the security and\n            governance readiness decision", html)
-        self.assertIn("Value hypothesis", html)
-        self.assertIn("Pilot or enablement next step", html)
-        self.assertIn("Assessment scope &amp; external AI validation: what this tool verifies", html)
-        self.assertIn("Verified from the Microsoft 365 tenant", html)
-        self.assertIn("Requires a separate review for each external AI product", html)
-        self.assertIn("not yet validated\n        for deployment", html)
+        self.assertIn("Separate from security readiness", html)
+        self.assertIn("They are\n          separate from security readiness", html)
+        self.assertIn("Measured tenant signal", html)
+        self.assertIn("Measurement and decision", html)
+        self.assertIn("Three readiness conclusions", html)
+        self.assertIn("Microsoft 365 foundation", html)
+        self.assertIn("Provider and tier approval", html)
+        self.assertIn("current provider register is required", html)
         self.assertIn("complete once per product and subscription tier", html)
 
 

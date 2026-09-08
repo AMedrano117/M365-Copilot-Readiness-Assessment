@@ -14,8 +14,8 @@ async def get_recommendation(sku_name, status="Success", client=None, pp_client=
         return [new_recommendation(
             service="Power Platform",
             feature="DLP Governance - Assessment Needed",
-            observation="DLP policy assessment unavailable - requires Power Platform Administrator access to evaluate governance impact on Copilot extensibility",
-            recommendation="Request Power Platform Administrator role to assess DLP policies: 1) Review if HTTP connector is blocked (prevents ALL plugin development), 2) Check custom connector restrictions (limits internal API integrations), 3) Identify premium connector blocks (may limit SAP/Salesforce/ServiceNow integrations), 4) Create 'Copilot Extensibility' environment if tenant-wide policies too restrictive. DLP governance is critical for Copilot adoption - overly restrictive policies block plugin development entirely. Assess and adjust before scaling agents.",
+            observation="Power Platform DLP policy evidence was not collected, so its effect on optional agent and connector extensibility is unverified.",
+            recommendation="If Power Platform extensibility is in scope, have an authorized Power Platform administrator review Data policies in the admin center and document connector classifications for the proposed agent use cases. The tenant-wide inventory export or preview Power Platform Reader API can establish inventory, but it does not replace the administrative DLP review. Keep this as optional extensibility coverage; it does not reduce core Microsoft 365 security readiness.",
             link_text="DLP Policy Review",
             link_url="https://learn.microsoft.com/power-platform/admin/wp-data-loss-prevention",
             priority="Medium",

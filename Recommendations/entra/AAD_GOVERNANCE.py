@@ -151,8 +151,8 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
                 link_url="https://learn.microsoft.com/entra/identity/enterprise-apps/configure-user-consent",
                 priority="High",
                 status=status,
-                evidence_key="app_access_detail",
-                evidence_summary="See App Access Detail for the application grants, flagged scopes, publisher state, and available activity context behind this consent finding."
+                evidence_key="app_consent_policy_detail; app_access_detail",
+                evidence_summary="See Application Consent Policy for the effective default-user consent assignments and App Access Detail for existing grants."
             ))
         elif admin_consent_required:
             # Success: Admin consent required
@@ -163,7 +163,9 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
                 recommendation="",
                 link_text="Admin Consent Workflow",
                 link_url="https://learn.microsoft.com/entra/identity/enterprise-apps/configure-admin-consent-workflow",
-                status=status
+                status=status,
+                evidence_key="app_consent_policy_detail",
+                evidence_summary="See Application Consent Policy for the effective default-user consent assignments returned by the tenant authorization policy."
             ))
     
     # ========================================

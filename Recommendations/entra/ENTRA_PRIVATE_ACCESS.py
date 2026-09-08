@@ -67,12 +67,25 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
             observations.append(new_recommendation(
                 service="Entra",
                 feature=feature_name,
-                observation="NetworkAccessPolicy.Read.All permission is not granted to the service principal",
-                recommendation="Grant the NetworkAccessPolicy.Read.All API permission to enable Global Secure Access monitoring for both Internet and Private Access features.",
-                link_text="NetworkAccessPolicy Permission Reference",
-                link_url="https://learn.microsoft.com/graph/permissions-reference#networkaccesspolicyreadall",
+                observation="NetworkAccess.Read.All permission is not granted to the service principal",
+                recommendation="In this target tenant, add Microsoft Graph application permission NetworkAccess.Read.All to the app registration identified by CLIENT_ID and grant tenant-wide admin consent. The Global Secure Access list endpoints used by this assessment require NetworkAccess.Read.All; NetworkAccessPolicy.Read.All alone is not sufficient. Then wait for propagation and rerun the assessment.",
+                link_text="Global Secure Access API Permissions",
+                link_url="https://learn.microsoft.com/graph/api/networkaccess-networkaccessroot-list-filteringpolicies?view=graph-rest-beta",
                 priority="Low",
                 status="Permission Required",
+                category=CATEGORY_SCAN_COVERAGE,
+                disposition="Coverage"
+            ))
+        elif private_status == 'Unavailable':
+            observations.append(new_recommendation(
+                service="Entra",
+                feature=feature_name,
+                observation="Global Secure Access configuration could not be read: Microsoft Graph returned HTTP 403 even though NetworkAccess.Read.All is present in the application token",
+                recommendation="Verify whether this tenant has been explicitly onboarded to Global Secure Access and has the required licensing. In the Entra admin center, open Global Secure Access and activate it only if the organization plans to use Private Access for AI agents or other workloads that need governed connectivity to private applications. Then wait for provisioning and rerun. If the feature is intentionally not deployed, retain this as a coverage limitation rather than treating it as a security failure.",
+                link_text="Global Secure Access Onboarding",
+                link_url="https://learn.microsoft.com/graph/api/resources/networkaccess-global-secure-access-api-overview?view=graph-rest-beta",
+                priority="Low",
+                status="Not Assessed",
                 category=CATEGORY_SCAN_COVERAGE,
                 disposition="Coverage"
             ))
