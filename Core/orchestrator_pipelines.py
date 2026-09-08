@@ -5,7 +5,18 @@ from .spinner import get_timestamp, _stdout_lock
 from .orchestrator_powershell import collect_purview_data_via_powershell
 
 
-def create_pipelines(client, services_and_licenses, tenant_id, service_config, interactive_auth='auto', interactive_plan=None):
+def create_pipelines(
+    client,
+    services_and_licenses,
+    tenant_id,
+    service_config,
+    interactive_auth='auto',
+    interactive_plan=None,
+    include_user_usage_detail=False,
+    copilot_dashboard_export=None,
+    power_platform_inventory=None,
+    preview_collectors='none',
+):
     """Create all service pipeline functions with shared context.
     
     Args:
@@ -28,6 +39,48 @@ def create_pipelines(client, services_and_licenses, tenant_id, service_config, i
         'purview': {'will_attempt': True},
         'power_platform': {'will_attempt': True}
     }
+    pp_client_cache = {'loaded': False, 'client': None}
+
+    async def get_shared_power_platform_client():
+        if pp_client_cache['loaded']:
+            return pp_client_cache['client']
+
+        pp_client = None
+        inventory_attempt = None
+        if power_platform_inventory:
+            from .power_platform_inventory import load_power_platform_inventory
+            inventory_attempt = load_power_platform_inventory(power_platform_inventory)
+            if getattr(inventory_attempt, 'power_platform_inventory', {}).get('available'):
+                pp_client = inventory_attempt
+
+        if pp_client is None and preview_collectors in {'power-platform', 'all'}:
+            from .power_platform_inventory import collect_power_platform_inventory_preview
+            inventory_attempt = await collect_power_platform_inventory_preview(tenant_id)
+            if getattr(inventory_attempt, 'power_platform_inventory', {}).get('available'):
+                pp_client = inventory_attempt
+
+        allow_legacy = interactive_plan['power_platform'].get('will_attempt', True)
+        if pp_client is None and allow_legacy:
+            from .get_power_platform_client import get_power_platform_client
+            pp_client = await get_power_platform_client(tenant_id)
+
+        if pp_client is not None and not hasattr(pp_client, 'power_platform_inventory'):
+            if inventory_attempt is not None:
+                pp_client.power_platform_inventory = getattr(inventory_attempt, 'power_platform_inventory', {})
+            else:
+                pp_client.power_platform_inventory = {
+                    'available': False,
+                    'reason': 'Optional inventory not assessed. Enable Manage > Inventory, download the completed CSV, and pass --power-platform-inventory PATH; or approve --preview-collectors power-platform.',
+                    'source': 'Power Platform unified inventory',
+                    'period': 'Current inventory',
+                    'refresh_date': '',
+                    'freshness': 'Unknown',
+                    'stale': False,
+                }
+
+        pp_client_cache['loaded'] = True
+        pp_client_cache['client'] = pp_client
+        return pp_client
     
     # Define pipeline functions as closures over shared context
     async def m365_pipeline():
@@ -38,7 +91,12 @@ def create_pipelines(client, services_and_licenses, tenant_id, service_config, i
         try:
             # Gathering phase (has its own progress bar inside get_m365_client)
             from .get_m365_client import get_m365_client
-            m365_client = await get_m365_client(client)
+            m365_client = await get_m365_client(
+                client,
+                include_user_usage_detail=include_user_usage_detail,
+                copilot_dashboard_export=copilot_dashboard_export,
+                preview_collectors=preview_collectors,
+            )
             
             # Processing phase with progress bar
             import sys
@@ -215,7 +273,11 @@ def create_pipelines(client, services_and_licenses, tenant_id, service_config, i
         
         try:
             import sys
-            allow_pp_collection = interactive_plan['power_platform'].get('will_attempt', True)
+            allow_pp_collection = (
+                interactive_plan['power_platform'].get('will_attempt', True)
+                or bool(power_platform_inventory)
+                or preview_collectors in {'power-platform', 'all'}
+            )
 
             if allow_pp_collection:
                 # Data already collected in pre-flight (or not available)
@@ -224,8 +286,7 @@ def create_pipelines(client, services_and_licenses, tenant_id, service_config, i
                     sys.stdout.write(f'\r[{get_timestamp()}]   Power Platform Gathering[░░░░░░░░░░░░░░░░░░░░]   0%')
                     sys.stdout.flush()
                 
-                from .get_power_platform_client import get_power_platform_client
-                pp_client = await get_power_platform_client(tenant_id)
+                pp_client = await get_shared_power_platform_client()
                 
                 with _stdout_lock:
                     sys.stdout.write(f'\r[{get_timestamp()}]   ✓ Power Platform Gathering[████████████████████] 100%\n')
@@ -273,15 +334,18 @@ def create_pipelines(client, services_and_licenses, tenant_id, service_config, i
         try:
             # Gathering phase (uses same data as Power Platform from pre-flight)
             import sys
-            allow_pp_collection = interactive_plan['power_platform'].get('will_attempt', True)
+            allow_pp_collection = (
+                interactive_plan['power_platform'].get('will_attempt', True)
+                or bool(power_platform_inventory)
+                or preview_collectors in {'power-platform', 'all'}
+            )
 
             if allow_pp_collection:
                 with _stdout_lock:
                     sys.stdout.write(f'\r[{get_timestamp()}]   Copilot Studio Gathering[░░░░░░░░░░░░░░░░░░░░]   0%')
                     sys.stdout.flush()
                 
-                from .get_power_platform_client import get_power_platform_client
-                pp_client = await get_power_platform_client(tenant_id)
+                pp_client = await get_shared_power_platform_client()
                 
                 with _stdout_lock:
                     sys.stdout.write(f'\r[{get_timestamp()}]   ✓ Copilot Studio Gathering[████████████████████] 100%\n')

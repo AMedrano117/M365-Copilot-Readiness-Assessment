@@ -29,7 +29,7 @@ def get_recommendation(sku_name, status="Success", m365_insights=None):
             service="M365",
             feature=feature_name,
             observation=f"{feature_name} is {status} in {friendly_sku}, missing structured goal tracking for AI adoption",
-            recommendation=f"Enable {feature_name} to track Copilot adoption as an organizational objective with measurable key results. Set goals like 'Achieve 80% Copilot active usage' or 'Reduce email drafting time by 30%', then use Viva Goals to monitor progress automatically. Copilot can update goal status based on usage analytics, suggest corrective actions when targets lag, and generate progress reports for leadership. Goals provides accountability framework for AI transformation, ensuring adoption initiatives remain visible and prioritized across the organization.",
+            recommendation=f"Enable {feature_name} only when the organization has named AI use cases and customer-owned measures. Establish a current baseline, choose an adoption or task-outcome target from tenant evidence, set a review date, and record an expand, adjust, or stop decision. Do not use a generic usage or time-savings percentage as proof of value.",
             link_text="AI-Powered Goals Management",
             link_url="https://learn.microsoft.com/viva/goals/",
             priority="Low",

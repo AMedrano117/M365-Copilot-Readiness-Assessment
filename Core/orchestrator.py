@@ -39,6 +39,14 @@ async def orchestrate(
     report_format='excel',
     sam_report_paths=None,
     dspm_report_paths=None,
+    include_user_usage_detail=False,
+    copilot_dashboard_export=None,
+    power_platform_inventory=None,
+    preview_collectors='none',
+    assessment_profile=None,
+    provider_evidence=None,
+    snapshot_json=None,
+    baseline=None,
 ):
     """Orchestrate gathering of service information and service plans.
     
@@ -69,7 +77,8 @@ async def orchestrate(
         print_interactive_collection_summary(interactive_plan)
         
         # PRE-FLIGHT: Launch unified Power Platform/Copilot Studio data collector if needed
-        if interactive_plan['power_platform']['will_attempt']:
+        use_inventory_source = bool(power_platform_inventory) or preview_collectors in {'power-platform', 'all'}
+        if interactive_plan['power_platform']['will_attempt'] and not use_inventory_source:
             await collect_power_platform_data(
                 tenant_id,
                 run_power_platform,
@@ -93,7 +102,11 @@ async def orchestrate(
             tenant_id,
             service_config,
             interactive_auth=interactive_auth,
-            interactive_plan=interactive_plan
+            interactive_plan=interactive_plan,
+            include_user_usage_detail=include_user_usage_detail,
+            copilot_dashboard_export=copilot_dashboard_export,
+            power_platform_inventory=power_platform_inventory,
+            preview_collectors=preview_collectors,
         )
         
         # Run service pipelines in parallel. Defender can gather its own data while
@@ -122,6 +135,15 @@ async def orchestrate(
             sam_report_paths=sam_report_paths,
             dspm_report_paths=dspm_report_paths,
             data_exposure_enabled=(run_m365 or run_purview),
+            assessment_profile=assessment_profile,
+            provider_evidence=provider_evidence,
+            snapshot_json=snapshot_json,
+            baseline=baseline,
+            enabled_collectors=[name for name, enabled in (
+                ("M365", run_m365), ("Entra", run_entra), ("Defender", run_defender),
+                ("Purview", run_purview), ("Power Platform", run_power_platform),
+                ("Copilot Studio", run_copilot_studio),
+            ) if enabled] + ([] if preview_collectors == "none" else [f"Preview: {preview_collectors}"]),
         )
         
     except CredentialUnavailableError as e:

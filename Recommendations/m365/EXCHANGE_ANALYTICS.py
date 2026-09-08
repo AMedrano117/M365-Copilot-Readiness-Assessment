@@ -66,7 +66,7 @@ def get_recommendation(sku_name, status="Success", m365_insights=None):
                 service="M365",
                 feature=feature_name,
                 observation=f"High email activity: {email_active_users:,} active email users. Exchange Analytics can quantify Copilot ROI through email drafting time reduction and improved response efficiency.",
-                recommendation="Baseline email metrics before Copilot rollout: average drafting time, daily email volume, response times, after-hours email. Post-Copilot, track 30-40% reduction in composition time and improved email quality scores.",
+                recommendation="Define a customer-owned email use case and baseline, such as drafting cycle time, quality review results, rework, or response time. Compare the same measure for the pilot cohort and expand only if the agreed success and risk criteria are met.",
                 link_text="Measure Email Efficiency Gains",
                 link_url="https://learn.microsoft.com/viva/insights/",
                 priority="High",

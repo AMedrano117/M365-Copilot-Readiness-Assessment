@@ -123,6 +123,11 @@ Run the service principal setup script to create Azure AD app registration with 
    - Printer.Read.All - Read printers
    - WorkplaceAnalytics-Reports.Read.All - Read workplace analytics
    - InformationProtectionPolicy.Read - Read information protection policies
+
+   `CloudApp-Discovery.Read.All` is deliberately **not** part of the default permission set. Add
+   it as an application permission and grant admin consent only when the tenant approves
+   `--preview-collectors shadow-ai` (or `all`). It provides aggregate Defender for Cloud Apps
+   discovery evidence; the report never requests discovered-user identities.
    
    **Microsoft Defender for Endpoint API:**
    - Machine.Read.All - Read machine data
@@ -173,6 +178,18 @@ python main.py --tenant-id "12345678-1234-1234-1234-123456789abc" --services Pur
 
 # All services for specific tenant (empty --services flag)
 python main.py --tenant-id "contoso.onmicrosoft.com" --services
+
+# Aggregate usage is automatic. Add restricted user detail to the Excel workbook only.
+python main.py --include-user-usage-detail --report-format both
+
+# Import optional supplemental exports (the tool does not start long-running exports).
+python main.py --copilot-dashboard-export .\exports\copilot-dashboard.csv
+python main.py --power-platform-inventory .\exports\power-platform-inventory.csv
+
+# Preview collectors are disabled by default.
+python main.py --preview-collectors shadow-ai
+python main.py --preview-collectors power-platform
+python main.py --preview-collectors all
 ```
 
 **Note:** Service names with spaces (`"Power Platform"`, `"Copilot Studio"`) must be enclosed in double quotes.
@@ -360,16 +377,42 @@ events may be shown.
 
 **Problem:** AI Builder inventory is reported as not assessed
 
-**Solution:** Install only the required authentication module, then rerun with a target-tenant
-Power Platform Administrator account:
+**Preferred solution:** In Power Platform admin center, open **Manage > Inventory**, enable the
+inventory feature if necessary, allow Microsoft to complete its inventory, export the tenant-wide
+CSV, and supply it without waiting for the assessment to run:
 
 ```powershell
-Install-Module Az.Accounts -Scope CurrentUser -Force
-python main.py --env-file .env --services "Power Platform" --interactive-auth fresh --report-format both
+python main.py --env-file .env --power-platform-inventory .\exports\power-platform-inventory.csv --report-format both
 ```
 
-This is delegated Power Platform API collection; adding another Microsoft Graph permission does not
-replace the signed-in user's Power Platform Administrator role.
+The alternative preview path is:
+
+```powershell
+python main.py --env-file .env --preview-collectors power-platform --report-format both
+```
+
+Assign the assessment service principal the tenant-scoped **Power Platform Reader** RBAC role
+(role ID `c886ad2e-27f7-4874-8381-5849b8d8a090`) at `/tenants/{tenantId}` first. This inventory API
+and its RBAC support are preview. Do not grant the application the Entra Power Platform
+Administrator directory role. The legacy delegated collector remains a fallback and aggregates
+all readable environments; Power Platform availability never changes the core readiness decision.
+
+### AI Usage and Shadow AI Issues
+
+**Problem:** Copilot usage or Microsoft 365 Apps readiness says permission missing
+
+**Solution:** Confirm the app registration identified by `CLIENT_ID` has the Microsoft Graph
+application permission `Reports.Read.All`, grant admin consent in the target tenant, obtain a fresh
+application token, and rerun. Unavailable data is reported as not assessed, never as zero usage.
+
+**Problem:** Shadow AI discovery is not assessed, has no stream, or returns HTTP 403
+
+**Solution:** This source is optional and preview. Add and consent the Microsoft Graph application
+permission `CloudApp-Discovery.Read.All`, then enable a Defender for Cloud Apps discovery source:
+Defender for Endpoint continuous report forwarding, a Cloud Discovery log stream, or Global Secure
+Access Shadow AI discovery. Allow Microsoft to populate the stream and rerun with
+`--preview-collectors shadow-ai`. Purview DSPM does not substitute for this source because DSPM
+measures data and prompt risk, not aggregate adoption of external AI services.
 
 ### Cross-Tenant Permission Issues
 

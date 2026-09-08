@@ -71,7 +71,7 @@ async def get_recommendation(sku_name, status="Success", client=None, pp_client=
                     service="Copilot Studio",
                     feature=f"{feature_name} - Agent Planning",
                     observation=f"High Teams activity ({monthly_msgs:,} messages/month) indicates strong potential for agent automation",
-                    recommendation="Plan agents for high-volume scenarios: Estimate 10-20% of repetitive conversations can be automated. Prioritize agents that deflect common questions from busy channels. Track metrics: resolution rate, time saved, user satisfaction.",
+                    recommendation="Identify a repetitive, bounded conversation type from actual support data. Pilot one agent, track human-reviewed resolution, escalation, quality, and satisfaction, and let the measured baseline determine whether expansion is justified.",
                     link_text="Agent Best Practices",
                     link_url="https://learn.microsoft.com/microsoft-copilot-studio/analytics-overview",
                     priority="Medium",

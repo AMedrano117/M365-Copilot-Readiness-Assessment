@@ -104,6 +104,45 @@ Because Microsoft runs these scans asynchronously, the tool reuses recent export
 Coverage item—with enablement, scan, export, and rerun instructions—when a scan is missing, stale,
 unreadable, or undated. See [RUN.md](RUN.md#data-exposure-and-oversharing-reports) for usage.
 
+### AI adoption and usage evidence
+
+The HTML report separates license coverage, actual Copilot activation and engagement, Microsoft
+365 app readiness, optional Power Platform extensibility, and optional external-AI discovery.
+Aggregate Copilot and Microsoft 365 Apps reports use the existing `Reports.Read.All` application
+permission and direct Graph REST calls; no additional Graph SDK package is introduced for them.
+
+Optional switches:
+
+```powershell
+python main.py --include-user-usage-detail
+python main.py --copilot-dashboard-export .\exports\copilot-dashboard.csv
+python main.py --power-platform-inventory .\exports\power-platform-inventory.csv
+python main.py --preview-collectors shadow-ai
+```
+
+User-level Copilot activity is collected only by explicit request and appears only in the
+restricted Excel workbook. Shadow AI is aggregate-only, disabled by default, and requires the
+optional Graph application permission `CloudApp-Discovery.Read.All` plus configured Defender for
+Cloud Apps discovery data. Missing optional evidence is never reported as zero use and cannot
+change core security readiness.
+
+### Cross-provider and use-case assessment
+
+Without an assessment profile, the tool concludes only on the general Microsoft 365 foundation. Provider/tier approval and use-case readiness remain **Not assessed**.
+
+```powershell
+python main.py `
+  --assessment-profile examples/assessment-profile.example.json `
+  --provider-evidence examples/provider-evidence.example.csv
+```
+
+- `--assessment-profile PATH` supplies proposed AI products, tiers, users, use cases, data boundaries, action capabilities, approvals, and measurements.
+- `--provider-evidence PATH` supplies the product-and-tier review register. Evidence is stale after 90 days by default; set `PROVIDER_EVIDENCE_MAX_AGE_DAYS` to change that threshold.
+- `--baseline PATH` compares the current run with a prior workbook or snapshot using stable finding fingerprints.
+- `--snapshot-json PATH` writes an optional automation snapshot. It does not add a default output file.
+
+Templates are available in [examples/assessment-profile.example.json](examples/assessment-profile.example.json) and [examples/provider-evidence.example.csv](examples/provider-evidence.example.csv).
+
 ## Next Steps
 
 [Run Automated Readiness Assessment](RUN.md)

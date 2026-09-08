@@ -89,6 +89,17 @@ class DispositionTests(unittest.TestCase):
         }
         self.assertEqual(enrich_assessment_record(record)["Disposition"], DISPOSITION_OPPORTUNITY)
 
+    def test_user_consent_is_classified_as_connected_app_security(self):
+        record = new_recommendation(
+            "Entra", "Application consent",
+            "User consent is enabled for applications.",
+            "Apply a risk-based permission grant policy.",
+            priority="High", status="Action Required",
+        )
+        enriched = enrich_assessment_record(record)
+        self.assertEqual(enriched["ImpactArea"], "Apps, connectors & agents")
+        self.assertEqual(enriched["AIApplicability"], "AI agents and connected apps")
+
 
 class ReadinessDecisionTests(unittest.TestCase):
     def test_high_action_blocks_broad_rollout_but_not_a_bounded_pilot(self):
@@ -105,6 +116,16 @@ class ReadinessDecisionTests(unittest.TestCase):
             "Run the collector.", priority="Medium", status=NOT_ASSESSED_STATUS,
         )
         self.assertEqual(summarize_readiness([gap])["decision"], "Assessment incomplete")
+
+    def test_optional_power_platform_coverage_does_not_block_core_readiness(self):
+        gap = new_recommendation(
+            "Power Platform", "Inventory", "Optional inventory was not supplied.",
+            "Supply an export when extensibility is in scope.", priority="Medium",
+            status=NOT_ASSESSED_STATUS,
+        )
+        summary = summarize_readiness([gap])
+        self.assertEqual(summary["decision"], "Ready for a controlled pilot")
+        self.assertEqual(len(summary["optional_coverage"]), 1)
 
 
 class ReportLaneTests(unittest.TestCase):
@@ -130,10 +151,11 @@ class ReportLaneTests(unittest.TestCase):
                 os.chdir(original_cwd)
 
         self.assertEqual(body.count('<article class="recommendation-card"'), 1)
-        self.assertIn("Adoption &amp; value opportunities (1)", body)
-        self.assertIn("Verified controls &amp; available capabilities (1)", body)
+        self.assertIn("Prioritized adoption &amp; value opportunities (1)", body)
+        self.assertIn('<div class="label">Verified Strengths</div>', body)
+        self.assertNotIn("Verified controls &amp; available capabilities", body)
         self.assertIn("Scan Coverage (1)", body)
-        self.assertIn("external AI validation", body)
+        self.assertIn("Three readiness conclusions", body)
 
 
 class RecommendationQualityGuardTests(unittest.TestCase):

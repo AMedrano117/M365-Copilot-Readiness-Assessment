@@ -101,6 +101,26 @@ provider, validate:
 Provider controls change frequently. Validate them against the current contract and primary
 provider documentation rather than relying on product-name assumptions.
 
+## Adoption, engagement, and optional extensibility
+
+The report keeps these measures distinct:
+
+- **License coverage:** assigned Copilot licenses divided by enabled users with at least one
+  assigned non-Copilot base license. This is a transparent tenant-derived eligibility estimate,
+  because Graph does not expose one authoritative Copilot-eligibility flag.
+- **Activation:** active Copilot users divided by Copilot-enabled users in the returned report.
+- **Engagement:** prompts, active days, application distribution, and daily trends.
+- **M365 app readiness:** active Word, Excel, PowerPoint, Outlook, Teams, web, desktop, and mobile
+  usage. These signals help select a pilot cohort but do not prove Copilot value.
+- **Extensibility:** optional Power Platform inventory, agents, connectors, and environments.
+- **External AI:** aggregate Defender for Cloud Apps discovery when the preview collector is
+  explicitly enabled. Purview DSPM remains data-risk evidence, not proof of external-AI adoption.
+
+Graph usage evidence is marked stale after seven days. Uploaded supplemental evidence is marked
+stale after 30 days. The provider's actual refresh date is always retained; missing, unauthorized,
+or malformed evidence is shown as unavailable and never converted to zero usage. Adoption and
+extensibility evidence cannot raise or lower the security and governance readiness score.
+
 ## Primary references
 
 - [Microsoft secure and governed data foundation for Copilot](https://learn.microsoft.com/microsoft-365/copilot/secure-govern-copilot-foundational-deployment-guidance)

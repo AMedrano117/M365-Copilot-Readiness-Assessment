@@ -161,8 +161,7 @@ try {
         $powerPlatformData["environments"] = $environments.value
         Write-ConditionalOutput " $($environments.value.Count) found" -Color Green
         
-        # Get first environment for subsequent calls
-        $envName = $environments.value[0].name
+        $environmentNames = @($environments.value | ForEach-Object { $_.name } | Where-Object { $_ })
     } else {
         throw "No environments returned"
     }
@@ -170,124 +169,58 @@ try {
     Write-ConditionalOutput " Permission denied" -Color Red
     $powerPlatformData["environments"] = @()
     $permissionFailures += "Environments"
-    $envName = $null
+    $environmentNames = @()
 }
 
-# Only collect additional data if we have an environment
-if ($envName) {
-    # Collect Flows
-    Write-ConditionalOutput "      > Power Automate Flows..." -NoNewline
-    try {
-        $flows = Invoke-PowerPlatformApi `
-            -Uri "https://api.flow.microsoft.com/providers/Microsoft.ProcessSimple/scopes/admin/environments/$envName/v2/flows?api-version=2016-11-01" `
-            -Token $flowToken
-        
-        if ($flows) {
-            $powerPlatformData["flows"] = $flows.value
-            Write-ConditionalOutput " $($flows.value.Count) found" -Color Green
-        } else {
-            throw "No flows returned"
+# Collect each resource type across every environment. Partial failures remain visible without
+# discarding successful data from the rest of the tenant.
+if ($environmentNames.Count -gt 0) {
+    $collections = @(
+        @{ Key = "flows"; Label = "Power Automate Flows"; Token = $flowToken; Uri = {
+            param($name) "https://api.flow.microsoft.com/providers/Microsoft.ProcessSimple/scopes/admin/environments/$name/v2/flows?api-version=2016-11-01"
+        }},
+        @{ Key = "apps"; Label = "Canvas Apps"; Token = $bapToken; Uri = {
+            param($name) $formatted = $name -replace '-', ''; "https://$formatted.environment.api.powerplatform.com/powerapps/apps?api-version=1"
+        }},
+        @{ Key = "connections"; Label = "Connections"; Token = $bapToken; Uri = {
+            param($name) "https://api.bap.microsoft.com/providers/Microsoft.PowerApps/scopes/admin/environments/$name/connections?api-version=2016-11-01"
+        }},
+        @{ Key = "dlp_policies"; Label = "DLP Policies"; Token = $bapToken; Uri = {
+            param($name) "https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/environments/$name/dlpPolicies?api-version=2024-05-01"
+        }},
+        @{ Key = "ai_models"; Label = "AI Models"; Token = $bapToken; Uri = {
+            param($name) "https://api.bap.microsoft.com/providers/Microsoft.PowerApps/environments/$name/aiModels?api-version=2024-05-01"
+        }},
+        @{ Key = "solutions"; Label = "Solutions"; Token = $bapToken; Uri = {
+            param($name) "https://api.bap.microsoft.com/providers/Microsoft.PowerApps/scopes/admin/environments/$name/solutions?api-version=2016-11-01"
+        }}
+    )
+
+    foreach ($collection in $collections) {
+        Write-ConditionalOutput "      > $($collection.Label)..." -NoNewline
+        $combined = @()
+        $failedEnvironments = @()
+        foreach ($envName in $environmentNames) {
+            $uri = & $collection.Uri $envName
+            $response = Invoke-PowerPlatformApi -Uri $uri -Token $collection.Token
+            if ($response) {
+                foreach ($item in @($response.value)) {
+                    if ($null -ne $item) {
+                        $item | Add-Member -NotePropertyName assessmentEnvironmentId -NotePropertyValue $envName -Force
+                        $combined += $item
+                    }
+                }
+            } else {
+                $failedEnvironments += $envName
+            }
         }
-    } catch {
-        Write-ConditionalOutput " Permission denied" -Color Red
-        $powerPlatformData["flows"] = @()
-        $permissionFailures += "Flows"
-    }
-    
-    # Collect Canvas Apps
-    Write-ConditionalOutput "      > Canvas Apps..." -NoNewline
-    try {
-        $envIdForApps = $envName -replace '-', ''
-        $apps = Invoke-PowerPlatformApi `
-            -Uri "https://$envIdForApps.environment.api.powerplatform.com/powerapps/apps?api-version=1" `
-            -Token $bapToken
-        
-        if ($apps) {
-            $powerPlatformData["apps"] = $apps.value
-            Write-ConditionalOutput " $($apps.value.Count) found" -Color Green
+        $powerPlatformData[$collection.Key] = $combined
+        if ($failedEnvironments.Count -gt 0) {
+            $permissionFailures += "$($collection.Label) ($($failedEnvironments.Count)/$($environmentNames.Count) environments unread)"
+            Write-ConditionalOutput " $($combined.Count) found; $($failedEnvironments.Count) environment(s) unread" -Color Yellow
         } else {
-            throw "No apps returned"
+            Write-ConditionalOutput " $($combined.Count) found" -Color Green
         }
-    } catch {
-        Write-ConditionalOutput " Permission denied" -Color Red
-        $powerPlatformData["apps"] = @()
-        $permissionFailures += "Apps"
-    }
-    
-    # Collect Connections
-    Write-ConditionalOutput "      > Connections..." -NoNewline
-    try {
-        $connections = Invoke-PowerPlatformApi `
-            -Uri "https://api.bap.microsoft.com/providers/Microsoft.PowerApps/scopes/admin/environments/$envName/connections?api-version=2016-11-01" `
-            -Token $bapToken
-        
-        if ($connections) {
-            $powerPlatformData["connections"] = $connections.value
-            Write-ConditionalOutput " $($connections.value.Count) found" -Color Green
-        } else {
-            throw "No connections returned"
-        }
-    } catch {
-        Write-ConditionalOutput " Permission denied" -Color Red
-        $powerPlatformData["connections"] = @()
-        $permissionFailures += "Connections"
-    }
-    
-    # Collect DLP Policies
-    Write-ConditionalOutput "      > DLP Policies..." -NoNewline
-    try {
-        $dlpPolicies = Invoke-PowerPlatformApi `
-            -Uri "https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/environments/$envName/dlpPolicies?api-version=2024-05-01" `
-            -Token $bapToken
-        
-        if ($dlpPolicies) {
-            $powerPlatformData["dlp_policies"] = $dlpPolicies.value
-            Write-ConditionalOutput " $($dlpPolicies.value.Count) found" -Color Green
-        } else {
-            throw "No DLP policies returned"
-        }
-    } catch {
-        Write-ConditionalOutput " Permission denied" -Color Red
-        $powerPlatformData["dlp_policies"] = @()
-        $permissionFailures += "DLP Policies"
-    }
-    
-    # Collect AI Models
-    Write-ConditionalOutput "      > AI Models..." -NoNewline
-    try {
-        $aiModels = Invoke-PowerPlatformApi `
-            -Uri "https://api.bap.microsoft.com/providers/Microsoft.PowerApps/environments/$envName/aiModels?api-version=2024-05-01" `
-            -Token $bapToken
-        
-        if ($aiModels) {
-            $powerPlatformData["ai_models"] = $aiModels.value
-            Write-ConditionalOutput " $($aiModels.value.Count) found" -Color Green
-        } else {
-            throw "No AI models returned"
-        }
-    } catch {
-        Write-ConditionalOutput " Permission denied" -Color Red
-        $powerPlatformData["ai_models"] = @()
-        $permissionFailures += "AI Models"
-    }
-    
-    # Collect Solutions
-    Write-ConditionalOutput "      > Solutions..." -NoNewline
-    try {
-        $solutions = Invoke-PowerPlatformApi `
-            -Uri "https://api.bap.microsoft.com/providers/Microsoft.PowerApps/scopes/admin/environments/$envName/solutions?api-version=2016-11-01" `
-            -Token $bapToken
-        
-        if ($solutions) {
-            $powerPlatformData["solutions"] = $solutions.value
-            Write-ConditionalOutput " $($solutions.value.Count) found" -Color Green
-        } else {
-            throw "No solutions returned"
-        }
-    } catch {
-        Write-ConditionalOutput " Permission denied" -Color Red
-        $powerPlatformData["solutions"] = @()
-        $permissionFailures += "Solutions"
     }
 } else {
     # No environment available - set empty data

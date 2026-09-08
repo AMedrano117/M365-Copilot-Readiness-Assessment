@@ -16,11 +16,30 @@ SHEET_DEFINITIONS = OrderedDict([
         "default_note": "See App Access Detail for the flagged applications, granted scopes, flag reasons, and recent activity context.",
         "preview_columns": ["App Display Name", "Flagged Because", "Activity Band", "Last Activity"],
     }),
+    ("app_consent_policy_detail", {
+        "title": "Application Consent Policy",
+        "appendix_title": "Appendix: Application Consent Policy",
+        "default_note": "See Application Consent Policy for the effective default-user consent assignments returned by Microsoft Graph.",
+        "preview_columns": ["Setting", "Value", "Policy ID", "Source State"],
+    }),
     ("admin_role_detail", {
         "title": "Admin Role Detail",
         "appendix_title": "Appendix: Administrative Role Detail",
         "default_note": "See Admin Role Detail for the privileged assignments that support this recommendation.",
-        "preview_columns": ["Assignment Type", "Principal ID", "Role Definition ID", "Reason Flagged"],
+        "preview_columns": ["Assignment Type", "Principal Display Name", "Role Name", "Reason Flagged"],
+    }),
+    ("authentication_detail", {
+        "title": "Authentication Coverage",
+        "appendix_title": "Appendix: Authentication Coverage",
+        "default_note": "See Authentication Coverage for the aggregate registration counts returned by Microsoft Graph.",
+        "preview_columns": ["Metric", "Value", "Source State"],
+    }),
+    ("identity_risk_detail", {
+        "title": "Identity Risk Detail",
+        "appendix_title": "Appendix: Identity Risk Detail",
+        "default_note": "See Identity Risk Detail for the risky-user and risk-detection records supporting this action.",
+        # Keep identities in the engineer workbook; the HTML preview remains aggregate.
+        "preview_columns": ["Record Type", "Risk Level", "Risk State", "Last Updated"],
     }),
     ("access_review_detail", {
         "title": "Access Review Detail",
@@ -76,6 +95,18 @@ SHEET_DEFINITIONS = OrderedDict([
         "default_note": "See M365 Activity Detail for the workload metrics and usage baselines referenced by this recommendation.",
         "preview_columns": ["Workload", "Metric", "Value", "Detail"],
     }),
+    ("ai_usage_detail", {
+        "title": "AI Adoption Usage",
+        "appendix_title": "Appendix: AI Adoption and Usage",
+        "default_note": "See AI Adoption Usage for aggregate Copilot, Microsoft 365 Apps, and optional external-AI activity evidence.",
+        "preview_columns": ["Evidence Source", "Period", "Metric", "Value", "Freshness"],
+    }),
+    ("copilot_user_usage_detail", {
+        "title": "Copilot User Usage",
+        "appendix_title": "Appendix: Restricted Copilot User Usage",
+        "default_note": "Restricted workbook evidence contains user-level Copilot activity collected only by explicit request.",
+        "preview_columns": ["Period", "Activity State", "Last Activity Date"],
+    }),
     ("service_plan_inventory", {
         "title": "Service Plan Inventory",
         "appendix_title": "Appendix: Service Plan Inventory",
@@ -101,6 +132,23 @@ HIGH_PRIVILEGE_SCOPE_MARKERS = [
     "files.readwrite",
     "directory.readwrite",
 ]
+
+# Microsoft documents these home tenants as Microsoft-owned service tenants. A small
+# application-ID allowlist covers legacy first-party principals whose owner metadata is not
+# populated in older tenants. Display names are deliberately not used as publisher proof.
+MICROSOFT_OWNER_TENANT_IDS = {
+    "f8cdef31-a31e-4b4a-93e4-5f571e91255a",
+    "72f988bf-86f1-41af-91ab-2d7cd011db47",
+}
+MICROSOFT_FIRST_PARTY_APP_IDS = {
+    "00000002-0000-0000-c000-000000000000",  # Azure AD Graph (legacy)
+    "00000003-0000-0000-c000-000000000000",  # Microsoft Graph
+    "00000002-0000-0ff1-ce00-000000000000",  # Exchange Online
+    "00000003-0000-0ff1-ce00-000000000000",  # SharePoint Online
+    "08e18876-6177-487e-b8b5-cf950c1e598c",  # SharePoint web client extensibility
+    "14d82eec-204b-4c2f-b7e8-296a70dab67e",  # Microsoft Graph command-line tools
+    "1950a258-227b-4e31-a9cf-717495945fc2",  # Microsoft Azure PowerShell
+}
 
 MAIL_SCOPE_MARKERS = ["mail."]
 FILES_SCOPE_MARKERS = ["files."]
@@ -201,6 +249,12 @@ def _bool_text(value):
     if text in {"false", "no", "disabled", "inactive"}:
         return "No"
     return ""
+
+
+def _count_phrase(count, singular, plural=None):
+    label = singular if count == 1 else (plural or singular + "s")
+    display = f"{count:,}" if isinstance(count, int) else str(count)
+    return f"{display} {label}"
 
 
 def _activity_band(count, available):
@@ -345,7 +399,10 @@ def build_evidence_bundle(
     sheets = OrderedDict()
     builders = [
         ("app_access_detail", lambda: _build_app_access_sheet(entra_client, defender_client)),
+        ("app_consent_policy_detail", lambda: _build_app_consent_policy_sheet(entra_client)),
         ("admin_role_detail", lambda: _build_admin_role_sheet(entra_client)),
+        ("authentication_detail", lambda: _build_authentication_sheet(entra_client)),
+        ("identity_risk_detail", lambda: _build_identity_risk_sheet(entra_client)),
         ("access_review_detail", lambda: _build_access_review_sheet(entra_client)),
         ("conditional_access_detail", lambda: _build_conditional_access_sheet(entra_client)),
         ("guest_access_detail", lambda: _build_guest_access_sheet(entra_client)),
@@ -355,6 +412,8 @@ def build_evidence_bundle(
         ("defender_device_detail", lambda: _build_defender_device_sheet(defender_client)),
         ("power_platform_detail", lambda: _build_power_platform_sheet(pp_client)),
         ("m365_activity_detail", lambda: _build_m365_activity_sheet(m365_client)),
+        ("ai_usage_detail", lambda: _build_ai_usage_sheet(m365_client)),
+        ("copilot_user_usage_detail", lambda: _build_copilot_user_usage_sheet(m365_client)),
         ("service_plan_inventory", lambda: _build_service_plan_inventory_sheet(m365_info)),
     ]
 
@@ -404,6 +463,19 @@ def build_evidence_bundle(
         "sheets": sheets,
         "evidence_index": evidence_index,
         "appendix_sections": appendix_sections,
+        "ai_usage": {
+            "copilot_usage": getattr(m365_client, "copilot_usage", {}) if m365_client else {},
+            "m365_app_readiness": getattr(m365_client, "m365_app_readiness", {}) if m365_client else {},
+            "copilot_dashboard": getattr(m365_client, "copilot_dashboard", {}) if m365_client else {},
+            "shadow_ai_usage": getattr(m365_client, "shadow_ai_usage", {}) if m365_client else {},
+            "license_summary": getattr(m365_client, "users_summary", {}) if m365_client else {},
+        },
+        "power_platform_inventory": getattr(pp_client, "power_platform_inventory", {}) if pp_client else {
+            "available": False,
+            "reason": "Optional inventory not assessed. Enable Manage > Inventory, download its CSV, and pass --power-platform-inventory PATH; this does not change core readiness.",
+            "source": "Power Platform unified inventory",
+            "freshness": "Unknown",
+        },
     }
 
 
@@ -530,10 +602,25 @@ def _apply_explicit_evidence_fallbacks(recommendations, sheets):
 
         service = str(record.get("Service", "") or "")
         feature = str(record.get("Feature", "") or "")
+        primary_evidence_text = " ".join(str(record.get(field, "") or "") for field in (
+            "Feature", "Observation",
+        )).lower()
         fallback_keys = ""
 
         if (service, feature) in EXPLICIT_FEATURE_FALLBACKS:
             fallback_keys = EXPLICIT_FEATURE_FALLBACKS[(service, feature)]
+        elif service == "Entra" and ("risky user" in primary_evidence_text or "identity protection" in primary_evidence_text or "risk detection" in primary_evidence_text):
+            fallback_keys = "identity_risk_detail"
+        elif service == "Entra" and ("role assignment" in primary_evidence_text or "privileged role" in primary_evidence_text or "pim" in primary_evidence_text):
+            fallback_keys = "admin_role_detail"
+        elif service == "Entra" and ("user consent" in primary_evidence_text or "admin consent" in primary_evidence_text or "consent policy" in primary_evidence_text):
+            fallback_keys = "app_consent_policy_detail"
+        elif service == "Entra" and ("enterprise application" in primary_evidence_text or "oauth" in primary_evidence_text or "publisher" in primary_evidence_text):
+            fallback_keys = "app_access_detail"
+        elif service == "Entra" and "conditional access" in primary_evidence_text:
+            fallback_keys = "conditional_access_detail"
+        elif service == "Entra" and ("mfa" in primary_evidence_text or "authentication method" in primary_evidence_text or "passwordless" in primary_evidence_text):
+            fallback_keys = "authentication_detail"
         elif service in EXPLICIT_SERVICE_FALLBACKS:
             fallback_keys = EXPLICIT_SERVICE_FALLBACKS[service]
 
@@ -582,6 +669,7 @@ def _build_app_access_sheet(entra_client, defender_client):
     activity_available = bool(activity_summary.get("available"))
     defender_risk_by_app = _build_defender_app_risk_index(defender_client)
     tenant_id = _iso_text(getattr(entra_client, "tenant_id", "")).lower()
+    collection_status = getattr(entra_client, "collection_status", {}) or {}
 
     app_index = {}
 
@@ -597,22 +685,49 @@ def _build_app_access_sheet(entra_client, defender_client):
         verified_id = _iso_text(_safe_get(verified_publisher, "verifiedPublisherId")) if verified_publisher else ""
         principal_type = _iso_text(_safe_get(service_principal, "servicePrincipalType"))
         owner_tenant = _iso_text(_safe_get(service_principal, "appOwnerOrganizationId")).lower()
+        classification_basis = ""
         if tenant_id and owner_tenant == tenant_id:
             publisher_verified = "Internal"
-        elif verified_name or verified_id or publisher_name.lower().startswith("microsoft") or principal_type.lower() == "managedidentity":
+            publisher_type = "Tenant-owned"
+            classification_basis = "App owner organization matches the assessed tenant"
+        elif principal_type.lower() == "managedidentity":
+            publisher_verified = "Not applicable"
+            publisher_type = "Managed identity"
+            classification_basis = "Graph servicePrincipalType is ManagedIdentity"
+        elif owner_tenant in MICROSOFT_OWNER_TENANT_IDS:
             publisher_verified = "Yes"
+            publisher_type = "Microsoft first-party"
+            classification_basis = "App owner organization is a documented Microsoft service tenant"
+        elif app_id.lower() in MICROSOFT_FIRST_PARTY_APP_IDS:
+            publisher_verified = "Yes"
+            publisher_type = "Microsoft first-party"
+            classification_basis = "Application ID is in the assessment's Microsoft first-party allowlist"
+        elif verified_name or verified_id:
+            publisher_verified = "Yes"
+            publisher_type = "Verified external"
+            classification_basis = "Graph returned verifiedPublisher metadata"
         elif owner_tenant:
             publisher_verified = "No"
+            publisher_type = "Unverified external"
+            classification_basis = "External app owner organization returned without verifiedPublisher metadata"
         else:
             publisher_verified = "Unknown"
+            publisher_type = "Unknown"
+            classification_basis = "Graph did not return sufficient publisher metadata"
+        display_name = _iso_text(_safe_get(service_principal, "displayName"))
+        identity_resolution = "Resolved" if display_name and app_id else "Partial"
         app_index.setdefault(
             key,
             {
                 "app_id": app_id,
                 "service_principal_id": service_principal_id,
-                "display_name": _iso_text(_safe_get(service_principal, "displayName")) or app_id,
+                "display_name": display_name or "Unnamed service principal",
                 "publisher_name": publisher_name,
                 "publisher_verified": publisher_verified,
+                "publisher_type": publisher_type,
+                "owner_tenant": owner_tenant,
+                "classification_basis": classification_basis,
+                "identity_resolution": identity_resolution,
                 "consent_types": set(),
                 "permission_types": set(),
                 "scopes": set(),
@@ -630,9 +745,13 @@ def _build_app_access_sheet(entra_client, defender_client):
             {
                 "app_id": "",
                 "service_principal_id": client_id,
-                "display_name": client_id,
+                "display_name": "Unresolved service principal",
                 "publisher_name": "",
                 "publisher_verified": "Unknown",
+                "publisher_type": "Unknown",
+                "owner_tenant": "",
+                "classification_basis": "Service principal metadata was not resolved",
+                "identity_resolution": "Unresolved",
                 "consent_types": set(),
                 "permission_types": set(),
                 "scopes": set(),
@@ -691,7 +810,7 @@ def _build_app_access_sheet(entra_client, defender_client):
         activity_record = activity_by_app.get(app_record["app_id"].lower(), {}) if app_record["app_id"] else {}
         activity_count = int(activity_record.get("activity_count", 0) or 0)
         last_activity = _iso_text(activity_record.get("last_activity"))
-        activity_band = _activity_band(activity_count, activity_available)
+        activity_band = _activity_band(activity_count, activity_available and bool(app_record["app_id"]))
         flag_instance_count = int(app_record.get("high_privilege_match_count", 0) or 0) + int(is_unverified)
         total_flag_instances += flag_instance_count
 
@@ -700,10 +819,14 @@ def _build_app_access_sheet(entra_client, defender_client):
                 "RecommendationId": "",
                 "Flagged By": "",
                 "App Display Name": app_record["display_name"],
-                "App ID": app_record["app_id"],
-                "Service Principal ID": app_record["service_principal_id"],
+                "Application (Client) ID": app_record["app_id"],
+                "Enterprise Application Object ID": app_record["service_principal_id"],
+                "Identity Resolution": app_record["identity_resolution"],
                 "Publisher Name": app_record["publisher_name"],
+                "Publisher Type": app_record["publisher_type"],
                 "Publisher Verification State": app_record["publisher_verified"],
+                "App Owner Organization ID": app_record["owner_tenant"],
+                "Publisher Classification Basis": app_record["classification_basis"],
                 "Consent Type": "; ".join(sorted(app_record["consent_types"], key=str.lower)),
                 "Permission Type": "; ".join(sorted(app_record["permission_types"], key=str.lower)) or "Unknown",
                 "Granted Scopes": "; ".join(normalized_scopes),
@@ -719,7 +842,8 @@ def _build_app_access_sheet(entra_client, defender_client):
                 "Flagged Because": "; ".join(flagged_because),
                 "Counted In Headline": _bool_text(flag_instance_count > 0),
                 "Flag Instance Count": flag_instance_count,
-                "Activity Count (30d)": activity_count if activity_available else "",
+                "Evidence Confidence": "High" if app_record["identity_resolution"] == "Resolved" else "Medium",
+                "Activity Count (30d)": activity_count if activity_available and app_record["app_id"] else "",
                 "Last Activity": last_activity,
                 "Activity Band": activity_band,
             }
@@ -734,6 +858,9 @@ def _build_app_access_sheet(entra_client, defender_client):
         )
     )
 
+    unresolved_count = sum(1 for row in rows if row.get("Identity Resolution") == "Unresolved")
+    app_inventory_status = collection_status.get("service_principals", {}) or {}
+    grant_status = collection_status.get("oauth_grants", {}) or {}
     activity_note = (
         "Thirty-day activity was collected from Entra application sign-in reporting and service principal sign-in activity."
         if activity_available
@@ -743,14 +870,155 @@ def _build_app_access_sheet(entra_client, defender_client):
     return {
         "rows": rows,
         "summary": (
-            f"{len(rows)} application(s) were carried into focused follow-up; "
-            f"{total_flag_instances} high-privilege or unverified-publisher grant instance(s) "
-            "contributed to headline findings."
+            f"Focused follow-up includes {_count_phrase(len(rows), 'application')}; "
+            f"{_count_phrase(total_flag_instances, 'high-privilege or unverified-publisher grant instance')} "
+            f"contributed to headline findings. Unresolved identities: {_count_phrase(unresolved_count, 'application identity record')}."
         ),
         "details": [
             "The review merged enterprise application inventory, delegated permission grants, and OAuth risk indicators into a focused application follow-up list.",
             "Routine Graph access alone is not treated as a finding. Rows are included only when high-impact scopes, an unverified external publisher, an unusually broad consent footprint, or a Defender OAuth risk signal is present.",
+            f"Enterprise application collection: {app_inventory_status.get('availability_status', 'unknown')}; OAuth grant collection: {grant_status.get('availability_status', 'unknown')}.",
             activity_note,
+        ],
+    }
+
+
+def _build_app_consent_policy_sheet(entra_client):
+    if not entra_client:
+        return None
+    state = (getattr(entra_client, "collection_status", {}) or {}).get("authorization_policy", {}) or {}
+    availability = str(state.get("availability_status", "unavailable") or "unavailable")
+    if availability not in {"available", "partial"}:
+        return None
+
+    policy = getattr(entra_client, "authorization_policy", {}) or {}
+    default_permissions = _safe_get(policy, "defaultUserRolePermissions") or {}
+    assigned = _safe_get(default_permissions, "permissionGrantPoliciesAssigned", None)
+    if assigned is None:
+        assigned = _safe_get(default_permissions, "permission_grant_policies_assigned", None)
+    if assigned is None:
+        return None
+
+    assigned = [str(value) for value in _ensure_list(assigned) if str(value)]
+    user_consent_policies = [
+        value for value in assigned
+        if value.lower().startswith("managepermissiongrantsforself.")
+    ]
+    rows = [{
+        "RecommendationId": "",
+        "Flagged By": "",
+        "Setting": "Default users may consent to applications",
+        "Value": "Yes" if user_consent_policies else "No",
+        "Policy ID": "; ".join(user_consent_policies),
+        "Source State": availability.title(),
+        "Evidence Confidence": "High" if availability == "available" else "Medium",
+    }]
+    for policy_id in assigned:
+        rows.append({
+            "RecommendationId": "",
+            "Flagged By": "",
+            "Setting": "Policy assigned to the default user role",
+            "Value": "User self-consent" if policy_id in user_consent_policies else "Other permission grant policy",
+            "Policy ID": policy_id,
+            "Source State": availability.title(),
+            "Evidence Confidence": "High" if availability == "available" else "Medium",
+        })
+
+    return {
+        "rows": rows,
+        "summary": (
+            "Default-user application consent is enabled through the listed policy assignments."
+            if user_consent_policies else
+            "No self-consent policy is assigned to the default user role; application consent requires an administrator or another authorized role."
+        ),
+        "details": [
+            "The effective boundary comes from authorizationPolicy.defaultUserRolePermissions.permissionGrantPoliciesAssigned.",
+            "Permission-grant policy definitions are supporting metadata and are not treated as proof that users are assigned those policies.",
+        ],
+    }
+
+
+def _build_authentication_sheet(entra_client):
+    if not entra_client:
+        return None
+    state = (getattr(entra_client, "collection_status", {}) or {}).get("auth_methods", {}) or {}
+    availability = str(state.get("availability_status", "unavailable") or "unavailable")
+    if availability not in {"available", "partial"}:
+        return None
+    summary = getattr(entra_client, "auth_summary", {}) or {}
+    total = int(summary.get("total_users", 0) or 0)
+    registered = int(summary.get("mfa_registered", 0) or 0)
+    capable = int(summary.get("mfa_capable", 0) or 0)
+    passwordless = int(summary.get("passwordless_enabled", 0) or 0)
+    rate = round(registered / total * 100, 1) if total else None
+    rows = [
+        {"RecommendationId": "", "Flagged By": "", "Metric": "Users assessed", "Value": total, "Source State": availability.title(), "Evidence Confidence": "High"},
+        {"RecommendationId": "", "Flagged By": "", "Metric": "MFA registered users", "Value": registered, "Source State": availability.title(), "Evidence Confidence": "High"},
+        {"RecommendationId": "", "Flagged By": "", "Metric": "MFA registration rate", "Value": "Not calculated" if rate is None else f"{rate}%", "Source State": availability.title(), "Evidence Confidence": "High"},
+        {"RecommendationId": "", "Flagged By": "", "Metric": "MFA capable users", "Value": capable, "Source State": availability.title(), "Evidence Confidence": "High"},
+        {"RecommendationId": "", "Flagged By": "", "Metric": "Passwordless registered users", "Value": passwordless, "Source State": availability.title(), "Evidence Confidence": "High"},
+    ]
+    return {
+        "rows": rows,
+        "summary": f"Microsoft Graph returned authentication registration data for {total} users; {registered} were registered for MFA.",
+        "details": [
+            "Counts come from reports/authenticationMethods/userRegistrationDetails and contain no user identities in the HTML report.",
+            "Use the restricted source or Entra admin center to follow up with individual users.",
+        ],
+    }
+
+
+def _build_identity_risk_sheet(entra_client):
+    if not entra_client:
+        return None
+    states = getattr(entra_client, "collection_status", {}) or {}
+    user_state = (states.get("risky_users", {}) or {}).get("availability_status", "unavailable")
+    detection_state = (states.get("risk_detections", {}) or {}).get("availability_status", "unavailable")
+    if user_state not in {"available", "partial"} and detection_state not in {"available", "partial"}:
+        return None
+
+    rows = []
+    for user in _ensure_list(getattr(entra_client, "risky_users", [])):
+        level = _iso_text(_safe_get(user, "riskLevel"))
+        state = _iso_text(_safe_get(user, "riskState"))
+        if level.lower() not in {"high", "medium"} and state.lower() not in {"atrisk", "confirmedcompromised"}:
+            continue
+        rows.append({
+            "RecommendationId": "", "Flagged By": "", "Record Type": "Risky User",
+            "Display Name": _iso_text(_safe_get(user, "userDisplayName")) or "Identity available by object ID",
+            "User Principal Name": _iso_text(_safe_get(user, "userPrincipalName")),
+            "Object ID": _iso_text(_safe_get(user, "id")),
+            "Risk Level": level or "Unknown", "Risk State": state or "Unknown",
+            "Risk Detail": _iso_text(_safe_get(user, "riskDetail")),
+            "Last Updated": _iso_text(_safe_get(user, "riskLastUpdatedDateTime")),
+            "Resolution Status": "Resolved" if _safe_get(user, "id") else "Unresolved",
+        })
+    for detection in _ensure_list(getattr(entra_client, "risk_detections", [])):
+        level = _iso_text(_safe_get(detection, "riskLevel"))
+        state = _iso_text(_safe_get(detection, "riskState"))
+        rows.append({
+            "RecommendationId": "", "Flagged By": "", "Record Type": "Risk Detection",
+            "Display Name": _iso_text(_safe_get(detection, "userDisplayName")) or "Identity available by object ID",
+            "User Principal Name": _iso_text(_safe_get(detection, "userPrincipalName")),
+            "Object ID": _iso_text(_safe_get(detection, "id")),
+            "Risk Level": level or "Unknown", "Risk State": state or "Unknown",
+            "Risk Detail": _iso_text(_safe_get(detection, "riskEventType")),
+            "Last Updated": _iso_text(_safe_get(detection, "lastUpdatedDateTime")) or _iso_text(_safe_get(detection, "detectedDateTime")),
+            "Resolution Status": "Resolved" if _safe_get(detection, "id") else "Unresolved",
+        })
+    if not rows:
+        rows.append({
+            "RecommendationId": "", "Flagged By": "", "Record Type": "Source Summary",
+            "Display Name": "", "User Principal Name": "", "Object ID": "",
+            "Risk Level": "None returned", "Risk State": "None returned", "Risk Detail": "",
+            "Last Updated": "", "Resolution Status": "Available",
+        })
+    return {
+        "rows": rows,
+        "summary": f"{_count_phrase(len(rows), 'current risky-user or risk-detection evidence row')} retained for engineer follow-up.",
+        "details": [
+            "User identities are retained only in the engineer workbook; the HTML appendix preview shows risk state without names.",
+            "Review current state in Microsoft Entra ID Protection before taking remediation action.",
         ],
     }
 
@@ -762,65 +1030,106 @@ def _build_admin_role_sheet(entra_client):
     role_assignments = _ensure_list(getattr(entra_client, "role_assignments", []))
     eligible_assignments = _ensure_list(getattr(entra_client, "role_eligibility_schedules", []))
     time_bound_assignments = _ensure_list(getattr(entra_client, "role_assignment_schedules", []))
-    pim_summary = getattr(entra_client, "pim_summary", {}) or {}
+    role_definitions = {
+        _iso_text(_safe_get(item, "id")).lower(): item
+        for item in _ensure_list(getattr(entra_client, "role_definitions", []))
+        if _iso_text(_safe_get(item, "id"))
+    }
     rows = []
 
-    for assignment in role_assignments:
-        rows.append({
+    def identity_key(assignment):
+        return (
+            _iso_text(_safe_get(assignment, "principalId")).lower(),
+            _iso_text(_safe_get(assignment, "roleDefinitionId")).lower(),
+            _iso_text(_safe_get(assignment, "directoryScopeId")).lower() or "/",
+        )
+
+    def normalized_row(assignment, assignment_type, end_date="", reason=""):
+        principal = _safe_get(assignment, "principal") or {}
+        role_definition_id = _iso_text(_safe_get(assignment, "roleDefinitionId"))
+        role_definition = _safe_get(assignment, "roleDefinition") or role_definitions.get(role_definition_id.lower(), {})
+        principal_name = (
+            _iso_text(_safe_get(principal, "displayName"))
+            or _iso_text(_safe_get(principal, "userPrincipalName"))
+        )
+        role_name = _iso_text(_safe_get(role_definition, "displayName"))
+        principal_type = _iso_text(_safe_get(principal, "@odata.type")).replace("#microsoft.graph.", "")
+        resolution = "Resolved" if principal_name and role_name else "Partial" if principal_name or role_name else "Unresolved"
+        if resolution != "Resolved":
+            reason = (reason + "; " if reason else "") + "Identity resolution required before changing this assignment"
+        return {
             "RecommendationId": "",
             "Flagged By": "",
-            "Assignment Type": "Active (Duration Unverified)",
+            "Principal Display Name": principal_name or "Unresolved principal",
+            "Principal Type": principal_type or "Unknown",
+            "Role Name": role_name or "Unresolved role definition",
+            "Assignment Type": assignment_type,
             "Principal ID": _iso_text(_safe_get(assignment, "principalId")),
-            "Role Definition ID": _iso_text(_safe_get(assignment, "roleDefinitionId")),
-            "Directory Scope ID": _iso_text(_safe_get(assignment, "directoryScopeId")),
+            "Role Definition ID": role_definition_id,
+            "Role Template ID": _iso_text(_safe_get(role_definition, "templateId")),
+            "Directory Scope ID": _iso_text(_safe_get(assignment, "directoryScopeId")) or "/",
             "Start Date": _iso_text(_safe_get(assignment, "startDateTime")),
-            "End Date": _iso_text(_safe_get(assignment, "endDateTime")) or "Not present on role assignment object",
-            "Reason Flagged": "Active assignment; duration must be determined from its assignment schedule",
-        })
+            "End Date": end_date,
+            "Identity Resolution": resolution,
+            "Reason Flagged": reason,
+        }
 
-    for assignment in eligible_assignments:
-        rows.append({
-            "RecommendationId": "",
-            "Flagged By": "",
-            "Assignment Type": "Eligible",
-            "Principal ID": _iso_text(_safe_get(assignment, "principalId")),
-            "Role Definition ID": _iso_text(_safe_get(assignment, "roleDefinitionId")),
-            "Directory Scope ID": _iso_text(_safe_get(assignment, "directoryScopeId")),
-            "Start Date": _iso_text(_safe_get(assignment, "startDateTime")),
-            "End Date": _iso_text(_safe_get(assignment, "endDateTime")),
-            "Reason Flagged": "Just-in-time eligible assignment",
-        })
-
+    scheduled_keys = set()
     for assignment in time_bound_assignments:
         schedule_info = _safe_get(assignment, "scheduleInfo") or {}
         expiration = _safe_get(schedule_info, "expiration") or {}
         expiration_type = _iso_text(_safe_get(expiration, "type"))
-        end_date = _iso_text(_safe_get(expiration, "endDateTime"))
+        end_date = _iso_text(_safe_get(expiration, "endDateTime")) or _iso_text(_safe_get(assignment, "endDateTime"))
         is_permanent = "noexpiration" in expiration_type.lower().replace("_", "")
-        rows.append({
-            "RecommendationId": "",
-            "Flagged By": "",
-            "Assignment Type": "Permanent Active" if is_permanent else "Time-Bound Active",
-            "Principal ID": _iso_text(_safe_get(assignment, "principalId")),
-            "Role Definition ID": _iso_text(_safe_get(assignment, "roleDefinitionId")),
-            "Directory Scope ID": _iso_text(_safe_get(assignment, "directoryScopeId")),
-            "Start Date": _iso_text(_safe_get(assignment, "startDateTime")),
-            "End Date": end_date or ("Permanent" if is_permanent else "Unclassified"),
-            "Reason Flagged": "Standing privileged assignment" if is_permanent else "Active privileged assignment with schedule",
-        })
+        scheduled_keys.add(identity_key(assignment))
+        rows.append(normalized_row(
+            assignment,
+            "Permanent Active" if is_permanent else "Time-Bound Active",
+            end_date or ("Permanent" if is_permanent else "Unclassified"),
+            "Standing privileged assignment" if is_permanent else "Active privileged assignment with schedule",
+        ))
 
-    rows.sort(key=lambda row: (str(row.get("Assignment Type", "")).lower(), str(row.get("Principal ID", "")).lower()))
+    # A unified roleAssignment and its assignmentSchedule describe the same grant. Keep the
+    # richer schedule row and retain only base assignments that have no schedule match.
+    for assignment in role_assignments:
+        if identity_key(assignment) in scheduled_keys:
+            continue
+        rows.append(normalized_row(
+            assignment,
+            "Active (Duration Unverified)",
+            _iso_text(_safe_get(assignment, "endDateTime")) or "Duration unavailable",
+            "Active assignment; no matching schedule was returned",
+        ))
+
+    for assignment in eligible_assignments:
+        rows.append(normalized_row(
+            assignment,
+            "Eligible",
+            _iso_text(_safe_get(assignment, "endDateTime")),
+            "Just-in-time eligible assignment",
+        ))
+
+    rows.sort(key=lambda row: (
+        str(row.get("Assignment Type", "")).lower(),
+        str(row.get("Role Name", "")).lower(),
+        str(row.get("Principal Display Name", "")).lower(),
+    ))
+
+    permanent_count = sum(row.get("Assignment Type") == "Permanent Active" for row in rows)
+    eligible_count = sum(row.get("Assignment Type") == "Eligible" for row in rows)
+    time_bound_count = sum(row.get("Assignment Type") == "Time-Bound Active" for row in rows)
+    unresolved_count = sum(row.get("Identity Resolution") != "Resolved" for row in rows)
 
     return {
         "rows": rows,
         "summary": (
-            f"{pim_summary.get('permanent_assignments', 0)} permanent active assignment(s), "
-            f"{pim_summary.get('total_eligible_assignments', 0)} eligible assignment(s), and "
-            f"{pim_summary.get('total_time_bound_assignments', 0)} scheduled active assignment(s) were reviewed."
+            f"{_count_phrase(permanent_count, 'permanent active assignment')}, "
+            f"{_count_phrase(eligible_count, 'eligible assignment')}, and "
+            f"{_count_phrase(time_bound_count, 'time-bound active assignment')} were reviewed after schedule deduplication."
         ),
         "details": [
-            "The review captured role assignment objects available from Entra privileged access data.",
-            "Where directory display names were not present in the reviewed source content, the engineer workbook retains principal and role definition IDs for direct follow-up.",
+            "The review merges active assignments with their schedules so the same grant is not counted twice.",
+            f"{_count_phrase(unresolved_count, 'row')} lack either a principal or role display name; their identifiers are retained for follow-up.",
         ],
     }
 
@@ -937,9 +1246,9 @@ def _build_conditional_access_sheet(entra_client):
     return {
         "rows": rows,
         "summary": (
-            f"{ca_summary.get('total', 0)} Conditional Access policie(s) were reviewed, "
-            f"including {ca_summary.get('enabled', 0)} enabled policie(s) and "
-            f"{ca_summary.get('require_mfa', 0)} policie(s) requiring MFA."
+            f"Review covered {_count_phrase(ca_summary.get('total', 0), 'Conditional Access policy', 'Conditional Access policies')}, "
+            f"including {_count_phrase(ca_summary.get('enabled', 0), 'enabled policy', 'enabled policies')} and "
+            f"{_count_phrase(ca_summary.get('require_mfa', 0), 'policy', 'policies')} requiring MFA."
         ),
         "details": [
             "Each row captures the policy state, targeting, and grant controls that were available from the tenant review.",
@@ -1015,8 +1324,8 @@ def _build_guest_access_sheet(entra_client):
     return {
         "rows": rows,
         "summary": (
-            f"{b2b_summary.get('total_guests', 0)} guest account(s) were reviewed, "
-            f"including {b2b_summary.get('guests_with_licenses', 0)} licensed guest(s)."
+            f"Review covered {_count_phrase(b2b_summary.get('total_guests', 0), 'guest account')}, "
+            f"including {_count_phrase(b2b_summary.get('guests_with_licenses', 0), 'licensed guest')}."
         ),
         "details": [
             "This appendix combines tenant-level external collaboration settings with individual guest objects already visible in the reviewed source content.",
@@ -1169,6 +1478,16 @@ def _build_power_platform_sheet(pp_client):
         return None
 
     rows = []
+    inventory_evidence = getattr(pp_client, "power_platform_inventory", {}) or {}
+    rows.append({
+        "RecommendationId": "",
+        "Flagged By": "",
+        "Detail Type": "Source Coverage",
+        "Name": inventory_evidence.get("source", "Power Platform enrichment"),
+        "Subtype": "Preview" if inventory_evidence.get("preview") else "Supported source",
+        "State": "Available" if inventory_evidence.get("available") else "Supplemental evidence not assessed",
+        "Additional Context": inventory_evidence.get("reason", "") or "Freshness: {}".format(inventory_evidence.get("freshness", "Unknown")),
+    })
 
     for environment in _ensure_list(getattr(pp_client, "environments", [])):
         properties = _safe_get(environment, "properties") or {}
@@ -1206,6 +1525,18 @@ def _build_power_platform_sheet(pp_client):
             "Subtype": _iso_text(_safe_get(properties, "appType")),
             "State": _iso_text(_safe_get(properties, "state")),
             "Additional Context": _iso_text(_safe_get(app, "id")),
+        })
+
+    for agent in _ensure_list(getattr(pp_client, "agents", [])):
+        properties = _safe_get(agent, "properties") or {}
+        rows.append({
+            "RecommendationId": "",
+            "Flagged By": "",
+            "Detail Type": "Agent",
+            "Name": _iso_text(_safe_get(properties, "displayName")) or _iso_text(_safe_get(agent, "name")),
+            "Subtype": _iso_text(_safe_get(agent, "type")) or "Copilot Studio agent",
+            "State": _iso_text(_safe_get(properties, "state")),
+            "Additional Context": "Environment: {}".format(_iso_text(_safe_get(properties, "environmentId"))),
         })
 
     for policy in _ensure_list(getattr(pp_client, "dlp_policies", [])):
@@ -1278,7 +1609,14 @@ def _build_m365_activity_sheet(m365_client):
     users_summary = getattr(m365_client, "users_summary", {}) or {}
 
     add_metric("Users", "Total Users", users_summary.get("total", 0), "Tenant user inventory reviewed for activity baselines.")
-    add_metric("Users", "Copilot Licensed Users", users_summary.get("copilot_licensed", 0), f"Adoption rate {users_summary.get('copilot_adoption_rate', 0)}%.")
+    license_coverage = users_summary.get("copilot_license_coverage")
+    coverage_text = "Not calculated" if license_coverage is None else f"{license_coverage}%"
+    add_metric(
+        "Users",
+        "Copilot Licensed Users",
+        users_summary.get("copilot_licensed", 0),
+        f"License coverage {coverage_text} of {users_summary.get('coverage_population', 'the assessed population')}.",
+    )
     add_metric("Email", "Active Users", email_summary.get("active_users", 0), f"Average sent per user {email_summary.get('avg_sent_per_user', 0)}.")
     add_metric("Email", "Total Sent", email_summary.get("total_sent", 0), f"Average received per user {email_summary.get('avg_received_per_user', 0)}.")
     add_metric("Teams", "Active Users", teams_summary.get("active_users", 0), f"Average meetings per user {teams_summary.get('avg_meetings_per_user', 0)}.")
@@ -1292,10 +1630,152 @@ def _build_m365_activity_sheet(m365_client):
 
     return {
         "rows": rows,
-        "summary": "M365 Activity Detail summarizes the workload usage baselines already collected for Exchange, Teams, SharePoint, OneDrive, activations, and active-user reporting.",
+        "summary": "Aggregate workload activity for Exchange, Teams, SharePoint, OneDrive, and Microsoft 365 Apps.",
         "details": [
-            "The workbook captures workload-level baselines rather than per-user detail because those are the metrics currently present in the reviewed source content.",
-            "These rows give the follow-up engineer the workload counts behind activity-driven M365 recommendations without changing the recommendation wording.",
+            "No user-level activity is included.",
+            "Use these baselines to select pilot groups and compare activity after the pilot.",
+        ],
+    }
+
+
+def _build_ai_usage_sheet(m365_client):
+    if not m365_client:
+        return None
+
+    rows = []
+
+    def add(source, period, metric, value, evidence):
+        rows.append({
+            "RecommendationId": "",
+            "Flagged By": "",
+            "Evidence Source": source,
+            "Period": period,
+            "Metric": metric,
+            "Value": value,
+            "Refresh Date": evidence.get("refresh_date", ""),
+            "Freshness": evidence.get("freshness", "Unknown"),
+            "Availability": "Available" if evidence.get("available") else "Not assessed",
+            "Detail": evidence.get("reason", ""),
+        })
+
+    users = getattr(m365_client, "users_summary", {}) or {}
+    coverage = users.get("copilot_license_coverage")
+    add(
+        "Microsoft Graph user licensing",
+        "Current",
+        "Copilot license coverage of estimated eligible users",
+        "Not calculated" if coverage is None else f"{coverage}%",
+        {"available": bool(users), "freshness": "Current", "reason": users.get("coverage_population", "")},
+    )
+
+    copilot = getattr(m365_client, "copilot_usage", {}) or {}
+    if copilot.get("available"):
+        returned_evidence = dict(copilot)
+        returned_evidence["reason"] = ""
+        for period, metrics in (copilot.get("periods", {}) or {}).items():
+            add(copilot.get("source", "Microsoft Graph"), period, "Enabled users", metrics.get("enabled_users"), returned_evidence)
+            add(copilot.get("source", "Microsoft Graph"), period, "Active users", metrics.get("active_users"), returned_evidence)
+            add(copilot.get("source", "Microsoft Graph"), period, "Active-user rate", "N/A" if metrics.get("active_rate") is None else f"{metrics.get('active_rate')}%", returned_evidence)
+            add(copilot.get("source", "Microsoft Graph"), period, "Unused enabled licenses", metrics.get("unused_licenses"), returned_evidence)
+            add(copilot.get("source", "Microsoft Graph"), period, "Prompts submitted", metrics.get("total_prompts"), returned_evidence)
+            add(copilot.get("source", "Microsoft Graph"), period, "Average prompts", metrics.get("average_prompts"), returned_evidence)
+            for app_name, app_metrics in (metrics.get("apps", {}) or {}).items():
+                add(
+                    copilot.get("source", "Microsoft Graph"), period,
+                    f"{app_name} active users", app_metrics.get("active_users"), returned_evidence,
+                )
+    else:
+        add(copilot.get("source", "Microsoft Graph Copilot usage"), copilot.get("period", ""), "Copilot usage", "Not assessed", copilot)
+
+    apps = getattr(m365_client, "m365_app_readiness", {}) or {}
+    if apps.get("available"):
+        for category, summary in (
+            ("app", apps.get("app_activity_summary", {}) or {}),
+            ("platform", apps.get("platform_activity_summary", {}) or {}),
+        ):
+            for key, values in summary.items():
+                add(
+                    apps.get("source", "Microsoft Graph"), "D30",
+                    f"M365 {category} peak daily active users: {key}",
+                    values.get("peak_daily_active_users"), apps,
+                )
+                rows[-1]["Detail"] = (
+                    f"Activity appeared on {values.get('active_days', 0)} daily report rows; "
+                    f"latest reported activity {values.get('latest_activity_date') or 'none'}; "
+                    f"latest report date {values.get('latest_report_date') or 'not provided'}."
+                )
+    else:
+        add(apps.get("source", "Microsoft Graph M365 Apps usage"), "D30", "M365 app readiness", "Not assessed", apps)
+
+    for evidence_name in ("copilot_dashboard", "shadow_ai_usage"):
+        evidence = getattr(m365_client, evidence_name, {}) or {}
+        metric = "Copilot Dashboard supplemental evidence" if evidence_name == "copilot_dashboard" else "External generative AI applications observed"
+        value = evidence.get("application_count", evidence.get("records", "Not assessed")) if evidence.get("available") else "Not assessed"
+        add(evidence.get("source", evidence_name), evidence.get("period", ""), metric, value, evidence)
+        if evidence_name == "copilot_dashboard" and evidence.get("available"):
+            add(evidence.get("source", evidence_name), evidence.get("period", ""), "Returning users", evidence.get("returning_users", "Not present"), evidence)
+            add(evidence.get("source", evidence_name), evidence.get("period", ""), "Unlicensed Copilot Chat activity", evidence.get("unlicensed_copilot_chat_activity", "Not present"), evidence)
+            for action_name, action_value in (evidence.get("detailed_actions", {}) or {}).items():
+                add(evidence.get("source", evidence_name), evidence.get("period", ""), f"Dashboard action: {action_name}", action_value, evidence)
+        if evidence_name == "shadow_ai_usage" and evidence.get("available"):
+            for application in evidence.get("applications", []) or []:
+                add(
+                    evidence.get("source", evidence_name), evidence.get("period", ""),
+                    f"External AI: {application.get('display_name', 'Unknown')}",
+                    application.get("active_users", ""), evidence,
+                )
+                rows[-1]["Detail"] = (
+                    f"Risk score {application.get('risk_rating', 'unknown')}; "
+                    f"traffic {application.get('traffic_bytes', 0)} bytes; "
+                    f"last seen {application.get('last_seen', 'unknown')}."
+                )
+
+    return {
+        "rows": rows,
+        "summary": "Aggregate AI adoption and usage evidence is separated from security readiness and includes source availability and freshness.",
+        "details": [
+            "License coverage is not active adoption. Active-user rate is calculated only from a successfully returned Microsoft 365 Copilot usage report.",
+            "Microsoft 365 workload activity indicates potential pilot fit; it does not prove Copilot value or return on investment.",
+            "Optional preview and uploaded evidence is supplemental and cannot change the core readiness decision.",
+        ],
+    }
+
+
+def _build_copilot_user_usage_sheet(m365_client):
+    if not m365_client:
+        return None
+    copilot = getattr(m365_client, "copilot_usage", {}) or {}
+    source_rows = copilot.get("user_detail", []) or []
+    if not source_rows:
+        return None
+    rows = []
+    for source in source_rows:
+        if not isinstance(source, dict):
+            continue
+        period_detail = {}
+        for candidate in source.get("copilotActivityUserDetailsByPeriod", []) or []:
+            if isinstance(candidate, dict) and candidate.get("reportPeriod") in (28, "28", "D28"):
+                period_detail = candidate
+                break
+        last_activity = source.get("microsoft365CopilotLastActivityDate", source.get("lastActivityDate", ""))
+        rows.append({
+            "RecommendationId": "",
+            "Flagged By": "",
+            "User Principal Name": source.get("userPrincipalName", ""),
+            "Display Name": source.get("displayName", ""),
+            "Period": "D28",
+            "Activity State": "Active" if last_activity else "No activity returned",
+            "Last Activity Date": last_activity,
+            "Active Usage Days": period_detail.get("activeUsageDays", period_detail.get("activeUsageDaysForAllApps", source.get("activeUsageDays", ""))),
+            "Prompts Submitted": period_detail.get("promptsSubmitted", period_detail.get("promptsSubmittedForAllApps", source.get("promptsSubmitted", ""))),
+            "Copilot Agent Last Activity": source.get("copilotAgentLastActivityDate", ""),
+        })
+    return {
+        "rows": rows,
+        "summary": f"{len(rows)} licensed-user Copilot activity row(s) were explicitly requested for the restricted workbook.",
+        "details": [
+            "This sheet may contain identifiable user activity. Do not distribute it with the customer-facing HTML report.",
+            "The HTML report uses aggregate metrics only and never renders these identity fields.",
         ],
     }
 

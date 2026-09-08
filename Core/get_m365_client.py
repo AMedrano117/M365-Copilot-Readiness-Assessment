@@ -11,7 +11,23 @@ from azure.core.exceptions import HttpResponseError
 from .spinner import get_timestamp, _stdout_lock
 from datetime import datetime, timedelta
 
-async def get_m365_client(graph_client):
+
+def _parse_csv_report(report_data):
+    """Parse a Microsoft Graph report response body into dictionaries."""
+    if not report_data:
+        return []
+    try:
+        csv_text = report_data.decode('utf-8-sig') if isinstance(report_data, bytes) else str(report_data)
+        return list(csv.DictReader(io.StringIO(csv_text)))
+    except Exception:
+        return []
+
+async def get_m365_client(
+    graph_client,
+    include_user_usage_detail=False,
+    copilot_dashboard_export=None,
+    preview_collectors="none",
+):
     """
     Get M365 usage analytics and deployment data from Microsoft Graph.
     Fetches comprehensive usage reports and metadata for Copilot readiness assessment.
@@ -24,29 +40,21 @@ async def get_m365_client(graph_client):
         or minimal client if permissions are insufficient (graceful degradation)
     """
     
-    # Helper function to parse CSV reports from Graph API
-    def parse_csv_report(report_data):
-        """Parse binary CSV data from Graph API reports into list of dicts"""
-        if not report_data:
-            return []
-        
-        try:
-            # Graph API returns bytes, decode to string
-            if isinstance(report_data, bytes):
-                csv_text = report_data.decode('utf-8-sig')  # BOM-aware
-            else:
-                csv_text = str(report_data)
-            
-            # Parse CSV
-            reader = csv.DictReader(io.StringIO(csv_text))
-            return list(reader)
-        except Exception:
-            return []
+    def field(item, name, default=None):
+        if isinstance(item, dict):
+            return item.get(name, default)
+        snake = []
+        for character in name:
+            if character.isupper() and snake:
+                snake.append('_')
+            snake.append(character.lower())
+        return getattr(item, ''.join(snake), getattr(item, name, default))
     
     # Create a simple object to store fetched data
     class M365Client:
         def __init__(self):
             self.available = False
+            self.collection_status = {}
             
             # Raw data storage
             self.sites = []
@@ -61,6 +69,26 @@ async def get_m365_client(graph_client):
             self.onedrive_summary = {}
             self.activations_summary = {}
             self.active_users_summary = {}
+            self.copilot_usage = {
+                'available': False,
+                'reason': 'Collection did not run',
+                'source': 'Microsoft Graph Microsoft 365 Copilot usage reports',
+            }
+            self.m365_app_readiness = {
+                'available': False,
+                'reason': 'Collection did not run',
+                'source': 'Microsoft Graph Microsoft 365 Apps usage reports',
+            }
+            self.copilot_dashboard = {
+                'available': False,
+                'reason': 'Optional export not supplied. Export Copilot Dashboard data from Viva Insights and pass --copilot-dashboard-export PATH.',
+                'source': 'Microsoft Copilot Dashboard export',
+            }
+            self.shadow_ai_usage = {
+                'available': False,
+                'reason': 'Preview Shadow AI collector was not enabled. Use --preview-collectors shadow-ai after configuring discovery and optional permission.',
+                'source': 'Microsoft Defender for Cloud Apps discovery (preview)',
+            }
             
             # Track missing features/permissions
             self.missing_permissions = []
@@ -75,19 +103,15 @@ async def get_m365_client(graph_client):
         # Errors are handled by asyncio.gather(return_exceptions=True)
         report_period = 'D30'
         
-        # Build request configuration for users query
-        from msgraph.generated.users.users_request_builder import UsersRequestBuilder
-        users_config = UsersRequestBuilder.UsersRequestBuilderGetRequestConfiguration(
-            query_parameters=UsersRequestBuilder.UsersRequestBuilderGetQueryParameters(
-                top=999,
-                select=['id', 'displayName', 'userPrincipalName', 'assignedLicenses', 'accountEnabled']
-            )
-        )
-        
         # Create tasks with labels for progress tracking
+        from .get_entra_client import _fetch_graph_collection_via_http
         tasks = {
-            'sites': graph_client.sites.get(),
-            'users': graph_client.users.get(request_configuration=users_config),
+            'sites': _fetch_graph_collection_via_http(
+                "/v1.0/sites?$select=id,displayName,webUrl&$top=999"
+            ),
+            'users': _fetch_graph_collection_via_http(
+                "/v1.0/users?$select=id,displayName,userPrincipalName,assignedLicenses,accountEnabled&$top=999"
+            ),
             'email_activity': graph_client.reports.get_email_activity_user_detail_with_period(period=report_period).get(),
             'teams_activity': graph_client.reports.get_teams_user_activity_user_detail_with_period(period=report_period).get(),
             'sharepoint_usage': graph_client.reports.get_share_point_site_usage_detail_with_period(period=report_period).get(),
@@ -95,6 +119,12 @@ async def get_m365_client(graph_client):
             'office_activations': graph_client.reports.get_office365_activations_user_detail.get(),
             'active_users': graph_client.reports.get_office365_active_user_detail_with_period(period=report_period).get()
         }
+        from .ai_usage import collect_ai_usage
+        tasks['ai_usage'] = collect_ai_usage(
+            include_user_detail=include_user_usage_detail,
+            copilot_dashboard_export=copilot_dashboard_export,
+            preview_collectors=preview_collectors,
+        )
         
         # Execute all API calls in parallel with progress bar
         import sys
@@ -127,20 +157,49 @@ async def get_m365_client(graph_client):
         
         # Map results to named dictionary
         response_dict = dict(zip(tasks.keys(), results))
+        for source_name, response in response_dict.items():
+            if source_name == 'ai_usage':
+                continue
+            if isinstance(response, Exception) or response is None:
+                client.collection_status[source_name] = {
+                    'availability_status': 'unavailable', 'records_collected': 0,
+                    'pages_collected': 0, 'truncated': False,
+                    'reason': str(response) if isinstance(response, Exception) else 'No response returned',
+                }
+                continue
+            if isinstance(response, dict) and 'value' in response:
+                client.collection_status[source_name] = {
+                    key: response.get(key) for key in (
+                        'availability_status', 'records_collected', 'pages_collected', 'truncated', 'reason'
+                    )
+                }
+                continue
+            next_link = getattr(response, 'odata_next_link', None)
+            if not next_link:
+                additional = getattr(response, 'additional_data', {}) or {}
+                next_link = additional.get('@odata.nextLink') if isinstance(additional, dict) else None
+            value = getattr(response, 'value', None)
+            client.collection_status[source_name] = {
+                'availability_status': 'partial' if next_link else 'available',
+                'records_collected': len(value) if isinstance(value, list) else '',
+                'pages_collected': 1,
+                'truncated': bool(next_link),
+                'reason': 'Additional Graph pages were returned but not consumed by this SDK collector.' if next_link else '',
+            }
         
         # Process Sites data
         sites_response = response_dict.get('sites')
         if not isinstance(sites_response, Exception) and sites_response:
             try:
-                client.sites = sites_response.value if hasattr(sites_response, 'value') else []
+                client.sites = sites_response.get('value', []) if isinstance(sites_response, dict) else (sites_response.value if hasattr(sites_response, 'value') else [])
                 client.available = True
                 
                 # Pre-compute sites summary
                 total_sites = len(client.sites)
                 client.sites_summary = {
                     'total': total_sites,
-                    'site_names': [site.display_name for site in client.sites if hasattr(site, 'display_name')],
-                    'root_site_id': client.sites[0].id if total_sites > 0 and hasattr(client.sites[0], 'id') else None
+                    'site_names': [field(site, 'displayName', '') for site in client.sites if field(site, 'displayName', '')],
+                    'root_site_id': field(client.sites[0], 'id') if total_sites > 0 else None
                 }
             except Exception as e:
                 client.sites_summary = {'total': 0, 'error': f'Failed to process sites: {str(e)}'}
@@ -152,12 +211,12 @@ async def get_m365_client(graph_client):
         users_response = response_dict.get('users')
         if not isinstance(users_response, Exception) and users_response:
             try:
-                client.users = users_response.value if hasattr(users_response, 'value') else []
+                client.users = users_response.get('value', []) if isinstance(users_response, dict) else (users_response.value if hasattr(users_response, 'value') else [])
                 client.available = True
                 
                 # Analyze user license assignments
                 total_users = len(client.users)
-                enabled_users = sum(1 for u in client.users if getattr(u, 'account_enabled', True))
+                enabled_users = sum(1 for u in client.users if field(u, 'accountEnabled', True))
                 
                 # Count Copilot license assignments (SKU IDs for M365 Copilot)
                 copilot_sku_ids = [
@@ -167,20 +226,39 @@ async def get_m365_client(graph_client):
                 copilot_sku_ids_lower = [sku.lower() for sku in copilot_sku_ids]  # Compute once
                 
                 copilot_licensed = 0
+                eligible_users = 0
                 for user in client.users:
-                    if hasattr(user, 'assigned_licenses') and user.assigned_licenses:
-                        for license in user.assigned_licenses:
-                            if hasattr(license, 'sku_id') and str(license.sku_id).lower() in copilot_sku_ids_lower:
-                                copilot_licensed += 1
-                                break
+                    assigned_sku_ids = []
+                    has_copilot_license = False
+                    assigned_licenses = field(user, 'assignedLicenses', []) or []
+                    if assigned_licenses:
+                        for license in assigned_licenses:
+                            sku_id = field(license, 'skuId', '')
+                            if sku_id:
+                                assigned_sku_ids.append(str(sku_id).lower())
+                            if sku_id and str(sku_id).lower() in copilot_sku_ids_lower:
+                                has_copilot_license = True
+                    if has_copilot_license:
+                        copilot_licensed += 1
+                    # Graph does not expose a single authoritative "Copilot eligible" flag.
+                    # Count enabled users with a non-Copilot base license as the auditable
+                    # tenant-derived eligibility population and disclose that derivation.
+                    if field(user, 'accountEnabled', True) and any(
+                        sku_id not in copilot_sku_ids_lower for sku_id in assigned_sku_ids
+                    ):
+                        eligible_users += 1
                 
                 client.users_summary = {
                     'total': total_users,
                     'enabled': enabled_users,
                     'disabled': total_users - enabled_users,
+                    'copilot_eligible_users': eligible_users,
                     'copilot_licensed': copilot_licensed,
-                    'copilot_adoption_rate': round((copilot_licensed / total_users * 100), 2) if total_users > 0 else 0,
-                    'sampled': total_users >= 999  # Flag if we hit the limit
+                    'copilot_license_coverage': round((copilot_licensed / eligible_users * 100), 2) if eligible_users > 0 else None,
+                    # Compatibility only. New report content must call this license coverage.
+                    'copilot_adoption_rate': round((copilot_licensed / eligible_users * 100), 2) if eligible_users > 0 else 0,
+                    'coverage_population': 'enabled users with at least one assigned non-Copilot base license (tenant-derived eligibility estimate)',
+                    'sampled': bool((client.collection_status.get('users') or {}).get('truncated'))
                 }
             except Exception as e:
                 client.users_summary = {'total': 0, 'error': f'Failed to process users: {str(e)}'}
@@ -190,9 +268,21 @@ async def get_m365_client(graph_client):
         
         # Process Email Activity Report
         # Parse CSV and extract key metrics for Exchange/Outlook observations
+        def record_csv_rows(source_name, rows):
+            rows = rows or []
+            status = client.collection_status.setdefault(source_name, {})
+            status.update({
+                'availability_status': 'available',
+                'records_collected': len(rows),
+                'pages_collected': 1,
+                'truncated': False,
+                'reason': '',
+            })
+
         email_response = response_dict.get('email_activity')
         if not isinstance(email_response, Exception) and email_response:
-            parsed_rows = parse_csv_report(email_response)
+            parsed_rows = _parse_csv_report(email_response)
+            record_csv_rows('email_activity', parsed_rows)
             
             if parsed_rows:
                 client.available = True
@@ -229,7 +319,8 @@ async def get_m365_client(graph_client):
         # Parse CSV and extract Teams usage metrics
         teams_response = response_dict.get('teams_activity')
         if not isinstance(teams_response, Exception) and teams_response:
-            parsed_rows = parse_csv_report(teams_response)
+            parsed_rows = _parse_csv_report(teams_response)
+            record_csv_rows('teams_activity', parsed_rows)
             
             if parsed_rows:
                 client.available = True
@@ -267,7 +358,8 @@ async def get_m365_client(graph_client):
         # Parse CSV and extract SharePoint site metrics
         sharepoint_response = response_dict.get('sharepoint_usage')
         if not isinstance(sharepoint_response, Exception) and sharepoint_response:
-            parsed_rows = parse_csv_report(sharepoint_response)
+            parsed_rows = _parse_csv_report(sharepoint_response)
+            record_csv_rows('sharepoint_usage', parsed_rows)
             
             if parsed_rows:
                 client.available = True
@@ -304,7 +396,8 @@ async def get_m365_client(graph_client):
         # Parse CSV and extract OneDrive adoption metrics
         onedrive_response = response_dict.get('onedrive_usage')
         if not isinstance(onedrive_response, Exception) and onedrive_response:
-            parsed_rows = parse_csv_report(onedrive_response)
+            parsed_rows = _parse_csv_report(onedrive_response)
+            record_csv_rows('onedrive_usage', parsed_rows)
             
             if parsed_rows:
                 client.available = True
@@ -341,7 +434,8 @@ async def get_m365_client(graph_client):
         # Parse CSV and extract Office app activation metrics
         activations_response = response_dict.get('office_activations')
         if not isinstance(activations_response, Exception) and activations_response:
-            parsed_rows = parse_csv_report(activations_response)
+            parsed_rows = _parse_csv_report(activations_response)
+            record_csv_rows('office_activations', parsed_rows)
             
             if parsed_rows:
                 client.available = True
@@ -377,7 +471,8 @@ async def get_m365_client(graph_client):
         # Parse CSV and extract cross-service activity metrics
         active_users_response = response_dict.get('active_users')
         if not isinstance(active_users_response, Exception) and active_users_response:
-            parsed_rows = parse_csv_report(active_users_response)
+            parsed_rows = _parse_csv_report(active_users_response)
+            record_csv_rows('active_users', parsed_rows)
             
             if parsed_rows:
                 client.available = True
@@ -402,6 +497,31 @@ async def get_m365_client(graph_client):
         else:
             client.active_users_summary = {'available': False}
         
+        ai_usage_result = response_dict.get('ai_usage')
+        if not isinstance(ai_usage_result, Exception) and isinstance(ai_usage_result, dict):
+            client.copilot_usage = ai_usage_result.get('copilot_usage', client.copilot_usage)
+            client.m365_app_readiness = ai_usage_result.get('m365_app_readiness', client.m365_app_readiness)
+            client.copilot_dashboard = ai_usage_result.get('copilot_dashboard', client.copilot_dashboard)
+            client.shadow_ai_usage = ai_usage_result.get('shadow_ai_usage', client.shadow_ai_usage)
+            direct_coverage = ai_usage_result.get('license_coverage', {}) or {}
+            if direct_coverage.get('available') and client.users_summary:
+                client.users_summary.update({
+                    'total': direct_coverage.get('total_users', client.users_summary.get('total', 0)),
+                    'enabled': direct_coverage.get('enabled_users', client.users_summary.get('enabled', 0)),
+                    'disabled': max(
+                        direct_coverage.get('total_users', 0) - direct_coverage.get('enabled_users', 0), 0
+                    ),
+                    'copilot_eligible_users': direct_coverage.get('eligible_users', 0),
+                    'copilot_licensed': direct_coverage.get('copilot_licensed_users', 0),
+                    'copilot_license_coverage': direct_coverage.get('copilot_license_coverage'),
+                    'copilot_adoption_rate': direct_coverage.get('copilot_license_coverage') or 0,
+                    'coverage_population': direct_coverage.get('coverage_population', ''),
+                    'sampled': False,
+                })
+        elif isinstance(ai_usage_result, Exception):
+            client.copilot_usage['reason'] = 'Collection failed: {}'.format(type(ai_usage_result).__name__)
+            client.m365_app_readiness['reason'] = 'Collection failed: {}'.format(type(ai_usage_result).__name__)
+
         # Log summary
         if client.available:
             successful_apis = sum([
@@ -464,8 +584,14 @@ def extract_m365_insights_from_client(m365_client):
             # Users & Licensing
             'total_users': 0,
             'enabled_users': 0,
+            'copilot_eligible_users': 0,
             'copilot_licensed_users': 0,
+            'copilot_license_coverage': None,
             'copilot_adoption_rate': 0,
+            'copilot_usage': {'available': False, 'reason': 'M365 collection unavailable'},
+            'm365_app_readiness': {'available': False, 'reason': 'M365 collection unavailable'},
+            'copilot_dashboard': {'available': False, 'reason': 'M365 collection unavailable'},
+            'shadow_ai_usage': {'available': False, 'reason': 'M365 collection unavailable'},
             
             # Email Activity
             'email_active_users': 0,
@@ -556,10 +682,22 @@ def extract_m365_insights_from_client(m365_client):
         # Users & Licensing
         'total_users': users_summary.get('total', 0),
         'enabled_users': users_summary.get('enabled', 0),
+        'copilot_eligible_users': users_summary.get('copilot_eligible_users', 0),
         'disabled_users': users_summary.get('disabled', 0),
         'copilot_licensed_users': users_summary.get('copilot_licensed', 0),
+        'copilot_license_coverage': users_summary.get('copilot_license_coverage'),
+        'copilot_license_coverage_population': users_summary.get('coverage_population', ''),
+        # Compatibility alias for older recommendation modules. This is license coverage,
+        # never proof of active Copilot use.
         'copilot_adoption_rate': users_summary.get('copilot_adoption_rate', 0),
         'user_data_sampled': users_summary.get('sampled', False),
+
+        # Dedicated AI usage evidence. Availability and reasons are retained so consumers
+        # never convert an unread report into a zero-usage claim.
+        'copilot_usage': getattr(m365_client, 'copilot_usage', {}),
+        'm365_app_readiness': getattr(m365_client, 'm365_app_readiness', {}),
+        'copilot_dashboard': getattr(m365_client, 'copilot_dashboard', {}),
+        'shadow_ai_usage': getattr(m365_client, 'shadow_ai_usage', {}),
         
         # Email Activity (Outlook/Exchange) - Parsed Metrics
         'email_report_available': email_summary.get('available', False),

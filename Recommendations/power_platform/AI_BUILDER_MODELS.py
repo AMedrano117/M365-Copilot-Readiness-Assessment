@@ -26,7 +26,7 @@ async def get_recommendation(sku_name, status="Success", client=None, pp_client=
             service="Power Platform",
             feature="AI Builder - Assessment Needed",
             observation=f"AI Builder model inventory was not assessed: {error_msg}. This does not mean that the tenant has no AI Builder models.",
-            recommendation="On the collection machine, install Az.Accounts with Install-Module Az.Accounts -Scope CurrentUser -Force. Rerun with: python main.py --env-file .env --services \"Power Platform\" --interactive-auth fresh --report-format both. Complete device authentication using a user assigned Power Platform Administrator in this target tenant. After collection succeeds, review the returned inventory before planning new models or Copilot integrations.",
+            recommendation="Prefer a unified Power Platform inventory export supplied with --power-platform-inventory PATH, or explicitly opt in to the preview inventory collector after assigning tenant-scoped Power Platform Reader RBAC to the application. Use the deeper interactive Power Platform Administrator collection only when environment-level configuration review is required. Inventory is optional extensibility evidence and does not alter core readiness.",
             link_text="AI Builder Overview",
             link_url="https://learn.microsoft.com/ai-builder/overview",
             priority="Medium",

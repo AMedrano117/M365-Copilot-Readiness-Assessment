@@ -307,49 +307,16 @@ try {
     Write-Host "  Consent may still be valid. Continue with setup." -ForegroundColor Gray
 }
 
-# Assign Power Platform Administrator role
-Write-Info "Assigning Power Platform Administrator role..."
-
-try {
-    # Power Platform Administrator role template ID (well-known constant)
-    $ppAdminRoleTemplateId = "11648597-926c-4cf3-9c36-bcebb0ba8dcc"
-    
-    # Get the role (or activate it first)
-    $ppAdminRole = Get-MgDirectoryRole -Filter "roleTemplateId eq '$ppAdminRoleTemplateId'" -ErrorAction SilentlyContinue
-    
-    if (-not $ppAdminRole) {
-        # Role template needs to be activated first
-        try {
-            $ppAdminRole = New-MgDirectoryRole -RoleTemplateId $ppAdminRoleTemplateId -ErrorAction Stop
-            Write-Success "Activated Power Platform Administrator role"
-        } catch {
-            # Try to get it again in case another process activated it
-            $ppAdminRole = Get-MgDirectoryRole -Filter "roleTemplateId eq '$ppAdminRoleTemplateId'" -ErrorAction SilentlyContinue
-        }
-    }
-    
-    if ($ppAdminRole) {
-        # Check if already assigned
-        $existingAssignment = Get-MgDirectoryRoleMember -DirectoryRoleId $ppAdminRole.Id -ErrorAction SilentlyContinue | 
-            Where-Object { $_.Id -eq $servicePrincipal.Id }
-        
-        if (-not $existingAssignment) {
-            # Assign the role
-            New-MgDirectoryRoleMemberByRef -DirectoryRoleId $ppAdminRole.Id -BodyParameter @{
-                "@odata.id" = "https://graph.microsoft.com/v1.0/directoryObjects/$($servicePrincipal.Id)"
-            } -ErrorAction Stop
-            Write-Success "Power Platform Administrator role assigned"
-        } else {
-            Write-Success "Power Platform Administrator role already assigned"
-        }
-    } else {
-        Write-Warn "Power Platform Administrator role not active in tenant"
-        Write-Warn "To assign manually: Entra Admin Center > Roles > Power Platform Administrator > Add service principal"
-    }
-} catch {
-    Write-Warn "Could not assign Power Platform Administrator role (insufficient permissions or role not available)"
-    Write-Warn "Power Platform features may not work. Assign role manually in Entra Admin Center if needed."
-}
+# Power Platform is optional enrichment. Do not grant the application the broad Entra Power
+# Platform Administrator role. The opt-in unified inventory API uses Power Platform RBAC and
+# should receive the tenant-scoped read-only role instead.
+Write-Info "Power Platform inventory access is optional"
+Write-Host "  For --preview-collectors power-platform, assign Power Platform Reader RBAC" -ForegroundColor Gray
+Write-Host "  Role ID: c886ad2e-27f7-4874-8381-5849b8d8a090" -ForegroundColor Gray
+Write-Host "  Scope: /tenants/$($context.TenantId)" -ForegroundColor Gray
+Write-Host "  This Power Platform API/RBAC path is preview; a Manage > Inventory CSV export is the supported fallback." -ForegroundColor Gray
+Write-Host "  Do not assign the Entra Power Platform Administrator role to this service principal." -ForegroundColor Gray
+Write-Host "  Optional Shadow AI preview collection separately requires Graph CloudApp-Discovery.Read.All." -ForegroundColor Gray
 
 # Step 8: Create .env file
 Write-Info "Creating .env file..."
@@ -420,7 +387,7 @@ Write-Host "  • Application ID: $($app.AppId)" -ForegroundColor White
 Write-Host "  • Service Principal: Created" -ForegroundColor White
 Write-Host "  • Admin Consent: " -NoNewline -ForegroundColor White
 Write-Host "✓ Granted" -ForegroundColor Green
-Write-Host "  • Power Platform Role: Assigned" -ForegroundColor White
+Write-Host "  • Power Platform: Optional; Reader RBAC or inventory CSV not configured by this script" -ForegroundColor White
 Write-Host "  • Client Secret Expires: $($secretExpiration.ToString('yyyy-MM-dd'))`n" -ForegroundColor White
 
 Write-Host "Next Steps:" -ForegroundColor Yellow

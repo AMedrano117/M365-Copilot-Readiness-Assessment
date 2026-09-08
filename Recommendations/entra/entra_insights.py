@@ -227,6 +227,8 @@ def extract_entra_insights_from_client(entra_client):
         
         # Application Consent (#11)
         'total_apps': consent_summary.get('total_apps', 0),
+        'consent_configuration_available': consent_summary.get('consent_configuration_available', False),
+        'assigned_user_consent_policies': consent_summary.get('assigned_user_consent_policies', []),
         'user_consent_allowed': consent_summary.get('user_consent_allowed', False),
         'admin_consent_required': consent_summary.get('admin_consent_required', False),
         'high_privilege_apps': consent_summary.get('high_privilege_apps', 0),
@@ -341,6 +343,8 @@ def extract_entra_insights_from_client(entra_client):
             'partner_configurations': b2b_summary.get('partner_configurations', 0)
         },
         'consent_summary': {
+            'consent_configuration_available': consent_summary.get('consent_configuration_available', False),
+            'assigned_user_consent_policies': consent_summary.get('assigned_user_consent_policies', []),
             'user_consent_allowed': consent_summary.get('user_consent_allowed', False),
             'admin_consent_required': consent_summary.get('admin_consent_required', False),
             'high_privilege_apps': consent_summary.get('high_privilege_apps', 0),

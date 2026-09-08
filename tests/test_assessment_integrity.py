@@ -327,6 +327,25 @@ class UnreadDataIsNotReportedAsCleanTests(unittest.TestCase):
         self.assertEqual(len(coverage), 1)
         self.assertNotIn("No managed devices detected", coverage[0]["Observation"])
 
+    def test_empty_intune_inventory_does_not_prove_uncontrolled_access(self):
+        from Recommendations.entra.INTUNE_A import get_recommendation
+
+        insights = {
+            "available": True,
+            "data_sources": {"managed_devices": True},
+            "device_summary": {
+                "total_managed_devices": 0,
+                "compliant_devices": 0,
+                "non_compliant_devices": 0,
+                "ca_requires_compliance": False,
+            },
+        }
+        results = get_recommendation("SPE_E5", "Success", entra_insights=insights)
+        device_result = next(item for item in results if "returned no managed devices" in item["Observation"])
+        self.assertEqual(device_result["Disposition"], "Coverage")
+        self.assertEqual(device_result["Status"], "Not Assessed")
+        self.assertIn("does not establish", device_result["Observation"])
+
 
 class ScanCoverageSeparationTests(unittest.TestCase):
     """Assessment coverage limits must not inflate or pollute tenant findings."""
@@ -401,7 +420,8 @@ class ScanCoverageSeparationTests(unittest.TestCase):
         self.assertEqual(result["Category"], "Scan Coverage")
         self.assertEqual(result["Disposition"], "Coverage")
         self.assertIn("does not mean", result["Observation"])
-        self.assertIn("Az.Accounts", result["Recommendation"])
+        self.assertIn("Power Platform Reader", result["Recommendation"])
+        self.assertIn("optional extensibility", result["Recommendation"])
 
     def test_read_and_empty_ai_builder_inventory_remains_an_opportunity(self):
         from Recommendations.power_platform.AI_BUILDER_MODELS import get_recommendation
@@ -483,7 +503,8 @@ class ScanCoverageSeparationTests(unittest.TestCase):
             REPO_ROOT / "Recommendations" / "entra" / "ENTRA_PRIVATE_ACCESS.py"
         ).read_text(encoding="utf-8")
 
-        self.assertIn("Policy.Read.PermissionGrant", consent_source)
+        self.assertIn("Policy.Read.All", consent_source)
+        self.assertIn("authorization policy", consent_source.lower())
         self.assertIn("NetworkAccess.Read.All permission is not granted", internet_source)
         self.assertIn("NetworkAccess.Read.All permission is not granted", private_source)
 

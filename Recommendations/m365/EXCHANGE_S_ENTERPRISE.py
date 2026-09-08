@@ -54,7 +54,7 @@ async def get_recommendation(sku_name, status="Success", client=None, m365_insig
                 service="M365",
                 feature=f"{feature_name} - Activity Baseline",
                 observation=f"Email activity data available: {active_users} active users, averaging {avg_sent} emails sent per user. Baseline established for measuring Copilot impact",
-                recommendation="Track email metrics before and after Copilot: drafting time (target 30-40% reduction), email volume, response quality. Focus on high-volume roles (managers, sales, support) where Copilot saves 2-3 hours weekly.",
+                recommendation="Track the same customer-defined email measures before and during a Copilot pilot, such as drafting cycle time, response quality, rework, and after-hours activity. Select roles with a documented business need and make expansion contingent on measured results.",
                 link_text="Exchange Activity Reports",
                 link_url="https://learn.microsoft.com/microsoft-365/admin/activity-reports/email-activity",
                 priority="Low",
