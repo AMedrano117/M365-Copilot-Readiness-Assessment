@@ -970,6 +970,76 @@ def export_to_html(recommendations, filename=None, tenant_name=None, evidence_bu
       </p>
     </section>
     """
+
+    entra_license = evidence_bundle.get("entra_license_context", {}) if evidence_bundle else {}
+    entra_license_rows = entra_license.get("rows", []) or []
+    entra_license_html = f"""
+    <section class="secondary-panel" id="entra-license-context">
+      <h2>Entra licensing context</h2>
+      <p><strong>Detected tenant tier: {escape(entra_license.get('detected_tier', 'Not determined'))}.</strong>
+      This explains which identity checks the tenant can support; a capability that is not licensed is reported as unavailable, not as a failed control.</p>
+      {render_compact_table(entra_license_rows, [
+          ("Identity capability", "Capability"), ("Entra P1", "P1"),
+          ("Entra P2", "P2"), ("This tenant", "Tenant"),
+      ])}
+      <p class="reference-row"><a href="https://learn.microsoft.com/entra/fundamentals/licensing" target="_blank" rel="noopener noreferrer">Microsoft Entra licensing reference</a></p>
+    </section>
+    """
+
+    exposure = evidence_bundle.get("data_exposure", {}) if evidence_bundle else {}
+    exposure_sources = exposure.get("sources", {}) or {}
+    exposure_rows = []
+    for source_key, area, purpose in (
+        ("sam", "SharePoint Advanced Management Data Access Governance", "SharePoint and OneDrive permissions and oversharing"),
+        ("dspm", "Purview DSPM data-risk assessment", "Sensitive-data exposure and oversharing risk"),
+    ):
+        source = exposure_sources.get(source_key, {}) or {}
+        if source.get("files_loaded"):
+            freshness = str(source.get("freshness", "unknown") or "unknown").lower()
+            if freshness == "fresh":
+                status = "Current report assessed"
+                next_step = "No new scan is needed for this assessment."
+            elif freshness == "stale":
+                status = "New report needed"
+                next_step = "Start a new Microsoft scan and rerun after it completes."
+            else:
+                status = "Date could not be verified"
+                next_step = "Supply a dated export or run a new Microsoft scan."
+        else:
+            status = "Check for a recent report"
+            next_step = "Reuse a current completed report; start a new Microsoft scan only if none exists."
+        exposure_rows.append({"Area": area, "Purpose": purpose, "Status": status, "Next step": next_step})
+
+    purview_policy = evidence_bundle.get("purview_policy_summary", {}) if evidence_bundle else {}
+    if purview_policy.get("available"):
+        dlp_summary = (
+            f"Purview returned {purview_policy.get('total', 0)} DLP policies; "
+            f"{purview_policy.get('enabled', 0)} are enabled."
+        )
+        dlp_detail = f"""
+        <details>
+          <summary>DLP policy reference ({purview_policy.get('total', 0)})</summary>
+          {render_compact_table((purview_policy.get('rows', []) or [])[:25], [
+              ("Policy", "Policy"), ("Enabled", "Enabled"), ("Mode", "Mode"), ("Locations", "Locations"),
+          ])}
+          {'<p class="muted">The first 25 policies are shown here; the workbook contains the complete Purview policy inventory.</p>' if len(purview_policy.get('rows', []) or []) > 25 else ''}
+        </details>
+        """
+    else:
+        dlp_summary = "DLP policy details were not collected, so policy names, modes, and workload coverage are not assessed."
+        dlp_detail = "<p class=\"muted\">Run <code>.\\collect_purview_data.ps1</code> and complete the Purview sign-in to include DLP policy details.</p>"
+
+    data_protection_html = f"""
+    <section class="secondary-panel" id="data-protection-status">
+      <h2>Data protection checks before AI deployment</h2>
+      <p>For AI that can use SharePoint or OneDrive content, complete both Microsoft data-exposure checks below. The tool reuses recent completed results and does not start long-running scans.</p>
+      {render_compact_table(exposure_rows, [
+          ("Check", "Area"), ("What it covers", "Purpose"), ("Status", "Status"), ("Next step", "Next step"),
+      ])}
+      <p class="analysis-impact-note">{escape(dlp_summary)}</p>
+      {dlp_detail}
+    </section>
+    """
     
     service_sections = []
     service_nav_items = []
@@ -1995,6 +2065,8 @@ def export_to_html(recommendations, filename=None, tenant_name=None, evidence_bu
     </section>
 
     {scope_html}
+    {entra_license_html}
+    {data_protection_html}
     {assurance_html}
     {action_plan_html}
 

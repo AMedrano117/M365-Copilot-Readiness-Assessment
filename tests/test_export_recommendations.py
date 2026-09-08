@@ -193,6 +193,44 @@ class ExportRecommendationsTests(unittest.TestCase):
         self.assertIn("current provider register is required", html)
         self.assertIn("complete once per product and subscription tier", html)
 
+    def test_html_surfaces_entra_license_data_scans_and_dlp_reference(self):
+        evidence_bundle = self._sample_evidence_bundle()
+        evidence_bundle.update({
+            "entra_license_context": {
+                "detected_tier": "Microsoft Entra ID P1",
+                "rows": [{
+                    "Capability": "Full Identity Protection risk data and risk-based Conditional Access",
+                    "P1": "Not included", "P2": "Included", "Tenant": "Not included with detected P1",
+                }],
+            },
+            "data_exposure": {"sources": {
+                "sam": {"files_loaded": 0},
+                "dspm": {"files_loaded": 1, "freshness": "fresh"},
+            }},
+            "purview_policy_summary": {
+                "available": True, "total": 1, "enabled": 1,
+                "rows": [{
+                    "Policy": "Protect financial data", "Enabled": "Yes", "Mode": "Enable",
+                    "Locations": "Exchange, SharePoint",
+                }],
+            },
+        })
+
+        html_path = export_to_html(
+            self._sample_recommendations(), filename="license_and_data.html",
+            tenant_name="Contoso", evidence_bundle=evidence_bundle,
+        )
+        html = Path(html_path).read_text(encoding="utf-8")
+
+        self.assertIn("Detected tenant tier: Microsoft Entra ID P1", html)
+        self.assertIn("Full Identity Protection risk data", html)
+        self.assertIn("SharePoint Advanced Management Data Access Governance", html)
+        self.assertIn("Check for a recent report", html)
+        self.assertIn("Purview DSPM data-risk assessment", html)
+        self.assertIn("Current report assessed", html)
+        self.assertIn("DLP policy reference (1)", html)
+        self.assertIn("Protect financial data", html)
+
 
 if __name__ == "__main__":
     unittest.main()

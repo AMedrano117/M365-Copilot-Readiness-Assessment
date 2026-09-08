@@ -683,13 +683,32 @@ async def get_entra_client(graph_client, tenant_id=None):
             # A task counts as read only when it neither raised nor returned nothing.
             for _task_name, _task_result in phase1_results.items():
                 if isinstance(_task_result, dict) and 'available' in _task_result:
+                    _reason = _task_result.get('error', '') or (f"HTTP {_task_result.get('status_code')}" if _task_result.get('status_code') else '')
+                    if _task_result.get('status_code') == 403 and _task_name in {'risky_users', 'risk_detections'}:
+                        _required_permission = (
+                            'IdentityRiskyUser.Read.All' if _task_name == 'risky_users'
+                            else 'IdentityRiskEvent.Read.All'
+                        )
+                        if _required_permission in _get_graph_token_roles():
+                            _reason = (
+                                f"Microsoft Graph returned HTTP 403 even though {_required_permission} is present. "
+                                "Full Identity Protection risk data requires Microsoft Entra ID P2 or another "
+                                "qualifying Entra entitlement; Microsoft Entra ID P1 provides only limited risk data."
+                            )
+                        else:
+                            _reason = (
+                                f"Microsoft Graph returned HTTP 403. Grant the application permission "
+                                f"{_required_permission}, provide tenant-wide admin consent, and rerun."
+                            )
+                        with _stdout_lock:
+                            print(f"[{get_timestamp()}] ℹ️     Entra: {_task_name.replace('_', ' ').title()} unavailable — {_reason}")
                     _status = {
                         'availability_status': _task_result.get('availability_status', 'available' if _task_result.get('available') else 'unavailable'),
                         'available': bool(_task_result.get('available')),
                         'records_collected': int(_task_result.get('records_collected', len(_extract_response_items(_task_result))) or 0),
                         'pages_collected': int(_task_result.get('pages_collected', 1 if _task_result.get('available') else 0) or 0),
                         'truncated': bool(_task_result.get('truncated')),
-                        'reason': _task_result.get('error', '') or (f"HTTP {_task_result.get('status_code')}" if _task_result.get('status_code') else ''),
+                        'reason': _reason,
                     }
                     client_obj.collection_status[_task_name] = _status
                     client_obj.data_sources[_task_name] = _status['available'] and not _status['truncated']

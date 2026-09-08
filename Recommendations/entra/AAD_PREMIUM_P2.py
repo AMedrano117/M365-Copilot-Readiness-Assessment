@@ -165,11 +165,25 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
                 ))
             elif not entra_source_was_read(entra_insights, 'risky_users', 'risk_detections'):
                 # Identity Protection data was never read - do not report unread as clean
+                source_states = entra_insights.get('collection_status', {}) or {}
+                source_reasons = [
+                    str((source_states.get(key, {}) or {}).get('reason', '') or '')
+                    for key in ('risky_users', 'risk_detections')
+                ]
+                p2_limited = any('Entra ID P2' in reason for reason in source_reasons)
                 recommendations.append(new_recommendation(
                     service="Entra",
                     feature=feature_name,
-                    observation="Identity Protection risk data could not be retrieved, so account risk is unverified",
-                    recommendation="Grant the assessment IdentityRiskyUser.Read.All and IdentityRiskEvent.Read.All, then rerun. Compromised accounts are a primary route to Copilot data exfiltration, so risk status should be confirmed before broad rollout. Meanwhile review Entra ID Protection > Risky users directly.",
+                    observation=(
+                        "Identity Protection risk data could not be retrieved because the tenant does not provide full risk reporting; account risk is unverified"
+                        if p2_limited else
+                        "Identity Protection risk data could not be retrieved, so account risk is unverified"
+                    ),
+                    recommendation=(
+                        "Microsoft Entra ID P1 provides limited risk information. Full risky-user and risk-detection assessment requires Entra ID P2 or another qualifying Entra entitlement. Treat this as a licensing coverage limit; no additional Graph permission is needed when the two IdentityRisk permissions already have admin consent."
+                        if p2_limited else
+                        "Grant the application permissions IdentityRiskyUser.Read.All and IdentityRiskEvent.Read.All with admin consent, then rerun. Meanwhile review Entra ID Protection > Risky users directly."
+                    ),
                     link_text="Identity Protection Risk Reports",
                     link_url="https://learn.microsoft.com/entra/id-protection/howto-identity-protection-investigate-risk",
                     priority="Medium",
