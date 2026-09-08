@@ -158,9 +158,6 @@ $graphPermissions = @(
     @{ Id = "b9bb2381-47a4-46cd-aafb-00cb12f68504"; Name = "Channel.ReadBasic.All" }
     @{ Id = "a82116e5-55eb-4c41-a434-62fe8a61c773"; Name = "OnlineMeetings.Read.All" }
     
-    # M365 Copilot Adoption - Virtual Appointments & Bookings (3+ observations)
-    @{ Id = "6e98f277-b046-4193-a4f2-6bf6a78cd491"; Name = "Bookings.Read.All" }
-    
     # M365 Copilot Adoption - User Activity & Insights (5+ observations)
     @{ Id = "b528084d-ad10-4598-8b93-929746b4d7d6"; Name = "People.Read.All" }
     

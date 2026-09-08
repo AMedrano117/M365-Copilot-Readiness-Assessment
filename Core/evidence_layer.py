@@ -476,6 +476,98 @@ def build_evidence_bundle(
             "source": "Power Platform unified inventory",
             "freshness": "Unknown",
         },
+        "entra_license_context": _build_entra_license_context(m365_info),
+        "purview_policy_summary": _build_purview_policy_summary(purview_client),
+        "data_exposure": data_exposure_info or {},
+    }
+
+
+def _build_entra_license_context(m365_info):
+    """Summarize the detected Entra tier and the practical P1/P2 boundary."""
+    licenses = m365_info.get("licenses", []) if isinstance(m365_info, dict) else []
+    active_plans = set()
+    active_skus = set()
+    for license_entry in licenses or []:
+        if not isinstance(license_entry, dict):
+            continue
+        sku = str(license_entry.get("sku_part_number", "") or "").upper()
+        if sku:
+            active_skus.add(sku)
+        for plan in license_entry.get("service_plans", []) or []:
+            if not isinstance(plan, dict):
+                continue
+            if str(plan.get("status", "") or "").lower() == "success":
+                active_plans.add(str(plan.get("name", "") or "").upper())
+
+    has_p2 = "AAD_PREMIUM_P2" in active_plans
+    has_p1 = has_p2 or bool(active_plans.intersection({"AAD_PREMIUM", "AAD_PREMIUM_P1"}))
+    has_governance = any(
+        "IDENTITY_GOVERNANCE" in value or "ENTRA_SUITE" in value
+        for value in active_plans.union(active_skus)
+    )
+    detected_tier = "Microsoft Entra ID P2" if has_p2 else "Microsoft Entra ID P1" if has_p1 else "Not detected from service plans"
+
+    def tenant_availability(p1_included, p2_included=True, alternate=""):
+        if has_p2 and p2_included:
+            return "Available with detected P2"
+        if has_p1 and p1_included:
+            return "Available with detected P1"
+        if has_governance and alternate:
+            return f"May be available with detected {alternate} entitlement"
+        if has_p1:
+            suffix = f"; {alternate} can also qualify" if alternate else ""
+            return f"Not included with detected P1{suffix}"
+        return "License entitlement not determined"
+
+    rows = [
+        {"Capability": "Conditional Access", "P1": "Included", "P2": "Included", "Tenant": tenant_availability(True)},
+        {"Capability": "MFA reporting and authentication controls", "P1": "Included", "P2": "Included", "Tenant": tenant_availability(True)},
+        {"Capability": "Self-service password reset with writeback", "P1": "Included", "P2": "Included", "Tenant": tenant_availability(True)},
+        {
+            "Capability": "Full Identity Protection risk data and risk-based Conditional Access",
+            "P1": "Not included", "P2": "Included", "Tenant": tenant_availability(False),
+        },
+        {
+            "Capability": "Privileged Identity Management",
+            "P1": "Not included", "P2": "Included",
+            "Tenant": tenant_availability(False, alternate="Identity Governance or Entra Suite"),
+        },
+        {
+            "Capability": "Access reviews and entitlement management",
+            "P1": "Not included", "P2": "Included",
+            "Tenant": tenant_availability(False, alternate="Identity Governance or Entra Suite"),
+        },
+    ]
+    return {"detected_tier": detected_tier, "rows": rows, "source": "Microsoft 365 subscribed SKU service plans"}
+
+
+def _build_purview_policy_summary(purview_client):
+    """Expose safe DLP policy details for the customer-facing report."""
+    if not purview_client:
+        return {"available": False, "reason": "Purview policy collection was not run."}
+    dlp = getattr(purview_client, "dlp_policies", {}) or {}
+    if not dlp.get("available"):
+        return {"available": False, "reason": "DLP policy details were not available from the Purview collection."}
+
+    rows = []
+    for policy in _ensure_list(dlp.get("policies", [])):
+        locations = []
+        for label, key in (("Exchange", "ExchangeLocation"), ("SharePoint", "SharePointLocation"), ("OneDrive", "OneDriveLocation")):
+            if _safe_get(policy, key) not in (None, "", [], False):
+                locations.append(label)
+        rows.append({
+            "Policy": _iso_text(_safe_get(policy, "Name")) or "Unnamed policy",
+            "Enabled": _bool_text(_safe_get(policy, "Enabled")),
+            "Mode": _iso_text(_safe_get(policy, "Mode")) or "Not provided",
+            "Locations": ", ".join(locations) or "Not provided",
+        })
+    rows.sort(key=lambda row: row["Policy"].lower())
+    return {
+        "available": True,
+        "total": len(rows),
+        "enabled": sum(1 for row in rows if row["Enabled"] == "Yes"),
+        "rows": rows,
+        "source": "Microsoft Purview compliance PowerShell",
     }
 
 
@@ -1349,6 +1441,17 @@ def _build_purview_policy_sheet(purview_client):
                     break
             enabled_value = _safe_get(item, enabled_key)
             mode_value = _safe_get(item, mode_key)
+            additional_context = _iso_text(_safe_get(item, "Status")) or _iso_text(_safe_get(item, "Comment"))
+            if object_type == "DLP Policy":
+                protected_locations = []
+                for label, location_key in (
+                    ("Exchange", "ExchangeLocation"),
+                    ("SharePoint", "SharePointLocation"),
+                    ("OneDrive", "OneDriveLocation"),
+                ):
+                    if _safe_get(item, location_key) not in (None, "", [], False):
+                        protected_locations.append(label)
+                additional_context = "Locations: " + (", ".join(protected_locations) or "Not provided")
             rows.append({
                 "RecommendationId": "",
                 "Flagged By": "",
@@ -1356,7 +1459,7 @@ def _build_purview_policy_sheet(purview_client):
                 "Name": name or _iso_text(_safe_get(item, "id")),
                 "Enabled": _bool_text(enabled_value),
                 "Mode": _iso_text(mode_value),
-                "Additional Context": _iso_text(_safe_get(item, "Status")) or _iso_text(_safe_get(item, "Comment")),
+                "Additional Context": additional_context,
             })
 
     add_objects("DLP Policy", purview_client.dlp_policies.get("policies", []))

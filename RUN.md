@@ -36,7 +36,7 @@ The following table shows what data is collected for each service and the APIs/c
 | Service | Authentication | APIs / PowerShell Cmdlets Used | Data Collected |
 |---------|----------------|--------------------------------|----------------|
 | **M365** | Service Principal | Microsoft Graph API:<br/>- `/subscribedSkus`<br/>- `/users` | License assignments, SKU details, service plan provisioning status, user activity metrics |
-| **Entra** | Service Principal | Microsoft Graph API:<br/>- `/identityProtection/riskyUsers`<br/>- `/identityProtection/riskDetections`<br/>- `/identity/conditionalAccess/policies`<br/>- `/policies/authorizationPolicy`<br/>- `/organization` | Risky users, risk detections, conditional access policies, MFA enforcement, external collaboration settings |
+| **Entra** | Service Principal | Microsoft Graph API:<br/>- `/identityProtection/riskyUsers`<br/>- `/identityProtection/riskDetections`<br/>- `/identity/conditionalAccess/policies`<br/>- `/policies/authorizationPolicy`<br/>- `/organization` | Risky users and risk detections when the tenant has a qualifying P2-level entitlement; conditional access policies, MFA enforcement, and external collaboration settings |
 | **Defender** | Service Principal | **Microsoft Graph Security API:**<br/>- `/security/alerts_v2`<br/>- `/security/incidents`<br/>- `/security/secureScore`<br/>- `/security/secureScoreControlProfiles`<br/>**Defender for Endpoint API:**<br/>- `/api/machines`<br/>- `/api/vulnerabilities`<br/>- `/api/recommendations`<br/>- `/api/exposureScore`<br/>- `/api/advancedqueries/run` | Security alerts, incidents, secure scores, device inventory, vulnerabilities, security recommendations, exposure scores, threat hunting queries |
 | **Purview** | User delegated | **Connect-IPPSSession:**<br/>- `Get-DlpCompliancePolicy`<br/>- `Get-Label`, `Get-LabelPolicy`<br/>- `Get-RetentionCompliancePolicy`<br/>- `Get-InformationBarrierPolicy`<br/>- `Get-InsiderRiskPolicy`<br/>- `Get-ComplianceCase`<br/>**Connect-ExchangeOnline:**<br/>- `Get-OrganizationConfig`<br/>- `Get-AdminAuditLogConfig`<br/>- `Get-IRMConfiguration` | DLP policies, sensitivity labels, label policies, retention policies, information barriers, insider risk policies, compliance cases, audit configuration, IRM settings |
 | **Power Platform** | User delegated | Power Platform Management API:<br/>- `/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments`<br/>- `/providers/Microsoft.PowerApps/apps`<br/>- `/providers/Microsoft.Flow/flows`<br/>- `/providers/Microsoft.PowerApps/aiModels` | Environments, environment DLP policies, Power Apps inventory, Power Automate flows, AI Builder models, connector usage |
@@ -118,7 +118,6 @@ Run the service principal setup script to create Azure AD app registration with 
    - ExternalConnection.Read.All - Read Graph connectors
    - Channel.ReadBasic.All - Read Teams channels
    - OnlineMeetings.Read.All - Read online meetings
-   - Bookings.Read.All - Read bookings
    - People.Read.All - Read people data
    - Printer.Read.All - Read printers
    - WorkplaceAnalytics-Reports.Read.All - Read workplace analytics
@@ -415,6 +414,15 @@ Access Shadow AI discovery. Allow Microsoft to populate the stream and rerun wit
 measures data and prompt risk, not aggregate adoption of external AI services.
 
 ### Cross-Tenant Permission Issues
+
+**Problem:** `risky_users` or `risk_detections` returns HTTP 403 even though the matching
+`IdentityRiskyUser.Read.All` or `IdentityRiskEvent.Read.All` application permission has admin
+consent.
+
+**Solution:** Check the Entra license before changing permissions again. Microsoft Entra ID P1
+provides limited risk information; full risky-user and risk-detection reporting requires Entra ID
+P2 or another qualifying Entra entitlement. The assessment reports this as a licensing coverage
+limit and does not interpret unread risk data as zero risky users.
 
 **Problem:** `NetworkAccess.Read.All permission is not granted to the service principal`
 

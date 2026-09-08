@@ -67,6 +67,20 @@ class FillerCardSuppressionTests(unittest.TestCase):
         self.assertEqual(by_plan["WINBIZ"]["Assessed"], "No")
         self.assertEqual(by_plan["SHAREPOINTENTERPRISE"]["Assessed"], "Yes")
 
+    def test_bookings_is_inventory_only_even_when_usage_is_high(self):
+        from Recommendations.m365.MICROSOFTBOOKINGS import get_recommendation
+
+        records = get_recommendation(
+            "ENTERPRISEPACK",
+            "PendingInput",
+            {"email_report_available": True, "email_avg_sent_per_user": 25, "teams_total_meetings": 5000},
+        )
+
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["Disposition"], "Reference")
+        self.assertEqual(records[0]["Recommendation"], "")
+        self.assertNotEqual(records[0]["Disposition"], "Coverage")
+
 
 class PlanStatusResolutionTests(unittest.TestCase):
     def test_plan_active_in_any_sku_is_reported_active(self):

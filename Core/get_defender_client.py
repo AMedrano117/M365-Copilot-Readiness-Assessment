@@ -47,7 +47,7 @@ async def get_defender_client(tenant_id, graph_client):
             self.defender_api_available = False
 
             # Per-dataset fetch outcome, keyed by Graph Security task name (alerts, incidents,
-            # risky_users, ...). True only when that specific query returned data. Without this
+            # secure scores, ...). True only when that specific query returned data. Without this
             # a failed query is indistinguishable from a genuinely empty result, and downstream
             # recommendations report "no threats detected" when nothing was ever read.
             self.data_sources = {}
@@ -167,13 +167,6 @@ async def get_defender_client(tenant_id, graph_client):
         graph_tasks['incidents'] = asyncio.create_task(graph_client.security.incidents.get())
         graph_tasks['secure_scores'] = asyncio.create_task(graph_client.security.secure_scores.get())
         graph_tasks['secure_score_controls'] = asyncio.create_task(graph_client.security.secure_score_control_profiles.get())
-        
-        # Fetch Identity Protection data (risky users who might access Copilot)
-        try:
-            graph_tasks['risky_users'] = asyncio.create_task(graph_client.identity_protection.risky_users.get())
-        except AttributeError:
-            # risky_users may not be available in this SDK version
-            pass
         
         # Fetch OAuth app consent (third-party apps with risky permissions for Agent integration)
         # Note: This may require additional permissions
@@ -360,39 +353,6 @@ async def get_defender_client(tenant_id, graph_client):
                     'identity_controls': len(identity_controls),
                     'data_controls': len(data_controls),
                     'copilot_relevant': copilot_relevant
-                }
-        
-        # Process Risky Users (Identity Protection)
-        if graph_results.get('risky_users'):
-            risky_users_data = graph_results['risky_users']
-            if hasattr(risky_users_data, 'value') and risky_users_data.value:
-                client.risky_users = risky_users_data.value
-                
-                high = 0
-                medium = 0
-                low = 0
-                confirmed_compromised = 0
-                
-                for user in risky_users_data.value:
-                    risk_level = getattr(user, 'risk_level', '').lower()
-                    risk_state = getattr(user, 'risk_state', '').lower()
-                    
-                    if risk_level == 'high':
-                        high += 1
-                    elif risk_level == 'medium':
-                        medium += 1
-                    elif risk_level == 'low':
-                        low += 1
-                    
-                    if risk_state == 'confirmedcompromised':
-                        confirmed_compromised += 1
-                
-                client.risky_users_summary = {
-                    'total': len(risky_users_data.value),
-                    'high': high,
-                    'medium': medium,
-                    'low': low,
-                    'confirmed_compromised': confirmed_compromised
                 }
         
         # Process Risky Sign-ins

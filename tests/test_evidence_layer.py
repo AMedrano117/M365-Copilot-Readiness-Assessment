@@ -7,12 +7,41 @@ from Core.evidence_layer import (
     _build_authentication_sheet,
     _build_identity_risk_sheet,
     _apply_explicit_evidence_fallbacks,
+    _build_entra_license_context,
+    _build_purview_policy_summary,
     build_evidence_bundle,
 )
 from Core.get_entra_client import _apply_authorization_policy, _get_attr
 
 
 class EvidenceLayerTests(unittest.TestCase):
+    def test_entra_p1_context_explains_p2_only_capabilities(self):
+        context = _build_entra_license_context({"licenses": [{
+            "sku_part_number": "SPE_E3",
+            "service_plans": [{"name": "AAD_PREMIUM", "status": "Success"}],
+        }]})
+
+        self.assertEqual(context["detected_tier"], "Microsoft Entra ID P1")
+        risk = next(row for row in context["rows"] if row["Capability"].startswith("Full Identity Protection"))
+        self.assertEqual(risk["P1"], "Not included")
+        self.assertIn("detected P1", risk["Tenant"])
+
+    def test_purview_dlp_summary_includes_mode_and_locations(self):
+        client = SimpleNamespace(dlp_policies={
+            "available": True,
+            "policies": [{
+                "Name": "Protect financial data", "Enabled": True, "Mode": "Enable",
+                "ExchangeLocation": ["All"], "SharePointLocation": ["All"], "OneDriveLocation": [],
+            }],
+        })
+
+        summary = _build_purview_policy_summary(client)
+
+        self.assertTrue(summary["available"])
+        self.assertEqual(summary["enabled"], 1)
+        self.assertEqual(summary["rows"][0]["Mode"], "Enable")
+        self.assertEqual(summary["rows"][0]["Locations"], "Exchange, SharePoint")
+
     def test_entra_fallback_uses_measured_condition_not_remediation_wording(self):
         rows = [
             {"Service": "Entra", "Feature": "Microsoft Entra ID P1", "Observation": "Only 7 of 10 users were enrolled in MFA.", "Recommendation": "Use Conditional Access."},

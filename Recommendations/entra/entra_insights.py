@@ -113,6 +113,7 @@ def extract_entra_insights_from_client(entra_client):
     network_access_summary = getattr(entra_client, 'network_access_summary', {})
     private_access_summary = getattr(entra_client, 'private_access_summary', {})
     data_sources = getattr(entra_client, 'data_sources', {}) or {}
+    collection_status = getattr(entra_client, 'collection_status', {}) or {}
     
     # Calculate derived metrics
     total_devices = device_summary.get('total_managed', 0)
@@ -130,6 +131,7 @@ def extract_entra_insights_from_client(entra_client):
         # Which phase-1 datasets were actually read. Lets recommendations distinguish
         # "query returned nothing" from "query never succeeded".
         'data_sources': data_sources,
+        'collection_status': collection_status,
 
         # Conditional Access (#4)
         'ca_total': ca_summary.get('total', 0),
