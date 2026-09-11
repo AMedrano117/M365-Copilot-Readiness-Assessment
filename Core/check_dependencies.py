@@ -11,7 +11,6 @@ def check_dependencies():
     required_packages = {
         'azure.identity': 'azure-identity',
         'azure.core': 'azure-core',
-        'msgraph': 'msgraph-sdk',
         'httpx': 'httpx',
         'openpyxl': 'openpyxl'
     }

@@ -48,6 +48,9 @@ if __name__ == "__main__":
     copilot_dashboard_export = args.copilot_dashboard_export
     power_platform_inventory = args.power_platform_inventory
     preview_collectors = args.preview_collectors
+    sharepoint_admin_url = args.sharepoint_admin_url
+    legacy_power_platform_collector = args.legacy_power_platform_collector
+    check_connections = args.check_connections
     assessment_profile = args.assessment_profile
     provider_evidence = args.provider_evidence
     snapshot_json = args.snapshot_json
@@ -65,7 +68,7 @@ if __name__ == "__main__":
     from Core.orchestrator import orchestrate
     
     try:
-        asyncio.run(
+        exit_code = asyncio.run(
             orchestrate(
                 tenant_id,
                 services,
@@ -78,12 +81,17 @@ if __name__ == "__main__":
                 copilot_dashboard_export=copilot_dashboard_export,
                 power_platform_inventory=power_platform_inventory,
                 preview_collectors=preview_collectors,
+                sharepoint_admin_url=sharepoint_admin_url,
+                legacy_power_platform_collector=legacy_power_platform_collector,
+                check_connections=check_connections,
                 assessment_profile=assessment_profile,
                 provider_evidence=provider_evidence,
                 snapshot_json=snapshot_json,
                 baseline=baseline,
             )
         )
+        if isinstance(exit_code, int) and exit_code:
+            sys.exit(exit_code)
     except ValueError as e:
         # Catch credential-related errors gracefully
         error_msg = str(e)

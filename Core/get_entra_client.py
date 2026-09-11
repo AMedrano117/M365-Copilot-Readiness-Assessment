@@ -219,7 +219,7 @@ async def _fetch_graph_object_via_http(path):
     finally:
         await http_client.aclose()
 
-async def get_entra_client(graph_client, tenant_id=None):
+async def get_entra_client(graph_client, tenant_id=None, preview_collectors='none'):
     """
     Get authenticated client for Microsoft Entra ID (Azure AD) APIs.
     Fetches comprehensive identity, security, and compliance data.
@@ -479,152 +479,8 @@ async def get_entra_client(graph_client, tenant_id=None):
     progress_task = asyncio.create_task(update_progress())
     
     try:
-        # Define all API calls using proper SDK object model
-        # Group by dependencies - some can run together, others need results first
-        
-        # Phase 1: Core data (no dependencies)
-        phase1_tasks = {}
-        
-        try:
-            # Conditional Access policies
-            phase1_tasks['ca_policies'] = graph_client.identity.conditional_access.policies.get()
-        except Exception:
-            pass
-        
-        try:
-            # Authentication methods user registration details
-            phase1_tasks['auth_methods'] = graph_client.reports.authentication_methods.user_registration_details.get()
-        except Exception:
-            pass
-        
-        try:
-            # Risky users from Identity Protection
-            phase1_tasks['risky_users'] = graph_client.identity_protection.risky_users.get()
-        except Exception:
-            pass
-        
-        try:
-            # Risk detections from Identity Protection
-            phase1_tasks['risk_detections'] = graph_client.identity_protection.risk_detections.get()
-        except Exception:
-            pass
-        
-        try:
-            # Role assignments (PIM)
-            phase1_tasks['role_assignments'] = graph_client.role_management.directory.role_assignments.get()
-        except Exception:
-            pass
-        
-        try:
-            # Role eligibility schedules (PIM)
-            phase1_tasks['role_eligibility_schedules'] = graph_client.role_management.directory.role_eligibility_schedules.get()
-        except Exception:
-            pass
-        
-        try:
-            # Role assignment schedules (PIM)
-            phase1_tasks['role_assignment_schedules'] = graph_client.role_management.directory.role_assignment_schedules.get()
-        except Exception:
-            pass
-        
-        try:
-            # Access reviews
-            phase1_tasks['access_reviews'] = graph_client.identity_governance.access_reviews.definitions.get()
-        except Exception:
-            pass
-        
-        try:
-            # Managed devices (Intune)
-            phase1_tasks['managed_devices'] = graph_client.device_management.managed_devices.get()
-        except Exception:
-            pass
-        
-        try:
-            # Device compliance policies (Intune)
-            phase1_tasks['compliance_policies'] = graph_client.device_management.device_compliance_policies.get()
-        except Exception:
-            pass
-        
-        try:
-            # Groups with licenses
-            from msgraph.generated.groups.groups_request_builder import GroupsRequestBuilder
-            query_params = GroupsRequestBuilder.GroupsRequestBuilderGetQueryParameters(
-                filter="assignedLicenses/$count ne 0",
-                select=["id", "displayName", "groupTypes", "assignedLicenses", "licenseProcessingState"],
-                top=999
-            )
-            request_config = GroupsRequestBuilder.GroupsRequestBuilderGetRequestConfiguration(query_parameters=query_params)
-            phase1_tasks['groups'] = graph_client.groups.get(request_configuration=request_config)
-        except Exception:
-            pass
-        
-        try:
-            # Guest users
-            from msgraph.generated.users.users_request_builder import UsersRequestBuilder
-            query_params = UsersRequestBuilder.UsersRequestBuilderGetQueryParameters(
-                filter="userType eq 'Guest'",
-                select=["id", "displayName", "userPrincipalName", "createdDateTime", "assignedLicenses"],
-                top=999
-            )
-            request_config = UsersRequestBuilder.UsersRequestBuilderGetRequestConfiguration(query_parameters=query_params)
-            phase1_tasks['guests'] = graph_client.users.get(request_configuration=request_config)
-        except Exception:
-            pass
-        
-        try:
-            # Cross-tenant access policy (B2B)
-            phase1_tasks['cross_tenant_policy'] = graph_client.policies.cross_tenant_access_policy.get()
-        except Exception:
-            pass
-        
-        try:
-            # Service principals
-            from msgraph.generated.service_principals.service_principals_request_builder import ServicePrincipalsRequestBuilder
-            query_params = ServicePrincipalsRequestBuilder.ServicePrincipalsRequestBuilderGetQueryParameters(
-                select=["id", "appId", "displayName", "publisherName", "verifiedPublisher", "appOwnerOrganizationId", "servicePrincipalType", "appRoles", "oauth2PermissionScopes"],
-                top=500
-            )
-            request_config = ServicePrincipalsRequestBuilder.ServicePrincipalsRequestBuilderGetRequestConfiguration(query_parameters=query_params)
-            phase1_tasks['service_principals'] = graph_client.service_principals.get(request_configuration=request_config)
-        except Exception:
-            pass
-        
-        try:
-            # OAuth permission grants
-            phase1_tasks['oauth_grants'] = graph_client.oauth2_permission_grants.get()
-        except Exception:
-            pass
-        
-        try:
-            # Permission grant policies (consent policies)
-            phase1_tasks['consent_policies'] = graph_client.policies.permission_grant_policies.get()
-        except Exception:
-            pass
-        
-        try:
-            # Authorization policy
-            phase1_tasks['authorization_policy'] = graph_client.policies.authorization_policy.get()
-        except Exception:
-            pass
-        
-        try:
-            # Sign-in logs: Last 7 days (legacy auth detection)
-            from msgraph.generated.audit_logs.sign_ins.sign_ins_request_builder import SignInsRequestBuilder
-            seven_days_ago = (datetime.utcnow() - timedelta(days=7)).strftime('%Y-%m-%dT%H:%M:%SZ')
-            query_params = SignInsRequestBuilder.SignInsRequestBuilderGetQueryParameters(
-                filter=f"createdDateTime ge {seven_days_ago}",
-                top=500
-            )
-            request_config = SignInsRequestBuilder.SignInsRequestBuilderGetRequestConfiguration(query_parameters=query_params)
-            phase1_tasks['signin_logs'] = graph_client.audit_logs.sign_ins.get(request_configuration=request_config)
-        except Exception:
-            pass
-
-        # The paginated HTTP collectors below supersede the SDK coroutines above. Close the
-        # unstarted coroutine objects so compatibility construction cannot leak warnings.
-        for pending_call in phase1_tasks.values():
-            if hasattr(pending_call, 'close'):
-                pending_call.close()
+        # Phase 1 uses the shared pagination-aware REST client for every collection.
+        # This avoids generated-SDK dependencies and ensures nextLink handling is uniform.
         phase1_tasks = {}
 
         try:
@@ -645,9 +501,8 @@ async def get_entra_client(graph_client, tenant_id=None):
             pass
 
         # Use one pagination-aware HTTP path for every collection that contributes to a
-        # finding or workbook count. The SDK calls above are retained as compatibility
-        # fallbacks for older generated clients, but these assignments deliberately replace
-        # them so a first page can never be mistaken for the complete tenant inventory.
+        # finding or workbook count so a first page can never be mistaken for the complete
+        # tenant inventory.
         seven_days_ago = (datetime.utcnow() - timedelta(days=7)).strftime('%Y-%m-%dT%H:%M:%SZ')
         collection_requests = {
             'ca_policies': ("/v1.0/identity/conditionalAccess/policies", {'$top': '999'}, None),
@@ -1377,6 +1232,23 @@ async def get_entra_client(graph_client, tenant_id=None):
         # ====================================================================
         # GLOBAL SECURE ACCESS (Entra Internet Access) - NetworkAccess API (Beta)
         # ====================================================================
+        if preview_collectors not in {'network-access', 'all'}:
+            not_selected = {
+                'status': 'OptionalNotSelected',
+                'error': 'Optional Network Access preview collector was not selected.',
+            }
+            client_obj.network_access_summary.update(not_selected)
+            client_obj.private_access_summary.update(not_selected)
+            if (client_obj.ca_summary['total'] > 0 or
+                    client_obj.auth_summary['total_users'] > 0 or
+                    client_obj.risk_summary['risky_users_total'] >= 0 or
+                    client_obj.device_summary['total_managed'] >= 0):
+                client_obj.available = True
+            progress_task.cancel()
+            with _stdout_lock:
+                sys.stdout.write(f'\r[{get_timestamp()}]   ✓ Entra Data Gathering    [████████████████████] 100%\n')
+                sys.stdout.flush()
+            return client_obj
         try:
             # Get HTTP client for direct beta API access
             http_client = await _get_graph_http_client()

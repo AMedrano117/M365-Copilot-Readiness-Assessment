@@ -407,7 +407,7 @@ class ScanCoverageSeparationTests(unittest.TestCase):
         self.assertEqual(result["Category"], "Scan Coverage")
         self.assertEqual(result["Disposition"], "Coverage")
         self.assertIn("evidence gap", result["Observation"])
-        self.assertIn("--services Purview --interactive-auth fresh", result["Recommendation"])
+        self.assertIn("python main.py --interactive-auth fresh", result["Recommendation"])
 
     def test_missing_ai_builder_inventory_is_coverage_not_zero_models(self):
         from Recommendations.power_platform.AI_BUILDER_MODELS import get_recommendation
@@ -587,8 +587,11 @@ class ScanCoverageSeparationTests(unittest.TestCase):
             )
             return match.group(1) if match else None
 
-        self.assertEqual(tile("Actions"), "1", "only remediable tenant conditions are actions")
-        self.assertEqual(tile("Coverage Gaps"), "2")
+        self.assertEqual(
+            tile("Priority improvements"), "1",
+            "only remediable tenant conditions are counted as improvements",
+        )
+        self.assertEqual(tile("Open evidence checks"), "4")
         self.assertEqual(body.count('<article class="recommendation-card"'), 1)
         self.assertIn('<section class="coverage-panel"', body)
         self.assertIn("Scan Coverage (2)", body)

@@ -1,168 +1,145 @@
-"""
-Communication DLP - Copilot & Agent Adoption Recommendation
-"""
-from Core.new_recommendation import new_recommendation
-from Core.friendly_names import get_friendly_sku_name
+"""Evidence-based Purview DLP assessment.
 
-async def get_deployment_status(client):
-    """
-    Check DLP policy deployment via Graph API (fallback - checks labels as proxy).
-    Returns dict with policy details.
-    """
-    try:
-        # Get information protection labels from Graph API as proxy for DLP
-        # Note: Graph API doesn't directly expose DLP policies
-        policies_response = await client.information_protection.policy.labels.get()
-        
-        if not policies_response or not policies_response.value:
-            return {
-                'available': False,
-                'total_labels': 0,
-                'has_protection_framework': False
-            }
-        
-        total_labels = len(policies_response.value)
-        
-        return {
-            'available': True,
-            'total_labels': total_labels,
-            'has_protection_framework': total_labels > 0
-        }
-        
-    except Exception as e:
-        error_msg = str(e).lower()
-        if '401' in error_msg or 'unauthorized' in error_msg:
-            return {
-                'available': False,
-                'error': 'insufficient_permissions',
-                'message': 'InformationProtectionPolicy.Read permission required'
-            }
-        elif '403' in error_msg or 'forbidden' in error_msg:
-            return {
-                'available': False,
-                'error': 'access_denied',
-                'message': 'Admin consent required for InformationProtectionPolicy.Read'
-            }
-        return {
-            'available': False,
-            'error': 'unknown',
-            'message': f'Unable to check DLP policies: {str(e)}'
-        }
+The service-plan record establishes entitlement only. Policy and rule conclusions come from
+the interactive Purview collection that the default ``main.py`` path runs.
+"""
+
+from Core.friendly_names import get_friendly_sku_name
+from Core.new_recommendation import CATEGORY_SCAN_COVERAGE, NOT_ASSESSED_STATUS, new_recommendation
+
+
+def _enabled_policy(policy):
+    enabled = policy.get("Enabled")
+    mode = str(policy.get("Mode", "") or "").strip().lower()
+    return enabled is True or str(enabled).strip().lower() in {"true", "yes"} or mode in {
+        "enable", "enforce", "testwithnotifications", "testwithoutnotifications"
+    }
+
+
+def _enabled_rule(rule):
+    disabled = rule.get("Disabled")
+    return disabled in (None, "", False) or str(disabled).strip().lower() in {"false", "no"}
+
+
+def _scope(policy):
+    labels = []
+    for label, key in (
+        ("Exchange", "ExchangeLocation"), ("SharePoint", "SharePointLocation"),
+        ("OneDrive", "OneDriveLocation"), ("Teams", "TeamsLocation"),
+        ("devices", "EndpointDlpLocation"), ("Power BI", "PowerBILocation"),
+    ):
+        if policy.get(key) not in (None, "", [], False):
+            labels.append(label)
+    return labels
+
+
+def _coverage(feature, observation, recommendation, link_url):
+    return new_recommendation(
+        service="Purview", feature=feature, observation=observation,
+        recommendation=recommendation, link_text="Microsoft Purview collection requirements",
+        link_url=link_url, priority="High", status=NOT_ASSESSED_STATUS,
+        category=CATEGORY_SCAN_COVERAGE, disposition="Coverage",
+        evidence_basis="Not verified", confidence="Unknown",
+    )
+
 
 async def get_recommendation(sku_name, status="Success", client=None, purview_client=None):
-    """
-    Communication DLP prevents users from sharing sensitive information
-    extracted by Copilot through Teams chats and other messaging platforms.
-    Returns 2 recommendations: license status + DLP policy coverage status.
-    """
-    feature_name = "Communication DLP"
+    feature_name = "Data Loss Prevention"
     friendly_sku = get_friendly_sku_name(sku_name)
-    
-    # First recommendation: License status
-    if status == "Success":
-        license_rec = new_recommendation(
-            service="Purview",
-            feature=feature_name,
-            observation=f"{feature_name} is active in {friendly_sku}, preventing data leaks through AI-assisted communications",
-            recommendation="",
-            link_text="DLP for Copilot Communications",
-            link_url="https://learn.microsoft.com/purview/dlp-microsoft-teams",
-            status=status
+    license_rec = new_recommendation(
+        service="Purview", feature=f"{feature_name} entitlement",
+        observation=f"A DLP service plan is {status.lower()} in {friendly_sku}. This confirms licensing only, not policy coverage or enforcement.",
+        recommendation="", link_text="Learn about Microsoft Purview DLP",
+        link_url="https://learn.microsoft.com/purview/dlp-learn-about-dlp",
+        status=status, disposition="Reference", impact_area="Data protection & compliance",
+        ai_applicability="All AI using M365 data", evidence_basis="License signal", confidence="Low",
+    )
+    if status != "Success":
+        return [license_rec]
+
+    if not purview_client:
+        return [license_rec, _coverage(
+            f"{feature_name} configuration",
+            "DLP policies and rules were not assessed because the interactive Purview collection was unavailable.",
+            "Run the normal main.py assessment and complete the Purview sign-in. To force a new sign-in instead of reusing cached data, run: python main.py --interactive-auth fresh.",
+            "https://learn.microsoft.com/purview/purview-permissions",
+        )]
+
+    policies_data = getattr(purview_client, "dlp_policies", {}) or {}
+    rules_data = getattr(purview_client, "dlp_rules", {}) or {}
+    source_status = getattr(purview_client, "collection_status", {}) or {}
+    if not policies_data.get("available"):
+        source = source_status.get("dlp_policies", {}) or {}
+        reason = source.get("reason") or "The Purview session did not return DLP policies."
+        role = source.get("required_role") or "View-Only DLP Compliance Management or Compliance Administrator"
+        return [license_rec, _coverage(
+            f"{feature_name} policy collection", f"DLP policies were not assessed. {reason}",
+            f"Grant the signed-in user read access through {role}, then rerun: python main.py --interactive-auth fresh.",
+            "https://learn.microsoft.com/purview/purview-permissions",
+        )]
+
+    policies = policies_data.get("policies", []) or []
+    enabled_policies = [policy for policy in policies if _enabled_policy(policy)]
+    enforced_policies = [p for p in enabled_policies if str(p.get("Mode", "") or "").strip().lower() in {"enable", "enforce"}]
+    locations = sorted({label for policy in enabled_policies for label in _scope(policy)})
+
+    if not policies:
+        return [license_rec, new_recommendation(
+            service="Purview", feature=f"{feature_name} baseline",
+            observation="Purview returned zero DLP policies. No policy-based DLP coverage was available to evaluate for Microsoft 365 data.",
+            recommendation="Define the sensitive information and sharing scenarios that matter to the planned AI use cases, then deploy a baseline DLP policy for the applicable Exchange, SharePoint, OneDrive, Teams, device, and browser locations. Start in simulation, review matches and false positives, then enforce the confirmed high-risk scenarios.",
+            link_text="Create and deploy DLP policies", link_url="https://learn.microsoft.com/purview/dlp-create-deploy-policy",
+            priority="High", status="Action Required", finding_key="purview.dlp.no_policies",
+            evidence_key="purview_policy_detail", evidence_summary="The Purview Policy Detail tab records that policy collection succeeded and returned no DLP policies.",
+            impact_area="Data protection & compliance", ai_applicability="All AI using M365 data",
+            evidence_basis="Tenant evidence", confidence="High",
+        )]
+
+    if not rules_data.get("available"):
+        source = source_status.get("dlp_rules", {}) or {}
+        reason = source.get("reason") or "The Purview session returned policies but not their rules."
+        role = source.get("required_role") or "View-Only DLP Compliance Management or Compliance Administrator"
+        item = _coverage(
+            f"{feature_name} rule collection",
+            f"Purview returned {len(policies)} DLP policies, but rule conditions and actions were not assessed. {reason}",
+            f"Grant the signed-in user read access through {role}, then rerun: python main.py --interactive-auth fresh. Policy names alone cannot establish what sensitive data is detected or what action occurs on a match.",
+            "https://learn.microsoft.com/powershell/module/exchangepowershell/get-dlpcompliancerule",
         )
-    else:
-        license_rec = new_recommendation(
-            service="Purview",
-            feature=feature_name,
-            observation=f"{feature_name} is {status} in {friendly_sku}, allowing uncontrolled sharing of Copilot-retrieved sensitive data",
-            recommendation=f"Enable {feature_name} to prevent users from pasting Copilot-generated content containing PII, financial data, or trade secrets into Teams chats, emails, or collaboration platforms. When Copilot retrieves sensitive information and presents it to users, Communication DLP blocks inappropriate sharing while allowing legitimate work. This addresses the unique risk that Copilot makes it trivially easy to gather and redistribute sensitive data that would traditionally require manual searching and compilation.",
-            link_text="DLP for Copilot Communications",
-            link_url="https://learn.microsoft.com/purview/dlp-microsoft-teams",
-            priority="High",
-            status=status
-        )
-    
-    # Collect all deployment recommendations
-    deployment_recs = []
-    
-    # Second recommendation: DLP policy coverage via Graph API (labels as proxy)
-    if status == "Success" and client:
-        deployment = await get_deployment_status(client)
-        
-        if deployment.get('available') and deployment.get('has_protection_framework'):
-            total_labels = deployment.get('total_labels', 0)
-            # Good - has information protection framework for DLP
-            graph_rec = new_recommendation(
-                service="Purview",
-                feature=f"{feature_name} - Label Coverage",
-                observation=f"Information protection framework active with {total_labels} sensitivity labels, supporting DLP policy enforcement for Copilot outputs",
-                recommendation="Verify DLP policies in Microsoft Purview compliance portal cover Copilot scenarios: 1) Block sharing of 'Confidential' or 'Highly Confidential' labeled content in Teams/email, 2) Detect PII (SSN, credit cards, patient records) in Copilot responses, 3) Alert when sensitive data is copied from Copilot to external apps, 4) Prevent Copilot-generated summaries containing financial data from leaving org. Test policies with Copilot: ask it to summarize confidential docs, try sharing output externally. Ensure DLP blocks inappropriate sharing while allowing legitimate work.",
-                link_text="DLP for Copilot Best Practices",
-                link_url="https://learn.microsoft.com/purview/dlp-microsoft-teams",
-                priority="Medium",
-                status="Success"
-            )
-            deployment_recs.append(graph_rec)
-    
-    # Third recommendation: DLP policy coverage via PowerShell cache (actual policies)
-    if status == "Success" and purview_client and hasattr(purview_client, 'dlp_policies'):
-        # Use cached data from PowerShell wrapper
-        dlp_data = purview_client.dlp_policies
-        
-        if dlp_data.get('available'):
-            total_policies = dlp_data.get('total_policies', 0)
-            policies = dlp_data.get('policies', [])
-            
-            # Analyze policies for Copilot coverage
-            enabled_policies = [p for p in policies if p.get('Enabled') == True]
-            teams_policies = [p for p in policies if p.get('ExchangeLocation') or 'All' in str(p.get('ExchangeLocation', []))]
-            
-            if total_policies > 0:
-                # Good - has DLP policies deployed
-                policy_names = ', '.join([p.get('Name', 'Unnamed') for p in policies[:3]])
-                if len(policies) > 3:
-                    policy_names += f" (+{len(policies)-3} more)"
-                
-                deployment_rec = new_recommendation(
-                    service="Purview",
-                    feature=f"{feature_name} - Policy Coverage",
-                    observation=f"{total_policies} DLP policies configured ({len(enabled_policies)} enabled): {policy_names}. Policies protect Copilot outputs in Teams, Exchange, SharePoint.",
-                    recommendation=f"Verify DLP policies cover Copilot-specific scenarios: 1) Test by asking Copilot to summarize confidential documents - attempt sharing in Teams (should block), 2) Check policies detect PII patterns in Copilot responses (SSN, credit cards), 3) Ensure policies cover Exchange (Copilot email drafts) and SharePoint (Copilot-generated docs), 4) Review policy modes - ensure critical policies are in 'Enforce' not 'Test' mode. Currently: {len(enabled_policies)}/{total_policies} policies enabled.",
-                    link_text="DLP for Copilot Best Practices",
-                    link_url="https://learn.microsoft.com/purview/dlp-microsoft-teams",
-                    priority="Low" if len(enabled_policies) >= 2 else "Medium",
-                    status="Success"
-                )
-                deployment_recs.append(deployment_rec)
-            else:
-                # No DLP policies - critical gap
-                deployment_rec = new_recommendation(
-                    service="Purview",
-                    feature=f"{feature_name} - Policy Coverage",
-                    observation="Communication DLP license active but ZERO DLP policies configured - Copilot outputs are UNPROTECTED",
-                    recommendation="Deploy DLP policies NOW before scaling Copilot adoption. Without policies, users can freely share Copilot-retrieved sensitive data externally. Required policies: 1) Block sharing documents labeled 'Highly Confidential' in Teams/email, 2) Detect PII (SSN, credit cards, patient data) in Copilot responses, 3) Alert on financial data in Copilot summaries, 4) Prevent copying trade secrets from Copilot to external apps. Copilot makes it trivial to aggregate sensitive data - DLP prevents inadvertent leaks. Configure policies in Purview compliance portal > Data loss prevention.",
-                    link_text="Configure DLP for Copilot",
-                    link_url="https://learn.microsoft.com/purview/dlp-learn-about-dlp",
-                    priority="High",
-                    status="Success"
-                )
-                deployment_recs.append(deployment_rec)
-        else:
-            # No cached data - PowerShell wrapper not run
-            deployment_rec = new_recommendation(
-                service="Purview",
-                feature=f"{feature_name} - Policy Coverage",
-                observation="INFO: DLP policy deployment status unavailable - run with PowerShell wrapper for detailed policy analysis",
-                recommendation="To get deployment-specific DLP recommendations, run: .\\collect_purview_data.ps1 instead of 'python main.py'. The script collects DLP policy data via Connect-IPPSSession, then runs the assessment. This provides detailed analysis of configured policies, enabled/disabled status, and coverage gaps for Copilot scenarios.",
-                link_text="DLP Policy Guide",
-                link_url="https://learn.microsoft.com/purview/dlp-learn-about-dlp",
-                priority="Low",
-                status="Success"
-            )
-            deployment_recs.append(deployment_rec)
-    
-    # Return all recommendations: license + any deployment recommendations
-    if deployment_recs:
-        return [license_rec] + deployment_recs
-    
-    # If no deployment data available, return only license recommendation
-    return [license_rec]
+        item["EvidenceKey"] = "purview_policy_detail"
+        return [license_rec, item]
+
+    rules = rules_data.get("rules", []) or []
+    enabled_rules = [rule for rule in rules if _enabled_rule(rule)]
+    if not enabled_policies or not enabled_rules:
+        return [license_rec, new_recommendation(
+            service="Purview", feature=f"{feature_name} enforcement",
+            observation=f"Purview returned {len(policies)} DLP policies and {len(rules)} rules, but only {len(enabled_policies)} policies and {len(enabled_rules)} rules are enabled.",
+            recommendation="Review the disabled policies and rules against the approved AI data-use scenarios. Enable only the applicable protections, validate them in simulation, and move confirmed high-risk rules to enforcement.",
+            link_text="DLP policy deployment guidance", link_url="https://learn.microsoft.com/purview/dlp-create-deploy-policy",
+            priority="High", status="Action Required", finding_key="purview.dlp.no_enabled_protection",
+            evidence_key="purview_policy_detail", evidence_summary="The Purview Policy Detail tab lists policies and rules with their enabled state, conditions, and actions.",
+            impact_area="Data protection & compliance", ai_applicability="All AI using M365 data",
+            evidence_basis="Tenant evidence", confidence="High",
+        )]
+
+    if not enforced_policies:
+        return [license_rec, new_recommendation(
+            service="Purview", feature=f"{feature_name} enforcement",
+            observation=f"Purview returned {len(enabled_policies)} enabled DLP policies and {len(enabled_rules)} enabled rules, but no enabled policy was identified in enforcement mode. Current scope: {', '.join(locations) or 'not returned'}.",
+            recommendation="Review simulation results and false positives for the applicable policies. Move validated high-risk rules to enforcement and document any policies intentionally left in simulation.",
+            link_text="DLP policy deployment guidance", link_url="https://learn.microsoft.com/purview/dlp-create-deploy-policy",
+            priority="Medium", status="Attention Required", finding_key="purview.dlp.simulation_only",
+            evidence_key="purview_policy_detail", evidence_summary="The Purview Policy Detail tab lists each DLP policy mode and rule behavior.",
+            impact_area="Data protection & compliance", ai_applicability="All AI using M365 data",
+            evidence_basis="Tenant evidence", confidence="High",
+        )]
+
+    return [license_rec, new_recommendation(
+        service="Purview", feature=f"{feature_name} configuration",
+        observation=f"Purview returned {len(enabled_policies)} enabled DLP policies and {len(enabled_rules)} enabled rules, including {len(enforced_policies)} policies in enforcement mode. Scope returned: {', '.join(locations) or 'not specified'}.",
+        recommendation="", link_text="DLP policy reference", link_url="https://learn.microsoft.com/purview/dlp-policy-reference",
+        status="Success", disposition="Reference", evidence_key="purview_policy_detail",
+        evidence_summary="The Purview Policy Detail tab lists policy modes, locations, rule conditions, and configured actions.",
+        impact_area="Data protection & compliance", ai_applicability="All AI using M365 data",
+        evidence_basis="Tenant evidence", confidence="High",
+    )]

@@ -16,6 +16,8 @@ def _parse_csv_report(report_data):
     """Parse a Microsoft Graph report response body into dictionaries."""
     if not report_data:
         return []
+    if isinstance(report_data, list):
+        return report_data
     try:
         csv_text = report_data.decode('utf-8-sig') if isinstance(report_data, bytes) else str(report_data)
         return list(csv.DictReader(io.StringIO(csv_text)))
@@ -59,6 +61,7 @@ async def get_m365_client(
             # Raw data storage
             self.sites = []
             self.users = []
+            self.external_connections = []
             
             # Pre-computed summaries for fast access
             self.sites_summary = {}
@@ -104,20 +107,35 @@ async def get_m365_client(
         report_period = 'D30'
         
         # Create tasks with labels for progress tracking
-        from .get_entra_client import _fetch_graph_collection_via_http
         tasks = {
-            'sites': _fetch_graph_collection_via_http(
-                "/v1.0/sites?$select=id,displayName,webUrl&$top=999"
+            'sites': graph_client.get_collection(
+                "/v1.0/sites", params={'$select': 'id,displayName,webUrl', '$top': '999'}
             ),
-            'users': _fetch_graph_collection_via_http(
-                "/v1.0/users?$select=id,displayName,userPrincipalName,assignedLicenses,accountEnabled&$top=999"
+            'users': graph_client.get_collection(
+                "/v1.0/users",
+                params={'$select': 'id,displayName,userPrincipalName,assignedLicenses,accountEnabled', '$top': '999'},
             ),
-            'email_activity': graph_client.reports.get_email_activity_user_detail_with_period(period=report_period).get(),
-            'teams_activity': graph_client.reports.get_teams_user_activity_user_detail_with_period(period=report_period).get(),
-            'sharepoint_usage': graph_client.reports.get_share_point_site_usage_detail_with_period(period=report_period).get(),
-            'onedrive_usage': graph_client.reports.get_one_drive_usage_account_detail_with_period(period=report_period).get(),
-            'office_activations': graph_client.reports.get_office365_activations_user_detail.get(),
-            'active_users': graph_client.reports.get_office365_active_user_detail_with_period(period=report_period).get()
+            'external_connections': graph_client.get_collection(
+                "/v1.0/external/connections", params={'$top': '999'}
+            ),
+            'email_activity': graph_client.get_csv(
+                "/v1.0/reports/getEmailActivityUserDetail(period='D30')"
+            ),
+            'teams_activity': graph_client.get_csv(
+                "/v1.0/reports/getTeamsUserActivityUserDetail(period='D30')"
+            ),
+            'sharepoint_usage': graph_client.get_csv(
+                "/v1.0/reports/getSharePointSiteUsageDetail(period='D30')"
+            ),
+            'onedrive_usage': graph_client.get_csv(
+                "/v1.0/reports/getOneDriveUsageAccountDetail(period='D30')"
+            ),
+            'office_activations': graph_client.get_csv(
+                "/v1.0/reports/getOffice365ActivationsUserDetail"
+            ),
+            'active_users': graph_client.get_csv(
+                "/v1.0/reports/getOffice365ActiveUserDetail(period='D30')"
+            ),
         }
         from .ai_usage import collect_ai_usage
         tasks['ai_usage'] = collect_ai_usage(
@@ -265,6 +283,10 @@ async def get_m365_client(
         else:
             client.users_summary = {'total': 0, 'error': 'User.Read.All permission missing or API error'}
             client.missing_permissions.append('User.Read.All')
+
+        connections_response = response_dict.get('external_connections')
+        if isinstance(connections_response, dict) and connections_response.get('available'):
+            client.external_connections = connections_response.get('value', []) or []
         
         # Process Email Activity Report
         # Parse CSV and extract key metrics for Exchange/Outlook observations

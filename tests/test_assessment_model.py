@@ -29,6 +29,19 @@ class DispositionTests(unittest.TestCase):
         self.assertEqual(enriched["EvidenceBasis"], "License signal")
         self.assertEqual(enriched["Confidence"], "Low")
 
+    def test_attached_inventory_does_not_upgrade_license_evidence(self):
+        record = new_recommendation(
+            "Purview", "Content Explorer",
+            "Content Explorer is active in Microsoft 365 E3.", status="Success",
+        )
+        record["EvidenceAvailable"] = "Yes"
+        record["EvidenceSheet"] = "Purview Policy Detail"
+
+        enriched = enrich_assessment_record(record)
+
+        self.assertEqual(enriched["EvidenceBasis"], "License signal")
+        self.assertEqual(enriched["Confidence"], "Low")
+
     def test_positive_deployment_idea_is_an_opportunity(self):
         rec = new_recommendation(
             "Copilot Studio", "Agent creation",
@@ -89,6 +102,18 @@ class DispositionTests(unittest.TestCase):
         }
         self.assertEqual(enrich_assessment_record(record)["Disposition"], DISPOSITION_OPPORTUNITY)
 
+    def test_m365_manual_deployment_check_is_supporting_context(self):
+        record = {
+            "Service": "M365",
+            "Feature": "SharePoint Content Deployment",
+            "Status": "Not Assessed",
+            "Priority": "Medium",
+            "Observation": "Content deployment status requires manual verification.",
+            "Recommendation": "Review content before choosing a pilot group.",
+            "Category": "Tenant Finding",
+        }
+        self.assertEqual(enrich_assessment_record(record)["Disposition"], DISPOSITION_OPPORTUNITY)
+
     def test_user_consent_is_classified_as_connected_app_security(self):
         record = new_recommendation(
             "Entra", "Application consent",
@@ -138,6 +163,8 @@ class ReportLaneTests(unittest.TestCase):
                                "Run a measured pilot.", priority="Medium", status="Success"),
             new_recommendation("Purview", "DLP", "DLP data could not be retrieved.",
                                "Rerun collection.", priority="Medium", status=NOT_ASSESSED_STATUS),
+            new_recommendation("Power Platform", "Inventory", "Optional inventory was not supplied.",
+                               "Supply an export when needed.", priority="Medium", status=NOT_ASSESSED_STATUS),
         ]
 
         original_cwd = os.getcwd()
@@ -152,10 +179,11 @@ class ReportLaneTests(unittest.TestCase):
 
         self.assertEqual(body.count('<article class="recommendation-card"'), 1)
         self.assertIn("Prioritized adoption &amp; value opportunities (1)", body)
-        self.assertIn('<div class="label">Verified Strengths</div>', body)
+        self.assertIn('<div class="label">Verified safeguards</div>', body)
         self.assertNotIn("Verified controls &amp; available capabilities", body)
         self.assertIn("Scan Coverage (1)", body)
-        self.assertIn("Three readiness conclusions", body)
+        self.assertNotIn("Optional inventory was not supplied", body)
+        self.assertNotIn("Three readiness conclusions", body)
 
 
 class RecommendationQualityGuardTests(unittest.TestCase):

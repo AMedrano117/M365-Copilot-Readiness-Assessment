@@ -17,9 +17,9 @@ Use the guidance below to run the Automated Readiness Assessment for Microsoft 3
 | Service Principal Setup | Global Administrator or Application Administrator | One-time setup |
 | M365 + Entra Licenses | Any user account (read-only) | Service Principal |
 | Defender Security Data | Security Reader | Service Principal |
-| Power Platform | Power Platform Administrator | User delegated |
-| Copilot Studio | Power Platform Administrator | User delegated |
-| Purview Compliance | Compliance Administrator | User delegated |
+| SharePoint governance | SharePoint Administrator; SAM reports can additionally require SharePoint Advanced Management Administrator | Browser or application certificate |
+| Purview core configuration | Compliance Administrator or the applicable read-only Purview role groups | Browser or application certificate |
+| Power Platform inventory export | Global Reader or another inventory-supported role | Portal export |
 
 **Note:** It is recommended that Microsoft 365 Administrators run this assessment. Alternatively, assign the appropriate roles listed above to designated users who will perform the assessment.
 
@@ -35,12 +35,12 @@ The following table shows what data is collected for each service and the APIs/c
 
 | Service | Authentication | APIs / PowerShell Cmdlets Used | Data Collected |
 |---------|----------------|--------------------------------|----------------|
-| **M365** | Service Principal | Microsoft Graph API:<br/>- `/subscribedSkus`<br/>- `/users` | License assignments, SKU details, service plan provisioning status, user activity metrics |
+| **M365** | Service Principal | Microsoft Graph tenant, users, groups, sites, reporting, Copilot reporting, and `/external/connections` APIs | License coverage, Copilot activation/engagement, M365 app pilot fit, sites, and connected grounding sources |
 | **Entra** | Service Principal | Microsoft Graph API:<br/>- `/identityProtection/riskyUsers`<br/>- `/identityProtection/riskDetections`<br/>- `/identity/conditionalAccess/policies`<br/>- `/policies/authorizationPolicy`<br/>- `/organization` | Risky users and risk detections when the tenant has a qualifying P2-level entitlement; conditional access policies, MFA enforcement, and external collaboration settings |
-| **Defender** | Service Principal | **Microsoft Graph Security API:**<br/>- `/security/alerts_v2`<br/>- `/security/incidents`<br/>- `/security/secureScore`<br/>- `/security/secureScoreControlProfiles`<br/>**Defender for Endpoint API:**<br/>- `/api/machines`<br/>- `/api/vulnerabilities`<br/>- `/api/recommendations`<br/>- `/api/exposureScore`<br/>- `/api/advancedqueries/run` | Security alerts, incidents, secure scores, device inventory, vulnerabilities, security recommendations, exposure scores, threat hunting queries |
-| **Purview** | User delegated | **Connect-IPPSSession:**<br/>- `Get-DlpCompliancePolicy`<br/>- `Get-Label`, `Get-LabelPolicy`<br/>- `Get-RetentionCompliancePolicy`<br/>- `Get-InformationBarrierPolicy`<br/>- `Get-InsiderRiskPolicy`<br/>- `Get-ComplianceCase`<br/>**Connect-ExchangeOnline:**<br/>- `Get-OrganizationConfig`<br/>- `Get-AdminAuditLogConfig`<br/>- `Get-IRMConfiguration` | DLP policies, sensitivity labels, label policies, retention policies, information barriers, insider risk policies, compliance cases, audit configuration, IRM settings |
-| **Power Platform** | User delegated | Power Platform Management API:<br/>- `/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments`<br/>- `/providers/Microsoft.PowerApps/apps`<br/>- `/providers/Microsoft.Flow/flows`<br/>- `/providers/Microsoft.PowerApps/aiModels` | Environments, environment DLP policies, Power Apps inventory, Power Automate flows, AI Builder models, connector usage |
-| **Copilot Studio** | User delegated | Power Platform Management API:<br/>- `/providers/Microsoft.BotService/botServices`<br/>- `/providers/Microsoft.Botframework/bots` | Copilot Studio agents, agent configurations, conversation analytics, authentication settings |
+| **Defender** | Service Principal | Graph Security alerts, incidents, Secure Score, and Defender for Endpoint `/api/machines` | Active security evidence plus device onboarding and risk. Ordinary Office traffic is never presented as AI usage. |
+| **SharePoint** | Browser or application certificate | `Get-SPOTenant`, `Get-SPOSite`, `Get-SPODataAccessGovernanceInsight`, and activity-data status cmdlets | Tenant/site sharing defaults, anonymous link behavior, legacy auth, site deviations, and existing DAG/SAM report readiness and freshness. No scan is started. |
+| **Purview** | Browser or application certificate | DLP policy/rule, sensitivity-label, retention, organization, rights-management, and audit cmdlets | Core data protection policy configuration. Specialized workloads are not queried by default. |
+| **Power Platform / Copilot Studio** | Export, or service principal for opt-in preview API | Unified Power Platform Inventory export or API | Agents, apps, flows, environments, owners, regions, managed state, and connectors. The Az.Accounts collector runs only with `--legacy-power-platform-collector`. |
 
 ## Data exposure and oversharing reports
 
@@ -72,10 +72,11 @@ pip install -r requirements.txt
 ```
 
 **Required packages:**
-- `azure-identity` - Authentication library
-- `msgraph-sdk` - Microsoft Graph API client
-- `requests` - HTTP library for REST APIs
-- `pandas`, `openpyxl` - Report generation (optional)
+- `azure-identity` and `httpx` - lightweight Microsoft Graph and service API authentication/client
+- `openpyxl` - Excel report generation
+
+The generated Microsoft Graph SDK is intentionally not installed. The assessment uses only the
+required REST endpoints, which avoids the SDK's very long generated paths on Windows.
 
 ### 2. Create Service Principal
 
@@ -85,20 +86,25 @@ Run the service principal setup script to create Azure AD app registration with 
 .\setup-service-principal.ps1
 ```
 
+Use `-Mode Standard` (the default) for client-secret Graph collection with browser fallback for
+SharePoint and Purview. Use `-Mode Unattended -CertificateThumbprint <thumbprint>` (or
+`-CertificatePath`) to attach and validate certificate authentication for those PowerShell
+collectors. Unattended setup requires an explicit confirmation before adding SharePoint
+`Sites.FullControl.All`; automation can supply `-ConfirmBroadSharePointAccess`. Preview packs are
+explicit, for example `-PreviewCollectors ShadowAI`. Existing
+credentials and permissions are retained unless `-RotateCredential` or
+`-PruneUnusedPermissions` is supplied.
+
 **What the script does:**
 1. Opens browser for admin authentication (Global Administrator or Application Administrator required)
-2. Creates Azure AD app registration: "M365 Copilot Readiness Assessment Tool" with **read-only permissions**
-3. Grants API permissions (Application permissions - all read-only):
+2. Creates or reconciles the existing app registration without deleting it
+3. Builds the requested application permission set from `collector-registry.json`:
    
    **Microsoft Graph API:**
    - User.Read.All - Read user profiles
-   - Directory.Read.All - Read directory data
    - Organization.Read.All - Read organization info
    - SecurityEvents.Read.All - Read security events
    - SecurityIncident.Read.All - Read security incidents
-   - ThreatIndicators.Read.All - Read threat indicators
-   - ThreatHunting.Read.All - Read threat hunting data
-   - ThreatAssessment.Read.All - Read threat assessments
    - IdentityRiskyUser.Read.All - Read risky users
    - IdentityRiskEvent.Read.All - Read risk events
    - Policy.Read.All - Read policies
@@ -108,35 +114,20 @@ Run the service principal setup script to create Azure AD app registration with 
    - AccessReview.Read.All - Read access reviews
    - DeviceManagementManagedDevices.Read.All - Read managed devices
    - DeviceManagementConfiguration.Read.All - Read device configurations
-   - NetworkAccessPolicy.Read.All - Read network access policies
-   - NetworkAccess.Read.All - Read Global Secure Access filtering policies and forwarding profiles
    - Application.Read.All - Read applications
    - AuditLog.Read.All - Read audit logs
    - Reports.Read.All - Read usage reports
    - Sites.Read.All - Read SharePoint sites
-   - Files.Read.All - Read files
    - ExternalConnection.Read.All - Read Graph connectors
-   - Channel.ReadBasic.All - Read Teams channels
-   - OnlineMeetings.Read.All - Read online meetings
-   - People.Read.All - Read people data
-   - Printer.Read.All - Read printers
-   - WorkplaceAnalytics-Reports.Read.All - Read workplace analytics
-   - InformationProtectionPolicy.Read - Read information protection policies
-
-   `CloudApp-Discovery.Read.All` is deliberately **not** part of the default permission set. Add
-   it as an application permission and grant admin consent only when the tenant approves
-   `--preview-collectors shadow-ai` (or `all`). It provides aggregate Defender for Cloud Apps
-   discovery evidence; the report never requests discovered-user identities.
+   Preview permissions are deliberately excluded unless `-PreviewCollectors` selects their pack.
+   `CloudApp-Discovery.Read.All` is used only for Shadow AI; `NetworkAccess.Read.All` and
+   `NetworkAccessPolicy.Read.All` are used only for Network Access.
    
    **Microsoft Defender for Endpoint API:**
    - Machine.Read.All - Read machine data
    
-   **Office 365 Management API:**
-   - ActivityFeed.Read - Read activity feed
-   - ServiceHealth.Read - Read service health
-
-4. Admin consent is granted for the permissions
-5. Generates client secret (30-day expiration)
+4. Opens admin consent and then verifies the resulting service-principal role assignments
+5. Keeps an existing credential; a 90-day secret is created only when needed or when `-RotateCredential` is supplied
 6. Creates `.env` file with credentials (TENANT_ID, CLIENT_ID, CLIENT_SECRET)
    - **Note:** `.env` file is excluded from git - CLIENT_SECRET is never checked into source control
 
@@ -189,7 +180,18 @@ python main.py --power-platform-inventory .\exports\power-platform-inventory.csv
 python main.py --preview-collectors shadow-ai
 python main.py --preview-collectors power-platform
 python main.py --preview-collectors all
+
+# Validate selected collectors without creating reports or starting scans.
+python main.py --check-connections
+
+# Explicit compatibility fallback only; this is the only runtime path that needs Az.Accounts.
+python main.py --legacy-power-platform-collector
 ```
+
+Connection checks return `0` when the selected configuration is usable (including legitimate
+license limitations), `2` for actionable authentication/permission/role/module gaps, and `1` for
+invalid configuration or an unexpected required-collector failure. They do not create assessment
+reports or launch Microsoft scans.
 
 **Note:** Service names with spaces (`"Power Platform"`, `"Copilot Studio"`) must be enclosed in double quotes.
 
@@ -201,7 +203,35 @@ python main.py --preview-collectors all
 - **Compliance Focus**: `SERVICES = ["Purview"]` or `--services Purview`
 - **Power Platform & Copilot**: `SERVICES = ["Power Platform", "Copilot Studio"]` or `--services "Power Platform" "Copilot Studio"`
 
+### SharePoint sharing and oversharing collection
+
+The default M365 run also checks SharePoint and OneDrive tenant sharing settings, site-level
+sharing configuration, and the status of existing SharePoint Advanced Management Data Access
+Governance reports. `setup-service-principal.ps1` installs the required SharePoint module, and
+`main.py` also attempts a current-user installation if the module is missing. The manual fallback is:
+
+```powershell
+Install-Module Microsoft.Online.SharePoint.PowerShell -Scope CurrentUser -Force
+```
+
+Microsoft Graph does not expose these SharePoint administrative settings. With the normal
+client-secret configuration, the SharePoint-only portion therefore requests a browser sign-in
+from a SharePoint Administrator. To keep this portion unattended, configure a `.pfx` certificate
+with `SHAREPOINT_CERTIFICATE_PATH` (or its certificate-store thumbprint) and the existing
+`CLIENT_ID` and `TENANT_ID`. SharePoint app-only administrative access also requires the
+**Office 365 SharePoint Online** application permission `Sites.FullControl.All` and tenant admin
+consent. This broad permission is added only by `setup-service-principal.ps1 -Mode Unattended`
+after a certificate is supplied; Standard mode continues to use browser fallback.
+
+The client secret remains in use for Microsoft Graph. `Connect-SPOService` supports app-only
+authentication with a certificate or managed identity, but not with a client secret.
+
 ### 4. Run the Assessment
+
+The default `python main.py` run assesses all configured service areas and automatically starts the
+core Purview collector. No separate DLP command is required. Purview results may be reused
+for eight hours; use `--interactive-auth fresh` when you need a new sign-in and collection. Using
+`--interactive-auth skip` or excluding Purview intentionally leaves these checks not assessed.
 
 **Execution Flow:**
 
@@ -212,8 +242,8 @@ python main.py --preview-collectors all
 
 2. **Data Collection Progress**:
    - **M365, Entra, Defender**: Silent authentication via service principal
-   - **Power Platform & Copilot Studio**: Web popup for user delegated authentication (if assessing these services)
-   - **Purview**: Web popup for Exchange Online PowerShell authentication (if assessing Purview)
+   - **SharePoint and Purview**: Certificate first; otherwise a clearly announced browser sign-in
+   - **Power Platform & Copilot Studio**: Imported inventory by default; preview API only when selected
    
    See [Data Collection Details](#data-collection-details) for specific APIs and cmdlets used per service.
    
@@ -221,9 +251,7 @@ python main.py --preview-collectors all
    [2026-01-06 14:30:52] 🚀 Starting orchestration for: M365, Entra, Defender...
    [2026-01-06 14:30:53] ✅ M365 licenses retrieved: 5 SKUs found
    [2026-01-06 14:30:54] ✅ Entra identity protection: 12 risky users detected
-   [2026-01-06 14:30:56] ✅ Defender security posture: Exposure score 45/100
-   [2026-01-06 14:30:58] 🔐 Power Platform: Device authentication required (follow browser prompt)
-   [2026-01-06 14:31:15] ✅ Power Platform: 3 environments analyzed
+   [2026-01-06 14:30:56] ✅ Defender security evidence collected
    [2026-01-06 14:31:20] 🔐 Purview: Exchange Online authentication required
    [2026-01-06 14:31:35] ✅ Purview: 12 DLP policies retrieved
    ```
@@ -371,6 +399,18 @@ python main.py --env-file .env --services Purview --interactive-auth fresh --rep
 The signed-in user needs Compliance Administrator or equivalent read access in the target tenant.
 The collector uses both Security & Compliance PowerShell and Exchange Online, so two authentication
 events may be shown.
+
+Global Reader does not grant the Purview compliance PowerShell role groups used by these cmdlets.
+For the simplest complete run, use a delegated account assigned Compliance Administrator in the
+target tenant. A least-privilege operator can instead use the relevant read-only Purview role groups,
+including View-Only DLP Compliance Management for DLP policies and rules, Information Protection
+for labels, View-Only Retention Management for retention, and Audit Reader for audit configuration.
+Role changes can take time to propagate.
+
+Insider Risk, Communication Compliance, Information Barriers, and eDiscovery require their own
+specialized Purview roles and, in some tenants, matching licenses or enabled workloads. They are
+not queried by a normal assessment. Set `PURVIEW_INCLUDE_SPECIALIZED=true` only when this optional
+context is approved and the operator has the appropriate roles.
 
 ### Power Platform Issues
 

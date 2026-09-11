@@ -29,13 +29,12 @@ def get_sites_observation(m365_insights):
     total_sites = m365_insights.get('total_sites', 0)
     
     if total_sites == 0:
-        return "No SharePoint sites detected (Sites.Read.All permission may be missing)"
-    elif total_sites < 5:
-        return f"{total_sites} SharePoint sites deployed (limited content available for Copilot)"
-    elif total_sites < 20:
-        return f"{total_sites} SharePoint sites deployed (moderate content foundation for Copilot)"
-    else:
-        return f"{total_sites} SharePoint sites deployed (strong content foundation for Copilot)"
+        return "No SharePoint sites were returned by the site inventory"
+    return (
+        f"{total_sites} SharePoint sites were returned by the site inventory. "
+        "Site count is workload context and does not establish content quality, "
+        "permission safety, or AI value."
+    )
 
 
 def get_sites_recommendation(m365_insights):
@@ -53,14 +52,8 @@ def get_sites_recommendation(m365_insights):
     
     total_sites = m365_insights.get('total_sites', 0)
     
-    if total_sites == 0:
-        return "Ensure Sites.Read.All permission is granted to assess SharePoint deployment. SharePoint provides the organizational knowledge base that Copilot uses to answer questions and generate insights."
-    elif total_sites < 5:
-        return "Create team sites for key departments and projects. Copilot's effectiveness depends on having organizational content in SharePoint - policies, procedures, project documentation, and collaborative workspaces. Aim for at least 10-15 active sites to provide meaningful context for AI responses."
-    elif total_sites < 20:
-        return "Expand SharePoint site deployment to cover more teams and business processes. More content diversity improves Copilot's ability to synthesize cross-functional insights and answer complex business questions."
-    
-    return ""  # Sufficient sites deployed
+    # A site count alone cannot justify creating more sites or predict AI value.
+    return ""
 
 
 def get_users_observation(m365_insights):
@@ -116,7 +109,7 @@ def get_copilot_adoption_recommendation(m365_insights):
         return ""
     
     if copilot_licensed == 0:
-        return "Start Copilot pilot with 10-20 power users from different departments to validate value before broad rollout. Focus on users who create lots of content, attend many meetings, or need to synthesize information from multiple sources."
+        return "Define a bounded pilot from the approved use cases and intended-user profile. Establish the customer's outcome and risk measures before assigning Copilot licenses."
     elif license_coverage is not None and license_coverage < 10:
         return f"Copilot licenses currently cover {license_coverage}% of the tenant-derived eligible-user estimate. Treat this as deployment reach, not adoption: validate active use, task quality, and a customer-defined outcome before expanding to similar roles."
     elif license_coverage is not None and license_coverage < 30:
@@ -159,7 +152,7 @@ def get_reports_observation(m365_insights):
         return "Usage reports unavailable (Reports.Read.All permission may be missing)"
     
     report_list = ', '.join(available_reports)
-    return f"Usage reports available: {report_list} (30-day baseline for Copilot impact measurement)"
+    return f"Usage reports available: {report_list} (workload context for pilot selection)"
 
 
 def get_reports_recommendation(m365_insights):
@@ -188,7 +181,11 @@ def get_reports_recommendation(m365_insights):
         missing_reports.append('SharePoint')
     
     if missing_reports:
-        return f"Ensure Reports.Read.All permission is granted to access {', '.join(missing_reports)} usage data. Baseline metrics are critical for measuring Copilot's impact on productivity - meeting time reduction, email volume changes, content collaboration patterns."
+        return (
+            f"Confirm Reports.Read.All access if {', '.join(missing_reports)} workload "
+            "context is needed for pilot selection. Missing workload reports do not prove "
+            "low adoption or block a security-readiness conclusion."
+        )
     
     # If all reports available, provide ROI guidance
     return "Establish use-case-specific baselines before rollout, such as task cycle time, quality review results, rework, or risk exceptions. After deployment, compare the same measures for the pilot cohort and apply a customer-approved expand, adjust, or stop decision. Workload volume alone does not demonstrate ROI."

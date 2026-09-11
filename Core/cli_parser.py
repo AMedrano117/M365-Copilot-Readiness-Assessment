@@ -30,6 +30,8 @@ Examples:
   python main.py --copilot-dashboard-export copilot-metrics.csv
   python main.py --power-platform-inventory power-platform-inventory.csv
   python main.py --preview-collectors shadow-ai
+  python main.py --check-connections
+  python main.py --legacy-power-platform-collector
   python main.py --assessment-profile assessment-profile.json --provider-evidence providers.csv
   python main.py --baseline Reports/prior.xlsx --snapshot-json output/latest-snapshot.json
         '''
@@ -50,7 +52,7 @@ Examples:
         '--interactive-auth',
         choices=['auto', 'fresh', 'skip'],
         default='auto',
-        help='Interactive enrichment behavior: auto=reuse existing sign-ins when possible, fresh=force a new sign-in, skip=use license/basic recommendations only'
+        help='PowerShell authentication: auto=use certificate or browser fallback, fresh=force new delegated sign-in when no certificate is configured, skip=do not use browser authentication'
     )
     parser.add_argument(
         '--env-file',
@@ -104,9 +106,26 @@ Examples:
     )
     parser.add_argument(
         '--preview-collectors',
-        choices=['none', 'power-platform', 'shadow-ai', 'all'],
+        choices=['none', 'power-platform', 'shadow-ai', 'network-access', 'all'],
         default='none',
         help='Opt in to supplemental Microsoft preview APIs. Preview data never changes the core readiness decision.'
+    )
+    parser.add_argument(
+        '--sharepoint-admin-url',
+        type=str,
+        default=None,
+        metavar='URL',
+        help='Optional SharePoint admin URL override. Normally derived from the tenant initial domain.'
+    )
+    parser.add_argument(
+        '--legacy-power-platform-collector',
+        action='store_true',
+        help='Use the legacy delegated Power Platform collector. This compatibility path requires Az.Accounts.'
+    )
+    parser.add_argument(
+        '--check-connections',
+        action='store_true',
+        help='Validate selected collector connections without running an assessment or creating reports.'
     )
     parser.add_argument(
         '--assessment-profile',

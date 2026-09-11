@@ -28,7 +28,6 @@ from .new_recommendation import (  # noqa: F401  (re-exported)
     CATEGORY_SCAN_COVERAGE,
 )
 from .assessment_model import (
-    CROSS_PLATFORM_MANUAL_CHECKS,
     DISPOSITION_ACTION,
     DISPOSITION_ASSURANCE,
     DISPOSITION_COVERAGE,
@@ -94,6 +93,24 @@ def summarize_finding(observation, max_length=110):
         cut = text[:max_length].rsplit(" ", 1)[0].rstrip(" ,;:-")
         text = f"{cut}…"
     return text
+
+
+def customer_coverage_label(record):
+    """Give decision-limiting evidence gaps a plain-language customer label."""
+    service = str(record.get("Service", "") or "")
+    feature = str(record.get("Feature", "") or record.get("Service", "") or "Required evidence")
+    text = f"{service} {feature}".lower()
+    if "sharepoint sharing and oversharing" in text:
+        return "SharePoint sharing settings and DAG status"
+    if "intune" in text or "managed device" in text:
+        return "Endpoint access-control model"
+    if "data governance evidence" in text:
+        return "Purview DLP and governance configuration"
+    if service == "Data Exposure" and "sharepoint" in text:
+        return "SharePoint Data Access Governance report"
+    if service == "Data Exposure" and ("sensitive-data" in text or "dspm" in text):
+        return "Purview DSPM data-risk assessment"
+    return feature
 
 
 def sanitize_filename_component(value):
@@ -542,20 +559,31 @@ def export_to_html(recommendations, filename=None, tenant_name=None, evidence_bu
     # not a finding; an adoption idea is not a security gap; and unread data is a coverage limit.
     findings = [r for r in recommendations if r.get("Disposition") == DISPOSITION_ACTION]
     opportunities = [r for r in recommendations if r.get("Disposition") == DISPOSITION_OPPORTUNITY]
-    assurances = [
+    recommendation_assurances = [
         r for r in recommendations
         if r.get("Disposition") == DISPOSITION_ASSURANCE
         and str(r.get("EvidenceBasis", "")).lower() not in {"license signal", "not verified"}
         and r.get("EvidenceAvailable") == "Yes"
+        and not re.search(
+            r"\b(?:active in|included in|license|licensed|licensing|service plan)\b",
+            " ".join(str(r.get(key, "") or "") for key in ("Feature", "Observation", "Recommendation")),
+            flags=re.IGNORECASE,
+        )
     ]
-    coverage_items = [r for r in recommendations if r.get("Disposition") == DISPOSITION_COVERAGE]
+    if isinstance(evidence_bundle, dict) and "verified_strengths" in evidence_bundle:
+        assurances = list(evidence_bundle.get("verified_strengths") or [])[:6]
+    else:
+        # Compatibility path for callers that do not yet supply the evidence bundle.
+        assurances = recommendation_assurances[:6]
     readiness = summarize_readiness(recommendations)
+    # The customer-facing coverage section is limited to evidence that can affect
+    # the Microsoft 365 foundation decision. Supplemental gaps remain available in
+    # the workbook and technical collection appendix.
+    coverage_items = list(readiness.get("decision_coverage", []) or [])
 
     high_priority = [r for r in findings if r.get("Priority") == "High"]
     medium_priority = [r for r in findings if r.get("Priority") == "Medium"]
     low_priority = [r for r in findings if r.get("Priority") == "Low"]
-    not_assessed = coverage_items
-
     services = {}
     for rec in findings:
         service = rec.get("Service", "Unknown")
@@ -883,15 +911,29 @@ def export_to_html(recommendations, filename=None, tenant_name=None, evidence_bu
         </details>
         """
 
+    priority_rank = {"High": 0, "Medium": 1, "Low": 2}
+    prioritized_findings = sorted(
+        findings,
+        key=lambda row: (
+            priority_rank.get(str(row.get("Priority", "")), 3),
+            str(row.get("Service", "")),
+            str(row.get("Feature", "")),
+        ),
+    )
     action_plan_rows = [{
         "Priority": row.get("Priority", ""),
         "Finding": row.get("Observation", ""),
         "Action": row.get("Recommendation", ""),
-    } for row in findings]
+    } for row in prioritized_findings[:5]]
+    action_plan_note = (
+        f" Showing the five highest-priority actions; {len(findings) - 5} additional "
+        f"{count_label(len(findings) - 5, 'action')} appear in the detailed findings below."
+        if len(findings) > 5 else ""
+    )
     action_plan_html = f"""
     <section class="scope-panel" id="action-plan">
-      <h2>Action plan</h2>
-      <p>Address these items before expanding AI access. Technical references and supporting evidence are available in the engineering appendix and workbook.</p>
+      <h2>Recommended next steps</h2>
+      <p>Start with these tenant-specific improvements before expanding AI access.{escape(action_plan_note)}</p>
       {render_compact_table(action_plan_rows, [
           ("Priority", "Priority"), ("What we found", "Finding"),
           ("What to do", "Action"),
@@ -910,20 +952,26 @@ def export_to_html(recommendations, filename=None, tenant_name=None, evidence_bu
     assurance_rows = [{
         "Area": item.get("ImpactArea", "") or item.get("Service", "Tenant control"),
         "Strength": item.get("Observation", "") or item.get("Feature", "Verified tenant control"),
+        "Evidence": item.get("Evidence", "Verified from collected tenant configuration."),
         "Benefit": strength_benefits.get(
             item.get("ImpactArea", ""),
             "This provides a verified foundation that can be retained as AI access expands.",
         ),
+    } if "Strength" not in item else {
+        "Area": item.get("Area", "Tenant control"),
+        "Strength": item.get("Strength", "Verified tenant control"),
+        "Evidence": item.get("Evidence", "Verified from collected tenant configuration."),
+        "Benefit": item.get("Benefit", "This supports controlled use of organizational data with AI."),
     } for item in assurances]
     assurance_html = ""
     if assurances:
         assurance_html = f"""
         <section class="scope-panel" id="assurances">
           <h2>What the tenant is doing well</h2>
-          <p>These are working controls verified from tenant evidence—not simply features included with a license.</p>
+          <p>These are safeguards the tenant has already configured and should retain as AI use expands.</p>
           {render_compact_table(assurance_rows, [
               ("Area", "Area"), ("What is working", "Strength"),
-              ("Why it helps AI readiness", "Benefit"),
+              ("What we verified", "Evidence"), ("Why it matters for AI", "Benefit"),
           ])}
         </section>
         """
@@ -933,43 +981,18 @@ def export_to_html(recommendations, filename=None, tenant_name=None, evidence_bu
     use_case_rows = conclusions.get("use_cases", []) or []
     provider_conclusion = conclusions.get("provider_conclusion", "Not assessed")
     use_case_conclusion = conclusions.get("use_case_conclusion", "Not assessed")
-    manual_check_html = render_compact_table(
-        CROSS_PLATFORM_MANUAL_CHECKS,
-        [("Provider-side check", "control"), ("Evidence to collect", "verify"), ("Risk if missing", "why")],
-    )
-    scope_html = f"""
-    <section class="scope-panel" id="scope-boundary">
-      <h2>Three readiness conclusions</h2>
-      <p>The foundation, provider, and use-case decisions answer different questions and do not substitute for one another.</p>
-      <div class="scope-boundary-grid">
-        <article>
-          <h3>Microsoft 365 foundation</h3>
-          <p><strong>{escape(readiness['decision'])}</strong><br>{escape(readiness['rationale'])}</p>
-        </article>
-        <article>
-          <h3>Provider and tier approval</h3>
-          <p><strong>{escape(provider_conclusion)}</strong><br>A current provider register is required for each named product and subscription tier.</p>
-        </article>
-        <article>
-          <h3>Proposed use cases</h3>
-          <p><strong>{escape(use_case_conclusion)}</strong><br>Each use case requires an owner, intended users, data scope, action boundaries, approvals, and outcome measures.</p>
-        </article>
-      </div>
-      {render_compact_table(provider_rows, [("Provider", "Provider"), ("Product", "Product"), ("Tier", "Tier"), ("Status", "Approval Status"), ("Reason", "Reason")]) if provider_rows else ''}
-      {render_compact_table(use_case_rows, [("Use case", "Use Case"), ("Owner", "Business Owner"), ("Provider", "Provider"), ("Readiness", "Readiness"), ("Reason", "Reason")]) if use_case_rows else ''}
-      <details>
-        <summary>External AI approval checklist—complete once per product and subscription tier ({len(CROSS_PLATFORM_MANUAL_CHECKS)})</summary>
-        <p class="checklist-intro">For each row, record the product and tier reviewed, an owner,
-        the evidence location, review date, and a Pass / Fail / Not verified result.</p>
-        {manual_check_html}
-      </details>
-      <p class="reference-row">References:
-        <a href="https://learn.microsoft.com/microsoft-365/copilot/secure-govern-copilot-foundational-deployment-guidance" target="_blank" rel="noopener noreferrer">Microsoft secure data foundation</a> ·
-        <a href="https://learn.microsoft.com/purview/ai-other-apps" target="_blank" rel="noopener noreferrer">Purview for other AI apps</a> ·
-        <a href="https://learn.microsoft.com/entra/identity/conditional-access/concept-conditional-access-cloud-apps" target="_blank" rel="noopener noreferrer">Conditional Access target resources</a>
-      </p>
-    </section>
-    """
+    scope_html = ""
+    if provider_rows or use_case_rows:
+        scope_html = f"""
+        <details class="secondary-panel" id="provider-use-case-review">
+          <summary>AI products and use cases supplied for this assessment</summary>
+          <p>Microsoft 365 foundation: <strong>{escape(readiness['decision'])}</strong> ·
+          Provider review: <strong>{escape(provider_conclusion)}</strong> ·
+          Use-case review: <strong>{escape(use_case_conclusion)}</strong></p>
+          {render_compact_table(provider_rows, [("Provider", "Provider"), ("Product", "Product"), ("Tier", "Tier"), ("Status", "Approval Status"), ("Reason", "Reason")]) if provider_rows else ''}
+          {render_compact_table(use_case_rows, [("Use case", "Use Case"), ("Owner", "Business Owner"), ("Provider", "Provider"), ("Readiness", "Readiness"), ("Reason", "Reason")]) if use_case_rows else ''}
+        </details>
+        """
 
     entra_license = evidence_bundle.get("entra_license_context", {}) if evidence_bundle else {}
     entra_license_rows = entra_license.get("rows", []) or []
@@ -981,7 +1004,7 @@ def export_to_html(recommendations, filename=None, tenant_name=None, evidence_bu
       {render_compact_table(entra_license_rows, [
           ("Identity capability", "Capability"), ("Entra P1", "P1"),
           ("Entra P2", "P2"), ("This tenant", "Tenant"),
-      ])}
+      ]) if entra_license_rows else ''}
       <p class="reference-row"><a href="https://learn.microsoft.com/entra/fundamentals/licensing" target="_blank" rel="noopener noreferrer">Microsoft Entra licensing reference</a></p>
     </section>
     """
@@ -1016,30 +1039,215 @@ def export_to_html(recommendations, filename=None, tenant_name=None, evidence_bu
             f"Purview returned {purview_policy.get('total', 0)} DLP policies; "
             f"{purview_policy.get('enabled', 0)} are enabled."
         )
+        if purview_policy.get("rules_available"):
+            dlp_summary += (
+                f" It also returned {purview_policy.get('total_rules', 0)} rules; "
+                f"{purview_policy.get('enabled_rules', 0)} are enabled."
+            )
+        else:
+            dlp_summary += " Rule conditions and actions were not available, so protection behavior could not be verified."
         dlp_detail = f"""
         <details>
           <summary>DLP policy reference ({purview_policy.get('total', 0)})</summary>
           {render_compact_table((purview_policy.get('rows', []) or [])[:25], [
-              ("Policy", "Policy"), ("Enabled", "Enabled"), ("Mode", "Mode"), ("Locations", "Locations"),
+              ("Policy", "Policy"), ("Enabled", "Enabled"), ("Mode", "Mode"),
+              ("Locations", "Locations"), ("Rules", "Rules"),
+              ("Protection behavior", "Protection behavior"),
           ])}
           {'<p class="muted">The first 25 policies are shown here; the workbook contains the complete Purview policy inventory.</p>' if len(purview_policy.get('rows', []) or []) > 25 else ''}
         </details>
+        {f'''<details>
+          <summary>DLP rule detail ({purview_policy.get('total_rules', 0)})</summary>
+          {render_compact_table((purview_policy.get('rule_rows', []) or [])[:50], [
+              ("Policy", "Policy"), ("Rule", "Rule"), ("Enabled", "Enabled"),
+              ("Conditions", "Conditions"), ("Actions", "Actions"), ("Severity", "Severity"),
+          ])}
+          {'<p class="muted">The first 50 rules are shown here; the workbook contains the complete rule inventory.</p>' if len(purview_policy.get('rule_rows', []) or []) > 50 else ''}
+        </details>''' if purview_policy.get('rules_available') else ''}
         """
     else:
-        dlp_summary = "DLP policy details were not collected, so policy names, modes, and workload coverage are not assessed."
-        dlp_detail = "<p class=\"muted\">Run <code>.\\collect_purview_data.ps1</code> and complete the Purview sign-in to include DLP policy details.</p>"
+        dlp_summary = "DLP policy and rule details were not collected, so coverage and protection behavior are not assessed."
+        dlp_detail = (
+            "<p class=\"muted\">The default <code>main.py</code> run collects Purview interactively. "
+            "Use <code>python main.py --interactive-auth fresh</code> to bypass cached Purview data and sign in again.</p>"
+        )
+
+    purview_source_labels = {
+        "dlp_policies": "DLP policies", "dlp_rules": "DLP rules",
+        "sensitivity_labels": "Sensitivity labels", "retention_policies": "Retention policies",
+        "label_policies": "Label publishing policies", "org_config": "Organization configuration",
+        "irm_config": "Rights management configuration", "audit_config": "Audit configuration",
+        "insider_risk_policies": "Insider Risk policies", "communication_compliance": "Communication Compliance",
+        "information_barriers": "Information Barriers", "ediscovery_cases": "eDiscovery cases",
+    }
+    purview_source_rows = []
+    for source_key, state in (evidence_bundle.get("purview_collection_status", {}) if evidence_bundle else {}).items():
+        state = state or {}
+        purview_source_rows.append({
+            "Source": purview_source_labels.get(source_key, source_key.replace("_", " ").title()),
+            "Required": "No — optional context" if state.get("optional") else "Yes",
+            "Status": str(state.get("availability_status", "unavailable") or "unavailable").replace("_", " ").title(),
+            "Records": state.get("records_collected", 0) if state.get("available") else "Not available",
+            "Reason": state.get("reason", "") or ("Collected" if state.get("available") else "No reason returned"),
+            "Read access": state.get("required_role", "") or "Not specified",
+        })
+    purview_coverage_detail = ""
+    if purview_source_rows:
+        purview_coverage_detail = f"""
+        <details>
+          <summary>Purview collection coverage</summary>
+          {render_compact_table(purview_source_rows, [
+              ("Source", "Source"), ("Needed for core assessment", "Required"),
+              ("Status", "Status"), ("Records", "Records"),
+              ("If unavailable", "Reason"), ("Access needed", "Read access"),
+          ])}
+        </details>
+        """
+
+    sharepoint_governance = evidence_bundle.get("sharepoint_governance", {}) if evidence_bundle else {}
+    if sharepoint_governance.get("available"):
+        sp_settings = sharepoint_governance.get("settings", {}) or {}
+
+        def friendly_sharing_level(value):
+            return {
+                "ExternalUserAndGuestSharing": "Anyone links, new guests, and existing guests",
+                "ExternalUserSharingOnly": "New and existing guests; no Anyone links",
+                "ExistingExternalUserSharingOnly": "Existing guests only",
+                "Disabled": "People in the organization only",
+            }.get(str(value), value or "Not returned")
+
+        def friendly_link_type(value):
+            return {
+                "AnonymousAccess": "Anyone link",
+                "Internal": "People in the organization",
+                "Direct": "Specific people",
+                "None": "Not configured",
+            }.get(str(value), value or "Not returned")
+
+        def friendly_bool(value):
+            if value is True or str(value).lower() == "true":
+                return "Yes"
+            if value is False or str(value).lower() == "false":
+                return "No"
+            return value if value not in (None, "") else "Not returned"
+
+        anonymous_expiration = sp_settings.get("RequireAnonymousLinksExpireInDays")
+        if str(anonymous_expiration) == "0":
+            anonymous_expiration = "Not enforced"
+        elif anonymous_expiration not in (None, ""):
+            anonymous_expiration = f"{anonymous_expiration} days"
+        else:
+            anonymous_expiration = "Not returned"
+
+        sharepoint_rows = [
+            {"Setting": "SharePoint external sharing", "Value": friendly_sharing_level(sp_settings.get("SharingCapability"))},
+            {"Setting": "OneDrive external sharing", "Value": friendly_sharing_level(sp_settings.get("OneDriveSharingCapability"))},
+            {"Setting": "Default sharing link", "Value": friendly_link_type(sp_settings.get("DefaultSharingLinkType"))},
+            {"Setting": "Anyone file links", "Value": sp_settings.get("FileAnonymousLinkType", "Not returned")},
+            {"Setting": "Anyone folder links", "Value": sp_settings.get("FolderAnonymousLinkType", "Not returned")},
+            {"Setting": "Anyone-link expiration", "Value": anonymous_expiration},
+            {"Setting": "Guest expiration enforced", "Value": friendly_bool(sp_settings.get("ExternalUserExpirationRequired"))},
+            {"Setting": "Legacy authentication permitted", "Value": friendly_bool(sp_settings.get("LegacyAuthProtocolsEnabled"))},
+            {"Setting": "Sites assessed", "Value": sharepoint_governance.get("site_count", 0)},
+            {"Setting": "Sites permitting Anyone links", "Value": sharepoint_governance.get("anyone_site_count", 0)},
+        ]
+        dag_status = (
+            f"{sharepoint_governance.get('dag_completed_count', 0)} completed and "
+            f"{sharepoint_governance.get('dag_running_count', 0)} running report(s) found."
+        ) if sharepoint_governance.get("dag_available") else (
+            "No readable report inventory was returned. Check whether SharePoint Advanced Management is licensed and whether the signed-in identity has access."
+        )
+        sharepoint_detail = f"""
+        <details open>
+          <summary>SharePoint and OneDrive sharing baseline</summary>
+          {render_compact_table(sharepoint_rows, [("Setting", "Setting"), ("Observed value", "Value")])}
+          <p class="muted">{escape(dag_status)} Existing completed reports can be reused; this tool does not start a scan.</p>
+        </details>
+        """
+    else:
+        sharepoint_detail = (
+            '<p class="analysis-impact-note"><strong>SharePoint sharing baseline not assessed.</strong> '
+            + escape(sharepoint_governance.get("reason", "The SharePoint governance collector did not return tenant settings."))
+            + '</p>'
+        )
 
     data_protection_html = f"""
     <section class="secondary-panel" id="data-protection-status">
       <h2>Data protection checks before AI deployment</h2>
       <p>For AI that can use SharePoint or OneDrive content, complete both Microsoft data-exposure checks below. The tool reuses recent completed results and does not start long-running scans.</p>
+      {sharepoint_detail}
       {render_compact_table(exposure_rows, [
           ("Check", "Area"), ("What it covers", "Purpose"), ("Status", "Status"), ("Next step", "Next step"),
       ])}
       <p class="analysis-impact-note">{escape(dlp_summary)}</p>
       {dlp_detail}
+      {purview_coverage_detail}
     </section>
     """
+
+    decision_coverage = readiness.get("decision_coverage", []) or []
+    open_evidence_items = []
+    for row in decision_coverage:
+        label = customer_coverage_label(row)
+        if label not in open_evidence_items:
+            open_evidence_items.append(label)
+
+    # SAM/DAG and DSPM are decision-limiting exposure checks even when a caller supplies no
+    # matching recommendation row. Add each missing source once, while avoiding a second label
+    # when the normal assessment already emitted the corresponding Scan Coverage item.
+    def _has_open_evidence(*needles):
+        return any(
+            any(needle in existing.lower() for needle in needles)
+            for existing in open_evidence_items
+        )
+
+    sam_source = exposure_sources.get("sam", {}) or {}
+    if not sam_source.get("files_loaded") and not _has_open_evidence("data access governance", "sam/dag"):
+        open_evidence_items.append("SharePoint Data Access Governance")
+    dspm_source = exposure_sources.get("dspm", {}) or {}
+    if not dspm_source.get("files_loaded") and not _has_open_evidence("dspm", "data-risk assessment"):
+        open_evidence_items.append("Purview DSPM")
+
+    if readiness.get("critical"):
+        customer_decision = "Critical safeguards required before AI access"
+    elif high_priority:
+        customer_decision = "Address priority safeguards before broad AI rollout"
+    elif open_evidence_items:
+        customer_decision = "Complete key evidence checks before deployment approval"
+    elif medium_priority:
+        customer_decision = "Foundation supports a controlled rollout with improvements"
+    else:
+        customer_decision = "Microsoft 365 foundation supports controlled AI adoption"
+
+    customer_summary_parts = [
+        f"{len(assurances)} verified {count_label(len(assurances), 'safeguard')}",
+        f"{len(high_priority)} priority {count_label(len(high_priority), 'improvement')}",
+        f"{len(medium_priority) + len(low_priority)} planned {count_label(len(medium_priority) + len(low_priority), 'improvement')}",
+    ]
+    if open_evidence_items:
+        customer_summary_parts.append(
+            f"{len(open_evidence_items)} open evidence {count_label(len(open_evidence_items), 'check')}"
+        )
+    customer_summary = " · ".join(customer_summary_parts)
+
+    top_focus = [
+        summarize_finding(
+            naturalize_count_text(row.get("Observation", "") or row.get("Feature", "")),
+            max_length=150,
+        ).rstrip(".;:")
+        for row in prioritized_findings[:2]
+    ]
+    decision_focus_html = ""
+    if top_focus:
+        decision_focus_html += (
+            '<p class="decision-focus"><strong>Immediate focus:</strong> '
+            + escape("; ".join(top_focus)) + "</p>"
+        )
+    if open_evidence_items:
+        decision_focus_html += (
+            '<p class="decision-focus"><strong>Evidence still needed:</strong> '
+            + escape(", ".join(open_evidence_items)) + "</p>"
+        )
     
     service_sections = []
     service_nav_items = []
@@ -1184,7 +1392,7 @@ def export_to_html(recommendations, filename=None, tenant_name=None, evidence_bu
             coverage_rows.append(f"""
               <tr>
                 <td>{escape(str(item.get("Service", "") or ""))}</td>
-                <td>{escape(str(item.get("Feature", "") or ""))}</td>
+                <td>{escape(customer_coverage_label(item))}</td>
                 <td>{paragraphize(item.get("Observation", ""))}</td>
                 <td>{paragraphize(item.get("Recommendation", ""))}</td>
                 <td>{link}</td>
@@ -1811,6 +2019,26 @@ def export_to_html(recommendations, filename=None, tenant_name=None, evidence_bu
       margin: 0 0 8px;
     }}
 
+    .decision-kicker {{
+      margin: 0 0 6px !important;
+      color: var(--accent) !important;
+      font-size: 0.78rem;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }}
+
+    .decision-summary {{
+      color: var(--text) !important;
+      font-weight: 650;
+    }}
+
+    .decision-focus {{
+      margin-top: 10px !important;
+      color: var(--muted);
+      line-height: 1.5;
+    }}
+
     .decision-panel p,
     .scope-panel > p,
     .secondary-panel > p {{
@@ -2059,50 +2287,37 @@ def export_to_html(recommendations, filename=None, tenant_name=None, evidence_bu
     {integrity_banner}
 
     <section class="decision-panel">
-      <h2>{escape(readiness['decision'])}</h2>
-      <p>{escape(readiness['rationale'])} This decision covers Microsoft 365 tenant controls;
-      external AI services require separate review.</p>
+      <p class="decision-kicker">Microsoft 365 AI readiness</p>
+      <h2>{escape(customer_decision)}</h2>
+      <p class="decision-summary">{escape(customer_summary)}</p>
+      {decision_focus_html}
     </section>
-
-    {scope_html}
-    {entra_license_html}
-    {data_protection_html}
-    {assurance_html}
-    {action_plan_html}
 
     <section class="summary-grid">
       <article class="summary-card">
-        <div class="label">Actions</div>
-        <div class="value">{len(findings)}</div>
+        <div class="label">Verified safeguards</div>
+        <div class="value">{len(assurances)}</div>
       </article>
       <article class="summary-card">
-        <div class="label">High Priority</div>
+        <div class="label">Priority improvements</div>
         <div class="value">{len(high_priority)}</div>
       </article>
       <article class="summary-card">
-        <div class="label">Medium Priority</div>
-        <div class="value">{len(medium_priority)}</div>
+        <div class="label">Planned improvements</div>
+        <div class="value">{len(medium_priority) + len(low_priority)}</div>
       </article>
       <article class="summary-card">
-        <div class="label">Low Priority</div>
-        <div class="value">{len(low_priority)}</div>
-      </article>
-      <article class="summary-card">
-        <div class="label">Coverage Gaps</div>
-        <div class="value">{len(not_assessed)}</div>
-      </article>
-      <article class="summary-card">
-        <div class="label">Adoption &amp; Value Opportunities</div>
-        <div class="value">{len(opportunity_rows)}</div>
-        <div class="decision-effect">Separate from security readiness</div>
-      </article>
-      <article class="summary-card">
-        <div class="label">Verified Strengths</div>
-        <div class="value">{len(assurances)}</div>
+        <div class="label">Open evidence checks</div>
+        <div class="value">{len(open_evidence_items)}</div>
       </article>
     </section>
 
+    {assurance_html}
+    {action_plan_html}
+    {data_protection_html}
     {adoption_html}
+    {entra_license_html}
+    {scope_html}
 
     <section class="controls-panel">
       <div class="controls-grid">
@@ -2306,7 +2521,14 @@ def open_html_report(html_path):
         print(f"Warning: Unable to open HTML report automatically: {e}")
         return False
 
-def print_recommendations_summary(recommendations, csv_path=None, excel_path=None, html_path=None, tenant_name=None):
+def print_recommendations_summary(
+    recommendations,
+    csv_path=None,
+    excel_path=None,
+    html_path=None,
+    tenant_name=None,
+    evidence_bundle=None,
+):
     """
     Print a summary of recommendations grouped by service and priority
     
@@ -2336,7 +2558,7 @@ def print_recommendations_summary(recommendations, csv_path=None, excel_path=Non
         and str(r.get("EvidenceBasis", "")).lower() not in {"license signal", "not verified"}
         and r.get("EvidenceAvailable") == "Yes"
     ]
-    coverage_items = [r for r in recommendations if r.get("Disposition") == DISPOSITION_COVERAGE]
+    coverage_items = list(readiness.get("decision_coverage", []) or [])
 
     # Group by priority
     high_priority = [r for r in findings if r.get("Priority") == "High"]
@@ -2349,7 +2571,9 @@ def print_recommendations_summary(recommendations, csv_path=None, excel_path=Non
     print(f"  🟡 Medium Priority: {len(medium_priority)}")
     print(f"  🟢 Low Priority:    {len(low_priority)}")
     print(f"  🔵 Service-plan/context items (workbook): {len(opportunities)}")
-    print(f"  ✓ Verified strengths: {len(assurances)}")
+    verified_strengths = (evidence_bundle or {}).get("verified_strengths")
+    strength_count = len(verified_strengths) if verified_strengths is not None else len(assurances)
+    print(f"  ✓ Verified strengths: {strength_count}")
     if coverage_items:
         print(f"  ⚪ Coverage gaps:   {len(coverage_items)} (unverified, not clean)")
 

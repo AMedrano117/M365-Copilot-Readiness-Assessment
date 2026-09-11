@@ -36,7 +36,40 @@ def collect_all_recommendations(m365_recommendations, entra_info, purview_info,
     all_recommendations.extend(copilot_studio_info.get('recommendations', []))
     if data_exposure_info:
         all_recommendations.extend(data_exposure_info.get('recommendations', []))
-    return all_recommendations
+    return reconcile_overlapping_evidence(all_recommendations)
+
+
+def reconcile_overlapping_evidence(recommendations):
+    """Prevent one collector's duplicate miss from contradicting evidence read elsewhere."""
+    records = [dict(row) for row in (recommendations or [])]
+    entra_risk_was_read = any(
+        str(row.get('Service', '') or '') == 'Entra'
+        and (
+            'risky users detected in the tenant' in str(row.get('Observation', '') or '').lower()
+            or 'no risky users detected' in str(row.get('Observation', '') or '').lower()
+        )
+        for row in records
+    )
+    if not entra_risk_was_read:
+        return records
+
+    for row in records:
+        observation = str(row.get('Observation', '') or '')
+        if (
+            str(row.get('Service', '') or '') == 'Defender'
+            and 'identity risk data could not be retrieved' in observation.lower()
+        ):
+            row['Observation'] = (
+                'Identity-risk evidence was collected through Entra ID Protection elsewhere in '
+                'this assessment. The separate Defender collector did not return a duplicate copy.'
+            )
+            row['Recommendation'] = ''
+            row['Status'] = 'Reference'
+            row['Priority'] = ''
+            row['Disposition'] = 'Reference'
+            row['EvidenceBasis'] = 'Tenant evidence'
+            row['Confidence'] = 'High'
+    return records
 
 
 def resolve_report_tenant_name(tenant_name, entra_info):
@@ -99,7 +132,8 @@ def process_and_print_all_information(m365_result, entra_info,
                                       report_format='excel', sam_report_paths=None,
                                       dspm_report_paths=None, data_exposure_enabled=True,
                                       assessment_profile=None, provider_evidence=None,
-                                      snapshot_json=None, baseline=None, enabled_collectors=None):
+                                      snapshot_json=None, baseline=None, enabled_collectors=None,
+                                      connection_results=None):
     """Process all service information and generate recommendations."""
     # Unpack M365 results
     (m365_info, m365_recommendations) = m365_result
@@ -161,12 +195,32 @@ def process_and_print_all_information(m365_result, entra_info,
         source_statuses = {}
         if entra_client:
             source_statuses.update(getattr(entra_client, 'collection_status', {}) or {})
+        defender_client = defender_info.get('_client') if isinstance(defender_info, dict) else None
+        purview_client = purview_info.get('_client') if isinstance(purview_info, dict) else None
+        if defender_client:
+            source_statuses.update({
+                f'defender_{key}': value
+                for key, value in (getattr(defender_client, 'collection_status', {}) or {}).items()
+            })
+        if purview_client:
+            source_statuses.update({
+                f'purview_{key}': value
+                for key, value in (getattr(purview_client, 'collection_status', {}) or {}).items()
+            })
         if m365_client:
             source_statuses.update({f'm365_{key}': value for key, value in (getattr(m365_client, 'collection_status', {}) or {}).items()})
+            sharepoint_governance = getattr(m365_client, 'sharepoint_governance', {}) or {}
+            source_statuses.update({
+                key: value for key, value in (sharepoint_governance.get('collection_status', {}) or {}).items()
+            })
             for name in ('copilot_usage', 'm365_app_readiness', 'copilot_dashboard', 'shadow_ai_usage'):
                 evidence = getattr(m365_client, name, None)
                 if isinstance(evidence, dict):
                     source_statuses[name] = evidence
+            sharepoint_payload = getattr(m365_client, 'sharepoint_governance', {}) or {}
+            for name, state in (sharepoint_payload.get('collection_status', {}) or {}).items():
+                if isinstance(state, dict):
+                    source_statuses[name] = state
         for source_name, source in (data_exposure_info.get('sources', {}) or {}).items():
             if isinstance(source, dict):
                 source_statuses[f'data_exposure_{source_name}'] = {
@@ -176,6 +230,17 @@ def process_and_print_all_information(m365_result, entra_info,
                     'truncated': bool(data_exposure_info.get('evidence_truncated')),
                     'reason': source.get('reason', ''),
                 }
+        from .connection_validation import connection_status_to_availability
+        for result in connection_results or []:
+            source_statuses[f"connection_{result.get('collector_id', 'unknown')}"] = {
+                'availability_status': connection_status_to_availability(result.get('status')),
+                'records_collected': '',
+                'pages_collected': '',
+                'truncated': False,
+                'reason': result.get('reason', ''),
+                'maturity': result.get('maturity', ''),
+                'evidence_purpose': result.get('evidence_purpose', ''),
+            }
         evidence_bundle['source_statuses'] = source_statuses
         evidence_bundle['run_manifest'] = build_run_manifest(
             report_tenant_name,
@@ -227,13 +292,18 @@ def process_and_print_all_information(m365_result, entra_info,
             csv_path,
             excel_path,
             html_path,
-            tenant_name=report_tenant_name
+            tenant_name=report_tenant_name,
+            evidence_bundle=evidence_bundle,
         )
         if open_html_report and html_path:
             opened = open_html_report_file(html_path)
             if opened:
                 print("HTML report opened in your default browser.")
     else:
-        print_recommendations_summary(all_recommendations, tenant_name=report_tenant_name)
+        print_recommendations_summary(
+            all_recommendations,
+            tenant_name=report_tenant_name,
+            evidence_bundle=evidence_bundle,
+        )
     
     print("\n" + "="*80)

@@ -7,6 +7,7 @@ import hashlib
 import re
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
 from datetime import datetime, timezone
@@ -15,6 +16,7 @@ from .spinner import get_timestamp, _stdout_lock
 
 
 PURVIEW_CACHE_MAX_AGE_SECONDS = 8 * 60 * 60
+PURVIEW_CACHE_SCHEMA_VERSION = 2
 COLLECTOR_DIAGNOSTICS_PATH = (
     Path(__file__).resolve().parent.parent / "Reports" / "collector_diagnostics.log"
 )
@@ -59,13 +61,17 @@ def _record_collector_diagnostics(collector, lines):
         pass
 
 
-def _launch_powershell(script_path, script_args):
-    """Launch PowerShell 7 when available, with Windows PowerShell as a fallback."""
+def _launch_powershell(script_path, script_args, prefer_windows=False):
+    """Launch the PowerShell edition appropriate for the selected collector."""
     candidates = []
+    # Discover both hosts in the conventional order, then prefer Windows
+    # PowerShell for the SharePoint Online module when requested.
     for executable_name in ("pwsh", "powershell"):
         executable = shutil.which(executable_name)
         if executable and executable not in candidates:
             candidates.append(executable)
+    if prefer_windows:
+        candidates.sort(key=lambda item: 0 if Path(item).stem.lower() == "powershell" else 1)
 
     if not candidates:
         raise FileNotFoundError(
@@ -122,6 +128,12 @@ def _inspect_purview_cache(tenant_id, max_age_seconds=PURVIEW_CACHE_MAX_AGE_SECO
 
     try:
         raw_payload = json.loads(cache_path.read_text(encoding="utf-8"))
+        if raw_payload.get("schema_version") != PURVIEW_CACHE_SCHEMA_VERSION:
+            return {
+                "usable": False,
+                "reason": "incompatible",
+                "cache_path": str(cache_path),
+            }
         cached_at = float(raw_payload.get("cached_at_epoch", 0))
         age_seconds = time.time() - cached_at
         if cached_at <= 0:
@@ -147,7 +159,13 @@ def _inspect_purview_cache(tenant_id, max_age_seconds=PURVIEW_CACHE_MAX_AGE_SECO
                 "cache_path": str(cache_path),
             }
 
-        json.loads(json_payload)
+        parsed_payload = json.loads(json_payload)
+        if not isinstance(parsed_payload, dict) or "dlp_rules" not in parsed_payload:
+            return {
+                "usable": False,
+                "reason": "incompatible",
+                "cache_path": str(cache_path),
+            }
         return {
             "usable": True,
             "reason": "fresh",
@@ -171,6 +189,7 @@ def _save_purview_cache(tenant_id, json_payload):
     try:
         cache_path = _get_purview_cache_path(tenant_id)
         cache_record = {
+            "schema_version": PURVIEW_CACHE_SCHEMA_VERSION,
             "tenant_id": tenant_id,
             "cached_at_epoch": time.time(),
             "purview_data_json": json_payload,
@@ -179,6 +198,17 @@ def _save_purview_cache(tenant_id, json_payload):
     except Exception:
         # Cache persistence is best-effort only.
         pass
+
+
+def _set_purview_runtime_payload(json_payload, source):
+    """Keep large Purview responses out of environment variables on Windows."""
+    from .get_purview_client import set_purview_data_payload
+
+    parsed_payload = json.loads(json_payload) if isinstance(json_payload, str) else json_payload
+    set_purview_data_payload(parsed_payload)
+    os.environ['PURVIEW_DATA_SOURCE'] = source
+    os.environ.pop('PURVIEW_DATA_JSON', None)
+    return parsed_payload
 
 
 async def collect_power_platform_data(
@@ -384,8 +414,7 @@ async def collect_purview_data_via_powershell(auth_mode='auto', tenant_id=None):
                 sys.stdout.flush()
     else:
         if cache_info and cache_info.get('usable'):
-            os.environ['PURVIEW_DATA_SOURCE'] = 'cache'
-            os.environ['PURVIEW_DATA_JSON'] = cache_info['json_payload']
+            _set_purview_runtime_payload(cache_info['json_payload'], 'cache')
             with _stdout_lock:
                 sys.stdout.write(
                     f'[{get_timestamp()}]   ℹ️  Using cached Purview deployment data from a previous successful run ({_format_age(cache_info["age_seconds"])} old)\n'
@@ -397,6 +426,12 @@ async def collect_purview_data_via_powershell(auth_mode='auto', tenant_id=None):
             with _stdout_lock:
                 sys.stdout.write(
                     f'[{get_timestamp()}]   ℹ️  Purview cache is too old ({_format_age(cache_info["age_seconds"])} old); collecting fresh deployment data\n'
+                )
+                sys.stdout.flush()
+        elif cache_info and cache_info.get('reason') == 'incompatible':
+            with _stdout_lock:
+                sys.stdout.write(
+                    f'[{get_timestamp()}]   ℹ️  Purview cache predates the current DLP rule collection; collecting fresh deployment data\n'
                 )
                 sys.stdout.flush()
 
@@ -414,9 +449,27 @@ async def collect_purview_data_via_powershell(auth_mode='auto', tenant_id=None):
     # Invoke collect_purview_data.ps1 in DataOnly mode with real-time stderr streaming
     # PS1 files are in parent directory, not in Core
     ps_script = os.path.join(os.path.dirname(__file__), '..', 'collect_purview_data.ps1')
+    collector_args = [
+        '-DataOnly', '-AuthMode', ('Fresh' if auth_mode == 'fresh' else 'Auto'),
+        '-TenantId', tenant_id or os.environ.get('TENANT_ID', ''),
+        '-ClientId', os.environ.get('CLIENT_ID', ''),
+        '-Organization', os.environ.get('PURVIEW_ORGANIZATION', ''),
+    ]
+    certificate_path = os.environ.get('PURVIEW_CERTIFICATE_PATH', '')
+    if not certificate_path and os.environ.get('CERTIFICATE_PATH', '').lower().endswith(('.pfx', '.p12')):
+        certificate_path = os.environ.get('CERTIFICATE_PATH', '')
+    certificate_thumbprint = os.environ.get('PURVIEW_CERTIFICATE_THUMBPRINT', '')
+    certificate_password = os.environ.get('PURVIEW_CERTIFICATE_PASSWORD', os.environ.get('CERTIFICATE_PASSWORD', ''))
+    if certificate_path:
+        collector_args.extend(['-CertificatePath', certificate_path])
+    if certificate_thumbprint:
+        collector_args.extend(['-CertificateThumbprint', certificate_thumbprint])
+    if certificate_password:
+        collector_args.extend(['-CertificatePassword', certificate_password])
+    if os.environ.get('PURVIEW_INCLUDE_SPECIALIZED', '').strip().lower() in {'1', 'true', 'yes'}:
+        collector_args.append('-IncludeSpecialized')
     process = _launch_powershell(
-        ps_script,
-        ['-DataOnly', '-AuthMode', ('Fresh' if auth_mode == 'fresh' else 'Auto')],
+        ps_script, collector_args, prefer_windows=bool(certificate_thumbprint)
     )
     
     # Spinner control
@@ -528,14 +581,13 @@ async def collect_purview_data_via_powershell(auth_mode='auto', tenant_id=None):
         )
         with _stdout_lock:
             sys.stdout.write(
-                f'[{get_timestamp()}]   ⚠️  Purview interactive collection unavailable; continuing with license-based recommendations\n'
+                f'[{get_timestamp()}]   ⚠️  Purview interactive collection unavailable; Purview configuration will be reported as not assessed\n'
             )
             if last_detail:
                 sys.stdout.write(f'[{get_timestamp()}]   ℹ️  Purview collector detail: {last_detail}\n')
             sys.stdout.flush()
         _record_collector_diagnostics('Purview', stderr_lines)
         return False
-    
     # Parse JSON output from PowerShell
     import json
     try:
@@ -568,21 +620,95 @@ async def collect_purview_data_via_powershell(auth_mode='auto', tenant_id=None):
             raise ValueError("No JSON found in PowerShell output")
 
         # Validate once more and inject data for get_purview_client to consume.
-        json.loads(json_str)
-        os.environ['PURVIEW_DATA_SOURCE'] = 'subprocess'
-        os.environ['PURVIEW_DATA_JSON'] = json_str
+        parsed_payload = _set_purview_runtime_payload(json_str, 'subprocess')
         _save_purview_cache(tenant_id, json_str)
 
         with _stdout_lock:
             sys.stdout.write(f'\r[{get_timestamp()}]   ✓ Purview Data Gathering  [████████████████████] 100%\n')
+            collection_summary = parsed_payload.get('collection_summary', {}) if isinstance(parsed_payload, dict) else {}
+            required_failures = collection_summary.get('required_failures', []) or []
+            optional_failures = collection_summary.get('optional_failures', []) or []
+            if required_failures:
+                names = ', '.join(str(item.get('source', 'Unknown source')) for item in required_failures)
+                sys.stdout.write(
+                    f'[{get_timestamp()}]   ⚠️  Required Purview evidence unavailable: {names}\n'
+                )
+                for item in required_failures:
+                    role = item.get('required_role', '')
+                    reason = item.get('reason', '')
+                    detail = '; '.join(value for value in (reason, f'Read access: {role}' if role else '') if value)
+                    sys.stdout.write(f'[{get_timestamp()}]      {item.get("source", "Purview source")}: {detail}\n')
+            if optional_failures:
+                names = ', '.join(str(item.get('source', 'Unknown source')) for item in optional_failures)
+                sys.stdout.write(
+                    f'[{get_timestamp()}]   ℹ️  Optional Purview enrichment unavailable: {names}. Core DLP results are unaffected.\n'
+                )
             sys.stdout.flush()
         return True
     except (json.JSONDecodeError, ValueError) as e:
         _record_collector_diagnostics('Purview', [*stderr_lines, str(e)])
         with _stdout_lock:
             sys.stdout.write(
-                f'[{get_timestamp()}]   ⚠️  Purview interactive collection returned unreadable output; continuing with license-based recommendations\n'
+                f'[{get_timestamp()}]   ⚠️  Purview interactive collection returned unreadable output; Purview configuration will be reported as not assessed\n'
             )
             sys.stdout.write(f'[{get_timestamp()}]   ℹ️  Purview collector detail: {e}\n')
             sys.stdout.flush()
         return False
+
+
+async def collect_sharepoint_governance_via_powershell(admin_url, tenant_id, auth_mode='auto'):
+    """Collect SharePoint tenant/site sharing settings and existing SAM report status."""
+    if not admin_url:
+        return {"available": False, "reason": "SharePoint admin URL could not be determined."}
+
+    client_id = os.environ.get("CLIENT_ID", "")
+    certificate_path = os.environ.get("SHAREPOINT_CERTIFICATE_PATH", "")
+    if not certificate_path and os.environ.get("CERTIFICATE_PATH", "").lower().endswith((".pfx", ".p12")):
+        certificate_path = os.environ.get("CERTIFICATE_PATH", "")
+    certificate_password = os.environ.get("SHAREPOINT_CERTIFICATE_PASSWORD", os.environ.get("CERTIFICATE_PASSWORD", ""))
+    certificate_thumbprint = os.environ.get("SHAREPOINT_CERTIFICATE_THUMBPRINT", "")
+
+    args = [
+        "-AdminUrl", admin_url, "-TenantId", tenant_id, "-ClientId", client_id,
+        "-AuthMode", "Fresh" if auth_mode == "fresh" else "Skip" if auth_mode == "skip" else "Auto",
+    ]
+    if certificate_path:
+        args.extend(["-CertificatePath", certificate_path])
+    if certificate_password:
+        args.extend(["-CertificatePassword", certificate_password])
+    if certificate_thumbprint:
+        args.extend(["-CertificateThumbprint", certificate_thumbprint])
+    download_root = Path(__file__).resolve().parent.parent / ".cache" / "sharepoint_dag"
+    download_root.mkdir(parents=True, exist_ok=True)
+    download_path = tempfile.mkdtemp(prefix="run-", dir=str(download_root))
+    args.extend(["-DownloadPath", download_path])
+
+    ps_script = os.path.join(os.path.dirname(__file__), "..", "collect_sharepoint_governance.ps1")
+    print(f'[{get_timestamp()}]   ℹ️  Collecting SharePoint sharing settings and existing SAM report status')
+    try:
+        process = _launch_powershell(ps_script, args, prefer_windows=True)
+        stdout, stderr = process.communicate()
+    except Exception as exc:
+        return {"available": False, "reason": str(exc), "collection_status": {}}
+
+    stderr_lines = [line.strip() for line in (stderr or "").splitlines() if line.strip()]
+    for line in stderr_lines:
+        if line.startswith("AUTH_PROMPT"):
+            print(f'[{get_timestamp()}]   ℹ️  Browser sign-in requested for SharePoint governance collection')
+        elif line.startswith("AUTH_COMPLETE"):
+            print(f'[{get_timestamp()}]   ✅ SharePoint sign-in accepted')
+        elif line.startswith("AUTH_REUSED"):
+            print(f'[{get_timestamp()}]   ℹ️  Using SharePoint application certificate authentication')
+    if process.returncode != 0:
+        detail = next((line for line in reversed(stderr_lines) if not line.startswith("AUTH_")), "Collector failed")
+        _record_collector_diagnostics("SharePoint", stderr_lines)
+        print(f'[{get_timestamp()}]   ⚠️  SharePoint governance collection unavailable: {_sanitize_collector_detail(detail)}')
+        return {"available": False, "reason": _sanitize_collector_detail(detail), "collection_status": {}}
+
+    try:
+        payload = json.loads((stdout or "").strip())
+        print(f'[{get_timestamp()}]   ✅ SharePoint sharing and SAM report inventory collected')
+        return payload
+    except (json.JSONDecodeError, ValueError) as exc:
+        _record_collector_diagnostics("SharePoint", [*stderr_lines, str(exc)])
+        return {"available": False, "reason": "SharePoint collector returned unreadable output.", "collection_status": {}}

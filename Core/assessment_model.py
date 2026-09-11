@@ -173,14 +173,15 @@ def infer_disposition(record):
     recommendation = str(record.get("Recommendation", "") or "").strip()
     observation = str(record.get("Observation", "") or "").strip()
 
-    if (category == CATEGORY_SCAN_COVERAGE or status in COVERAGE_STATUSES
-            or COVERAGE_LANGUAGE.search(observation)):
+    if category == CATEGORY_SCAN_COVERAGE:
         return DISPOSITION_COVERAGE
     if str(record.get("Service", "") or "") == "M365" and status != "critical":
         # M365 modules primarily describe product availability and adoption.  They do not
         # collect object-level oversharing or data-protection evidence, so they cannot create a
         # security gate.  Keep their suggested work in the value/prerequisite lane.
         return DISPOSITION_OPPORTUNITY if recommendation else DISPOSITION_ASSURANCE
+    if status in COVERAGE_STATUSES or COVERAGE_LANGUAGE.search(observation):
+        return DISPOSITION_COVERAGE
     if source_status == "insight" or status == "insight":
         return DISPOSITION_OPPORTUNITY
     if source_status == "success":
@@ -235,12 +236,13 @@ def infer_evidence(record, disposition):
         return explicit_basis, explicit_confidence or "Medium"
     if disposition == DISPOSITION_COVERAGE:
         return "Not verified", "Unknown"
+    text = _combined_text(record)
+    # A workbook tab may contain the licensed service-plan inventory, but that does not turn
+    # an entitlement statement into evidence that a control is configured or effective.
+    if re.search(r"\b(?:active in|included in|license|licensed|licensing|service plan)\b", text):
+        return "License signal", "Low"
     if str(record.get("EvidenceAvailable", "") or "").strip().lower() == "yes":
         return "Tenant evidence", "High"
-
-    text = _combined_text(record)
-    if re.search(r"\b(?:active in|license|licensed|service plan)\b", text):
-        return "License signal", "Low"
     return "Tenant observation", "Medium"
 
 

@@ -16,6 +16,8 @@ def create_pipelines(
     copilot_dashboard_export=None,
     power_platform_inventory=None,
     preview_collectors='none',
+    sharepoint_data=None,
+    legacy_power_platform_collector=False,
 ):
     """Create all service pipeline functions with shared context.
     
@@ -59,7 +61,7 @@ def create_pipelines(
             if getattr(inventory_attempt, 'power_platform_inventory', {}).get('available'):
                 pp_client = inventory_attempt
 
-        allow_legacy = interactive_plan['power_platform'].get('will_attempt', True)
+        allow_legacy = bool(legacy_power_platform_collector) and interactive_plan['power_platform'].get('will_attempt', False)
         if pp_client is None and allow_legacy:
             from .get_power_platform_client import get_power_platform_client
             pp_client = await get_power_platform_client(tenant_id)
@@ -97,6 +99,9 @@ def create_pipelines(
                 copilot_dashboard_export=copilot_dashboard_export,
                 preview_collectors=preview_collectors,
             )
+            m365_client.sharepoint_governance = sharepoint_data or {
+                'available': False, 'reason': 'SharePoint governance collection was not requested.'
+            }
             
             # Processing phase with progress bar
             import sys
@@ -107,6 +112,8 @@ def create_pipelines(
             
             from .get_m365_info import get_m365_info
             license_info, recommendations = await get_m365_info(client, services_and_licenses, m365_client)
+            from .sharepoint_governance import build_sharepoint_recommendations
+            recommendations.extend(build_sharepoint_recommendations(m365_client.sharepoint_governance))
 
             with _stdout_lock:
                 sys.stdout.write(f'\r[{get_timestamp()}]   ✓ M365 Data Processing    [████████████████████] 100%\n')
@@ -133,7 +140,9 @@ def create_pipelines(
         try:
             # Gathering phase (has its own progress bar inside get_entra_client)
             from .get_entra_client import get_entra_client
-            entra_client = await get_entra_client(client, tenant_id)
+            entra_client = await get_entra_client(
+                client, tenant_id, preview_collectors=preview_collectors
+            )
             
             # Processing phase with progress bar
             import sys
@@ -192,7 +201,7 @@ def create_pipelines(
                 if not attempted_collection:
                     with _stdout_lock:
                         import sys
-                        sys.stdout.write(f'[{get_timestamp()}]   ℹ️  Purview deployment enrichment skipped; using license-based recommendations\n')
+                        sys.stdout.write(f'[{get_timestamp()}]   ℹ️  Purview deployment enrichment skipped; Purview configuration will be reported as not assessed\n')
                         sys.stdout.flush()
             
             if purview_data_source == 'stdin':
@@ -274,7 +283,7 @@ def create_pipelines(
         try:
             import sys
             allow_pp_collection = (
-                interactive_plan['power_platform'].get('will_attempt', True)
+                bool(legacy_power_platform_collector) and interactive_plan['power_platform'].get('will_attempt', False)
                 or bool(power_platform_inventory)
                 or preview_collectors in {'power-platform', 'all'}
             )
@@ -294,7 +303,7 @@ def create_pipelines(
             else:
                 pp_client = None
                 with _stdout_lock:
-                    sys.stdout.write(f'[{get_timestamp()}]   ℹ️  Power Platform deployment enrichment skipped; using basic recommendations\n')
+                    sys.stdout.write(f'[{get_timestamp()}]   ℹ️  Power Platform inventory not supplied and preview API not selected; optional extensibility inventory remains not assessed\n')
                     sys.stdout.flush()
             
             # Processing phase
@@ -335,7 +344,7 @@ def create_pipelines(
             # Gathering phase (uses same data as Power Platform from pre-flight)
             import sys
             allow_pp_collection = (
-                interactive_plan['power_platform'].get('will_attempt', True)
+                bool(legacy_power_platform_collector) and interactive_plan['power_platform'].get('will_attempt', False)
                 or bool(power_platform_inventory)
                 or preview_collectors in {'power-platform', 'all'}
             )
@@ -353,7 +362,7 @@ def create_pipelines(
             else:
                 pp_client = None
                 with _stdout_lock:
-                    sys.stdout.write(f'[{get_timestamp()}]   ℹ️  Copilot Studio deployment enrichment skipped; using basic recommendations\n')
+                    sys.stdout.write(f'[{get_timestamp()}]   ℹ️  Copilot Studio inventory not supplied and Power Platform preview API not selected; agent inventory remains supplemental and not assessed\n')
                     sys.stdout.flush()
             
             # pp_client can be None (no enrichment data) - that's OK!

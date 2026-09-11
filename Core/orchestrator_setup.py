@@ -1,6 +1,8 @@
 """Initialization and setup functions for orchestrator."""
 
 import json
+import os
+import shutil
 import subprocess
 
 from .get_graph_client import get_graph_client
@@ -74,48 +76,139 @@ async def setup_graph_and_licenses(tenant_id, show_graph_messages):
     return client, services_and_licenses, has_license_data
 
 
-def get_local_powershell_module_availability():
-    """Check if optional interactive collection modules are installed locally."""
-    module_names = ["ExchangeOnlineManagement", "Az.Accounts"]
-    default_status = {name: False for name in module_names}
+def get_local_powershell_module_availability(install_sharepoint=False):
+    """Discover and optionally install modules in the PowerShell host that uses them."""
+    module_names = [
+        "ExchangeOnlineManagement", "Az.Accounts",
+        "Microsoft.Online.SharePoint.PowerShell",
+    ]
+    status = {name: False for name in module_names}
+    status.update({
+        "sharepoint_install_attempted": False,
+        "sharepoint_install_succeeded": False,
+        "sharepoint_install_error": "",
+        "sharepoint_module_manifest": "",
+        "module_details": {},
+    })
+    windows_host = shutil.which("powershell")
+    modern_host = shutil.which("pwsh")
+    host = windows_host or modern_host
+    if not host:
+        return status
 
+    install_block = ""
+    if install_sharepoint:
+        install_block = (
+            "$result.sharepoint_install_attempted=$true; "
+            "foreach($spec in @(@{Name='ExchangeOnlineManagement';Minimum='3.2.0'},"
+            "@{Name='Microsoft.Online.SharePoint.PowerShell';Minimum='16.0.27215.12000'})){ "
+            "$found=Get-Module -ListAvailable -Name $spec.Name | Sort-Object Version -Descending | Select-Object -First 1; "
+            "if((-not $found)-or($found.Version -lt [version]$spec.Minimum)){ "
+            "Install-Module $spec.Name -Scope CurrentUser -Force -AllowClobber -Repository PSGallery -MinimumVersion $spec.Minimum } }; "
+        )
+
+    # Explicitly include redirected Documents/OneDrive module roots. This fixes
+    # machines where the module was installed correctly but PSModulePath omitted
+    # the redirected CurrentUser location.
     ps_script = (
-        "$result = @{}; "
-        "foreach ($name in @('ExchangeOnlineManagement','Az.Accounts')) { "
-        "$result[$name] = [bool](Get-Module -ListAvailable -Name $name) "
-        "}; "
-        "$result | ConvertTo-Json -Compress"
+        "$ErrorActionPreference='Stop'; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; "
+        "$result=@{sharepoint_install_attempted=$false;sharepoint_install_succeeded=$false;sharepoint_install_error='';module_details=@{}}; "
+        "$roots=@(); $docs=[Environment]::GetFolderPath('MyDocuments'); "
+        "if($docs){$roots+=@((Join-Path $docs 'WindowsPowerShell\\Modules'),(Join-Path $docs 'PowerShell\\Modules'))}; "
+        "$profileParent=Split-Path $docs -Parent; if($profileParent -and (Test-Path $profileParent)){ "
+        "Get-ChildItem -LiteralPath $profileParent -Directory -Filter 'OneDrive*' -ErrorAction SilentlyContinue | ForEach-Object { "
+        "$roots+=@((Join-Path $_.FullName 'Documents\\WindowsPowerShell\\Modules'),(Join-Path $_.FullName 'Documents\\PowerShell\\Modules')) } }; "
+        "foreach($root in @($roots|Select-Object -Unique)){if((Test-Path $root)-and(($env:PSModulePath -split ';') -notcontains $root)){$env:PSModulePath=\"$root;$env:PSModulePath\"}}; "
+        + install_block +
+        "$requirements=@{'ExchangeOnlineManagement'=@('3.2.0','Connect-IPPSSession');'Az.Accounts'=@('0.0','Connect-AzAccount');"
+        "'Microsoft.Online.SharePoint.PowerShell'=@('16.0.27215.12000','Get-SPODataAccessGovernanceInsight')}; "
+        "foreach($name in $requirements.Keys){$m=Get-Module -ListAvailable -Name $name|Sort-Object Version -Descending|Select-Object -First 1; "
+        "$ok=$false;$cmd=$false;if($m){try{Import-Module $m.Path -Force -ErrorAction Stop;$cmd=[bool](Get-Command $requirements[$name][1] -ErrorAction SilentlyContinue);"
+        "$ok=($m.Version -ge [version]$requirements[$name][0])-and$cmd}catch{}}; "
+        "$result[$name]=$ok;$result.module_details[$name]=@{available=$ok;version=$(if($m){[string]$m.Version}else{''});path=$(if($m){[string]$m.Path}else{''});cmdlet=$cmd;host=$PSVersionTable.PSEdition}}; "
+        "$result.sharepoint_install_succeeded=[bool]$result['Microsoft.Online.SharePoint.PowerShell']; "
+        "$sp=$result.module_details['Microsoft.Online.SharePoint.PowerShell'];if($sp){$result.sharepoint_module_manifest=$sp.path}; "
+        "$result|ConvertTo-Json -Depth 6 -Compress"
     )
-
     try:
         completed = subprocess.run(
-            ["pwsh", "-NoProfile", "-Command", ps_script],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=15,
-            check=False,
+            [host, "-NoProfile", "-Command", ps_script],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=180 if install_sharepoint else 15, check=False,
         )
         if completed.returncode != 0 or not completed.stdout.strip():
-            return default_status
-        result = json.loads(completed.stdout.strip())
-        return {name: bool(result.get(name)) for name in module_names}
-    except Exception:
-        return default_status
+            status["sharepoint_install_error"] = completed.stderr.strip()[:1000]
+            return status
+        result = json.loads(completed.stdout.strip().splitlines()[-1])
+        for name in module_names:
+            status[name] = bool(result.get(name))
+        for key in (
+            "sharepoint_install_attempted", "sharepoint_install_succeeded",
+            "sharepoint_install_error", "sharepoint_module_manifest", "module_details",
+        ):
+            status[key] = result.get(key, status[key])
+        if modern_host and modern_host != host and (
+            not status["ExchangeOnlineManagement"] or not status["Az.Accounts"]
+        ):
+            modern_probe = (
+                "$r=@{module_details=@{}};$requirements=@{'ExchangeOnlineManagement'=@('3.2.0','Connect-IPPSSession');'Az.Accounts'=@('0.0','Connect-AzAccount')};"
+                "foreach($name in $requirements.Keys){$m=Get-Module -ListAvailable -Name $name|Sort-Object Version -Descending|Select-Object -First 1;$ok=$false;$cmd=$false;"
+                "if($m){try{Import-Module $m.Path -Force -ErrorAction Stop;$cmd=[bool](Get-Command $requirements[$name][1] -ErrorAction SilentlyContinue);$ok=($m.Version -ge [version]$requirements[$name][0])-and$cmd}catch{}};"
+                "$r[$name]=$ok;$r.module_details[$name]=@{available=$ok;version=$(if($m){[string]$m.Version}else{''});path=$(if($m){[string]$m.Path}else{''});cmdlet=$cmd;host=$PSVersionTable.PSEdition}};$r|ConvertTo-Json -Depth 5 -Compress"
+            )
+            try:
+                modern_result = subprocess.run(
+                    [modern_host, "-NoProfile", "-Command", modern_probe],
+                    capture_output=True, text=True, encoding="utf-8", errors="replace",
+                    timeout=15, check=False,
+                )
+                if modern_result.returncode == 0 and modern_result.stdout.strip():
+                    modern_detail = json.loads(modern_result.stdout.strip().splitlines()[-1])
+                    for name in ("ExchangeOnlineManagement", "Az.Accounts"):
+                        if modern_detail.get(name):
+                            status[name] = True
+                            status["module_details"][name] = modern_detail.get("module_details", {}).get(name, {})
+            except Exception:
+                # The Windows PowerShell result remains authoritative for
+                # SharePoint. A failed secondary probe must not erase it.
+                pass
+    except Exception as exc:
+        status["sharepoint_install_error"] = str(exc)
+
+    if status['sharepoint_module_manifest']:
+        os.environ['SHAREPOINT_MODULE_PATH'] = status['sharepoint_module_manifest']
+    return status
 
 
-def prepare_interactive_collection_plan(service_config, interactive_auth='auto'):
+def prepare_interactive_collection_plan(
+    service_config, interactive_auth='auto', legacy_power_platform_collector=False,
+    install_missing_modules=True,
+):
     """Build a plan for optional interactive data collectors."""
-    modules = get_local_powershell_module_availability()
+    modules = get_local_powershell_module_availability(
+        install_sharepoint=bool(service_config.get('run_m365')) and install_missing_modules
+    )
     policy = interactive_auth or 'auto'
 
     purview_selected = service_config['run_purview']
-    pp_selected = service_config['run_power_platform'] or service_config['run_copilot_studio']
+    pp_selected = bool(legacy_power_platform_collector) and (
+        service_config['run_power_platform'] or service_config['run_copilot_studio']
+    )
+    sharepoint_selected = service_config['run_m365']
+    sharepoint_certificate = bool(
+        os.environ.get('SHAREPOINT_CERTIFICATE_THUMBPRINT')
+        or os.environ.get('SHAREPOINT_CERTIFICATE_PATH')
+        or (os.environ.get('CERTIFICATE_PATH', '').lower().endswith(('.pfx', '.p12')))
+    )
+    purview_certificate = bool(
+        os.environ.get('PURVIEW_CERTIFICATE_THUMBPRINT')
+        or os.environ.get('PURVIEW_CERTIFICATE_PATH')
+        or (os.environ.get('CERTIFICATE_PATH', '').lower().endswith(('.pfx', '.p12')))
+    )
 
     purview_reason = None
     if purview_selected:
-        if policy == 'skip':
+        if policy == 'skip' and not purview_certificate:
             purview_reason = 'skipped by policy'
         elif not modules.get('ExchangeOnlineManagement', False):
             purview_reason = 'ExchangeOnlineManagement module not installed'
@@ -134,11 +227,28 @@ def prepare_interactive_collection_plan(service_config, interactive_auth='auto')
             'selected': purview_selected,
             'will_attempt': purview_selected and purview_reason is None,
             'skip_reason': purview_reason,
+            'application_auth': purview_certificate,
         },
         'power_platform': {
             'selected': pp_selected,
             'will_attempt': pp_selected and pp_reason is None,
             'skip_reason': pp_reason,
+            'legacy': bool(legacy_power_platform_collector),
+        },
+        'sharepoint': {
+            'selected': sharepoint_selected,
+            'will_attempt': sharepoint_selected
+                and modules.get('Microsoft.Online.SharePoint.PowerShell', False)
+                and (policy != 'skip' or sharepoint_certificate),
+            'application_auth': sharepoint_certificate,
+            'skip_reason': (
+                None if not sharepoint_selected
+                else 'Microsoft.Online.SharePoint.PowerShell module not installed'
+                if not modules.get('Microsoft.Online.SharePoint.PowerShell', False)
+                else 'delegated authentication skipped and no SharePoint certificate configured'
+                if policy == 'skip' and not sharepoint_certificate
+                else None
+            ),
         },
     }
 
@@ -149,7 +259,10 @@ def print_interactive_collection_summary(interactive_plan):
 
     policy = interactive_plan['policy']
     if policy == 'skip':
-        lines.append("Interactive deployment enrichment: skipped. Continuing with license/basic recommendations only.")
+        lines.append(
+            "Interactive collection: skipped. Sources that require delegated sign-in "
+            "will be reported as not assessed."
+        )
     elif policy == 'fresh':
         lines.append("Interactive deployment enrichment: enabled. A fresh Microsoft 365 sign-in will be requested if needed.")
     else:
@@ -158,13 +271,12 @@ def print_interactive_collection_summary(interactive_plan):
     purview_plan = interactive_plan['purview']
     if purview_plan['selected']:
         if purview_plan['will_attempt']:
-            lines.append(
-                "Purview deployment data selected. Admin-level delegated access may be required for full results."
-            )
+            method = 'application certificate' if purview_plan.get('application_auth') else 'browser sign-in'
+            lines.append(f"Purview core policy collection selected using {method}.")
         else:
             lines.append(
                 f"Purview deployment collection: skipped ({purview_plan['skip_reason']}). "
-                "Continuing with license-based recommendations."
+                "DLP and other Purview configuration will be reported as not assessed."
             )
             if purview_plan['skip_reason'] == 'ExchangeOnlineManagement module not installed':
                 lines.append(
@@ -176,18 +288,37 @@ def print_interactive_collection_summary(interactive_plan):
     if pp_plan['selected']:
         if pp_plan['will_attempt']:
             lines.append(
-                "Power Platform/Copilot Studio deployment data selected. Admin-level delegated access may be required for full results."
+                "Legacy Power Platform collection selected. This compatibility path uses Az.Accounts and delegated sign-in."
             )
         else:
             lines.append(
                 f"Power Platform/Copilot Studio deployment collection: skipped ({pp_plan['skip_reason']}). "
-                "Continuing with license/basic recommendations."
+                "Optional extensibility inventory will be reported as not assessed."
             )
             if pp_plan['skip_reason'] == 'Az.Accounts module not installed':
                 lines.append(
                     "Install locally with: Install-Module Az.Accounts -Scope CurrentUser -Force. "
                     "The interactive user needs Power Platform Administrator in the target tenant."
                 )
+
+    sharepoint_plan = interactive_plan.get('sharepoint', {})
+    if sharepoint_plan.get('selected'):
+        if sharepoint_plan.get('will_attempt'):
+            method = 'application certificate' if sharepoint_plan.get('application_auth') else 'browser sign-in'
+            lines.append(
+                f"SharePoint sharing and Data Access Governance collection selected using {method}."
+            )
+        else:
+            lines.append(
+                f"SharePoint governance collection: skipped ({sharepoint_plan.get('skip_reason')}). "
+                "Sharing defaults and SAM report status will be reported as not assessed."
+            )
+            if sharepoint_plan.get('skip_reason') == 'Microsoft.Online.SharePoint.PowerShell module not installed':
+                install_error = interactive_plan.get('modules', {}).get('sharepoint_install_error', '')
+                lines.append("The tool attempted to install the SharePoint module for the current user but it is still unavailable.")
+                if install_error:
+                    lines.append(f"Installation detail: {install_error}")
+                lines.append("Manual fallback: Install-Module Microsoft.Online.SharePoint.PowerShell -Scope CurrentUser -Force -AllowClobber")
 
     if not lines:
         return
