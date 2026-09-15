@@ -1,6 +1,6 @@
-# Enterprise AI Readiness Assessment for the Microsoft 365 Data Estate
+# Microsoft 365 Copilot Readiness Assessment
 
-This read-only assessment evaluates the Microsoft 365 foundation used by Microsoft 365 Copilot, AI agents, and external AI products that connect to tenant data. It separates security and data readiness from product adoption, optional extensibility, and provider approval.
+This read-only assessment helps business leaders and IT owners decide what must be addressed or confirmed before a Microsoft 365 Copilot pilot expands. It combines tenant evidence, saved collections and Microsoft portal exports into one customer HTML report and a technical evidence workbook. Agents and external AI products are included when explicitly scoped.
 
 The report produces three distinct conclusions:
 
@@ -53,7 +53,47 @@ python main.py --check-connections
 python main.py
 ```
 
-See [prereq.md](prereq.md) for the exact permission, role, certificate, module, and licensing requirements. See [RUN.md](RUN.md) for all command-line examples.
+Use [RUN.md](RUN.md) as the canonical operator runbook: prepare, collect and save, add exports, rebuild and review. [prereq.md](prereq.md) covers connected access and setup; [the portal guide](PORTAL_REPORTS_AND_OFFLINE.md) covers report requests and validated export schemas.
+
+## Collect once, then rebuild offline
+
+To preview HTML and Excel immediately using the repository's synthetic report samples, run:
+
+```powershell
+python main.py --mode offline --reports-dir .\tests\fixtures\microsoft_reports --tenant-name "Sample tenant"
+```
+
+This preview requires no tenant collection and identifies unassessed tenant controls. Select `--mode live` for tenant collection or `--mode offline` for local report generation. The older `--offline` flag remains an alias. Without a mode, `--collection-input`, `--prior-report`, or `--purview-cache` selects offline; otherwise the existing live default is retained.
+
+Every live assessment automatically saves a reusable tenant collection and a portable assessment folder. At the end, **COLLECTION INPUT (`--collection-input`)** shows the exact file to reuse and a copyable offline command. Use that path to combine the run with portal exports later:
+
+```powershell
+python main.py --mode live
+# Replace <collection-input> with the full path from the final console handoff.
+python main.py --mode offline --collection-input "<collection-input>" --reports-dir .\exports
+```
+
+Collections use a unique filename under `output/collections/`: `tenant-collection_<tenant>_<UTC timestamp>_<unique id>.json`. Use the **COLLECTION INPUT** path shown by the console, which points to the reusable collection or rebuild recipe for that assessment. `--save-collection PATH` is an optional override for a custom destination, such as `python main.py --mode live --save-collection .\output\customer\tenant-collection.json`. Connection preflight (`--check-connections`) does not save a collection; offline mode does not save or overwrite one.
+
+The offline command builds HTML and Excel without tenant authentication, network calls, or administrative PowerShell. The adjacent `<collection-stem>_package` folder preserves `collection.json`, original supplemental inputs, assessment settings, deliverables and an operator log. Copy that entire folder and rebuild using its `collection.json`; original cache/download paths are unnecessary. If exports are available during the live run, include `--reports-dir` then. The package restores those inputs on replay; use `--reports-dir` to add later exports. See [RUN.md](RUN.md#portable-assessment-folder) for the package layout and replay rules.
+
+Original collection dates remain unchanged. The recorded evaluation date controls freshness; `--evaluation-date YYYY-MM-DD` deliberately reassesses saved evidence as of another date. User-level workbook detail still requires `--include-user-usage-detail` on each run. To review exports before a collection is available, use `python main.py --mode offline --reports-dir .\exports`; tenant controls are explicitly unassessed.
+
+The replayable collection is different from `--snapshot-json`, which stores assessment results for comparison. To combine older tenant evidence with new exports without another live run, add `--prior-report Reports/prior.xlsx` and, if available, `--purview-cache .cache/purview/saved.json`. Historical findings join their relevant domains and confirmation actions, retaining original dates; the full original register remains in workbook tabs. A Purview cache supplies configuration only. These inputs cannot reconstruct raw data that was never saved. Treat the entire assessment package as confidential tenant data.
+
+Successful historical or portal-only builds also create a portable folder under `output/assessments/`, using `rebuild.json` instead of a collection. Copy the whole folder and use `--collection-input PATH\rebuild.json` to restore the saved inputs automatically. Offline builds never create an artificial tenant collection.
+
+See [Portal reports and offline reporting](PORTAL_REPORTS_AND_OFFLINE.md) for supported export schemas, report requests, permissions, licensing, and a customer email template.
+
+Include admin-center PDFs in [`--reports-dir`](PORTAL_REVIEW.md), including PDF subfolders. The tool automatically creates JSON, extracts text locally (Windows OCR for image pages), and embeds page previews and originals. The package preserves these for replay. Extracted context does not automatically satisfy a readiness control; `--portal-review` remains available for curated review notes.
+
+Live collection includes paid Copilot prompt aggregates, subscription seat counts and returned Copilot DLP targeting/actions. Request only remaining relevant portal details instead of routinely exporting three PDFs. See [automatic Copilot collection coverage](COPILOT_AUTOMATIC_COLLECTION.md).
+
+### Console detail and colors
+
+Default output keeps progress, warnings, the decision, action counts and output paths visible. Add `--verbose` (or `-v`) for processing details, source provenance, actions by assessment area and input receipts. The workbook and structured operator log retain detailed results in either mode.
+
+Color defaults to `--color auto`: interactive terminals use color; redirected output and `NO_COLOR` use plain text. `--color never` disables it, and `--color always` explicitly forces it. See [the console workflow](RUN.md#read-the-console-and-copy-the-next-command) for examples.
 
 ## SharePoint oversharing and Purview data risk
 
@@ -130,7 +170,9 @@ Every assessment creates:
 - A concise HTML report led by the decision, required actions, what the tenant is doing well, adoption/value evidence, and decision-limiting data gaps.
 - An Excel evidence workbook by default. CSV is available with `--report-format csv`; `--report-format both` creates Excel and CSV.
 
-The main HTML keeps technical permissions, module paths, URLs, collector status, and engineer evidence in collapsible sections. The workbook begins with the Action Plan, Evidence Index, and Collection Coverage, followed by evidence tabs and the full Recommendations register.
+Every live assessment also saves a collection JSON and portable assessment folder for offline reuse. Preflight-only checks and offline builds do not create or overwrite a collection.
+
+The HTML follows one narrative: executive assessment, prioritized action plan, readiness by assessment area, rollout conditions, remaining evidence and decisions, and technical appendix. Technical source details and the original historical register remain available in the workbook. Missing evidence never becomes a measured zero, and offline execution alone does not determine readiness.
 
 Reports, environment files, caches, and credentials are excluded by `.gitignore`.
 
@@ -142,7 +184,4 @@ See [METHODOLOGY.md](METHODOLOGY.md) for control definitions, evidence standards
 
 ## Start here
 
-1. Read [prereq.md](prereq.md).
-2. Run `setup-service-principal.ps1`.
-3. Run `python main.py --check-connections`.
-4. Run `python main.py`.
+Follow [RUN.md](RUN.md) for the supported collection and replay workflow. For a local preview, start with the synthetic offline command above.

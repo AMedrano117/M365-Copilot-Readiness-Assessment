@@ -1,3 +1,4 @@
+from Core.source_evidence import source_is_complete
 """
 eDiscovery Analytics - Copilot & Agent Adoption Recommendation
 """
@@ -36,7 +37,7 @@ async def get_recommendation(sku_name, status="Success", client=None, purview_cl
     
     # Check deployment status from PowerShell data (uses eDiscovery cases data)
     deployment_recs = []
-    if status == "Success" and purview_client and hasattr(purview_client, 'ediscovery_cases'):
+    if status == "Success" and source_is_complete(purview_client, "ediscovery_cases", getattr(purview_client, "ediscovery_cases", None)):
         case_data = purview_client.ediscovery_cases
         
         # Generate recommendation whether data is available or not (0 count = not configured)

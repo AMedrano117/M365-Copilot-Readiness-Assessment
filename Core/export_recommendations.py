@@ -9,6 +9,7 @@ import webbrowser
 from datetime import datetime
 from html import escape
 from pathlib import Path
+from .copilot_readiness_import import FLAG_COLUMNS
 
 
 PREFERRED_STATUS_ORDER = [
@@ -197,7 +198,14 @@ def _add_excel_table(ws, table_name):
     # same range creates duplicate filter definitions that openpyxl tolerates but
     # some desktop Excel builds report as a workbook repair/corruption condition.
     ws.auto_filter.ref = None
-    table = Table(displayName=_safe_table_name(table_name), ref=ws.dimensions)
+    base_name = _safe_table_name(table_name)
+    used_names = {name.casefold() for sheet in ws.parent for name in sheet.tables}
+    unique_name = base_name
+    suffix = 2
+    while unique_name.casefold() in used_names:
+        unique_name = f"{base_name}_{suffix}"
+        suffix += 1
+    table = Table(displayName=unique_name, ref=ws.dimensions)
     style = TableStyleInfo(
         name="TableStyleMedium2",
         showFirstColumn=False,
@@ -290,13 +298,104 @@ def _append_dict_rows_to_sheet(ws, rows, header_fill, header_font, wrap_alignmen
     if not rows:
         return
 
-    headers = list(rows[0].keys())
+    headers = list(dict.fromkeys(header for row in rows for header in row))
     ws.append(headers)
-    for row in rows:
-        ws.append([row.get(header, "") for header in headers])
+    for cell in ws[1]:
+        if isinstance(cell.value, str):
+            cell.data_type = "s"
+    for row_number, row in enumerate(rows, start=2):
+        values = [json.dumps(row.get(header), ensure_ascii=False, sort_keys=True) if isinstance(row.get(header), (dict, list, tuple)) else row.get(header, "") for header in headers]
+        ws.append(values)
+        # Evidence can include user-supplied CSV text. Preserve it as text rather
+        # than allowing an imported value to become an executable Excel formula.
+        for column, value in enumerate(values, start=1):
+            if isinstance(value, str) and value.startswith("="):
+                ws.cell(row=row_number, column=column).data_type = "s"
 
     _apply_excel_sheet_formatting(ws, headers, header_fill, header_font, wrap_alignment)
     _add_excel_table(ws, table_name or ws.title)
+
+
+def _rollout_progress_rows(result):
+    return [
+        {'Stage': stage.get('label'), 'Stage status': stage.get('status'),
+         'Requirement': requirement.get('title'), 'Status': requirement.get('status'),
+         'Reason': requirement.get('reason'),
+         'Action IDs': '; '.join(str(value) for value in requirement.get('action_ids', [])),
+         'Control ID': requirement.get('control_id', ''),
+         'Responsible role': requirement.get('owner_role', '')}
+        for stage in (result.get('rollout_progress') or {}).get('stages', [])
+        for requirement in stage.get('requirements', [])
+    ]
+
+
+def _readiness_review_rows(result):
+    review = result.get('readiness_review') or {}
+    rows = []
+    for name, label in (('pilot_plan', 'Pilot plan'), ('pilot_outcomes', 'Pilot outcomes'),
+                        ('expansion_approval', 'Expansion approval')):
+        value = review.get(name)
+        if isinstance(value, dict) and value:
+            rows.append({'Review type': label, **value})
+    for name, label in (('control_reviews', 'Control review'), ('pilot_conditions', 'Pilot condition')):
+        rows.extend({'Review type': label, **value} for value in review.get(name, []) if isinstance(value, dict))
+    if review.get('errors'):
+        rows.append({'Review type': 'Validation', 'Status': review.get('status'), 'Errors': review['errors']})
+    return rows
+
+
+def _prior_sheet_title(workbook, original_title):
+    """Keep historical tabs identifiable while satisfying Excel's naming rules."""
+    clean_title = re.sub(r"[\\/*?:\[\]]", "_", str(original_title or "Evidence")).strip(" '")
+    base_title = f"Prior {clean_title or 'Evidence'}"
+    used_titles = {title.casefold() for title in workbook.sheetnames}
+    title = base_title[:31]
+    suffix = 2
+    while title.casefold() in used_titles:
+        ending = f" ({suffix})"
+        title = f"{base_title[:31 - len(ending)]}{ending}"
+        suffix += 1
+    return title
+
+
+def _append_prior_report_workbook(workbook, prior, header_fill, header_font, wrap_alignment):
+    """Preserve earlier report evidence separately from this build's decisions."""
+    if not prior.get("available"):
+        return
+    source_title = _prior_sheet_title(workbook, "Report Sources")
+    source_sheet = workbook.create_sheet(source_title)
+    source_rows = []
+    prior_sheets = dict(prior.get("sheets") or {})
+    existing = {str(title).casefold() for title in prior_sheets}
+    if "recommendations" not in existing and prior.get("recommendations"):
+        prior_sheets["Recommendations"] = {"rows": prior["recommendations"]}
+    if "collection coverage" not in existing and prior.get("collection_coverage"):
+        prior_sheets["Collection Coverage"] = {"rows": prior["collection_coverage"]}
+    for original_title, original_sheet in prior_sheets.items():
+        title = _prior_sheet_title(workbook, original_title)
+        sheet = workbook.create_sheet(title)
+        _append_dict_rows_to_sheet(
+            sheet, original_sheet.get("rows") or [], header_fill, header_font,
+            wrap_alignment, table_name=title,
+        )
+        source_rows.append({
+            "Source File": prior.get("source_file", ""),
+            "Original Report Date": prior.get("generated_at") or "Not established",
+            "Original Sheet": original_title,
+            "New Workbook Tab": title,
+            "Evidence Context": "Historical report; tenant controls were not recollected.",
+        })
+    if not source_rows:
+        source_rows.append({
+            "Source File": prior.get("source_file", ""),
+            "Original Report Date": prior.get("generated_at") or "Not established",
+            "Original Sheet": "", "New Workbook Tab": "",
+            "Evidence Context": "Historical report contains no importable rows.",
+        })
+    _append_dict_rows_to_sheet(
+        source_sheet, source_rows, header_fill, header_font, wrap_alignment,
+        table_name=source_title,
+    )
 
 
 def export_to_excel(recommendations, filename=None, tenant_name=None, evidence_bundle=None):
@@ -311,7 +410,13 @@ def export_to_excel(recommendations, filename=None, tenant_name=None, evidence_b
     Returns:
         str: Path to created Excel file
     """
-    recommendations = enrich_assessment_records(recommendations)
+    from .assessment_result import build_assessment_result
+    evidence_bundle = evidence_bundle if evidence_bundle is not None else {}
+    result = evidence_bundle.get('assessment_result')
+    if result is None:
+        result = build_assessment_result(recommendations, evidence_bundle)
+        evidence_bundle['assessment_result'] = result
+    recommendations = result['recommendations']
 
     try:
         from openpyxl import Workbook
@@ -357,13 +462,21 @@ def export_to_excel(recommendations, filename=None, tenant_name=None, evidence_b
     }
 
     action_rows = [{
+        "Action": index,
+        "RecommendationId": rec.get("RecommendationId", ""),
+        "Domain": rec.get("Domain", ""),
+        "Type": rec.get("ActionType", ""),
         "Priority": rec.get("Priority", ""),
         "What We Found": rec.get("Observation", ""),
         "Recommended Action": rec.get("Recommendation", ""),
-        "Owner": "",
+        "Responsible Role": rec.get("OwnerRole", ""),
+        "Rollout Stage": rec.get("ReadinessStage", ""),
         "Target Date": "",
-        "Completion Evidence": "",
-    } for rec in recommendations if rec.get("Disposition") == DISPOSITION_ACTION]
+        "Completion Evidence": rec.get("CompletionEvidence", ""),
+        "Observed": rec.get("ObservationDate", ""),
+        "Qualification": rec.get("Qualification", ""),
+        "Evidence": "Evidence Index",
+    } for index, rec in enumerate(result['actions'], 1)]
     _append_dict_rows_to_sheet(ws, action_rows or [{
         "Priority": "", "What We Found": "No deployment actions were identified from the evidence collected.",
         "Recommended Action": "Continue monitoring the tenant as conditions and intended AI use cases change.",
@@ -373,15 +486,46 @@ def export_to_excel(recommendations, filename=None, tenant_name=None, evidence_b
     if evidence_bundle:
         # License availability belongs in Service Plan Inventory and the compatibility
         # Recommendations register. It is not source evidence for a control decision.
-        evidence_index = [
+        evidence_index = [{
+            'RecommendationId': row.get('RecommendationId', ''),
+            'Domain': row.get('Domain', ''), 'Finding': row.get('Feature', ''),
+            'Original Date': row.get('ObservationDate', ''),
+            'Evidence Basis': row.get('EvidenceBasis', ''), 'Confidence': row.get('Confidence', ''),
+            'Qualification': row.get('Qualification', ''), 'Workbook Tab': row.get('EvidenceSheet', ''),
+            'Source File': row.get('SourceFile', ''),
+            'Supporting Observation': row.get('Evidence') or row.get('Observation', ''),
+        } for row in recommendations]
+        evidence_index.extend([
             row for row in evidence_bundle.get('evidence_index', [])
             if str(row.get('Evidence Basis', row.get('EvidenceBasis', ''))).lower() != 'license signal'
-        ]
+            and row.get('RecommendationId') not in {r.get('RecommendationId') for r in recommendations}
+        ])
         if evidence_index:
             index_sheet = wb.create_sheet("Evidence Index")
             _append_dict_rows_to_sheet(index_sheet, evidence_index, header_fill, header_font, wrap_alignment, table_name="EvidenceIndex")
 
         coverage_rows = []
+        collection_context = evidence_bundle.get("collection_context", {}) or {}
+        migration = collection_context.get('methodology_migration')
+        if migration:
+            coverage_rows.append({
+                'Source': 'Methodology compatibility migration', 'State': 'migrated',
+                'Records': '', 'Pages': '', 'Truncated': '',
+                'Refresh Date': collection_context.get('collected_at', ''),
+                'Freshness': '',
+                'Reason': f"{migration['from']} -> {migration['to']}: {migration['reason']}",
+                'Source File': collection_context.get('source_file', ''), 'Age (Days)': '',
+            })
+        if collection_context.get("mode") == "offline":
+            coverage_rows.append({
+                "Source": "Offline report build", "State": "offline",
+                "Records": "", "Pages": "", "Truncated": "",
+                "Refresh Date": collection_context.get("collected_at", ""),
+                "Freshness": collection_context.get("freshness", "Unknown"),
+                "Reason": collection_context.get("scope", "") or "Tenant controls were not collected during this report build.",
+                "Source File": collection_context.get("source_file", ""),
+                "Age (Days)": collection_context.get("age_days", ""),
+            })
         for source, state in (evidence_bundle.get('source_statuses', {}) or {}).items():
             state = state if isinstance(state, dict) else {"availability_status": str(state)}
             coverage_rows.append({
@@ -520,1986 +664,103 @@ def export_to_excel(recommendations, filename=None, tenant_name=None, evidence_b
                 table_name=sheet.get('title', 'Evidence'),
             )
 
+    if evidence_bundle:
+        _append_prior_report_workbook(
+            wb, evidence_bundle.get("prior_report") or {}, header_fill,
+            header_font, wrap_alignment,
+        )
+
+    for title, rows in (
+        ('Assessment Summary', [{'Item': 'Deployment decision', 'Value': result['decision']},
+            {'Item': 'Rationale', 'Value': result['rationale']},
+            {'Item': 'Evaluation date', 'Value': result.get('evaluation_date')},
+            *[{'Item': key, 'Value': value} for key, value in result['counts'].items()]]),
+        ('Domain Results', [{'Domain': row['title'], 'Status': row.get('status'),
+            'Summary': row.get('summary'), 'Actions': row.get('action_count'),
+            'Responsible Role': row.get('owner_role')} for row in result['domains']]),
+        ('Evidence Observations', result.get('observations', result.get('evidence', []))),
+        ('Adoption Metrics', result.get('adoption_metrics', [])),
+        ('Import Receipt', evidence_bundle.get('import_receipt', [])),
+        ('Portal Review', (evidence_bundle.get('portal_review') or {}).get('rows', [])),
+        ('PDF Extracted Text', [{'Source File': capture.get('source_name'), 'Page': page['page'],
+                                'Method': page['method'], 'Extracted text': page['text'],
+                                'Qualification': capture.get('qualification')}
+                               for capture in (evidence_bundle.get('portal_review') or {}).get('captures', [])
+                               for page in capture.get('extracted_pages', [])]),
+        ('Copilot Admin Data', (evidence_bundle.get('copilot_admin_review') or {}).get('rows', [])),
+        ('Copilot DLP Detail', ((evidence_bundle.get('copilot_admin_review') or {}).get('dlp') or {}).get('detail', [])),
+        ('Portal Review Remaining', (evidence_bundle.get('copilot_admin_review') or {}).get('manual_checks', [])),
+        ('Rollout Progress', _rollout_progress_rows(result)),
+        ('Readiness Reviews', _readiness_review_rows(result)),
+    ):
+        if rows:
+            sheet = wb.create_sheet(title)
+            _append_dict_rows_to_sheet(sheet, rows, header_fill, header_font, wrap_alignment, table_name=title)
+
+    # Every action has a navigable evidence reference, including historical checks.
+    if 'Evidence Index' in wb:
+        index_sheet = wb['Evidence Index']
+        headers = {cell.value: cell.column for cell in index_sheet[1]}
+        prior_tabs = {}
+        if 'Prior Report Sources' in wb:
+            mapping = list(wb['Prior Report Sources'].values)
+            for values in mapping[1:]:
+                row = dict(zip(mapping[0], values))
+                prior_tabs[row.get('Original Sheet')] = row.get('New Workbook Tab')
+        historical_ids = {r.get('RecommendationId') for r in recommendations if r.get('SourceType') == 'prior_assessment'}
+        for i in range(2, index_sheet.max_row + 1):
+            if index_sheet.cell(i, headers['RecommendationId']).value in historical_ids:
+                cell = index_sheet.cell(i, headers['Workbook Tab'])
+                original_titles = str(cell.value or '').split(';')
+                targets = [prior_tabs[t.strip()] for t in original_titles if t.strip() in prior_tabs]
+                cell.value = '; '.join(targets) or prior_tabs.get('Recommendations', '')
+        index_rows = {index_sheet.cell(i, headers['RecommendationId']).value: i for i in range(2, index_sheet.max_row + 1)}
+        action_sheet = wb['Action Plan']
+        action_headers = {cell.value: cell.column for cell in action_sheet[1]}
+        if 'RecommendationId' in action_headers:
+            for i in range(2, action_sheet.max_row + 1):
+                target = index_rows.get(action_sheet.cell(i, action_headers['RecommendationId']).value)
+                if target:
+                    cell = action_sheet.cell(i, action_headers['Evidence'])
+                    cell.hyperlink = f"#'Evidence Index'!A{target}"
+                    cell.style = 'Hyperlink'
+        for i in range(2, index_sheet.max_row + 1):
+            cell = index_sheet.cell(i, headers['Workbook Tab'])
+            candidates = str(cell.value or '').split(';')
+            target = next((item.strip() for item in candidates if item.strip() in wb.sheetnames), None)
+            if target:
+                cell.hyperlink = "#'" + target.replace("'", "''") + "'!A1"
+                cell.style = 'Hyperlink'
+
+    # All imported strings, including register cells and headers, remain inert.
+    for sheet in wb:
+        for row in sheet:
+            for cell in row:
+                if isinstance(cell.value, str):
+                    cell.data_type = 's'
+
     # Save workbook
     wb.save(filepath)
     return str(filepath)
 
 def export_to_html(recommendations, filename=None, tenant_name=None, evidence_bundle=None, excel_path=None):
-    """
-    Export recommendations to a readable standalone HTML report.
-    
-    Args:
-        recommendations: List of recommendation dictionaries
-        filename: Output filename (optional, generates timestamp-based name if not provided)
-    
-    Returns:
-        str: Path to created HTML file
-    """
-    recommendations = enrich_assessment_records(recommendations)
+    """Render the same assessed result used by the workbook and operator receipt."""
+    from .assessment_result import build_assessment_result
+    from .customer_report import render_customer_report
+    bundle = evidence_bundle if evidence_bundle is not None else {}
+    result = bundle.get('assessment_result')
+    if result is None:
+        result = build_assessment_result(recommendations, bundle)
+        bundle['assessment_result'] = result
+    folder = Path('Reports')
+    folder.mkdir(exist_ok=True)
+    name = filename or build_report_filename('html', tenant_name=tenant_name)
+    if not name.endswith('.html'):
+        name += '.html'
+    path = folder / name
+    path.write_text(render_customer_report(result, bundle, tenant_name, excel_path), encoding='utf-8')
+    return str(path)
 
-    recommendations_dir = Path("Reports")
-    recommendations_dir.mkdir(exist_ok=True)
-    
-    if not filename:
-        filename = build_report_filename("html", tenant_name=tenant_name)
-    
-    if not filename.endswith('.html'):
-        filename += '.html'
-    
-    filepath = recommendations_dir / filename
-    
-    if not recommendations:
-        print("No recommendations to export.")
-        return None
-    
-    generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    tenant_label = str(tenant_name or "Tenant name unavailable")
-    workbook_label = Path(excel_path).name if excel_path else ""
-    # Keep unlike things in unlike lanes.  A healthy licensed feature is assurance evidence,
-    # not a finding; an adoption idea is not a security gap; and unread data is a coverage limit.
-    findings = [r for r in recommendations if r.get("Disposition") == DISPOSITION_ACTION]
-    opportunities = [r for r in recommendations if r.get("Disposition") == DISPOSITION_OPPORTUNITY]
-    recommendation_assurances = [
-        r for r in recommendations
-        if r.get("Disposition") == DISPOSITION_ASSURANCE
-        and str(r.get("EvidenceBasis", "")).lower() not in {"license signal", "not verified"}
-        and r.get("EvidenceAvailable") == "Yes"
-        and not re.search(
-            r"\b(?:active in|included in|license|licensed|licensing|service plan)\b",
-            " ".join(str(r.get(key, "") or "") for key in ("Feature", "Observation", "Recommendation")),
-            flags=re.IGNORECASE,
-        )
-    ]
-    if isinstance(evidence_bundle, dict) and "verified_strengths" in evidence_bundle:
-        assurances = list(evidence_bundle.get("verified_strengths") or [])[:6]
-    else:
-        # Compatibility path for callers that do not yet supply the evidence bundle.
-        assurances = recommendation_assurances[:6]
-    readiness = summarize_readiness(recommendations)
-    # The customer-facing coverage section is limited to evidence that can affect
-    # the Microsoft 365 foundation decision. Supplemental gaps remain available in
-    # the workbook and technical collection appendix.
-    coverage_items = list(readiness.get("decision_coverage", []) or [])
-
-    high_priority = [r for r in findings if r.get("Priority") == "High"]
-    medium_priority = [r for r in findings if r.get("Priority") == "Medium"]
-    low_priority = [r for r in findings if r.get("Priority") == "Low"]
-    services = {}
-    for rec in findings:
-        service = rec.get("Service", "Unknown")
-        if service not in services:
-            services[service] = []
-        services[service].append(rec)
-
-    status_values = sort_values_with_preferences(
-        [rec.get("Status", "Unknown") for rec in findings],
-        PREFERRED_STATUS_ORDER,
-    )
-    
-    def priority_class(priority):
-        return {
-            "High": "priority-high",
-            "Medium": "priority-medium",
-            "Low": "priority-low",
-        }.get(priority, "priority-unknown")
-    
-    def status_class(status):
-        normalized = (status or "").lower().replace(" ", "-")
-        if normalized in {"success", "warning", "attention-required", "action-required", "critical"}:
-            return f"status-{normalized}"
-        if normalized in {"missing", "pendinginput", "pendingactivation"}:
-            return "status-warning"
-        if normalized in {"not-assessed", "permission-required", "missing-prerequisite"}:
-            return "status-not-assessed"
-        return "status-default"
-    
-    def paragraphize(text):
-        safe = escape(naturalize_count_text(text))
-        if not safe:
-            return "<span class=\"muted\">Not provided</span>"
-        # Several recommendation modules use **bold** for emphasis. That markdown is meaningful
-        # in the CSV and Excel exports, so it stays in the source text and is rendered here
-        # instead - otherwise the asterisks reach the reader verbatim. Applied after escaping,
-        # so the inserted tags are the only markup in the result.
-        safe = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", safe, flags=re.DOTALL)
-        return "<br>".join(safe.splitlines())
-
-    def naturalize_count_text(text):
-        """Render legacy count placeholders as ordinary English in the HTML report."""
-        # Zero is collected evidence, not a missing value. Preserve it so tables never
-        # turn a real count of zero into "Not provided".
-        raw = "" if text is None else str(text)
-
-        def replace_placeholder(match):
-            stem, ending = match.groups()
-            nearby = raw[max(0, match.start() - 100):match.start()]
-            # The last count in the current phrase normally belongs to this noun, including
-            # constructions such as "48 active role assignment schedules".
-            phrase = re.split(r"[.;:]|\b(?:and|but|including)\b", nearby, flags=re.IGNORECASE)[-1]
-            counts = re.findall(r"\b\d[\d,]*\b", phrase)
-            count = int(counts[-1].replace(",", "")) if counts else None
-            singular = f"{stem}y" if ending == "ies" else stem
-            plural = f"{stem}ies" if ending == "ies" else f"{stem}s"
-            return singular if count == 1 else plural
-
-        return re.sub(r"\b([A-Za-z]+)\((s|ies)\)", replace_placeholder, raw)
-
-    def count_label(count, singular, plural=None):
-        return singular if count == 1 else (plural or f"{singular}s")
-
-    def short_text(text):
-        return escape(str(text or ""))
-
-    def slugify(text):
-        normalized = re.sub(r'[^a-z0-9]+', '-', str(text or "").lower()).strip('-')
-        return normalized or "section"
-
-    def render_appendix_preview(section):
-        preview_rows = section.get("preview_rows", [])
-        if not preview_rows:
-            return ""
-
-        preview_columns = []
-        for column in ["RecommendationId", "Flagged By"]:
-            if any(column in row for row in preview_rows):
-                preview_columns.append(column)
-
-        for column in section.get("preview_columns", []):
-            if any(column in row for row in preview_rows) and column not in preview_columns:
-                preview_columns.append(column)
-
-        if not preview_columns:
-            return ""
-
-        header_html = "".join(f"<th>{escape(column)}</th>" for column in preview_columns)
-        row_html = []
-        for row in preview_rows:
-            cells = "".join(
-                f"<td>{paragraphize(row.get(column, ''))}</td>"
-                for column in preview_columns
-            )
-            row_html.append(f"<tr>{cells}</tr>")
-
-        return (
-            "<div class=\"appendix-preview\">"
-            "<div class=\"preview-label\">Workbook excerpt</div>"
-            "<table class=\"preview-table\">"
-            f"<thead><tr>{header_html}</tr></thead>"
-            f"<tbody>{''.join(row_html)}</tbody>"
-            "</table>"
-            "</div>"
-        )
-
-    def render_compact_table(rows, columns):
-        if not rows:
-            return '<p class="muted">None identified.</p>'
-        header_html = "".join(f"<th>{escape(label)}</th>" for label, _ in columns)
-        body_rows = []
-        for row in rows:
-            cells = "".join(
-                f"<td>{paragraphize(row.get(key, ''))}</td>"
-                for _, key in columns
-            )
-            body_rows.append(f"<tr>{cells}</tr>")
-        return (
-            '<div class="appendix-preview"><table class="preview-table">'
-            f"<thead><tr>{header_html}</tr></thead>"
-            f"<tbody>{''.join(body_rows)}</tbody></table></div>"
-        )
-
-    ai_usage = evidence_bundle.get("ai_usage", {}) if evidence_bundle else {}
-    copilot_usage = ai_usage.get("copilot_usage", {}) or {}
-    app_readiness = ai_usage.get("m365_app_readiness", {}) or {}
-    dashboard_usage = ai_usage.get("copilot_dashboard", {}) or {}
-    shadow_ai_usage = ai_usage.get("shadow_ai_usage", {}) or {}
-    license_summary = ai_usage.get("license_summary", {}) or {}
-    power_inventory = evidence_bundle.get("power_platform_inventory", {}) if evidence_bundle else {}
-
-    def display_value(value, suffix=""):
-        if value is None or value == "":
-            return "Not assessed"
-        return f"{value}{suffix}"
-
-    def explain_report_periods(value):
-        """Translate Graph period codes before they reach customer-facing HTML."""
-        text = str(value or "")
-        for code, label in (
-            ("D180", "Last 180 days"),
-            ("D90", "Last 90 days"),
-            ("D30", "Last 30 days"),
-            ("D28", "Last 28 days"),
-            ("D7", "Last 7 days"),
-        ):
-            text = text.replace(code, label)
-        return text
-
-    usage_periods = copilot_usage.get("periods", {}) or {}
-    selected_period = copilot_usage.get("selected_period") or next(
-        (period for period in ("D28", "D7", "D90", "D180") if period in usage_periods), ""
-    )
-    selected_usage = usage_periods.get(selected_period, {})
-    period_label = explain_report_periods(selected_period).lower() if selected_period else "available period"
-    license_coverage = license_summary.get("copilot_license_coverage")
-    trend_rows = copilot_usage.get("trend", []) or []
-    trend_direction = "Not assessed"
-    if len(trend_rows) >= 2:
-        first_active = trend_rows[0].get("active_users")
-        last_active = trend_rows[-1].get("active_users")
-        if first_active is not None and last_active is not None:
-            change = last_active - first_active
-            trend_direction = "Up" if change > 0 else "Down" if change < 0 else "Flat"
-
-    usage_cards = [
-        ("License coverage", display_value(license_coverage, "%") if license_coverage is not None else "Not calculated",
-         "Licensed Copilot users as a share of estimated eligible users."),
-        (f"Active users — {period_label}", display_value(selected_usage.get("active_users")) if selected_usage else "Not assessed",
-         "Users who performed at least one Copilot action."),
-        (f"Activation rate — {period_label}", display_value(selected_usage.get("active_rate"), "%") if selected_usage else "Not assessed",
-         "Active users as a percentage of enabled users."),
-        (f"Prompts — {period_label}", display_value(selected_usage.get("total_prompts")) if selected_usage and selected_usage.get("total_prompts") is not None else "Not provided",
-         "Total prompts submitted during the reporting window."),
-        ("Daily usage trend", trend_direction if trend_direction != "Not assessed" else "Not provided",
-         "Change in daily active users."),
-    ]
-    usage_card_html = "".join(
-        f'<article class="summary-card"><div class="label">{escape(label)}</div>'
-        f'<div class="value usage-value">{escape(str(value))}</div>'
-        f'<div class="decision-effect">{escape(detail)}</div></article>'
-        for label, value, detail in usage_cards
-    )
-
-    app_rows = []
-    for name, metrics in sorted((selected_usage.get("apps", {}) or {}).items()):
-        app_rows.append({
-            "Application": name,
-            "Enabled": metrics.get("enabled_users", ""),
-            "Active": metrics.get("active_users", ""),
-            "Active rate": "N/A" if metrics.get("active_rate") is None else f"{metrics.get('active_rate')}%",
-        })
-
-    shadow_rows = [{
-        "Application": app.get("display_name", "Unknown"),
-        "Risk score": app.get("risk_rating", "Unknown"),
-        "Active users": app.get("active_users", "Unknown"),
-        "Traffic bytes": app.get("traffic_bytes", "Unknown"),
-        "Last seen": app.get("last_seen", "Unknown"),
-    } for app in (shadow_ai_usage.get("applications", []) or [])]
-
-    source_rows = []
-    for label, evidence in (
-        ("Microsoft 365 Copilot usage", copilot_usage),
-        ("Microsoft 365 Apps readiness", app_readiness),
-        ("Copilot Dashboard export", dashboard_usage),
-        ("Shadow AI discovery", shadow_ai_usage),
-        ("Power Platform inventory", power_inventory),
-    ):
-        source_rows.append({
-            "Source": label,
-            "Status": str(evidence.get("availability_status", "available" if evidence.get("available") else "not_requested")).replace("_", " ").title(),
-            "As of": evidence.get("refresh_date", "") or "Not provided",
-            "Freshness": evidence.get("freshness", "Unknown"),
-            "Reason": explain_report_periods(evidence.get("reason", "")),
-        })
-
-    adoption_html = f"""
-    <section class="scope-panel" id="ai-adoption-usage">
-      <h2>AI Adoption &amp; Usage</h2>
-      <p>License coverage shows deployment reach. Active users, prompts, and app use show adoption
-      and engagement. These metrics are reported separately from security readiness.</p>
-      <div class="summary-grid usage-grid">{usage_card_html}</div>
-      {render_compact_table(app_rows, [
-          ("Application", "Application"), ("Enabled", "Enabled"),
-          ("Active", "Active"), ("Active rate", "Active rate"),
-      ]) if app_rows else '<p class="muted">Microsoft did not return application-level Copilot activity.</p>'}
-      {render_compact_table(shadow_rows, [
-          ("Observed external AI", "Application"), ("Risk score", "Risk score"),
-          ("Active users", "Active users"), ("Traffic bytes", "Traffic bytes"),
-          ("Last seen", "Last seen"),
-      ]) if shadow_rows else ''}
-      <details>
-        <summary>Usage evidence coverage and freshness</summary>
-        {render_compact_table(source_rows, [
-            ("Source", "Source"), ("Status", "Status"), ("As of", "As of"),
-            ("Freshness", "Freshness"), ("Reason", "Reason"),
-        ])}
-      </details>
-    </section>
-    """
-
-    opportunity_rows = []
-    if selected_usage and selected_usage.get("enabled_users") == 0:
-        opportunity_rows.append({
-            "Service": "M365",
-            "Feature": "Controlled Copilot pilot",
-            "Observation": f"The Copilot usage report returned successfully with no enabled users during the {period_label}.",
-            "Why": "This is a valid pre-deployment state, so readiness should be tested with a bounded use case rather than judged as low adoption.",
-            "Hypothesis": "A narrow cohort whose daily work uses the selected Microsoft 365 apps will produce enough evidence to decide whether the use case should expand.",
-            "Recommendation": "Choose a narrow pilot cohort, record a customer-owned quality, cycle-time, or risk baseline, and set the review date and expand/stop threshold before assigning licenses.",
-        })
-    elif selected_usage:
-        unused = selected_usage.get("unused_licenses", 0) or 0
-        if unused:
-            opportunity_rows.append({
-                "Service": "M365", "Feature": "Activate or reassign unused Copilot licenses",
-                "Observation": f"{unused} of {selected_usage.get('enabled_users', 0)} enabled users had no intentional Copilot activity during the {period_label}.",
-                "Why": "Enabled seats without activity may indicate an enablement, training, or role-fit problem; they do not prove that the product lacks value.",
-                "Hypothesis": "Role-specific onboarding and a named task will increase intentional use among currently inactive enabled users.",
-                "Recommendation": "Measure active-user rate and the customer-selected task outcome at a defined review date. Expand if both meet the agreed threshold; otherwise adjust the pilot or reassign licenses.",
-            })
-        if selected_usage.get("active_users", 0):
-            active_count = selected_usage.get("active_users", 0)
-            active_verb = "was" if active_count == 1 else "were"
-            prompt_signal = (
-                f" with {selected_usage.get('total_prompts')} prompts submitted"
-                if selected_usage.get("total_prompts") is not None else
-                "; prompt volume was not supplied by the provider"
-            )
-            opportunity_rows.append({
-                "Service": "M365", "Feature": "Validate sustained engagement",
-                "Observation": f"{active_count} {count_label(active_count, 'user')} {active_verb} active during the {period_label}{prompt_signal}.",
-                "Why": "Active use confirms initial engagement, but activity volume alone does not establish sustained use or a better business outcome.",
-                "Hypothesis": "Users will return when Copilot is attached to a repeatable task with a clear benefit and adequate training.",
-                "Recommendation": "Review the usage periods actually returned, collect user feedback, and compare the named task's quality and cycle-time measures with baseline before the expand/stop decision.",
-            })
-    else:
-        period_reason = (copilot_usage.get("period_status", {}).get("D28", {}) or {}).get("reason")
-        opportunity_rows.append({
-            "Service": "M365", "Feature": "Establish an actual Copilot usage baseline",
-            "Observation": f"Copilot activity could not be measured: {explain_report_periods(period_reason or copilot_usage.get('reason') or 'no report data returned')}.",
-            "Why": "License assignment cannot show whether people are using Copilot or whether a pilot is producing value.",
-            "Hypothesis": "A successfully collected usage baseline will distinguish non-deployment, enablement gaps, and actual engagement.",
-            "Recommendation": "Resolve report access or confirm non-deployment, then define the customer-owned engagement and outcome thresholds used for the expand/stop decision.",
-        })
-    if app_readiness.get("available"):
-        opportunity_rows.append({
-            "Service": "M365", "Feature": "Select evidence-based pilot cohorts",
-            "Observation": app_readiness.get("readiness_signal") or "Microsoft 365 Apps user and platform activity was successfully collected for the last 30 days.",
-            "Why": "Existing app use identifies where an in-app AI pilot can fit normal work; it does not by itself prove AI value.",
-            "Hypothesis": "A cohort already active in the application required by the use case will encounter fewer adoption barriers.",
-            "Recommendation": "Select an app-aligned cohort, measure the use case against its baseline, and expand only if the customer-defined outcome and risk thresholds are met.",
-        })
-    if dashboard_usage.get("available"):
-        opportunity_rows.append({
-            "Service": "Viva Insights", "Feature": "Measure returning use and task-level behavior",
-            "Observation": f"The supplied Copilot Dashboard export contains {dashboard_usage.get('records', 0)} records.",
-            "Why": "Returning-user and action metrics distinguish sustained engagement from one-time experimentation, but still do not prove a business outcome.",
-            "Hypothesis": "Use cases with repeat engagement will also show stronger customer-selected quality or cycle-time results.",
-            "Recommendation": "Compare returning use and detailed actions with the named outcome and risk baseline, then apply the customer-approved expand/stop threshold.",
-        })
-    opportunity_rows = opportunity_rows[:5]
-
-    opportunity_html = ""
-    if opportunity_rows:
-        opportunity_cards = "".join(f"""
-          <article class="opportunity-card">
-            <h3>{escape(str(row.get('Feature', '') or 'Pilot opportunity'))}</h3>
-            <dl>
-              <div><dt>Measured tenant signal</dt><dd>{paragraphize(row.get('Observation', ''))}</dd></div>
-              <div><dt>Why it matters</dt><dd>{paragraphize(row.get('Why', ''))}</dd></div>
-              <div><dt>Pilot hypothesis</dt><dd>{paragraphize(row.get('Hypothesis', ''))}</dd></div>
-              <div><dt>Measurement and decision</dt><dd>{paragraphize(row.get('Recommendation', ''))}</dd></div>
-            </dl>
-          </article>
-        """ for row in opportunity_rows)
-        opportunity_html = f"""
-        <details class="secondary-panel" id="opportunities">
-          <summary>Prioritized adoption &amp; value opportunities ({len(opportunity_rows)})</summary>
-          <p>These suggestions use tenant activity and licensing to guide pilot selection. Validate
-          each with a business owner, a measurable outcome, and an expand/stop decision. They are
-          separate from security readiness.</p>
-          <div class="opportunity-grid">{opportunity_cards}</div>
-        </details>
-        """
-
-    priority_rank = {"High": 0, "Medium": 1, "Low": 2}
-    prioritized_findings = sorted(
-        findings,
-        key=lambda row: (
-            priority_rank.get(str(row.get("Priority", "")), 3),
-            str(row.get("Service", "")),
-            str(row.get("Feature", "")),
-        ),
-    )
-    action_plan_rows = [{
-        "Priority": row.get("Priority", ""),
-        "Finding": row.get("Observation", ""),
-        "Action": row.get("Recommendation", ""),
-    } for row in prioritized_findings[:5]]
-    action_plan_note = (
-        f" Showing the five highest-priority actions; {len(findings) - 5} additional "
-        f"{count_label(len(findings) - 5, 'action')} appear in the detailed findings below."
-        if len(findings) > 5 else ""
-    )
-    action_plan_html = f"""
-    <section class="scope-panel" id="action-plan">
-      <h2>Recommended next steps</h2>
-      <p>Start with these tenant-specific improvements before expanding AI access.{escape(action_plan_note)}</p>
-      {render_compact_table(action_plan_rows, [
-          ("Priority", "Priority"), ("What we found", "Finding"),
-          ("What to do", "Action"),
-      ])}
-    </section>
-    """
-
-    strength_benefits = {
-        "Identity & access": "This helps protect Microsoft 365 data when people or AI-connected applications sign in.",
-        "Apps, connectors & agents": "This helps limit which applications, agents, and connectors can reach tenant data.",
-        "Data exposure & grounding": "This reduces the chance that AI surfaces content more broadly than intended.",
-        "Data protection & governance": "This helps preserve data-handling rules when AI works with tenant content.",
-        "Endpoint, browser & network": "This helps control how organizational data can move into AI services.",
-        "Threat & incident posture": "This improves the tenant's ability to detect and respond to AI-related security events.",
-    }
-    assurance_rows = [{
-        "Area": item.get("ImpactArea", "") or item.get("Service", "Tenant control"),
-        "Strength": item.get("Observation", "") or item.get("Feature", "Verified tenant control"),
-        "Evidence": item.get("Evidence", "Verified from collected tenant configuration."),
-        "Benefit": strength_benefits.get(
-            item.get("ImpactArea", ""),
-            "This provides a verified foundation that can be retained as AI access expands.",
-        ),
-    } if "Strength" not in item else {
-        "Area": item.get("Area", "Tenant control"),
-        "Strength": item.get("Strength", "Verified tenant control"),
-        "Evidence": item.get("Evidence", "Verified from collected tenant configuration."),
-        "Benefit": item.get("Benefit", "This supports controlled use of organizational data with AI."),
-    } for item in assurances]
-    assurance_html = ""
-    if assurances:
-        assurance_html = f"""
-        <section class="scope-panel" id="assurances">
-          <h2>What the tenant is doing well</h2>
-          <p>These are safeguards the tenant has already configured and should retain as AI use expands.</p>
-          {render_compact_table(assurance_rows, [
-              ("Area", "Area"), ("What is working", "Strength"),
-              ("What we verified", "Evidence"), ("Why it matters for AI", "Benefit"),
-          ])}
-        </section>
-        """
-
-    conclusions = evidence_bundle.get("conclusions", {}) if evidence_bundle else {}
-    provider_rows = conclusions.get("providers", []) or []
-    use_case_rows = conclusions.get("use_cases", []) or []
-    provider_conclusion = conclusions.get("provider_conclusion", "Not assessed")
-    use_case_conclusion = conclusions.get("use_case_conclusion", "Not assessed")
-    scope_html = ""
-    if provider_rows or use_case_rows:
-        scope_html = f"""
-        <details class="secondary-panel" id="provider-use-case-review">
-          <summary>AI products and use cases supplied for this assessment</summary>
-          <p>Microsoft 365 foundation: <strong>{escape(readiness['decision'])}</strong> ·
-          Provider review: <strong>{escape(provider_conclusion)}</strong> ·
-          Use-case review: <strong>{escape(use_case_conclusion)}</strong></p>
-          {render_compact_table(provider_rows, [("Provider", "Provider"), ("Product", "Product"), ("Tier", "Tier"), ("Status", "Approval Status"), ("Reason", "Reason")]) if provider_rows else ''}
-          {render_compact_table(use_case_rows, [("Use case", "Use Case"), ("Owner", "Business Owner"), ("Provider", "Provider"), ("Readiness", "Readiness"), ("Reason", "Reason")]) if use_case_rows else ''}
-        </details>
-        """
-
-    entra_license = evidence_bundle.get("entra_license_context", {}) if evidence_bundle else {}
-    entra_license_rows = entra_license.get("rows", []) or []
-    entra_license_html = f"""
-    <section class="secondary-panel" id="entra-license-context">
-      <h2>Entra licensing context</h2>
-      <p><strong>Detected tenant tier: {escape(entra_license.get('detected_tier', 'Not determined'))}.</strong>
-      This explains which identity checks the tenant can support; a capability that is not licensed is reported as unavailable, not as a failed control.</p>
-      {render_compact_table(entra_license_rows, [
-          ("Identity capability", "Capability"), ("Entra P1", "P1"),
-          ("Entra P2", "P2"), ("This tenant", "Tenant"),
-      ]) if entra_license_rows else ''}
-      <p class="reference-row"><a href="https://learn.microsoft.com/entra/fundamentals/licensing" target="_blank" rel="noopener noreferrer">Microsoft Entra licensing reference</a></p>
-    </section>
-    """
-
-    exposure = evidence_bundle.get("data_exposure", {}) if evidence_bundle else {}
-    exposure_sources = exposure.get("sources", {}) or {}
-    exposure_rows = []
-    for source_key, area, purpose in (
-        ("sam", "SharePoint Advanced Management Data Access Governance", "SharePoint and OneDrive permissions and oversharing"),
-        ("dspm", "Purview DSPM data-risk assessment", "Sensitive-data exposure and oversharing risk"),
-    ):
-        source = exposure_sources.get(source_key, {}) or {}
-        if source.get("files_loaded"):
-            freshness = str(source.get("freshness", "unknown") or "unknown").lower()
-            if freshness == "fresh":
-                status = "Current report assessed"
-                next_step = "No new scan is needed for this assessment."
-            elif freshness == "stale":
-                status = "New report needed"
-                next_step = "Start a new Microsoft scan and rerun after it completes."
-            else:
-                status = "Date could not be verified"
-                next_step = "Supply a dated export or run a new Microsoft scan."
-        else:
-            status = "Check for a recent report"
-            next_step = "Reuse a current completed report; start a new Microsoft scan only if none exists."
-        exposure_rows.append({"Area": area, "Purpose": purpose, "Status": status, "Next step": next_step})
-
-    purview_policy = evidence_bundle.get("purview_policy_summary", {}) if evidence_bundle else {}
-    if purview_policy.get("available"):
-        dlp_summary = (
-            f"Purview returned {purview_policy.get('total', 0)} DLP policies; "
-            f"{purview_policy.get('enabled', 0)} are enabled."
-        )
-        if purview_policy.get("rules_available"):
-            dlp_summary += (
-                f" It also returned {purview_policy.get('total_rules', 0)} rules; "
-                f"{purview_policy.get('enabled_rules', 0)} are enabled."
-            )
-        else:
-            dlp_summary += " Rule conditions and actions were not available, so protection behavior could not be verified."
-        dlp_detail = f"""
-        <details>
-          <summary>DLP policy reference ({purview_policy.get('total', 0)})</summary>
-          {render_compact_table((purview_policy.get('rows', []) or [])[:25], [
-              ("Policy", "Policy"), ("Enabled", "Enabled"), ("Mode", "Mode"),
-              ("Locations", "Locations"), ("Rules", "Rules"),
-              ("Protection behavior", "Protection behavior"),
-          ])}
-          {'<p class="muted">The first 25 policies are shown here; the workbook contains the complete Purview policy inventory.</p>' if len(purview_policy.get('rows', []) or []) > 25 else ''}
-        </details>
-        {f'''<details>
-          <summary>DLP rule detail ({purview_policy.get('total_rules', 0)})</summary>
-          {render_compact_table((purview_policy.get('rule_rows', []) or [])[:50], [
-              ("Policy", "Policy"), ("Rule", "Rule"), ("Enabled", "Enabled"),
-              ("Conditions", "Conditions"), ("Actions", "Actions"), ("Severity", "Severity"),
-          ])}
-          {'<p class="muted">The first 50 rules are shown here; the workbook contains the complete rule inventory.</p>' if len(purview_policy.get('rule_rows', []) or []) > 50 else ''}
-        </details>''' if purview_policy.get('rules_available') else ''}
-        """
-    else:
-        dlp_summary = "DLP policy and rule details were not collected, so coverage and protection behavior are not assessed."
-        dlp_detail = (
-            "<p class=\"muted\">The default <code>main.py</code> run collects Purview interactively. "
-            "Use <code>python main.py --interactive-auth fresh</code> to bypass cached Purview data and sign in again.</p>"
-        )
-
-    purview_source_labels = {
-        "dlp_policies": "DLP policies", "dlp_rules": "DLP rules",
-        "sensitivity_labels": "Sensitivity labels", "retention_policies": "Retention policies",
-        "label_policies": "Label publishing policies", "org_config": "Organization configuration",
-        "irm_config": "Rights management configuration", "audit_config": "Audit configuration",
-        "insider_risk_policies": "Insider Risk policies", "communication_compliance": "Communication Compliance",
-        "information_barriers": "Information Barriers", "ediscovery_cases": "eDiscovery cases",
-    }
-    purview_source_rows = []
-    for source_key, state in (evidence_bundle.get("purview_collection_status", {}) if evidence_bundle else {}).items():
-        state = state or {}
-        purview_source_rows.append({
-            "Source": purview_source_labels.get(source_key, source_key.replace("_", " ").title()),
-            "Required": "No — optional context" if state.get("optional") else "Yes",
-            "Status": str(state.get("availability_status", "unavailable") or "unavailable").replace("_", " ").title(),
-            "Records": state.get("records_collected", 0) if state.get("available") else "Not available",
-            "Reason": state.get("reason", "") or ("Collected" if state.get("available") else "No reason returned"),
-            "Read access": state.get("required_role", "") or "Not specified",
-        })
-    purview_coverage_detail = ""
-    if purview_source_rows:
-        purview_coverage_detail = f"""
-        <details>
-          <summary>Purview collection coverage</summary>
-          {render_compact_table(purview_source_rows, [
-              ("Source", "Source"), ("Needed for core assessment", "Required"),
-              ("Status", "Status"), ("Records", "Records"),
-              ("If unavailable", "Reason"), ("Access needed", "Read access"),
-          ])}
-        </details>
-        """
-
-    sharepoint_governance = evidence_bundle.get("sharepoint_governance", {}) if evidence_bundle else {}
-    if sharepoint_governance.get("available"):
-        sp_settings = sharepoint_governance.get("settings", {}) or {}
-
-        def friendly_sharing_level(value):
-            return {
-                "ExternalUserAndGuestSharing": "Anyone links, new guests, and existing guests",
-                "ExternalUserSharingOnly": "New and existing guests; no Anyone links",
-                "ExistingExternalUserSharingOnly": "Existing guests only",
-                "Disabled": "People in the organization only",
-            }.get(str(value), value or "Not returned")
-
-        def friendly_link_type(value):
-            return {
-                "AnonymousAccess": "Anyone link",
-                "Internal": "People in the organization",
-                "Direct": "Specific people",
-                "None": "Not configured",
-            }.get(str(value), value or "Not returned")
-
-        def friendly_bool(value):
-            if value is True or str(value).lower() == "true":
-                return "Yes"
-            if value is False or str(value).lower() == "false":
-                return "No"
-            return value if value not in (None, "") else "Not returned"
-
-        anonymous_expiration = sp_settings.get("RequireAnonymousLinksExpireInDays")
-        if str(anonymous_expiration) == "0":
-            anonymous_expiration = "Not enforced"
-        elif anonymous_expiration not in (None, ""):
-            anonymous_expiration = f"{anonymous_expiration} days"
-        else:
-            anonymous_expiration = "Not returned"
-
-        sharepoint_rows = [
-            {"Setting": "SharePoint external sharing", "Value": friendly_sharing_level(sp_settings.get("SharingCapability"))},
-            {"Setting": "OneDrive external sharing", "Value": friendly_sharing_level(sp_settings.get("OneDriveSharingCapability"))},
-            {"Setting": "Default sharing link", "Value": friendly_link_type(sp_settings.get("DefaultSharingLinkType"))},
-            {"Setting": "Anyone file links", "Value": sp_settings.get("FileAnonymousLinkType", "Not returned")},
-            {"Setting": "Anyone folder links", "Value": sp_settings.get("FolderAnonymousLinkType", "Not returned")},
-            {"Setting": "Anyone-link expiration", "Value": anonymous_expiration},
-            {"Setting": "Guest expiration enforced", "Value": friendly_bool(sp_settings.get("ExternalUserExpirationRequired"))},
-            {"Setting": "Legacy authentication permitted", "Value": friendly_bool(sp_settings.get("LegacyAuthProtocolsEnabled"))},
-            {"Setting": "Sites assessed", "Value": sharepoint_governance.get("site_count", 0)},
-            {"Setting": "Sites permitting Anyone links", "Value": sharepoint_governance.get("anyone_site_count", 0)},
-        ]
-        dag_status = (
-            f"{sharepoint_governance.get('dag_completed_count', 0)} completed and "
-            f"{sharepoint_governance.get('dag_running_count', 0)} running report(s) found."
-        ) if sharepoint_governance.get("dag_available") else (
-            "No readable report inventory was returned. Check whether SharePoint Advanced Management is licensed and whether the signed-in identity has access."
-        )
-        sharepoint_detail = f"""
-        <details open>
-          <summary>SharePoint and OneDrive sharing baseline</summary>
-          {render_compact_table(sharepoint_rows, [("Setting", "Setting"), ("Observed value", "Value")])}
-          <p class="muted">{escape(dag_status)} Existing completed reports can be reused; this tool does not start a scan.</p>
-        </details>
-        """
-    else:
-        sharepoint_detail = (
-            '<p class="analysis-impact-note"><strong>SharePoint sharing baseline not assessed.</strong> '
-            + escape(sharepoint_governance.get("reason", "The SharePoint governance collector did not return tenant settings."))
-            + '</p>'
-        )
-
-    data_protection_html = f"""
-    <section class="secondary-panel" id="data-protection-status">
-      <h2>Data protection checks before AI deployment</h2>
-      <p>For AI that can use SharePoint or OneDrive content, complete both Microsoft data-exposure checks below. The tool reuses recent completed results and does not start long-running scans.</p>
-      {sharepoint_detail}
-      {render_compact_table(exposure_rows, [
-          ("Check", "Area"), ("What it covers", "Purpose"), ("Status", "Status"), ("Next step", "Next step"),
-      ])}
-      <p class="analysis-impact-note">{escape(dlp_summary)}</p>
-      {dlp_detail}
-      {purview_coverage_detail}
-    </section>
-    """
-
-    decision_coverage = readiness.get("decision_coverage", []) or []
-    open_evidence_items = []
-    for row in decision_coverage:
-        label = customer_coverage_label(row)
-        if label not in open_evidence_items:
-            open_evidence_items.append(label)
-
-    # SAM/DAG and DSPM are decision-limiting exposure checks even when a caller supplies no
-    # matching recommendation row. Add each missing source once, while avoiding a second label
-    # when the normal assessment already emitted the corresponding Scan Coverage item.
-    def _has_open_evidence(*needles):
-        return any(
-            any(needle in existing.lower() for needle in needles)
-            for existing in open_evidence_items
-        )
-
-    sam_source = exposure_sources.get("sam", {}) or {}
-    if not sam_source.get("files_loaded") and not _has_open_evidence("data access governance", "sam/dag"):
-        open_evidence_items.append("SharePoint Data Access Governance")
-    dspm_source = exposure_sources.get("dspm", {}) or {}
-    if not dspm_source.get("files_loaded") and not _has_open_evidence("dspm", "data-risk assessment"):
-        open_evidence_items.append("Purview DSPM")
-
-    if readiness.get("critical"):
-        customer_decision = "Critical safeguards required before AI access"
-    elif high_priority:
-        customer_decision = "Address priority safeguards before broad AI rollout"
-    elif open_evidence_items:
-        customer_decision = "Complete key evidence checks before deployment approval"
-    elif medium_priority:
-        customer_decision = "Foundation supports a controlled rollout with improvements"
-    else:
-        customer_decision = "Microsoft 365 foundation supports controlled AI adoption"
-
-    customer_summary_parts = [
-        f"{len(assurances)} verified {count_label(len(assurances), 'safeguard')}",
-        f"{len(high_priority)} priority {count_label(len(high_priority), 'improvement')}",
-        f"{len(medium_priority) + len(low_priority)} planned {count_label(len(medium_priority) + len(low_priority), 'improvement')}",
-    ]
-    if open_evidence_items:
-        customer_summary_parts.append(
-            f"{len(open_evidence_items)} open evidence {count_label(len(open_evidence_items), 'check')}"
-        )
-    customer_summary = " · ".join(customer_summary_parts)
-
-    top_focus = [
-        summarize_finding(
-            naturalize_count_text(row.get("Observation", "") or row.get("Feature", "")),
-            max_length=150,
-        ).rstrip(".;:")
-        for row in prioritized_findings[:2]
-    ]
-    decision_focus_html = ""
-    if top_focus:
-        decision_focus_html += (
-            '<p class="decision-focus"><strong>Immediate focus:</strong> '
-            + escape("; ".join(top_focus)) + "</p>"
-        )
-    if open_evidence_items:
-        decision_focus_html += (
-            '<p class="decision-focus"><strong>Evidence still needed:</strong> '
-            + escape(", ".join(open_evidence_items)) + "</p>"
-        )
-    
-    service_sections = []
-    service_nav_items = []
-    for service, recs in sorted(services.items()):
-        service_slug = slugify(service)
-        service_nav_items.append(
-            f'<a class="toc-link" href="#service-{service_slug}">{escape(service)} <span>{len(recs)}</span></a>'
-        )
-        cards = []
-        for rec in recs:
-            priority = rec.get("Priority", "Unknown")
-            status = rec.get("Status", "Unknown")
-            feature = escape(str(rec.get("Feature", "Unknown")))
-            link_text = escape(str(rec.get("LinkText", "") or "Learn more"))
-            link_url = str(rec.get("LinkUrl", "") or "").strip()
-            priority_value = str(priority or "Unknown").strip()
-            status_value = str(status or "Unknown").strip()
-            recommendation_id = str(rec.get("RecommendationId", "") or "")
-            evidence_available = str(rec.get("EvidenceAvailable", "No") or "No")
-            evidence_sheet = str(rec.get("EvidenceSheet", "") or "")
-            evidence_summary = str(rec.get("EvidenceSummary", "") or "")
-            search_blob = " ".join([
-                recommendation_id,
-                str(service or ""),
-                str(rec.get("Feature", "") or ""),
-                str(rec.get("Status", "") or ""),
-                str(rec.get("Priority", "") or ""),
-                str(rec.get("Observation", "") or ""),
-                str(rec.get("Recommendation", "") or ""),
-                str(rec.get("ImpactArea", "") or ""),
-                str(rec.get("AIApplicability", "") or ""),
-                evidence_sheet,
-                evidence_summary,
-            ]).lower()
-            link_html = ""
-            if link_url:
-                safe_url = escape(link_url, quote=True)
-                link_html = f'<p class="link-row"><a href="{safe_url}" target="_blank" rel="noopener noreferrer">{link_text}</a></p>'
-
-            evidence_html = ""
-            if evidence_available.lower() == "yes" and evidence_sheet:
-                tab_label = "tabs" if ";" in evidence_sheet or "," in evidence_sheet else "tab"
-                workbook_reference = (
-                    f"See <strong>{escape(workbook_label)}</strong>, {tab_label}: <strong>{escape(evidence_sheet)}</strong>."
-                    if workbook_label
-                    else f"See workbook {tab_label}: <strong>{escape(evidence_sheet)}</strong>."
-                )
-                evidence_html = f"""
-                <section class="evidence-callout">
-                  <h4>Engineer Follow-Up</h4>
-                  <p>{paragraphize(evidence_summary)}</p>
-                  <p class="muted">{workbook_reference}</p>
-                </section>
-                """
-            
-            raw_feature = str(rec.get("Feature", "") or "")
-            heading_text = naturalize_count_text(summarize_finding(rec.get("Observation", "")) or raw_feature)
-            card_heading = escape(heading_text)
-            # Only show the licence subtitle when the heading does not already name it.
-            feature_subtitle = ""
-            if raw_feature and not heading_text.lower().startswith(raw_feature.lower()[:28]):
-                feature_subtitle = f'<div class="card-subtitle">{feature}</div>'
-
-            also_licensed = str(rec.get("AlsoLicensedVia", "") or "").strip()
-            also_html = ""
-            if also_licensed:
-                also_html = f"""
-                <p class="muted also-licensed">Same condition is also covered by:
-                {escape(also_licensed)}</p>
-                """
-
-            cards.append(f"""
-            <article class="recommendation-card"
-              data-service="{escape(str(service), quote=True)}"
-              data-priority="{escape(priority_value, quote=True)}"
-              data-status="{escape(status_value, quote=True)}"
-              data-impact="{escape(str(rec.get('ImpactArea', '') or ''), quote=True)}"
-              data-search="{escape(search_blob, quote=True)}">
-              <div class="card-header">
-                <div>
-                  <div class="card-meta">{escape(recommendation_id) if recommendation_id else 'Recommendation'}</div>
-                  <h3>{card_heading}</h3>
-                  {feature_subtitle}
-                </div>
-                <div class="badge-row">
-                  <span class="badge {priority_class(priority)}">{escape(str(priority))}</span>
-                  <span class="badge {status_class(status)}">{escape(str(status))}</span>
-                </div>
-              </div>
-              <div class="assessment-meta">
-                <span>{escape(str(rec.get('ReadinessStage', '') or 'Planned improvement'))}</span>
-                <span>{escape(str(rec.get('ImpactArea', '') or 'Platform capability'))}</span>
-                <span>{escape(str(rec.get('AIApplicability', '') or 'Microsoft 365 data estate'))}</span>
-                <span>{escape(str(rec.get('EvidenceBasis', '') or 'Tenant observation'))} / {escape(str(rec.get('Confidence', '') or 'Medium'))} confidence</span>
-              </div>
-              <div class="card-body">
-                <section>
-                  <h4>Observation</h4>
-                  <p>{paragraphize(rec.get("Observation", ""))}</p>
-                </section>
-                <section>
-                  <h4>Recommendation</h4>
-                  <p>{paragraphize(rec.get("Recommendation", ""))}</p>
-                  {also_html}
-                </section>
-                {evidence_html}
-                {link_html}
-              </div>
-            </article>
-            """)
-        
-        service_sections.append(f"""
-        <section class="service-section" id="service-{service_slug}" data-service="{escape(str(service), quote=True)}">
-          <div class="service-header">
-            <div class="service-heading">
-              <button class="service-toggle" type="button" aria-expanded="true" aria-controls="service-content-{service_slug}">
-                <span class="toggle-icon" aria-hidden="true">▾</span>
-                <span class="service-title">{escape(service)}</span>
-              </button>
-              <span class="service-count" data-default-count="{len(recs)}">{len(recs)} {count_label(len(recs), "recommendation")}</span>
-            </div>
-          </div>
-          <div class="service-content" id="service-content-{service_slug}">
-            <div class="recommendation-grid">
-              {''.join(cards)}
-            </div>
-          </div>
-        </section>
-        """)
-
-    # Scan coverage: what this run could not inspect, and why. Rendered separately from tenant
-    # findings so the customer is not asked to action the assessment's own configuration.
-    coverage_html = ""
-    if coverage_items:
-        coverage_rows = []
-        for item in coverage_items:
-            link = ""
-            url = str(item.get("LinkUrl", "") or "").strip()
-            if url:
-                link = (f'<a href="{escape(url)}" target="_blank" rel="noopener noreferrer">'
-                        f'{escape(str(item.get("LinkText", "") or "Learn more"))}</a>')
-            coverage_rows.append(f"""
-              <tr>
-                <td>{escape(str(item.get("Service", "") or ""))}</td>
-                <td>{escape(customer_coverage_label(item))}</td>
-                <td>{paragraphize(item.get("Observation", ""))}</td>
-                <td>{paragraphize(item.get("Recommendation", ""))}</td>
-                <td>{link}</td>
-              </tr>""")
-        coverage_html = f"""
-        <section class="coverage-panel">
-          <details id="scan-coverage">
-            <summary>Scan Coverage ({len(coverage_items)}) — evidence gaps and collection steps</summary>
-          <p class="coverage-intro">These areas were not assessed and are excluded from the
-          security findings. Complete the listed steps and rerun to close the gaps.</p>
-          <div class="appendix-preview">
-            <table class="preview-table">
-              <thead><tr><th>Service</th><th>Area</th><th>What could not be assessed</th><th>How to resolve</th><th>Reference</th></tr></thead>
-              <tbody>{''.join(coverage_rows)}</tbody>
-            </table>
-          </div>
-          </details>
-        </section>
-        """
-
-    appendix_html = ""
-    appendix_sections = list(evidence_bundle.get("appendix_sections", [])) if evidence_bundle else []
-    if opportunities:
-        opportunity_inventory_rows = [{
-            "Service": item.get("Service", ""),
-            "Capability": item.get("Feature", ""),
-            "Status": item.get("Status", ""),
-            "Treatment": "Supporting inventory only; validate against a named use case before promotion.",
-        } for item in opportunities]
-        appendix_sections.append({
-            "key": "opportunity_register",
-            "title": "Appendix: Full Service-Plan Opportunity Register",
-            "workbook_tab": "Recommendations",
-            "summary": f"{len(opportunities)} optional service-plan and enablement {count_label(len(opportunities), 'idea')} for engineering review.",
-            "details": [
-                "These are possibilities based on licensing or workload context.",
-                "Move an item into the customer plan after assigning an owner, baseline, and expand/stop decision.",
-            ],
-            "preview_columns": ["Service", "Capability", "Status", "Treatment"],
-            "preview_rows": opportunity_inventory_rows[:10],
-        })
-    if appendix_sections:
-        appendix_blocks = []
-        for section in appendix_sections:
-            detail_items = "".join(
-                f"<li>{paragraphize(detail)}</li>"
-                for detail in section.get("details", [])
-            )
-            workbook_context = (
-                f"{escape(section.get('workbook_tab', ''))} in {escape(workbook_label)}"
-                if workbook_label
-                else escape(section.get('workbook_tab', ''))
-            )
-            appendix_blocks.append(f"""
-            <section class="appendix-section" id="appendix-{slugify(section.get('key', 'detail'))}">
-              <div class="appendix-header">
-                <div>
-                  <div class="appendix-kicker">Engineer Appendix</div>
-                  <h3>{escape(section.get('title', 'Appendix Detail'))}</h3>
-                </div>
-                <div class="tab-pill">Workbook tab: {workbook_context}</div>
-              </div>
-              <p class="appendix-summary">{paragraphize(section.get('summary', ''))}</p>
-              <ul class="appendix-details">
-                {detail_items}
-              </ul>
-              {render_appendix_preview(section)}
-            </section>
-            """)
-
-        appendix_html = f"""
-        <details class="appendix-panel" id="engineer-appendix">
-          <summary class="appendix-intro">
-            <span class="appendix-title">Engineer Follow-Up Appendix</span>
-            <span class="appendix-summary-copy">{len(appendix_sections)} {count_label(len(appendix_sections), 'evidence section')}.
-            Expand for object and configuration details.</span>
-          </summary>
-          <div class="appendix-content">
-            {''.join(appendix_blocks)}
-          </div>
-        </details>
-        """
-
-    integrity = evidence_bundle.get("integrity", {}) if evidence_bundle else {}
-    integrity_banner = ""
-    if integrity and not integrity.get("valid", True):
-        integrity_banner = f"""
-        <section class="coverage-panel validation-banner">
-          <h2>{escape(integrity.get('banner', 'Validation incomplete—do not use for deployment approval'))}</h2>
-          <p class="coverage-intro">The diagnostic report was generated, but {len(integrity.get('issues', []))} integrity issue(s) require review. See the workbook Integrity Checks tab.</p>
-        </details>
-        """
-
-    html = f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Enterprise AI Readiness Assessment - Microsoft 365 Data Estate</title>
-  <style>
-    :root {{
-      --bg: #f4f6f8;
-      --surface: #ffffff;
-      --surface-alt: #eef3f8;
-      --text: #17202a;
-      --muted: #5b6875;
-      --border: #d6dee8;
-      --accent: #005a9c;
-      --high: #c62828;
-      --high-bg: #fdecec;
-      --medium: #a15c00;
-      --medium-bg: #fff4dd;
-      --low: #1f6f50;
-      --low-bg: #e7f6ef;
-      --success: #0f6cbd;
-      --success-bg: #e8f2fb;
-      --warning: #8a5a00;
-      --warning-bg: #fff4dd;
-      --critical: #8b1e3f;
-      --critical-bg: #fdebf1;
-      --attention: #6b4eff;
-      --attention-bg: #f1edff;
-      --unassessed: #4a5568;
-      --unassessed-bg: #eceff3;
-      --shadow: 0 12px 30px rgba(23, 32, 42, 0.08);
-    }}
-
-    * {{
-      box-sizing: border-box;
-    }}
-
-    body {{
-      margin: 0;
-      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
-      background: linear-gradient(180deg, #eaf2fb 0%, var(--bg) 35%, #f7f9fb 100%);
-      color: var(--text);
-      line-height: 1.5;
-    }}
-
-    .page {{
-      max-width: 1280px;
-      margin: 0 auto;
-      padding: 32px 20px 48px;
-    }}
-
-    .hero {{
-      background: linear-gradient(135deg, #0d3b66 0%, #005a9c 55%, #2f80ed 100%);
-      color: white;
-      border-radius: 24px;
-      padding: 32px;
-      box-shadow: var(--shadow);
-    }}
-
-    .hero h1 {{
-      margin: 0 0 8px;
-      font-size: clamp(2rem, 4vw, 3rem);
-      line-height: 1.1;
-    }}
-
-    .hero p {{
-      margin: 0;
-      max-width: 760px;
-      color: rgba(255, 255, 255, 0.88);
-    }}
-
-    .summary-grid {{
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-      gap: 16px;
-      margin: 24px 0 32px;
-    }}
-
-    .summary-card {{
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 18px;
-      padding: 20px;
-      box-shadow: var(--shadow);
-    }}
-
-    .summary-card .label {{
-      color: var(--muted);
-      font-size: 0.92rem;
-      margin-bottom: 8px;
-    }}
-
-    .summary-card .value {{
-      font-size: 2rem;
-      font-weight: 700;
-      line-height: 1;
-    }}
-
-    .summary-card .usage-value {{
-      font-size: 1.45rem;
-      overflow-wrap: anywhere;
-    }}
-
-    .usage-grid {{
-      margin-bottom: 18px;
-    }}
-
-    .opportunity-grid {{
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-      gap: 16px;
-      margin-top: 18px;
-    }}
-
-    .opportunity-card {{
-      border: 1px solid var(--border);
-      border-radius: 14px;
-      background: var(--surface-alt);
-      padding: 18px;
-    }}
-
-    .opportunity-card h3 {{
-      margin: 0 0 14px;
-      font-size: 1.05rem;
-    }}
-
-    .opportunity-card dl,
-    .opportunity-card dd {{
-      margin: 0;
-    }}
-
-    .opportunity-card dl > div + div {{
-      margin-top: 12px;
-    }}
-
-    .opportunity-card dt {{
-      color: var(--muted);
-      font-size: 0.78rem;
-      font-weight: 700;
-      letter-spacing: 0.04em;
-      margin-bottom: 3px;
-      text-transform: uppercase;
-    }}
-
-    .summary-card .decision-effect {{
-      margin-top: 9px;
-      color: var(--muted);
-      font-size: 0.78rem;
-      line-height: 1.3;
-    }}
-
-    .service-section {{
-      margin-top: 28px;
-      scroll-margin-top: 140px;
-    }}
-
-    .service-header {{
-      display: flex;
-      justify-content: space-between;
-      align-items: baseline;
-      gap: 12px;
-      margin-bottom: 14px;
-    }}
-
-    .service-heading {{
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      flex-wrap: wrap;
-    }}
-
-    .service-toggle {{
-      display: inline-flex;
-      align-items: center;
-      gap: 10px;
-      border: none;
-      background: transparent;
-      color: var(--text);
-      padding: 0;
-      cursor: pointer;
-      font: inherit;
-    }}
-
-    .service-toggle:hover {{
-      text-decoration: underline;
-    }}
-
-    .toggle-icon {{
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      width: 28px;
-      height: 28px;
-      border-radius: 999px;
-      background: var(--surface-alt);
-      transition: transform 0.2s ease;
-    }}
-
-    .service-section.is-collapsed .toggle-icon {{
-      transform: rotate(-90deg);
-    }}
-
-    .service-title {{
-      margin: 0;
-      font-size: 1.5rem;
-      font-weight: 700;
-    }}
-
-    .service-header span {{
-      color: var(--muted);
-      font-size: 0.95rem;
-    }}
-
-    .recommendation-grid {{
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-      gap: 18px;
-    }}
-
-    .recommendation-card {{
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 20px;
-      padding: 20px;
-      box-shadow: var(--shadow);
-    }}
-
-    .controls-panel {{
-      position: sticky;
-      top: 12px;
-      z-index: 10;
-      background: rgba(255, 255, 255, 0.9);
-      backdrop-filter: blur(10px);
-      border: 1px solid var(--border);
-      border-radius: 20px;
-      padding: 18px;
-      box-shadow: var(--shadow);
-      margin-bottom: 24px;
-    }}
-
-    .controls-grid {{
-      display: grid;
-      grid-template-columns: 2fr 1fr 1fr 1fr minmax(220px, auto);
-      gap: 12px;
-      align-items: end;
-    }}
-
-    .control-group {{
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-    }}
-
-    .control-group label {{
-      font-size: 0.84rem;
-      color: var(--muted);
-      font-weight: 600;
-    }}
-
-    .control-group input,
-    .control-group select,
-    .control-button {{
-      width: 100%;
-      min-height: 44px;
-      border-radius: 12px;
-      border: 1px solid var(--border);
-      background: var(--surface);
-      color: var(--text);
-      padding: 10px 12px;
-      font: inherit;
-    }}
-
-    .control-button {{
-      cursor: pointer;
-      font-weight: 700;
-      background: var(--surface-alt);
-    }}
-
-    .control-actions {{
-      display: flex;
-      gap: 10px;
-    }}
-
-    .control-actions .control-button {{
-      flex: 1 1 auto;
-    }}
-
-    .control-button:hover {{
-      background: #dde8f3;
-    }}
-
-    .filter-meta {{
-      display: flex;
-      justify-content: space-between;
-      gap: 12px;
-      margin-top: 14px;
-      color: var(--muted);
-      font-size: 0.92rem;
-    }}
-
-    .toc-panel {{
-      margin-bottom: 24px;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 20px;
-      padding: 18px;
-      box-shadow: var(--shadow);
-    }}
-
-    .toc-panel h2 {{
-      margin: 0 0 12px;
-      font-size: 1rem;
-    }}
-
-    .toc-grid {{
-      display: flex;
-      flex-wrap: wrap;
-      gap: 10px;
-    }}
-
-    .toc-link {{
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      border-radius: 999px;
-      padding: 8px 12px;
-      background: var(--surface-alt);
-      color: var(--text);
-      font-size: 0.9rem;
-      font-weight: 600;
-    }}
-
-    .toc-link span {{
-      color: var(--muted);
-      font-size: 0.82rem;
-    }}
-
-    .empty-state {{
-      display: none;
-      margin-top: 20px;
-      padding: 24px;
-      background: var(--surface);
-      border: 1px dashed var(--border);
-      border-radius: 18px;
-      text-align: center;
-      color: var(--muted);
-      box-shadow: var(--shadow);
-    }}
-
-    .card-header {{
-      display: flex;
-      justify-content: space-between;
-      align-items: flex-start;
-      gap: 12px;
-      margin-bottom: 18px;
-    }}
-
-    .card-header h3 {{
-      margin: 0;
-      font-size: 1.1rem;
-      line-height: 1.3;
-    }}
-
-    .badge-row {{
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      justify-content: flex-end;
-    }}
-
-    .badge {{
-      display: inline-flex;
-      align-items: center;
-      border-radius: 999px;
-      padding: 6px 10px;
-      font-size: 0.8rem;
-      font-weight: 700;
-      white-space: nowrap;
-    }}
-
-    .priority-high {{
-      background: var(--high-bg);
-      color: var(--high);
-    }}
-
-    .priority-medium {{
-      background: var(--medium-bg);
-      color: var(--medium);
-    }}
-
-    .priority-low {{
-      background: var(--low-bg);
-      color: var(--low);
-    }}
-
-    .priority-unknown {{
-      background: var(--surface-alt);
-      color: var(--muted);
-    }}
-
-    .status-success {{
-      background: var(--success-bg);
-      color: var(--success);
-    }}
-
-    .status-warning {{
-      background: var(--warning-bg);
-      color: var(--warning);
-    }}
-
-    .status-critical {{
-      background: var(--critical-bg);
-      color: var(--critical);
-    }}
-
-    .status-attention-required {{
-      background: var(--attention-bg);
-      color: var(--attention);
-    }}
-
-    .status-action-required {{
-      background: var(--critical-bg);
-      color: var(--critical);
-    }}
-
-    .card-subtitle {{
-      margin-top: 4px;
-      font-size: 0.88rem;
-      color: var(--muted);
-      font-weight: 600;
-    }}
-
-    .also-licensed {{
-      margin-top: 10px !important;
-      font-size: 0.86rem;
-    }}
-
-    .status-not-assessed {{
-      background: var(--unassessed-bg);
-      color: var(--unassessed);
-      border: 1px dashed var(--unassessed);
-    }}
-
-    .status-default {{
-      background: var(--surface-alt);
-      color: var(--muted);
-    }}
-
-    .card-body section + section {{
-      margin-top: 16px;
-    }}
-
-    .assessment-meta {{
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      margin: -4px 0 16px;
-    }}
-
-    .assessment-meta span {{
-      border: 1px solid var(--border);
-      border-radius: 999px;
-      background: var(--surface-alt);
-      color: var(--muted);
-      padding: 4px 8px;
-      font-size: 0.76rem;
-      font-weight: 600;
-    }}
-
-    .card-body h4 {{
-      margin: 0 0 6px;
-      font-size: 0.84rem;
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
-      color: var(--muted);
-    }}
-
-    .card-body p {{
-      margin: 0;
-    }}
-
-    .link-row {{
-      margin-top: 18px !important;
-    }}
-
-    .card-meta {{
-      font-size: 0.78rem;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      color: var(--muted);
-      margin-bottom: 6px;
-      font-weight: 700;
-    }}
-
-    .evidence-callout {{
-      border: 1px solid #c8d8eb;
-      background: #f3f8fd;
-      border-radius: 14px;
-      padding: 14px 16px;
-      margin-top: 18px;
-    }}
-
-    .coverage-panel {{
-      margin-top: 32px;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-left: 4px solid var(--unassessed);
-      border-radius: 20px;
-      padding: 24px;
-      box-shadow: var(--shadow);
-    }}
-
-    .decision-panel,
-    .scope-panel,
-    .secondary-panel {{
-      margin-top: 24px;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 20px;
-      padding: 22px;
-      box-shadow: var(--shadow);
-    }}
-
-    .decision-panel {{
-      border-left: 5px solid var(--accent);
-    }}
-
-    .decision-panel h2,
-    .scope-panel h2 {{
-      margin: 0 0 8px;
-    }}
-
-    .decision-kicker {{
-      margin: 0 0 6px !important;
-      color: var(--accent) !important;
-      font-size: 0.78rem;
-      font-weight: 800;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-    }}
-
-    .decision-summary {{
-      color: var(--text) !important;
-      font-weight: 650;
-    }}
-
-    .decision-focus {{
-      margin-top: 10px !important;
-      color: var(--muted);
-      line-height: 1.5;
-    }}
-
-    .decision-panel p,
-    .scope-panel > p,
-    .secondary-panel > p {{
-      margin: 0;
-      color: var(--muted);
-    }}
-
-    details > summary {{
-      cursor: pointer;
-      font-weight: 700;
-    }}
-
-    .scope-panel details {{
-      margin-top: 16px;
-    }}
-
-    .analysis-impact-note,
-    .scope-decision-note {{
-      margin: 16px 0;
-      padding: 14px 16px;
-      border-left: 4px solid var(--accent);
-      border-radius: 10px;
-      background: var(--surface-alt);
-      color: var(--text);
-      line-height: 1.55;
-    }}
-
-    .scope-boundary-grid {{
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-      gap: 14px;
-      margin-top: 16px;
-    }}
-
-    .scope-boundary-grid article {{
-      padding: 16px;
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      background: var(--surface-alt);
-    }}
-
-    .scope-boundary-grid h3 {{
-      margin: 0 0 8px;
-      font-size: 1rem;
-    }}
-
-    .scope-boundary-grid p,
-    .checklist-intro {{
-      margin: 0;
-      color: var(--muted);
-      line-height: 1.5;
-    }}
-
-    .checklist-intro {{
-      padding-top: 10px;
-    }}
-
-    .coverage-panel h2 {{
-      margin: 0 0 8px;
-    }}
-
-    .coverage-intro {{
-      margin: 14px 0 16px;
-      color: var(--muted);
-      max-width: 900px;
-    }}
-
-    .appendix-panel {{
-      margin-top: 32px;
-    }}
-
-    .appendix-intro {{
-      display: flex;
-      flex-direction: column;
-      gap: 7px;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 20px;
-      padding: 24px;
-      box-shadow: var(--shadow);
-    }}
-
-    .appendix-intro:focus-visible {{
-      outline: 3px solid rgba(0, 90, 156, 0.3);
-      outline-offset: 3px;
-    }}
-
-    .appendix-title {{
-      color: var(--text);
-      font-size: 1.5rem;
-      line-height: 1.2;
-    }}
-
-    .appendix-summary-copy {{
-      color: var(--muted);
-      font-weight: 400;
-      line-height: 1.5;
-    }}
-
-    .appendix-content {{
-      display: grid;
-      gap: 18px;
-      margin-top: 18px;
-    }}
-
-    .appendix-section {{
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 20px;
-      padding: 24px;
-      box-shadow: var(--shadow);
-    }}
-
-    .appendix-header {{
-      display: flex;
-      justify-content: space-between;
-      gap: 16px;
-      align-items: flex-start;
-      margin-bottom: 12px;
-    }}
-
-    .appendix-header h3 {{
-      margin: 0;
-    }}
-
-    .appendix-kicker {{
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      font-size: 0.75rem;
-      font-weight: 700;
-      color: var(--muted);
-      margin-bottom: 6px;
-    }}
-
-    .tab-pill {{
-      background: var(--surface-alt);
-      color: var(--accent);
-      border: 1px solid var(--border);
-      border-radius: 999px;
-      padding: 8px 12px;
-      font-size: 0.88rem;
-      font-weight: 600;
-      white-space: nowrap;
-    }}
-
-    .appendix-summary {{
-      margin: 0 0 12px;
-    }}
-
-    .appendix-details {{
-      margin: 0 0 16px 18px;
-      padding: 0;
-      color: var(--muted);
-    }}
-
-    .appendix-details li + li {{
-      margin-top: 6px;
-    }}
-
-    .appendix-preview {{
-      margin-top: 16px;
-      overflow-x: auto;
-    }}
-
-    .preview-label {{
-      font-size: 0.82rem;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      color: var(--muted);
-      margin-bottom: 8px;
-    }}
-
-    .preview-table {{
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 0.92rem;
-      min-width: 680px;
-    }}
-
-    .preview-table th,
-    .preview-table td {{
-      border: 1px solid var(--border);
-      padding: 10px 12px;
-      text-align: left;
-      vertical-align: top;
-    }}
-
-    .preview-table th {{
-      background: var(--surface-alt);
-      color: var(--text);
-    }}
-
-    a {{
-      color: var(--accent);
-      text-decoration: none;
-      font-weight: 600;
-    }}
-
-    a:hover {{
-      text-decoration: underline;
-    }}
-
-    .muted {{
-      color: var(--muted);
-    }}
-
-    @media (max-width: 720px) {{
-      .hero {{
-        padding: 24px;
-      }}
-
-      .controls-grid {{
-        grid-template-columns: 1fr;
-      }}
-
-      .card-header {{
-        flex-direction: column;
-      }}
-
-      .badge-row {{
-        justify-content: flex-start;
-      }}
-
-      .filter-meta {{
-        flex-direction: column;
-      }}
-
-      .appendix-header {{
-        flex-direction: column;
-      }}
-
-      .tab-pill {{
-        white-space: normal;
-      }}
-    }}
-  </style>
-</head>
-<body>
-  <div class="page">
-    <section class="hero">
-      <h1>Enterprise AI Readiness Assessment</h1>
-      <p>Microsoft 365 data estate · Tenant: {escape(tenant_label)}<br>Generated on {escape(generated_at)}</p>
-    </section>
-
-    {integrity_banner}
-
-    <section class="decision-panel">
-      <p class="decision-kicker">Microsoft 365 AI readiness</p>
-      <h2>{escape(customer_decision)}</h2>
-      <p class="decision-summary">{escape(customer_summary)}</p>
-      {decision_focus_html}
-    </section>
-
-    <section class="summary-grid">
-      <article class="summary-card">
-        <div class="label">Verified safeguards</div>
-        <div class="value">{len(assurances)}</div>
-      </article>
-      <article class="summary-card">
-        <div class="label">Priority improvements</div>
-        <div class="value">{len(high_priority)}</div>
-      </article>
-      <article class="summary-card">
-        <div class="label">Planned improvements</div>
-        <div class="value">{len(medium_priority) + len(low_priority)}</div>
-      </article>
-      <article class="summary-card">
-        <div class="label">Open evidence checks</div>
-        <div class="value">{len(open_evidence_items)}</div>
-      </article>
-    </section>
-
-    {assurance_html}
-    {action_plan_html}
-    {data_protection_html}
-    {adoption_html}
-    {entra_license_html}
-    {scope_html}
-
-    <section class="controls-panel">
-      <div class="controls-grid">
-        <div class="control-group">
-          <label for="searchInput">Search</label>
-          <input id="searchInput" type="search" placeholder="Search feature, service, observation, or recommendation">
-        </div>
-        <div class="control-group">
-          <label for="serviceFilter">Service</label>
-          <select id="serviceFilter">
-            <option value="">All services</option>
-            {''.join(f'<option value="{escape(service, quote=True)}">{escape(service)}</option>' for service in sorted(services))}
-          </select>
-        </div>
-        <div class="control-group">
-          <label for="priorityFilter">Priority</label>
-          <select id="priorityFilter">
-            <option value="">All priorities</option>
-            <option value="High">High</option>
-            <option value="Medium">Medium</option>
-            <option value="Low">Low</option>
-            <option value="Unknown">Unknown</option>
-          </select>
-        </div>
-        <div class="control-group">
-          <label for="statusFilter">Status</label>
-          <select id="statusFilter">
-            <option value="">All statuses</option>
-            {''.join(f'<option value="{escape(status, quote=True)}">{escape(status)}</option>' for status in status_values)}
-          </select>
-        </div>
-        <div class="control-group">
-          <label>&nbsp;</label>
-          <div class="control-actions">
-            <button id="resetFilters" class="control-button" type="button">Reset</button>
-            <button id="expandAll" class="control-button" type="button">Expand All</button>
-            <button id="collapseAll" class="control-button" type="button">Collapse All</button>
-          </div>
-        </div>
-      </div>
-      <div class="filter-meta">
-        <div id="resultsCount">Showing {len(findings)} of {len(findings)} actions</div>
-      </div>
-    </section>
-
-    <section class="toc-panel">
-      <h2>Actions by Service</h2>
-      <div class="toc-grid">
-        {''.join(service_nav_items)}
-      </div>
-    </section>
-
-    {''.join(service_sections)}
-    {opportunity_html}
-    {coverage_html}
-    {appendix_html}
-    <section id="emptyState" class="empty-state">
-      No actions match the current filters. Try clearing or broadening your search.
-    </section>
-  </div>
-  <script>
-    (() => {{
-      const searchInput = document.getElementById('searchInput');
-      const serviceFilter = document.getElementById('serviceFilter');
-      const priorityFilter = document.getElementById('priorityFilter');
-      const statusFilter = document.getElementById('statusFilter');
-      const resetButton = document.getElementById('resetFilters');
-      const expandAllButton = document.getElementById('expandAll');
-      const collapseAllButton = document.getElementById('collapseAll');
-      const resultsCount = document.getElementById('resultsCount');
-      const emptyState = document.getElementById('emptyState');
-      const cards = Array.from(document.querySelectorAll('.recommendation-card'));
-      const sections = Array.from(document.querySelectorAll('.service-section'));
-      const tocLinks = Array.from(document.querySelectorAll('.toc-link'));
-
-      function setSectionCollapsed(section, collapsed) {{
-        section.classList.toggle('is-collapsed', collapsed);
-        const content = section.querySelector('.service-content');
-        const toggle = section.querySelector('.service-toggle');
-        if (content) {{
-          content.hidden = collapsed;
-        }}
-        if (toggle) {{
-          toggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
-        }}
-      }}
-
-      function applyFilters() {{
-        const searchTerm = searchInput.value.trim().toLowerCase();
-        const serviceValue = serviceFilter.value;
-        const priorityValue = priorityFilter.value;
-        const statusValue = statusFilter.value;
-
-        let visibleCards = 0;
-
-        cards.forEach(card => {{
-          const matchesSearch = !searchTerm || (card.dataset.search || '').includes(searchTerm);
-          const matchesService = !serviceValue || card.dataset.service === serviceValue;
-          const matchesPriority = !priorityValue || card.dataset.priority === priorityValue;
-          const matchesStatus = !statusValue || card.dataset.status === statusValue;
-          const visible = matchesSearch && matchesService && matchesPriority && matchesStatus;
-          card.hidden = !visible;
-          if (visible) visibleCards += 1;
-        }});
-
-        sections.forEach(section => {{
-          const visibleInSection = section.querySelectorAll('.recommendation-card:not([hidden])').length;
-          section.hidden = !visibleInSection;
-          const countNode = section.querySelector('.service-count');
-          if (countNode) {{
-            const defaultCount = countNode.dataset.defaultCount || visibleInSection;
-            const noun = visibleInSection === 1 ? 'recommendation' : 'recommendations';
-            countNode.textContent = visibleInSection === Number(defaultCount)
-              ? `${{defaultCount}} ${{noun}}`
-              : `${{visibleInSection}} matching ${{noun}}`;
-          }}
-        }});
-
-        resultsCount.textContent = `Showing ${{visibleCards}} of {len(findings)} actions`;
-        emptyState.style.display = visibleCards ? 'none' : 'block';
-      }}
-
-      [searchInput, serviceFilter, priorityFilter, statusFilter].forEach(control => {{
-        control.addEventListener('input', applyFilters);
-        control.addEventListener('change', applyFilters);
-      }});
-
-      resetButton.addEventListener('click', () => {{
-        searchInput.value = '';
-        serviceFilter.value = '';
-        priorityFilter.value = '';
-        statusFilter.value = '';
-        applyFilters();
-      }});
-
-      sections.forEach(section => {{
-        const toggle = section.querySelector('.service-toggle');
-        if (!toggle) {{
-          return;
-        }}
-        toggle.addEventListener('click', () => {{
-          const collapsed = section.classList.contains('is-collapsed');
-          setSectionCollapsed(section, !collapsed);
-        }});
-      }});
-
-      expandAllButton.addEventListener('click', () => {{
-        sections.forEach(section => setSectionCollapsed(section, false));
-      }});
-
-      collapseAllButton.addEventListener('click', () => {{
-        sections.forEach(section => {{
-          if (!section.hidden) {{
-            setSectionCollapsed(section, true);
-          }}
-        }});
-      }});
-
-      tocLinks.forEach(link => {{
-        link.addEventListener('click', () => {{
-          const targetId = link.getAttribute('href');
-          if (!targetId) {{
-            return;
-          }}
-          const targetSection = document.querySelector(targetId);
-          if (targetSection) {{
-            setSectionCollapsed(targetSection, false);
-          }}
-        }});
-      }});
-
-      applyFilters();
-    }})();
-  </script>
-</body>
-</html>
-"""
-    
-    with open(filepath, 'w', encoding='utf-8') as htmlfile:
-        htmlfile.write(html)
-    
-    return str(filepath)
 
 def open_html_report(html_path):
     """
@@ -2542,58 +803,56 @@ def print_recommendations_summary(
         print("\nℹ️  No recommendations generated")
         return
     
-    print("\n" + "="*80)
-    print("RECOMMENDATIONS SUMMARY")
-    print("="*80)
+    from .console_reporting import detail, display_path, is_verbose, section, status, style, print_source_gaps
+    section('ASSESSMENT')
     if tenant_name:
-        print(f"Tenant: {tenant_name}")
+        print(style(tenant_name, 'important'))
     
     recommendations = enrich_assessment_records(recommendations)
-    readiness = summarize_readiness(recommendations)
-    findings = [r for r in recommendations if r.get("Disposition") == DISPOSITION_ACTION]
-    opportunities = [r for r in recommendations if r.get("Disposition") == DISPOSITION_OPPORTUNITY]
-    assurances = [
-        r for r in recommendations
-        if r.get("Disposition") == DISPOSITION_ASSURANCE
-        and str(r.get("EvidenceBasis", "")).lower() not in {"license signal", "not verified"}
-        and r.get("EvidenceAvailable") == "Yes"
-    ]
-    coverage_items = list(readiness.get("decision_coverage", []) or [])
+    from .assessment_result import build_assessment_result
+    readiness = (evidence_bundle or {}).get('assessment_result') or build_assessment_result(recommendations, evidence_bundle or {})
+    findings = readiness['actions']
+    opportunities = readiness['opportunities']
+    assurances = readiness['strengths']
+    coverage_items = readiness['coverage']
 
     # Group by priority
     high_priority = [r for r in findings if r.get("Priority") == "High"]
     medium_priority = [r for r in findings if r.get("Priority") == "Medium"]
     low_priority = [r for r in findings if r.get("Priority") == "Low"]
-    print(f"\nDeployment decision: {readiness['decision']}")
-    print(f"  {readiness['rationale']}")
-    print(f"\nActions: {len(findings)}")
-    print(f"  🔴 High Priority:   {len(high_priority)}")
-    print(f"  🟡 Medium Priority: {len(medium_priority)}")
-    print(f"  🟢 Low Priority:    {len(low_priority)}")
-    print(f"  🔵 Service-plan/context items (workbook): {len(opportunities)}")
-    verified_strengths = (evidence_bundle or {}).get("verified_strengths")
-    strength_count = len(verified_strengths) if verified_strengths is not None else len(assurances)
-    print(f"  ✓ Verified strengths: {strength_count}")
+    tone = 'success' if readiness['decision'] == 'Ready for a controlled pilot' else 'error' if readiness['decision'] == 'Not ready for pilot' else 'warning'
+    progress = readiness.get('rollout_progress') or {}
+    if progress:
+        status(f"Rollout stage: {progress['current_stage']}", tone)
+        checks = progress.get('counts') or {}
+        status(f"Required controls: {checks.get('established_controls', 0)} established | "
+               f"{checks.get('observed_issues', 0)} with issues | {checks.get('unconfirmed_controls', 0)} unconfirmed")
+    status(f"Deployment decision: {readiness['decision']}", tone)
+    detail(readiness['rationale'])
+    counts = readiness['counts']
+    print(f"Actions: {len(findings)} — {counts['remediation']} remediation, {counts['confirmation']} confirmation, {counts['evidence_gaps']} evidence checks")
+    if counts.get('critical'):
+        status(f"Critical priority: {counts['critical']}", 'error')
+    print('Priority: ' + style(f'{len(high_priority)} high', 'error' if high_priority else 'muted')
+          + ' | ' + style(f'{len(medium_priority)} medium', 'warning' if medium_priority else 'muted')
+          + ' | ' + style(f'{len(low_priority)} low', 'info'))
+    detail(f"Service-plan/context items (workbook): {len(opportunities)}")
+    strength_count = len(assurances)
+    status(f"Verified strengths: {strength_count}", 'success' if strength_count else 'muted')
     if coverage_items:
-        print(f"  ⚪ Coverage gaps:   {len(coverage_items)} (unverified, not clean)")
+        detail(f"Coverage gaps: {len(coverage_items)} (included in the action total)")
 
-    # Group by service
-    services = {}
-    for rec in findings:
-        service = rec.get("Service", "Unknown")
-        if service not in services:
-            services[service] = []
-        services[service].append(rec)
+    if is_verbose():
+        section('Actions by assessment area')
+    for domain in readiness['domains']:
+        count = domain.get('action_count', 0)
+        if count and is_verbose():
+            action_label = "action" if count == 1 else "actions"
+            print(f"  • {domain['title']}: {count} {action_label}")
 
-    print(f"\nActions by Service:")
-    for service, recs in sorted(services.items()):
-        action_label = "action" if len(recs) == 1 else "actions"
-        print(f"  • {service}: {len(recs)} {action_label}")
-    
-    if excel_path:
-        print(f"\nRecommendations exported to Excel: {excel_path}")
-    if csv_path:
-        print(f"Recommendations exported to CSV: {csv_path}")
-    if html_path:
-        print(f"Recommendations exported to HTML: {html_path}")
-    print()
+    print_source_gaps((evidence_bundle or {}).get('source_statuses'))
+    if html_path or excel_path or csv_path:
+        section('OUTPUT FILES')
+        for label, path in (('HTML', html_path), ('Workbook', excel_path), ('CSV', csv_path)):
+            if path:
+                print(f"{label}: {style(display_path(path), 'path')}")

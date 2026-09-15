@@ -3,7 +3,17 @@ Credential validation for Azure/Microsoft 365 authentication.
 Checks for required environment variables before starting orchestration.
 """
 import os
+import re
 import sys
+
+
+_ENV_FILE_SOURCES = {}
+
+
+def env_variable_source(name):
+    """Describe configuration provenance without exposing any credential value."""
+    path = _ENV_FILE_SOURCES.get(name)
+    return f'{name} in {path}' if path else f'{name} environment variable'
 
 
 def resolve_env_file_path(env_file=None, base_path=None):
@@ -28,12 +38,26 @@ def load_env_file(env_file=None, base_path=None):
     os.environ['ASSESSMENT_ENV_FILE'] = env_path
 
     if os.path.exists(env_path):
-        with open(env_path, 'r') as f:
+        with open(env_path, 'r', encoding='utf-8-sig') as f:
             for line in f:
                 line = line.strip()
                 if line and not line.startswith('#') and '=' in line:
                     key, value = line.split('=', 1)
-                    os.environ[key.strip()] = value.strip()
+                    key = key.strip().removeprefix('export ').strip()
+                    if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', key):
+                        continue
+                    value = value.strip()
+                    if value.startswith(('"', "'")):
+                        # Preserve literal secrets and Windows paths; never expand
+                        # variables, commands, or backslash escapes in .env values.
+                        quoted = re.fullmatch(r'''(["'])(.*?)\1\s*(?:#.*)?''', value)
+                        if not quoted:
+                            raise ValueError(f'Invalid quoted value for {key} in {env_path}')
+                        value = quoted.group(2)
+                    else:
+                        value = re.split(r'\s+#', value, maxsplit=1)[0].rstrip()
+                    os.environ[key] = value
+                    _ENV_FILE_SOURCES[key] = env_path
         return env_path
 
     return None

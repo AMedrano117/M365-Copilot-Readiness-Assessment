@@ -30,6 +30,8 @@ wheels/
 # Environment variables
 .env
 .env.*
+*.env
+*.env.*
 !.env.example
 
 # Local secrets and authentication material
@@ -45,8 +47,10 @@ env/
 ENV/
 
 # Generated reports and exports
-Reports/
-output/
+[Rr]eports/
+[Oo]utput/
+[Cc]ollections/
+*-portal-review/
 
 # Local collection and browser-test artifacts
 .cache/

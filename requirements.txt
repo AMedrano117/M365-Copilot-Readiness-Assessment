@@ -7,3 +7,6 @@ httpx>=0.24.0
 
 # Excel export
 openpyxl>=3.1.0
+
+# Local PDF text extraction and page previews (image-only PDFs use Windows OCR)
+PyMuPDF>=1.28.2,<2

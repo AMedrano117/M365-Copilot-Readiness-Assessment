@@ -1,0 +1,4 @@
+Site name,URL,Template,Connected to Teams,Sensitivity label,Retention policy,Site lock state,Last activity date (UTC),Email address of site owners,Site creation date (UTC),Storage used (GB),Is inactive,Is ownerless
+Example legacy,https://example.sharepoint.com/sites/legacy,Team site,False,Public,,Unlock,2025-01-01,,2020-01-01,0.75,True,True
+Example owned,https://example.sharepoint.com/sites/owned,Communication site,False,,,Unlock,2025-02-01,,2020-02-01,1.25,True,False
+Example unknown,https://example.sharepoint.com/sites/unknown,Team site,True,Confidential,,ReadOnly,2025-03-01,owner@example.com,2020-03-01,2.5,False,

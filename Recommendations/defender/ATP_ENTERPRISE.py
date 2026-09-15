@@ -21,9 +21,9 @@ def get_recommendation(sku_name, status="Success", defender_client=None, defende
             if defender_insights.has_email_threats():
                 observation += ". " + ", ".join(defender_insights.phishing_malware_metrics)
                 recommendation = "Review email threats targeting Copilot users"
-            else:
-                # Clean status - no email threats
-                observation += ". No email threats detected in last 30 days"
+            elif defender_insights.source_was_read('alerts'):
+                # Completed alert source - no email threats
+                observation += ". No phishing or malware alerts were returned by the completed alert query"
         
         return new_recommendation(
             service="Defender",

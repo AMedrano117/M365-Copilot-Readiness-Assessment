@@ -1,3 +1,4 @@
+from Core.source_evidence import source_is_complete
 """
 Information Protection for Office 365 - Standard - Copilot & Agent Adoption Recommendation
 """
@@ -89,7 +90,7 @@ async def get_recommendation(sku_name, status="Success", client=None, purview_cl
     deployment_recs = []
     
     # Prioritize PowerShell data (more accurate than Graph API)
-    if status == "Success" and purview_client and hasattr(purview_client, 'sensitivity_labels'):
+    if status == "Success" and source_is_complete(purview_client, "sensitivity_labels", getattr(purview_client, "sensitivity_labels", None)):
         labels_data = purview_client.sensitivity_labels
         label_policies_data = purview_client.label_policies if hasattr(purview_client, 'label_policies') else {'available': False}
         

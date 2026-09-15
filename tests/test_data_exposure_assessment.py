@@ -54,12 +54,12 @@ class DataExposureAssessmentTests(unittest.TestCase):
 
         features = {item["Feature"] for item in result["recommendations"]}
         self.assertTrue(result["available"])
-        self.assertIn("Anonymous sharing exposure", features)
-        self.assertIn("Broad internal access", features)
+        self.assertIn("Review links that allow access without sign-in", features)
+        self.assertIn("Review organization-wide links and group permissions", features)
         self.assertIn("External sharing exposure", features)
         self.assertIn("Potentially overshared content", features)
         self.assertIn("Sensitive content without labels", features)
-        self.assertFalse(any(item["Disposition"] == "Coverage" for item in result["recommendations"]))
+        self.assertTrue(any(item["Feature"] == "Exported report coverage" for item in result["recommendations"]))
         self.assertTrue(all(item.get("EvidenceKey") == "data_exposure_detail" for item in result["recommendations"]))
         self.assertEqual(len(result["evidence_rows"]), 2)
 
@@ -75,14 +75,14 @@ class DataExposureAssessmentTests(unittest.TestCase):
             result = build_data_exposure_assessment([sam], [])
 
         freshness = [item for item in result["recommendations"] if "freshness" in item["Feature"].lower()]
-        risk = [item for item in result["recommendations"] if item["Feature"] == "Anonymous sharing exposure"]
+        risk = [item for item in result["recommendations"] if item["Feature"] == "Review links that allow access without sign-in"]
         self.assertEqual(result["sources"]["sam"]["freshness"], "stale")
         self.assertEqual(len(freshness), 1)
         self.assertEqual(freshness[0]["Disposition"], "Coverage")
         self.assertEqual(risk[0]["Confidence"], "Medium")
-        self.assertTrue(any("new Microsoft scan is needed" in message for message in result["operator_messages"]))
+        self.assertTrue(any("Confirm its continued relevance or supply a newer completed report" in message for message in result["operator_messages"]))
 
-    def test_fresh_clean_reports_create_assurance(self):
+    def test_fresh_narrow_clean_reports_keep_unreported_domains_unverified(self):
         today = datetime.now(timezone.utc).date().isoformat()
         with tempfile.TemporaryDirectory() as directory:
             sam = self._csv(directory, "sam.csv", [{
@@ -98,9 +98,9 @@ class DataExposureAssessmentTests(unittest.TestCase):
             }])
             result = build_data_exposure_assessment([sam], [dspm])
 
-        self.assertEqual(len(result["recommendations"]), 1)
-        self.assertEqual(result["recommendations"][0]["Disposition"], "Assurance")
-        self.assertEqual(result["recommendations"][0]["EvidenceKey"], "data_exposure_detail")
+        self.assertTrue(result["recommendations"])
+        self.assertTrue(all(item["Disposition"] == "Coverage" for item in result["recommendations"]))
+        self.assertIn("Organization links", result["sources"]["sam"]["coverage"]["domains_missing"])
 
     def test_report_without_scan_date_requires_refresh_validation(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -146,7 +146,8 @@ class DataExposureAssessmentTests(unittest.TestCase):
             result = build_data_exposure_assessment([sam], [dspm])
 
         self.assertEqual(result["sources"]["dspm"]["signals"], {})
-        self.assertEqual(result["recommendations"][0]["Disposition"], "Assurance")
+        self.assertFalse(any(item["Disposition"] == "Action" for item in result["recommendations"]))
+        self.assertTrue(any(item["Disposition"] == "Coverage" for item in result["recommendations"]))
 
     def test_overlapping_sam_exports_do_not_double_count_the_same_site_signal(self):
         today = datetime.now(timezone.utc).date().isoformat()
@@ -163,6 +164,40 @@ class DataExposureAssessmentTests(unittest.TestCase):
 
         self.assertEqual(result["sources"]["sam"]["signals"]["Anyone links"], 7)
         self.assertEqual(len(result["sources"]["sam"]["risk_rows"]), 1)
+
+    def test_risk_narrative_separates_permission_units_and_scopes_each_finding(self):
+        with tempfile.TemporaryDirectory() as directory:
+            sam = self._csv(directory, "permissions.csv", [{
+                "Report Date": "2026-09-14",
+                "Site URL": "https://example.sharepoint.com/sites/broad",
+                "Anyone link count": "1", "Everyone permission count": "3",
+                "EEEU permission count": "2", "People In Your Org link count": "7",
+                "Guest user permissions": "0",
+            }, {
+                "Report Date": "2026-09-14",
+                "Site URL": "https://example.sharepoint.com/sites/external",
+                "Anyone link count": "0", "Everyone permission count": "0",
+                "EEEU permission count": "0", "People In Your Org link count": "0",
+                "Guest user permissions": "9",
+            }])
+            result = build_data_exposure_assessment([sam], [], evaluation_date="2026-09-15")
+
+        rows = {row["FindingKey"]: row for row in result["recommendations"]}
+        anyone = rows["data_exposure.anonymous_links"]
+        internal = rows["data_exposure.broad_internal_access"]
+        external = rows["data_exposure.external_exposure"]
+        self.assertEqual(len(result["sources"]["sam"]["affected_sites"]), 2)
+        self.assertIn("1 Anyone link", anyone["Observation"])
+        self.assertIn("1 SharePoint site", anyone["Observation"])
+        self.assertNotIn("2 identified sites", anyone["Observation"])
+        self.assertIn("3 permissions granted to Everyone", internal["Observation"])
+        self.assertIn("2 permissions granted to Everyone except external users", internal["Observation"])
+        self.assertIn("7 links accessible to people in the organization", internal["Observation"])
+        self.assertNotIn("12", internal["Observation"])
+        self.assertIn("can overlap", internal["Observation"])
+        self.assertIn("1 SharePoint site", internal["Observation"])
+        self.assertNotIn("9 external-user or external-link", external["Observation"])
+        self.assertNotEqual(anyone["Feature"], internal["Feature"])
 
     def test_data_exposure_evidence_is_linked_into_the_workbook_bundle(self):
         today = datetime.now(timezone.utc).date().isoformat()
@@ -181,7 +216,7 @@ class DataExposureAssessmentTests(unittest.TestCase):
         )
 
         self.assertIn("data_exposure_detail", bundle["sheets"])
-        risk = next(item for item in bundle["recommendations"] if item["Feature"] == "Anonymous sharing exposure")
+        risk = next(item for item in bundle["recommendations"] if item["Feature"] == "Review links that allow access without sign-in")
         self.assertEqual(risk["EvidenceAvailable"], "Yes")
         self.assertEqual(risk["EvidenceSheet"], "Data Exposure Detail")
 
@@ -196,10 +231,11 @@ class DataExposureAssessmentTests(unittest.TestCase):
             finally:
                 os.chdir(original_cwd)
 
-        self.assertIn("Data Exposure", body)
-        self.assertIn("Reports &gt; Data access governance", body)
-        self.assertIn("Enabling this capability is optional", body)
-        self.assertIn("DSPM_REPORT_PATHS", body)
+        self.assertIn("Confirm who can access sensitive content", body)
+        self.assertIn("Complete the content access review", body)
+        self.assertIn("Responsible role", body)
+        self.assertNotIn("DSPM_REPORT_PATHS", body)
+        self.assertNotIn("--dspm-report", body)
 
 
 if __name__ == "__main__":

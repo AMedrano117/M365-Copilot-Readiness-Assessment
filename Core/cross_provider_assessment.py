@@ -11,8 +11,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-METHODOLOGY_VERSION = "2.0.0"
-ASSESSMENT_VERSION = "2.0.0"
+METHODOLOGY_VERSION = "2.1.0"
+ASSESSMENT_VERSION = "2.1.0"
 GUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
 
 CONTROL_CATALOG = (
@@ -80,7 +80,11 @@ def load_assessment_profile(path):
     if not isinstance(use_cases, list):
         errors.append("use_cases must be an array")
         use_cases = []
-    return {
+    if "readiness_review" in payload:
+        from .control_reviews import validate_readiness_review
+        errors.extend(validate_readiness_review(payload))
+    from .control_reviews import LoadedAssessmentProfile
+    return LoadedAssessmentProfile({
         "available": not errors,
         "status": "available" if not errors else "partial",
         "reason": "; ".join(errors),
@@ -89,7 +93,7 @@ def load_assessment_profile(path):
         "products": products,
         "use_cases": use_cases,
         "raw": payload,
-    }
+    })
 
 
 def _read_tabular(path):
@@ -107,7 +111,7 @@ def _read_tabular(path):
     raise ValueError("Provider evidence must be CSV or XLSX.")
 
 
-def load_provider_evidence(path, max_age_days=None):
+def load_provider_evidence(path, max_age_days=None, evaluation_date=None):
     if not path:
         return {"available": False, "status": "not_requested", "reason": "No provider evidence register was supplied.", "rows": [], "max_age_days": int(max_age_days or os.getenv("PROVIDER_EVIDENCE_MAX_AGE_DAYS", "90"))}
     max_age = int(max_age_days or os.getenv("PROVIDER_EVIDENCE_MAX_AGE_DAYS", "90"))
@@ -115,7 +119,7 @@ def load_provider_evidence(path, max_age_days=None):
         raw_rows = _read_tabular(path)
     except Exception as exc:
         return {"available": False, "status": "unavailable", "reason": f"Provider evidence could not be read: {exc}", "filename": _safe_basename(path), "rows": [], "max_age_days": max_age}
-    today = datetime.now(timezone.utc).date()
+    today = _parse_date(evaluation_date) if evaluation_date else datetime.now(timezone.utc).date()
     rows = []
     for raw in raw_rows:
         normalized = {_normalized_key(key): value for key, value in (raw or {}).items()}

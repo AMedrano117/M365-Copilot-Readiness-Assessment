@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import subprocess
+from . import console_reporting as console
 
 from .get_graph_client import get_graph_client
 from .services_and_licenses import ServicesAndLicenses
@@ -17,6 +18,14 @@ async def load_modules_and_analyze(tenant_id, service_config):
         tenant_id: Azure tenant ID
         service_config: Dict with run_* flags from validate_and_prepare_services()
     """
+    console.status('Preparing selected collectors...')
+    selected = [label for key, label in (
+        ('run_m365', 'M365 and SharePoint'), ('run_entra', 'Entra'),
+        ('run_defender', 'Defender'), ('run_purview', 'Purview'),
+        ('run_power_platform', 'Power Platform'), ('run_copilot_studio', 'Copilot Studio'),
+    ) if service_config.get(key)]
+    console.status('Collection areas: ' + ', '.join(selected) + '.')
+
     # Initialize progress bar with actual count
     from .module_loader import start_module_loading
     start_module_loading(service_config['services_to_load'])
@@ -35,15 +44,15 @@ async def load_modules_and_analyze(tenant_id, service_config):
     if service_config['run_copilot_studio']:
         import Recommendations.copilot_studio
     
-    # Show feature analysis after modules are loaded
-    from .check_all_service_plans import analyze_service_plans
-    await analyze_service_plans(tenant_id, service_config['services'])
+    # This display-only analysis is separate from the shared license collection.
+    # Keep its feature counts and progress animation in verbose output.
+    if console.is_verbose():
+        from .check_all_service_plans import analyze_service_plans
+        await analyze_service_plans(tenant_id, service_config['services'])
     
     # Print start message after modules are loaded
-    if service_config['run_all']:
-        print(f"[{get_timestamp()}] 🚀 Starting orchestration for all services...")
-    else:
-        print(f"[{get_timestamp()}] 🚀 Starting orchestration for: {', '.join(service_config['services'])}...")
+    console.status('Collecting tenant evidence...')
+    console.detail('Selected services: ' + ('all' if service_config['run_all'] else ', '.join(service_config['services'])))
 
 
 async def setup_graph_and_licenses(tenant_id, show_graph_messages):
@@ -56,11 +65,12 @@ async def setup_graph_and_licenses(tenant_id, show_graph_messages):
     Returns:
         Tuple: (graph_client, services_and_licenses, has_license_data)
     """
+    console.status('Microsoft Graph: checking application access and license context...')
     # Always create Graph client (needed for license checks in all services)
     # Use silent mode for PowerShell-only runs (Purview, Power Platform)
     client = await get_graph_client(tenant_id, silent=not show_graph_messages)
     if show_graph_messages:
-        print(f"[{get_timestamp()}] ✅ Connected to Microsoft Graph (Service Principal)")
+        console.detail('Connected to Microsoft Graph using the service principal.')
     
     # Setup services container (needed by all pipelines)
     services_and_licenses = ServicesAndLicenses()
@@ -323,12 +333,15 @@ def print_interactive_collection_summary(interactive_plan):
     if not lines:
         return
 
-    print(f"[{get_timestamp()}] ℹ️  Interactive collection pre-check:")
+    console.detail('Interactive collection pre-check:')
     for line in lines:
-        print(f"[{get_timestamp()}]     {line}")
+        if any(marker in line.lower() for marker in ('not installed', 'still unavailable', 'installation detail:', 'manual fallback:')):
+            console.status(line, tone='warning')
+        else:
+            console.detail(line)
 
     if interactive_plan['policy'] == 'auto':
-        print(
+        console.detail(
             f"[{get_timestamp()}]     Tip: use --interactive-auth skip to avoid optional prompts "
             "when running with read-only or non-admin roles."
         )

@@ -43,6 +43,9 @@ def get_timestamp():
 
 def simple_spinner(stop_event, message, stdout_lock):
     """Simple spinner for module loading"""
+    from .console_reporting import is_verbose
+    if not is_verbose() or not sys.stdout.isatty():
+        return
     spinner_chars = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
     idx = 0
     timestamp = get_timestamp()
@@ -61,6 +64,9 @@ def simple_spinner(stop_event, message, stdout_lock):
 
 def _spinner_thread(stop_event, message):
     """Run spinner animation in separate thread"""
+    from .console_reporting import is_verbose
+    if not is_verbose() or not sys.stdout.isatty():
+        return
     spinner_chars = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
     idx = 0
     timestamp = get_timestamp()

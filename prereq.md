@@ -1,11 +1,13 @@
 # Prerequisites
 
+These tenant permissions and network requirements apply to connected collection. Follow [RUN.md](RUN.md) for the canonical workflow. Every live assessment automatically saves a collection JSON and portable package; `--save-collection PATH` only chooses a custom destination. Preflight does not save a collection, and offline builds do not create or overwrite one. Rebuilding with `--mode offline --collection-input PATH` needs local Python dependencies and the full package, but no tenant credentials, network calls or administrative PowerShell. [The portal guide](PORTAL_REPORTS_AND_OFFLINE.md) covers report requests and sample compatibility.
+
 ## Local requirements
 
 - Windows 10/11 or Windows Server with Windows PowerShell 5.1.
 - Python 3.10 or later.
 - Network access to Microsoft sign-in, Microsoft Graph, Defender, SharePoint Online, Exchange Online, and Purview endpoints used by the selected collectors.
-- An Entra administrator who can create or update an application registration and grant tenant-wide application consent.
+- An Entra administrator who can create or update an application registration, plus an administrator authorized to grant Microsoft Graph application consent. Application Administrator alone cannot grant Graph application permissions; arrange Privileged Role Administrator, Global Administrator, or an appropriate custom consent role. [Microsoft consent guidance](https://learn.microsoft.com/en-us/entra/identity/enterprise-apps/grant-admin-consent).
 
 Create the Python environment and install only the packages used by the tool:
 
@@ -24,8 +26,8 @@ Standard mode is the normal operator-assisted configuration:
 
 ```powershell
 .\setup-service-principal.ps1 -Mode Standard
-python main.py --check-connections
-python main.py
+python main.py --mode live --check-connections
+python main.py --mode live
 ```
 
 The setup script reuses the existing application with the configured display name, reconciles its permission manifest, and installs or updates the supported PowerShell modules. It keeps an existing usable credential unless `-RotateCredential` is supplied. Standard mode uses the client secret or certificate for application APIs and requests browser sign-in for SharePoint and Purview when no certificate is configured.
@@ -44,7 +46,7 @@ The setup script installs:
 |---|---|---|---|
 | Microsoft Graph tenant, licensing, usage, identity, consent, devices, security, and external connections | Application certificate or client secret | Application permissions reconciled by `setup-service-principal.ps1` | Individual workloads can still be unavailable when the tenant is not licensed or provisioned. |
 | Defender for Endpoint device inventory | Application certificate or client secret | `Machine.Read.All` on WindowsDefenderATP | Requires Defender for Endpoint provisioning. |
-| SharePoint tenant, sites, sharing, and existing DAG reports | Delegated browser sign-in, or application certificate | SharePoint Administrator for delegated use; `Sites.FullControl.All` for app-only administrative PowerShell | Advanced DAG reports require SharePoint Advanced Management. |
+| SharePoint tenant, sites, sharing, and existing DAG reports | Delegated browser sign-in, or application certificate | SharePoint Administrator for delegated use; `Sites.FullControl.All` for app-only administrative PowerShell | Snapshot reports require SharePoint Advanced Management entitlement. Detailed Everyone/EEEU reports additionally require the SharePoint Advanced Management Administrator role. |
 | Purview DLP, labels, retention, rights management, and audit configuration | Delegated browser sign-in, or supported application certificate | Appropriate delegated Purview/Exchange read roles, or the application role groups configured by Unattended setup | Feature availability depends on the tenant’s Purview and Exchange subscriptions. |
 | Power Platform inventory export | No live sign-in | An exported Manage > Inventory CSV | Supplemental only. |
 | Power Platform inventory API | Application credential | Tenant-scoped Power Platform Reader RBAC | Preview and opt-in. |
@@ -54,6 +56,8 @@ The setup script installs:
 The stable Graph permission set is defined in `collector-registry.json` and includes the permissions actually used for organization, user, group, application, reporting, site, Entra policy, directory-role, authentication-method, access-review, managed-device, audit, identity-risk, external-connection, alert, incident, and Secure Score reads.
 
 Microsoft Entra ID Protection is checked separately from Conditional Access. When the risk permission is present but the tenant only has Entra ID P1, unavailable risk evidence is reported as a licensing limitation rather than a missing permission.
+
+Portal report roles are separate from application API permissions. Confirm current SharePoint entitlement and the content-metadata access granted by the additional SAM administrator role against [SAM prerequisites](https://learn.microsoft.com/en-us/sharepoint/sharepoint-advanced-management-prerequisites). DSPM assessment readers and creators have different permissions; viewing file details needs additional Content Explorer roles. Check [DSPM permissions](https://learn.microsoft.com/en-us/purview/data-security-posture-management-permissions) and [the per-report access table](PORTAL_REPORTS_AND_OFFLINE.md#permissions-and-licensing-to-arrange). Microsoft references were checked on September 15, 2026.
 
 ## Unattended SharePoint and Purview
 

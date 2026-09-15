@@ -8,6 +8,7 @@ import re
 
 from .friendly_names import get_friendly_plan_name, get_friendly_sku_name
 from .assessment_model import enrich_assessment_records
+from .copilot_readiness_import import FLAG_COLUMNS
 
 
 SHEET_DEFINITIONS = OrderedDict([
@@ -78,6 +79,12 @@ SHEET_DEFINITIONS = OrderedDict([
         "default_note": "See SharePoint Governance for tenant sharing defaults, site-level sharing counts, and existing Data Access Governance report status.",
         "preview_columns": ["Detail Type", "Setting or report", "Value or status", "Why it matters"],
     }),
+    ("sharepoint_lifecycle_detail", {
+        "title": "SharePoint Lifecycle Detail",
+        "appendix_title": "Appendix: SharePoint Site Lifecycle",
+        "default_note": "See SharePoint Lifecycle Detail for ownership and inactivity evidence from the supplied lifecycle reports.",
+        "preview_columns": ["Report Type", "Report Date", "Lifecycle Signals"],
+    }),
     ("defender_incident_detail", {
         "title": "Defender Incident Detail",
         "appendix_title": "Appendix: Defender Incident Detail",
@@ -119,6 +126,18 @@ SHEET_DEFINITIONS = OrderedDict([
         "appendix_title": "Appendix: Restricted Copilot User Usage",
         "default_note": "Restricted workbook evidence contains user-level Copilot activity collected only by explicit request.",
         "preview_columns": ["Period", "Activity State", "Last Activity Date"],
+    }),
+    ("copilot_readiness_detail", {
+        "title": "Copilot Readiness Export",
+        "appendix_title": "Appendix: Copilot Readiness Export",
+        "default_note": "See Copilot Readiness Export for aggregate readiness indicators scoped to the exported rows.",
+        "preview_columns": ["Indicator", "True", "False", "Unknown", "Report Period (Days)", "Report Date"],
+    }),
+    ("copilot_readiness_user_detail", {
+        "title": "Copilot Readiness Users",
+        "appendix_title": "Appendix: Restricted Copilot Readiness Users",
+        "default_note": "Restricted workbook evidence contains exported user readiness flags only when explicitly requested.",
+        "preview_columns": [],
     }),
     ("service_plan_inventory", {
         "title": "Service Plan Inventory",
@@ -427,6 +446,7 @@ def build_evidence_bundle(
         ("guest_access_detail", lambda: _build_guest_access_sheet(entra_client)),
         ("purview_policy_detail", lambda: _build_purview_policy_sheet(purview_client)),
         ("data_exposure_detail", lambda: _build_data_exposure_sheet(data_exposure_info)),
+        ("sharepoint_lifecycle_detail", lambda: _build_sharepoint_lifecycle_sheet(data_exposure_info)),
         ("sharepoint_governance_detail", lambda: _build_sharepoint_governance_sheet(m365_client)),
         ("defender_incident_detail", lambda: _build_defender_incident_sheet(defender_client)),
         ("defender_device_detail", lambda: _build_defender_device_sheet(defender_client)),
@@ -435,6 +455,8 @@ def build_evidence_bundle(
         ("external_connection_detail", lambda: _build_external_connection_sheet(m365_client)),
         ("ai_usage_detail", lambda: _build_ai_usage_sheet(m365_client)),
         ("copilot_user_usage_detail", lambda: _build_copilot_user_usage_sheet(m365_client)),
+        ("copilot_readiness_detail", lambda: _build_copilot_readiness_sheet(m365_client)),
+        ("copilot_readiness_user_detail", lambda: _build_copilot_readiness_user_sheet(m365_client)),
         ("service_plan_inventory", lambda: _build_service_plan_inventory_sheet(m365_info)),
     ]
 
@@ -477,19 +499,24 @@ def build_evidence_bundle(
         "details": sheet.get("details", []),
         "preview_columns": sheet.get("preview_columns", []),
         "preview_rows": sheet.get("rows", [])[:5],
-    } for key, sheet in sheets.items()]
+    } for key, sheet in sheets.items()
+        if key not in {"copilot_user_usage_detail", "copilot_readiness_user_detail", "sharepoint_lifecycle_detail"}]
 
     return {
         "recommendations": recommendations,
         "sheets": sheets,
         "evidence_index": evidence_index,
         "appendix_sections": appendix_sections,
+        "copilot_readiness_export": {
+            key: value for key, value in (getattr(m365_client, "copilot_readiness_export", {}) or {}).items()
+            if key != "user_details"
+        } if m365_client else {},
         "ai_usage": {
             "copilot_usage": getattr(m365_client, "copilot_usage", {}) if m365_client else {},
             "m365_app_readiness": getattr(m365_client, "m365_app_readiness", {}) if m365_client else {},
             "copilot_dashboard": getattr(m365_client, "copilot_dashboard", {}) if m365_client else {},
             "shadow_ai_usage": getattr(m365_client, "shadow_ai_usage", {}) if m365_client else {},
-            "license_summary": getattr(m365_client, "users_summary", {}) if m365_client else {},
+            "license_summary": _measured_summary(getattr(m365_client, "users_summary", {})) if m365_client else {},
         },
         "power_platform_inventory": getattr(pp_client, "power_platform_inventory", {}) if pp_client else {
             "available": False,
@@ -786,7 +813,56 @@ def _build_verified_strengths(entra_client, purview_client, m365_client=None):
                 "Key": "azure-rms-enabled",
             })
 
+    strength_sources = {
+        "sharepoint-sharing-restricted": (m365_client, "sharepoint_governance_detail", "content"),
+        "conditional-access-mfa": (entra_client, "conditional_access_detail", "identity"),
+        "app-consent-restricted": (entra_client, "app_consent_policy_detail", "applications"),
+        "dlp-enforced": (purview_client, "purview_policy_detail", "data_protection"),
+        "sensitivity-labels-published": (purview_client, "purview_policy_detail", "data_protection"),
+        "unified-audit-enabled": (purview_client, "purview_policy_detail", "data_protection"),
+        "azure-rms-enabled": (purview_client, "purview_policy_detail", "data_protection"),
+    }
+    for row in rows:
+        client, evidence_key, domain = strength_sources[row["Key"]]
+        provenance = getattr(client, "cache_provenance", {}) or {}
+        row.update(EvidenceKey=evidence_key, DomainId=domain)
+        from .source_evidence import source_is_complete
+        required = {
+            "dlp-enforced": ("dlp_policies", "dlp_rules"),
+            "sensitivity-labels-published": ("sensitivity_labels", "label_policies"),
+            "unified-audit-enabled": ("audit_config",),
+            "azure-rms-enabled": ("irm_config",),
+        }.get(row["Key"], ())
+        if required:
+            row["EvidenceComplete"] = all(source_is_complete(client, name, getattr(client, name, {}) or {}) for name in required)
+            row["EvidenceSource"] = "purview_" + required[0]
+        if provenance:
+            row.update(ObservationDate=provenance.get("collected_at", ""),
+                       SourceFile=provenance.get("source_file", ""),
+                       SourceType=provenance.get("source_type", ""))
     return rows[:6]
+
+
+def _build_sharepoint_lifecycle_sheet(data_exposure_info):
+    if not isinstance(data_exposure_info, dict):
+        return None
+    rows = [dict(row) for row in data_exposure_info.get("lifecycle_evidence_rows", []) or []]
+    if not rows:
+        return None
+    summary = data_exposure_info.get("lifecycle_summary", {}) or {}
+    return {
+        "rows": rows,
+        "summary": (
+            f"{summary.get('site_count', len(rows))} exported sites: "
+            f"{summary.get('ownerless_site_count', 0)} reported ownerless and "
+            f"{summary.get('inactive_site_count', 0)} reported inactive."
+        ),
+        "details": [
+            "Lifecycle status supports ownership and content-maintenance review; it does not establish oversharing or sensitive-data exposure.",
+            "An empty owner contact does not establish that a site is ownerless. Report dates remain separate from site activity dates.",
+            "Owner contacts and individual site details are retained in this workbook for authorized follow-up.",
+        ],
+    }
 
 
 def _build_data_exposure_sheet(data_exposure_info):
@@ -796,7 +872,7 @@ def _build_data_exposure_sheet(data_exposure_info):
     rows = []
     sources = data_exposure_info.get("sources", {}) or {}
     for source_key, source in sources.items():
-        if not isinstance(source, dict) or not source.get("files_loaded"):
+        if not isinstance(source, dict) or not (source.get("files_loaded") or source.get("reports")):
             continue
         source_name = "SharePoint Advanced Management" if source_key == "sam" else "Microsoft Purview DSPM"
         rows.append({
@@ -820,14 +896,31 @@ def _build_data_exposure_sheet(data_exposure_info):
             "Records Read": source.get("records_read", 0),
             "Max Age (Days)": source.get("max_age_days", ""),
         })
+        for report in source.get("reports", []) or []:
+            rows.append({
+                "RecommendationId": "", "Flagged By": "", "Detail Type": "Source Report",
+                "Source": source_name, "Source File": report.get("source_file", ""),
+                "Source Sheet": report.get("source_sheet", ""),
+                "Report Type": report.get("report_type", ""),
+                "Workload": report.get("workload", ""),
+                "Tenant ID": report.get("tenant_id", ""),
+                "Report Date": report.get("report_date", ""),
+                "Report Date Basis": report.get("date_basis", ""),
+                "Records Read": report.get("records_read", ""),
+                "Source Status": report.get("status", ""),
+                "Coverage Domains": "; ".join(report.get("domains", []) or []),
+                "Age (Days)": report.get("age_days", ""),
+                "Freshness": report.get("freshness", ""),
+                "Max Age (Days)": report.get("max_age_days", source.get("max_age_days", "")),
+            })
 
     for evidence_row in data_exposure_info.get("evidence_rows", []) or []:
         row = dict(evidence_row)
         row["Detail Type"] = "Risk Evidence"
-        row["Freshness"] = ""
-        row["Report Date"] = ""
-        row["Records Read"] = ""
-        row["Max Age (Days)"] = ""
+        row.setdefault("Freshness", "")
+        row.setdefault("Report Date", "")
+        row.setdefault("Records Read", "")
+        row.setdefault("Max Age (Days)", "")
         rows.append(row)
 
     if not rows:
@@ -840,7 +933,7 @@ def _build_data_exposure_sheet(data_exposure_info):
     )
     details = [
         "Only explicit fields from Microsoft Purview DSPM and SharePoint Advanced Management exports are treated as exposure evidence; usage volume alone is not a risk signal.",
-        "Source Summary rows record report freshness and volume. Risk Evidence rows identify the affected sites or items and the signal found in the authoritative export.",
+        "Source Summary rows record overall freshness and volume. Source Report rows retain each file's report date, selection status and coverage. Risk Evidence rows retain the date and signal from their source export.",
     ]
     if data_exposure_info.get("evidence_truncated"):
         details.append(
@@ -1750,6 +1843,8 @@ def _build_defender_incident_sheet(defender_client):
             })
 
     incident_summary = getattr(defender_client, "incident_summary", {}) or {}
+    from .source_evidence import source_is_complete
+    complete = source_is_complete(defender_client, "incidents")
     rows.sort(key=lambda row: (str(row.get("Severity", "")).lower(), str(row.get("Created Date", ""))), reverse=True)
 
     return {
@@ -1758,7 +1853,7 @@ def _build_defender_incident_sheet(defender_client):
             f"{incident_summary.get('total', 0)} security incident(s) were reviewed, "
             f"including {incident_summary.get('active', 0)} active incident(s) and "
             f"{incident_summary.get('high_severity', 0)} high-severity incident(s)."
-        ),
+        ) if complete else "The incident query did not complete. Incident counts and the absence of active incidents are not established. Any returned records below are partial evidence.",
         "details": [
             "Incident detail combines the Graph Security and Defender API incident views when they were available from the reviewed tenant.",
             "The engineer workbook shows the exact incidents that supported higher-severity security posture observations.",
@@ -1798,6 +1893,8 @@ def _build_defender_device_sheet(defender_client):
         })
 
     device_summary = getattr(defender_client, "device_summary", {}) or {}
+    from .source_evidence import source_is_complete
+    complete = source_is_complete(defender_client, "machines")
     rows.sort(key=lambda row: (str(row.get("Risk Score", "")).lower(), str(row.get("Device Name", "")).lower()))
 
     return {
@@ -1805,10 +1902,10 @@ def _build_defender_device_sheet(defender_client):
         "summary": (
             f"{device_summary.get('total', 0)} Defender device(s) were reviewed, "
             f"including {device_summary.get('high_risk', 0)} high-risk device(s)."
-        ),
+        ) if complete else "The device query did not complete. The total device population and its risk distribution are not established.",
         "details": [
             "Device detail captures the risk and exposure fields returned by Defender for Endpoint in the tenant review.",
-            "This gives the follow-up engineer a direct starting point for devices that may weaken Copilot rollout security posture.",
+            "The returned inventory does not establish coverage of the intended pilot fleet or its browser protection baseline; reconcile it against the expected device population.",
         ],
     }
 
@@ -2028,6 +2125,13 @@ def _build_sharepoint_governance_sheet(m365_client):
     }
 
 
+def _measured_summary(value):
+    """Collector placeholders on failed reads are not measurements of zero."""
+    if not isinstance(value, dict) or value.get("available") is False or value.get("error"):
+        return {}
+    return value
+
+
 def _build_m365_activity_sheet(m365_client):
     if not m365_client:
         return None
@@ -2044,33 +2148,33 @@ def _build_m365_activity_sheet(m365_client):
             "Detail": detail,
         })
 
-    email_summary = getattr(m365_client, "email_summary", {}) or {}
-    teams_summary = getattr(m365_client, "teams_summary", {}) or {}
-    sharepoint_summary = getattr(m365_client, "sharepoint_summary", {}) or {}
-    onedrive_summary = getattr(m365_client, "onedrive_summary", {}) or {}
-    activations_summary = getattr(m365_client, "activations_summary", {}) or {}
-    active_users_summary = getattr(m365_client, "active_users_summary", {}) or {}
-    users_summary = getattr(m365_client, "users_summary", {}) or {}
+    email_summary = _measured_summary(getattr(m365_client, "email_summary", {}))
+    teams_summary = _measured_summary(getattr(m365_client, "teams_summary", {}))
+    sharepoint_summary = _measured_summary(getattr(m365_client, "sharepoint_summary", {}))
+    onedrive_summary = _measured_summary(getattr(m365_client, "onedrive_summary", {}))
+    activations_summary = _measured_summary(getattr(m365_client, "activations_summary", {}))
+    active_users_summary = _measured_summary(getattr(m365_client, "active_users_summary", {}))
+    users_summary = _measured_summary(getattr(m365_client, "users_summary", {}))
 
-    add_metric("Users", "Total Users", users_summary.get("total", 0), "Tenant user inventory reviewed for activity baselines.")
+    add_metric("Users", "Total Users", users_summary.get("total"), "Tenant user inventory reviewed for activity baselines." if users_summary else "User inventory was not supplied.")
     license_coverage = users_summary.get("copilot_license_coverage")
     coverage_text = "Not calculated" if license_coverage is None else f"{license_coverage}%"
     add_metric(
         "Users",
         "Copilot Licensed Users",
-        users_summary.get("copilot_licensed", 0),
+        users_summary.get("copilot_licensed"),
         f"License coverage {coverage_text} of {users_summary.get('coverage_population', 'the assessed population')}.",
     )
-    add_metric("Email", "Active Users", email_summary.get("active_users", 0), f"Average sent per user {email_summary.get('avg_sent_per_user', 0)}.")
-    add_metric("Email", "Total Sent", email_summary.get("total_sent", 0), f"Average received per user {email_summary.get('avg_received_per_user', 0)}.")
-    add_metric("Teams", "Active Users", teams_summary.get("active_users", 0), f"Average meetings per user {teams_summary.get('avg_meetings_per_user', 0)}.")
-    add_metric("Teams", "Total Meetings", teams_summary.get("total_meetings", 0), f"Average messages per user {teams_summary.get('avg_messages_per_user', 0)}.")
-    add_metric("SharePoint", "Active Sites", sharepoint_summary.get("active_sites", 0), f"Site activity rate {sharepoint_summary.get('site_activity_rate', 0)}%.")
-    add_metric("SharePoint", "Total Files", sharepoint_summary.get("total_files", 0), f"Average files per site {sharepoint_summary.get('avg_files_per_site', 0)}.")
-    add_metric("OneDrive", "Active Accounts", onedrive_summary.get("active_accounts", 0), f"Adoption rate {onedrive_summary.get('adoption_rate', 0)}%.")
-    add_metric("OneDrive", "Storage Used (GB)", onedrive_summary.get("storage_used_gb", 0), f"Average files per active account {onedrive_summary.get('avg_files_per_user', 0)}.")
-    add_metric("Office Activations", "Desktop Adoption Rate", activations_summary.get("desktop_adoption_rate", 0), f"Windows users {activations_summary.get('windows_users', 0)}, Mac users {activations_summary.get('mac_users', 0)}.")
-    add_metric("Active Users Snapshot", "Office 365 Active", active_users_summary.get("office_365_active", 0), f"Exchange {active_users_summary.get('exchange_active', 0)}, Teams {active_users_summary.get('teams_active', 0)}.")
+    add_metric("Email", "Active Users", email_summary.get("active_users"))
+    add_metric("Email", "Total Sent", email_summary.get("total_sent"))
+    add_metric("Teams", "Active Users", teams_summary.get("active_users"))
+    add_metric("Teams", "Total Meetings", teams_summary.get("total_meetings"))
+    add_metric("SharePoint", "Active Sites", sharepoint_summary.get("active_sites"))
+    add_metric("SharePoint", "Total Files", sharepoint_summary.get("total_files"))
+    add_metric("OneDrive", "Active Accounts", onedrive_summary.get("active_accounts"))
+    add_metric("OneDrive", "Storage Used (GB)", onedrive_summary.get("storage_used_gb"))
+    add_metric("Office Activations", "Desktop Adoption Rate", activations_summary.get("desktop_adoption_rate"))
+    add_metric("Active Users Snapshot", "Office 365 Active", active_users_summary.get("office_365_active"))
 
     return {
         "rows": rows,
@@ -2214,6 +2318,58 @@ def _build_ai_usage_sheet(m365_client):
             "Microsoft 365 workload activity indicates potential pilot fit; it does not prove Copilot value or return on investment.",
             "Optional preview and uploaded evidence is supplemental and cannot change the core readiness decision.",
         ],
+    }
+
+
+def _build_copilot_readiness_sheet(m365_client):
+    evidence = getattr(m365_client, "copilot_readiness_export", {}) or {}
+    if not evidence or evidence.get("status") == "not_supplied":
+        return None
+    metadata = {
+        "Source File": evidence.get("source_file", ""),
+        "Report Date": evidence.get("report_date", ""),
+        "Report Period (Days)": evidence.get("report_period", ""),
+        "Exported Rows": evidence.get("total_rows", 0),
+        "Status": evidence.get("status", "unknown"),
+    }
+    rows = [{
+        "Indicator": label,
+        "True": counts.get("true", 0),
+        "False": counts.get("false", 0),
+        "Unknown": counts.get("unknown", 0),
+        **metadata,
+    } for key, label in FLAG_COLUMNS.items()
+        if isinstance(counts := (evidence.get("metrics", {}) or {}).get(key), dict)]
+    if not rows:
+        rows = [{"Indicator": "Export validation", "True": "", "False": "", "Unknown": "", **metadata}]
+    return {
+        "rows": rows,
+        "summary": evidence.get("summary", "Readiness evidence is scoped to the exported rows."),
+        "details": [
+            "True, false and unknown values are distinct. None of these flags measures actual Copilot usage.",
+            "Licensed rows do not establish tenant-wide license totals or the export's coverage of the tenant.",
+            *([evidence["error"]] if evidence.get("error") else []),
+            *(evidence.get("warnings", []) or []),
+        ],
+    }
+
+
+def _build_copilot_readiness_user_sheet(m365_client):
+    evidence = getattr(m365_client, "copilot_readiness_export", {}) or {}
+    source_rows = evidence.get("user_details", []) or []
+    if not evidence.get("available") or not source_rows:
+        return None
+    rows = [{
+        "User Principal Name": row.get("user_principal_name", ""),
+        "Report Date": row.get("report_date", ""),
+        "Report Period (Days)": row.get("report_period", ""),
+        **{label: "Unknown" if row.get(key) is None else "True" if row[key] else "False"
+           for key, label in FLAG_COLUMNS.items()},
+    } for row in source_rows]
+    return {
+        "rows": rows,
+        "summary": f"{len(rows)} exported user readiness rows were explicitly requested for the restricted workbook.",
+        "details": ["Identifiable readiness indicators are excluded from HTML. These rows are not a Copilot usage report."],
     }
 
 

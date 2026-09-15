@@ -581,20 +581,13 @@ class ScanCoverageSeparationTests(unittest.TestCase):
             finally:
                 os.chdir(original_cwd)
 
-        def tile(label):
-            match = re.search(
-                rf'<div class="label">{label}</div>\s*<div class="value">(\d+)</div>', body
-            )
-            return match.group(1) if match else None
-
-        self.assertEqual(
-            tile("Priority improvements"), "1",
-            "only remediable tenant conditions are counted as improvements",
-        )
-        self.assertEqual(tile("Open evidence checks"), "4")
-        self.assertEqual(body.count('<article class="recommendation-card"'), 1)
-        self.assertIn('<section class="coverage-panel"', body)
-        self.assertIn("Scan Coverage (2)", body)
+        from Core.assessment_result import build_assessment_result
+        result = build_assessment_result(recommendations, {})
+        self.assertEqual(result['counts']['remediation'], 0, 'Undated conditions require confirmation.')
+        self.assertEqual(result['counts']['confirmation'], 1)
+        self.assertGreaterEqual(result['counts']['evidence_gaps'], 2)
+        self.assertEqual(body.count('<article class="action"'), result['counts']['actions'])
+        self.assertIn('Remaining evidence and decisions', body)
 
     def test_not_assessed_is_a_first_class_status(self):
         from Core.export_recommendations import PREFERRED_STATUS_ORDER

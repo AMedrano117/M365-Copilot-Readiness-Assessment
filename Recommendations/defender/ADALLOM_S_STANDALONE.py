@@ -21,9 +21,11 @@ def get_recommendation(sku_name, status="Success", client=None, defender_client=
             if defender_insights.has_oauth_risks():
                 observation += ". " + ", ".join(defender_insights.oauth_metrics)
                 recommendation = defender_insights.oauth_recommendation
+            elif defender_insights.source_was_read('oauth_apps'):
+                # The specific app-risk source was completely read
+                observation += ". No high-risk OAuth apps were returned by the completed app-risk query"
             else:
-                # Clean status - no OAuth risks
-                observation += ". No high-risk OAuth apps detected"
+                observation += ". App-risk evidence was not completely collected; application risk remains unverified"
         
         return new_recommendation(
             service="Defender",

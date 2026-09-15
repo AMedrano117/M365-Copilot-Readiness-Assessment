@@ -9,6 +9,7 @@ from pathlib import Path
 from .collector_registry import COLLECTOR_REGISTRY, selected_collector_ids
 from .get_graph_client import GRAPH_SCOPE, GraphRequestError, get_api_client
 from .orchestrator_powershell import _launch_powershell
+from . import console_reporting as console
 
 
 READY = "Ready"
@@ -357,12 +358,17 @@ def connection_status_to_availability(status):
 
 def print_connection_results(results, detailed=True):
     if detailed:
-        print("\nCOLLECTOR CONNECTIONS")
-        print("=" * 80)
+        console.section('Collector connections')
+        console.status('Checks cover selected permissions and representative requests. '
+                       'The live run reports whether each dataset was collected successfully.')
         width = max((len(item["collector"]) for item in results), default=20)
         for item in results:
             detail = f" — {item['reason']}" if item.get("reason") else ""
-            print(f"{item['collector']:<{width}}  {item['status']}{detail}")
+            message = f"{item['collector']:<{width}}  {item['status']}{detail}"
+            if item['status'] == NOT_SELECTED:
+                console.detail(message)
+            else:
+                console.status(message, tone='success' if item['status'] == READY else 'warning')
     else:
         expected_sign_ins = [
             item for item in results
@@ -370,13 +376,16 @@ def print_connection_results(results, detailed=True):
         ]
         actionable = [
             item for item in results
-            if item.get("status") in ACTIONABLE and item not in expected_sign_ins
+            if item.get("status") in ACTIONABLE | {FAILED, LICENSE, NOT_PROVISIONED} and item not in expected_sign_ins
         ]
         if actionable:
             names = ", ".join(item["collector"] for item in actionable)
-            print(f"Connection preflight: {len(actionable)} source(s) need attention ({names}).")
+            console.status(f"Connection preflight: {len(actionable)} source(s) need attention ({names}).", tone='warning')
+            for item in actionable:
+                if item.get('reason'):
+                    console.status(f"{item['collector']}: {item['reason']}", tone='warning')
         else:
-            print("Connection preflight: selected non-interactive sources are usable.")
+            console.detail('Connection preflight: selected non-interactive sources are usable.')
         if expected_sign_ins:
             names = ", ".join(item["collector"] for item in expected_sign_ins)
-            print(f"Browser sign-in will follow for: {names}.")
+            console.detail(f"Browser sign-in will follow for: {names}.")

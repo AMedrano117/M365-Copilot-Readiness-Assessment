@@ -4,11 +4,6 @@ import csv
 from datetime import datetime, timezone
 from pathlib import Path
 
-import httpx
-
-from .get_graph_client import get_shared_credential
-
-
 POWER_PLATFORM_API = "https://api.powerplatform.com"
 POWER_PLATFORM_READER_ROLE_ID = "c886ad2e-27f7-4874-8381-5849b8d8a090"
 
@@ -205,6 +200,10 @@ def load_power_platform_inventory(path):
 
 
 async def collect_power_platform_inventory_preview(tenant_id):
+    # Keep the CSV inventory loader usable without live authentication packages.
+    import httpx
+    from .get_graph_client import get_shared_credential
+
     credential = get_shared_credential()
     evidence = _base_evidence("Power Platform inventory API (preview)")
     evidence["preview"] = True

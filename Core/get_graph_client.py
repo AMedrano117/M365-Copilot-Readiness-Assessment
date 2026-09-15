@@ -8,6 +8,7 @@ explicit JSON, CSV, streaming, pagination, and source-status helpers.
 """
 
 from __future__ import annotations
+from . import console_reporting as console
 
 import asyncio
 import csv
@@ -280,11 +281,11 @@ async def get_graph_client(tenant_id=None, silent=False):
     else:
         auth_method = "certificate" if os.getenv("CERTIFICATE_PATH") else "client secret"
     if not silent:
-        print(f"[{get_timestamp()}] ℹ️     Authenticating with service principal ({auth_method})...")
+        console.detail(f"[{get_timestamp()}] ℹ️     Authenticating with service principal ({auth_method})...")
     _graph_client = GraphRestClient(_credential)
     await _graph_client._authorization_header()
     if not silent:
-        print(f"[{get_timestamp()}] ✅ Authenticated successfully")
+        console.detail(f"[{get_timestamp()}] ✅ Authenticated successfully")
     return _graph_client
 
 

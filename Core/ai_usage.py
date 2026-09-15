@@ -8,18 +8,36 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
-import httpx
-
-from .get_graph_client import get_shared_credential
-
-
 GRAPH_BASE = "https://graph.microsoft.com"
 COPILOT_PERIODS = ("D7", "D28", "D90", "D180")
 COPILOT_SKU_IDS = {
-    # Microsoft 365 Copilot user subscription (commercial).
+    # Documented paid Microsoft 365 Copilot SKUs; service plans below also
+    # recognize newer offers/bundles without guessing their SKU identifiers.
+    # https://learn.microsoft.com/entra/identity/users/licensing-service-plan-reference
     "639dec6b-bb19-468b-871c-c5c441c4b0cb",
-    "c28afa23-5a37-4837-938f-7cc48d0cca5c",
-    "f2b5e97e-f677-4bb5-8127-5c3ce7b6a64e",
+    "a809996b-059e-42e2-9866-db24b99a9782",
+    "ad9c22b3-52d7-4e7e-973c-88121ea96436",
+    "15f2e9fc-b782-4f73-bf51-81d8b7fff6f4",
+}
+COPILOT_SERVICE_PLAN_IDS = {
+    "a62f8878-de10-42f3-b68f-6149a25ceb97",  # M365_COPILOT_APPS
+    "3f30311c-6b1e-48a4-ab79-725b469da960",  # M365_COPILOT_BUSINESS_CHAT
+}
+COPILOT_SERVICE_PLAN_NAMES = {"M365_COPILOT_APPS", "M365_COPILOT_BUSINESS_CHAT"}
+# Recognizable qualifying workloads only. Exchange Foundation, Bing Chat
+# Enterprise, Copilot Studio and security/storage add-ons are not base plans.
+# This remains an estimate, not a complete product-terms eligibility audit.
+COPILOT_BASE_SERVICE_PLAN_NAMES = {
+    "EXCHANGE_S_STANDARD", "EXCHANGE_S_ENTERPRISE", "EXCHANGE_S_DESKLESS",
+    "OFFICESUBSCRIPTION", "O365_BUSINESS",
+    "SHAREPOINTSTANDARD", "SHAREPOINTENTERPRISE", "SHAREPOINTDESKLESS",
+    "TEAMS1",
+}
+COPILOT_BASE_SKU_NAMES = {
+    "SPB", "O365_BUSINESS_ESSENTIALS", "O365_BUSINESS_PREMIUM", "O365_BUSINESS",
+    "SPE_E3", "SPE_E5", "SPE_E7", "SPE_F1", "SPE_F3",
+    "STANDARDPACK", "ENTERPRISEPACK", "ENTERPRISEPREMIUM", "DESKLESSPACK",
+    "OFFICESUBSCRIPTION",
 }
 COPILOT_APPS = {
     "microsoftTeams": "Teams",
@@ -69,13 +87,17 @@ def _parse_date(value):
     return parsed.astimezone(timezone.utc)
 
 
-def _set_freshness(evidence, max_age_days):
+def _set_freshness(evidence, max_age_days, evaluation_date=None):
     parsed = _parse_date(evidence.get("refresh_date"))
     if not parsed:
         evidence["freshness"] = "Unknown"
         evidence["stale"] = False
         return evidence
-    age_days = max(0, (datetime.now(timezone.utc) - parsed).days)
+    evaluated_at = _parse_date(evaluation_date) if evaluation_date else datetime.now(timezone.utc)
+    age_days = (evaluated_at.date() - parsed.date()).days
+    if age_days < 0:
+        evidence.update(age_days=None, freshness='Future', stale=False)
+        return evidence
     evidence["age_days"] = age_days
     evidence["stale"] = age_days > max_age_days
     evidence["freshness"] = "Stale" if evidence["stale"] else "Fresh"
@@ -182,6 +204,11 @@ async def _get_report_payload(client, path):
     except Exception as exc:
         return None, "Request failed: {}".format(type(exc).__name__)
     if response.status_code == 200:
+        if response.text.lstrip().startswith(('{', '[')):
+            try:
+                return response.json(), ""
+            except (ValueError, json.JSONDecodeError):
+                return None, "Microsoft returned an unreadable report payload"
         csv_payload = _csv_report_payload(response.text)
         if csv_payload:
             return csv_payload, ""
@@ -421,15 +448,35 @@ async def collect_copilot_usage(client, include_user_detail=False):
         "Deployed" if evidence["available"] else "Unknown"
     )
 
-    user_rows = []
-    if include_user_detail:
-        detail_payload, detail_error = await _get_report_payload(
-            client,
-            "/v1.0/copilot/reports/getMicrosoft365CopilotUsageUserDetail(period='D28',version='v2')",
-        )
-        user_rows = _value_rows(detail_payload)
-        evidence["user_detail_reason"] = detail_error
-    evidence["user_detail"] = user_rows
+    # Aggregate v2 engagement on every run; retain identities only on explicit opt-in.
+    detail_payload, detail_error = await _get_report_payload(
+        client, "/v1.0/copilot/reports/getMicrosoft365CopilotUsageUserDetail(period='D28',version='v2')",
+    )
+    user_rows = list(_value_rows(detail_payload))
+    if not detail_error and not (isinstance(detail_payload, list) or
+                                isinstance(detail_payload, dict) and isinstance(detail_payload.get('value'), list)):
+        detail_error = 'Incomplete usage detail: the report rows were not returned.'
+    next_link = detail_payload.get('@odata.nextLink') if isinstance(detail_payload, dict) else None
+    seen_links = set()
+    while next_link and not detail_error:
+        from urllib.parse import urlsplit
+        target = urlsplit(str(next_link))
+        if (target.scheme != 'https' or target.netloc.lower() != 'graph.microsoft.com'
+                or not target.path.startswith('/v1.0/copilot/reports/')
+                or next_link in seen_links or len(seen_links) >= 1000):
+            detail_error = 'Incomplete usage detail: an unsupported or repeated paging link was returned.'
+            break
+        seen_links.add(next_link)
+        page, detail_error = await _get_report_payload(client, next_link)
+        if not detail_error and not (isinstance(page, list) or
+                                    isinstance(page, dict) and isinstance(page.get('value'), list)):
+            detail_error = 'Incomplete usage detail: a page did not contain report rows.'
+        user_rows.extend(_value_rows(page))
+        next_link = page.get('@odata.nextLink') if isinstance(page, dict) else None
+    from .copilot_activity_summary import summarize_activity
+    evidence['engagement_summary'] = summarize_activity(user_rows, error=detail_error)
+    evidence['user_detail_reason'] = detail_error
+    evidence["user_detail"] = user_rows if include_user_detail else []
     return _set_freshness(evidence, 7)
 
 
@@ -544,7 +591,12 @@ async def collect_m365_app_readiness(client):
 
 
 async def collect_license_coverage(client):
-    """Aggregate licensing without retaining user identities; handles every users page."""
+    """Resolve assigned tenant products to paid Copilot plans, without user identities.
+
+    Counts describe assigned licenses, not active usage or successful provisioning.
+    A subscription catalog failure leaves the total unknown rather than asserting
+    that newer Copilot Business/bundle SKUs are unlicensed.
+    """
     evidence = _base_evidence("Microsoft Graph user licensing", "Current")
     payload, error = await _get_all_json(
         client,
@@ -554,9 +606,31 @@ async def collect_license_coverage(client):
     if payload is None:
         evidence["reason"] = error
         return evidence
+    catalog, catalog_error = await _get_all_json(client, "/v1.0/subscribedSkus")
+    catalog_valid = isinstance(catalog, dict) and isinstance(catalog.get("value"), list)
+    catalog_rows = _value_rows(catalog) if catalog_valid else []
+    catalog_by_id = {
+        str(sku.get("skuId", "")).lower(): sku for sku in catalog_rows
+        if isinstance(sku, dict) and sku.get("skuId")
+    }
+    paid_sku_ids = set(COPILOT_SKU_IDS)
+    base_sku_ids = set()
+    for sku_id, sku in catalog_by_id.items():
+        plans = [plan for plan in (sku.get("servicePlans", []) or []) if isinstance(plan, dict)]
+        plan_ids = {str(plan.get("servicePlanId", "")).lower() for plan in plans}
+        plan_names = {str(plan.get("servicePlanName", "")).upper() for plan in plans}
+        if plan_ids & COPILOT_SERVICE_PLAN_IDS or plan_names & COPILOT_SERVICE_PLAN_NAMES:
+            paid_sku_ids.add(sku_id)
+        if (plan_names & COPILOT_BASE_SERVICE_PLAN_NAMES
+                or str(sku.get("skuPartNumber", "")).upper() in COPILOT_BASE_SKU_NAMES):
+            base_sku_ids.add(sku_id)
+
     eligible = 0
     copilot_licensed = 0
+    copilot_licensed_eligible = 0
     enabled = 0
+    without_recognized_base = 0
+    unresolved_sku_ids = set()
     for row in _value_rows(payload):
         if not isinstance(row, dict) or row.get("accountEnabled") is False:
             continue
@@ -566,28 +640,58 @@ async def collect_license_coverage(client):
             for item in (row.get("assignedLicenses", []) or [])
             if isinstance(item, dict) and item.get("skuId")
         }
-        if sku_ids & COPILOT_SKU_IDS:
+        unresolved_sku_ids.update(sku_ids - catalog_by_id.keys() - COPILOT_SKU_IDS)
+        has_copilot = bool(sku_ids & paid_sku_ids)
+        has_base = bool(sku_ids & base_sku_ids)
+        if has_copilot:
             copilot_licensed += 1
-        if any(sku_id not in COPILOT_SKU_IDS for sku_id in sku_ids):
+        if has_base:
             eligible += 1
+            copilot_licensed_eligible += int(has_copilot)
+        elif sku_ids:
+            without_recognized_base += 1
+
+    catalog_complete = catalog_valid and not catalog_error and not unresolved_sku_ids
+    users_complete = not error
+    coverage_complete = catalog_complete and users_complete and not without_recognized_base
+    reasons = []
+    if error:
+        reasons.append("User licensing collection is incomplete: " + error)
+    if not catalog_valid or catalog_error:
+        reasons.append("Subscription catalog unavailable or incomplete: " + (catalog_error or "Unreadable response"))
+    if unresolved_sku_ids:
+        reasons.append("{} assigned SKU(s) could not be resolved from the subscription catalog".format(len(unresolved_sku_ids)))
+    if without_recognized_base:
+        reasons.append("{} enabled licensed user(s) have no recognized qualifying base plan; eligibility is not established".format(without_recognized_base))
     evidence.update({
         "available": True,
-        "availability_status": "available",
-        "reason": "",
+        "availability_status": "available" if coverage_complete else "partial",
+        "reason": "; ".join(reasons),
         "total_users": len(_value_rows(payload)),
         "enabled_users": enabled,
         "eligible_users": eligible,
-        "copilot_licensed_users": copilot_licensed,
-        "copilot_license_coverage": round(copilot_licensed * 100 / eligible, 2) if eligible else None,
-        "coverage_population": "enabled users with at least one assigned non-Copilot base license (tenant-derived eligibility estimate)",
+        "copilot_licensed_users": copilot_licensed if catalog_complete and users_complete else None,
+        "known_copilot_licensed_users": copilot_licensed,
+        "copilot_license_coverage": (
+            round(copilot_licensed_eligible * 100 / eligible, 2)
+            if eligible and coverage_complete else None
+        ),
+        "coverage_population": "enabled users with recognized qualifying Microsoft 365 workload/base plans (tenant-derived eligibility estimate)",
+        "license_detection_basis": "assigned paid Microsoft 365 Copilot SKU or service-plan identity; includes qualifying Business offers and bundles, excludes Chat-only plans",
+        "subscription_catalog_available": catalog_valid and not catalog_error,
+        "unresolved_assigned_sku_count": len(unresolved_sku_ids),
+        "users_without_recognized_base_license": without_recognized_base,
         "refresh_date": datetime.now(timezone.utc).date().isoformat(),
         "refresh_basis": "assessment collection time",
         "freshness": "Current",
         "records_collected": len(_value_rows(payload)),
         "pages_collected": (payload.get("_collection_metadata", {}) or {}).get("pages_collected", 1),
-        "truncated": (payload.get("_collection_metadata", {}) or {}).get("truncated", False),
+        "truncated": bool(error) or (payload.get("_collection_metadata", {}) or {}).get("truncated", False),
         "selected_period": "Current",
     })
+    from .copilot_admin_review import subscription_capacity
+    evidence['copilot_subscription_capacity'] = subscription_capacity(
+        catalog_rows, paid_sku_ids, complete=catalog_valid and not catalog_error)
     return evidence
 
 
@@ -769,6 +873,10 @@ async def collect_shadow_ai_usage(client):
 
 
 async def collect_ai_usage(include_user_detail=False, copilot_dashboard_export=None, preview_collectors="none"):
+    # Offline CSV parsing does not require the Graph/Azure or HTTP dependencies.
+    import httpx
+    from .get_graph_client import get_shared_credential
+
     credential = get_shared_credential()
     token = credential.get_token("https://graph.microsoft.com/.default")
     async with httpx.AsyncClient(

@@ -16,7 +16,7 @@ Feature files get pre-computed metrics via simple dict access - no parsing overh
 def get_sites_observation(m365_insights):
     """
     Generate SharePoint sites observation text.
-    
+
     Args:
         m365_insights: dict from extract_m365_insights_from_client()
     
@@ -70,15 +70,27 @@ def get_users_observation(m365_insights):
         return ""
     
     total_users = m365_insights.get('total_users', 0)
-    copilot_licensed = m365_insights.get('copilot_licensed_users', 0)
+    copilot_licensed = m365_insights.get('copilot_licensed_users')
     license_coverage = m365_insights.get('copilot_license_coverage')
     
     if total_users == 0:
         return "User data unavailable (User.Read.All permission may be missing)"
     
-    observation_parts = [f"{total_users} total users"]
-    
-    if copilot_licensed > 0:
+    observation_parts = [
+        f"{total_users} users returned (collection incomplete)"
+        if m365_insights.get('user_data_sampled') else f"{total_users} total users"
+    ]
+
+    if copilot_licensed is None:
+        known = m365_insights.get('known_copilot_licensed_users')
+        licensing_text = "Copilot license count not established"
+        if known:
+            licensing_text += f" (at least {known} assigned licenses confirmed)"
+        reason = m365_insights.get('copilot_license_coverage_reason')
+        if reason:
+            licensing_text += f": {reason}"
+        observation_parts.append(licensing_text)
+    elif copilot_licensed > 0:
         population = m365_insights.get('copilot_license_coverage_population', 'the estimated eligible population')
         coverage_text = "coverage not calculated" if license_coverage is None else f"{license_coverage}% license coverage of {population}"
         observation_parts.append(f"{copilot_licensed} with Copilot licenses ({coverage_text})")
@@ -102,12 +114,14 @@ def get_copilot_adoption_recommendation(m365_insights):
         return ""
     
     total_users = m365_insights.get('total_users', 0)
-    copilot_licensed = m365_insights.get('copilot_licensed_users', 0)
+    copilot_licensed = m365_insights.get('copilot_licensed_users')
     license_coverage = m365_insights.get('copilot_license_coverage')
     
     if total_users == 0:
         return ""
     
+    if copilot_licensed is None:
+        return "Confirm access to user license assignments and the tenant subscription catalog, then rerun licensing collection. Review existing entitlements before making Copilot rollout or license changes."
     if copilot_licensed == 0:
         return "Define a bounded pilot from the approved use cases and intended-user profile. Establish the customer's outcome and risk measures before assigning Copilot licenses."
     elif license_coverage is not None and license_coverage < 10:
@@ -257,15 +271,14 @@ def get_total_users(m365_insights):
     return m365_insights.get('total_users', 0) if m365_insights else 0
 
 def get_copilot_licensed_count(m365_insights):
-    """Get number of users with Copilot licenses"""
-    return m365_insights.get('copilot_licensed_users', 0) if m365_insights else 0
+    """Get the assigned Copilot license count, or None when not established."""
+    return m365_insights.get('copilot_licensed_users') if m365_insights else None
 
 def get_copilot_adoption_percentage(m365_insights):
     """Compatibility accessor: returns license coverage, not active adoption."""
     if not m365_insights:
-        return 0
-    value = m365_insights.get('copilot_license_coverage')
-    return value if value is not None else 0
+        return None
+    return m365_insights.get('copilot_license_coverage')
 
 def is_user_data_sampled(m365_insights):
     """Check if user data is sampled (>999 users - only first 999 retrieved)"""

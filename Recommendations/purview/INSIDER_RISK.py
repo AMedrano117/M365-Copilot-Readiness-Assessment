@@ -1,3 +1,4 @@
+from Core.source_evidence import source_is_complete
 """
 Insider Risk Management - Copilot & Agent Adoption Recommendation
 """
@@ -36,7 +37,7 @@ async def get_recommendation(sku_name, status="Success", client=None, purview_cl
     
     # Check deployment status from PowerShell data
     deployment_recs = []
-    if status == "Success" and purview_client and hasattr(purview_client, 'insider_risk'):
+    if status == "Success" and source_is_complete(purview_client, "insider_risk", getattr(purview_client, "insider_risk", None)):
         insider_risk_data = purview_client.insider_risk
         
         if insider_risk_data.get('available'):

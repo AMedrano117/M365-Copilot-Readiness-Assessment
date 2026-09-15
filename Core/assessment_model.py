@@ -282,6 +282,13 @@ def enrich_assessment_records(records):
     return [enrich_assessment_record(record) for record in (records or [])]
 
 
+def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation_date=None, expected_tenant_id=None):
+    """Public entry point for the shared evidence-qualified assessment result."""
+    from .assessment_result import build_assessment_result as build
+    return build(recommendations, evidence_bundle, evaluation_date=evaluation_date,
+                 expected_tenant_id=expected_tenant_id)
+
+
 def summarize_readiness(records):
     enriched = enrich_assessment_records(records)
     actions = [r for r in enriched if r.get("Disposition") == DISPOSITION_ACTION]
@@ -299,7 +306,11 @@ def summarize_readiness(records):
     high = [r for r in actions if r.get("Priority") == "High"]
     medium = [r for r in actions if r.get("Priority") == "Medium"]
 
-    if critical:
+    offline_coverage = any(r.get('FindingKey') == 'offline.tenant_coverage' for r in decision_coverage)
+    if offline_coverage:
+        decision = "Assessment incomplete"
+        rationale = "The offline evidence does not include a current tenant collection. Review the available findings, but tenant readiness is not established."
+    elif critical:
         decision = "Not ready for pilot"
         noun = "condition" if len(critical) == 1 else "conditions"
         rationale = f"{len(critical)} critical {noun} require remediation before AI access is expanded."

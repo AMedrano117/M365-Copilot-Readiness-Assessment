@@ -5,6 +5,7 @@ Fetches and caches: Conditional Access policies, MFA registration, Identity Prot
 PIM, Access Reviews, Device Compliance, B2B settings, and Application Consent data.
 Used for enhanced Entra observations focused on Copilot adoption.
 """
+from . import console_reporting as console
 import asyncio
 import base64
 import httpx
@@ -150,15 +151,16 @@ async def _fetch_graph_collection_via_http(path, params=None, max_pages=100, hea
     try:
         while next_url and pages < max_pages:
             response = await http_client.get(next_url, params=next_params, headers=headers)
-            if response.status_code in (401, 403):
+            if response.status_code >= 400:
                 return {
                     'available': False,
-                    'availability_status': 'unavailable',
+                    'availability_status': 'partial' if pages else 'unavailable',
                     'status_code': response.status_code,
-                    'value': [],
+                    'error': _graph_error_detail(response),
+                    'value': results,
                     'records_collected': len(results),
                     'pages_collected': pages,
-                    'truncated': False,
+                    'truncated': bool(pages),
                 }
 
             response.raise_for_status()
@@ -193,15 +195,31 @@ async def _fetch_graph_collection_via_http(path, params=None, max_pages=100, hea
         await http_client.aclose()
 
 
+def _graph_error_detail(response):
+    """Keep the Graph explanation, without response headers, credentials or tracebacks."""
+    from .orchestrator_powershell import _sanitize_collector_detail
+    detail = f'Microsoft Graph HTTP {response.status_code}'
+    try:
+        body = response.json()
+        error = body.get('error') if isinstance(body, dict) else None
+        if isinstance(error, dict):
+            parts = [str(error[key]) for key in ('code', 'message') if isinstance(error.get(key), str)]
+            if parts:
+                detail += ': ' + ' - '.join(parts)
+    except (ValueError, TypeError):
+        pass
+    return ' '.join(_sanitize_collector_detail(detail).split())[:1000]
+
+
 async def _fetch_graph_object_via_http(path):
     """Fetch a Graph singleton while preserving the same collection-status contract."""
     http_client = await _get_graph_http_client()
     try:
         response = await http_client.get(path)
-        if response.status_code in (401, 403):
+        if response.status_code >= 400:
             return {
                 'available': False, 'availability_status': 'unavailable',
-                'status_code': response.status_code, 'object': None,
+                'status_code': response.status_code, 'object': None, 'error': _graph_error_detail(response),
                 'records_collected': 0, 'pages_collected': 0, 'truncated': False,
             }
         response.raise_for_status()
@@ -460,23 +478,10 @@ async def get_entra_client(graph_client, tenant_id=None, preview_collectors='non
     import sys
     from .spinner import _stdout_lock, get_timestamp
     
-    # Show initial progress bar
+    # Independent collectors share stdout; emit complete lines and no simulated percentage.
     with _stdout_lock:
-        sys.stdout.write(f'\r[{get_timestamp()}]   Entra Data Gathering    [░░░░░░░░░░░░░░░░░░░░]   0%')
+        console.detail(f'[{get_timestamp()}]   Entra data collection started.\n')
         sys.stdout.flush()
-    
-    # Create progress update task
-    async def update_progress():
-        for i in range(1, 101):
-            await asyncio.sleep(0.2)  # ~20 seconds total
-            progress = i / 100
-            filled = int(20 * progress)
-            bar = '█' * filled + '░' * (20 - filled)
-            with _stdout_lock:
-                sys.stdout.write(f'\r[{get_timestamp()}]   Entra Data Gathering    [{bar}] {i:3d}%')
-                sys.stdout.flush()
-    
-    progress_task = asyncio.create_task(update_progress())
     
     try:
         # Phase 1 uses the shared pagination-aware REST client for every collection.
@@ -515,8 +520,10 @@ async def get_entra_client(graph_client, tenant_id=None, preview_collectors='non
             # v1.0 documents expansion of principal. Role names are resolved from the
             # separately paginated roleDefinitions collection.
             'role_assignments': ("/v1.0/roleManagement/directory/roleAssignments", {'$expand': 'principal'}, None),
-            'role_eligibility_schedules': ("/v1.0/roleManagement/directory/roleEligibilitySchedules", {'$top': '999', '$expand': 'principal,roleDefinition'}, None),
-            'role_assignment_schedules': ("/v1.0/roleManagement/directory/roleAssignmentSchedules", {'$top': '999', '$expand': 'principal,roleDefinition'}, None),
+            # Schedule list endpoints document select/filter/expand, not a client page size.
+            # Use the service's paging and follow every returned nextLink.
+            'role_eligibility_schedules': ("/v1.0/roleManagement/directory/roleEligibilitySchedules", {'$expand': 'principal,roleDefinition'}, None),
+            'role_assignment_schedules': ("/v1.0/roleManagement/directory/roleAssignmentSchedules", {'$expand': 'principal,roleDefinition'}, None),
             'access_reviews': ("/v1.0/identityGovernance/accessReviews/definitions", {}, None),
             'managed_devices': ("/v1.0/deviceManagement/managedDevices", {'$top': '999'}, None),
             'compliance_policies': ("/v1.0/deviceManagement/deviceCompliancePolicies", {'$top': '999'}, None),
@@ -540,6 +547,7 @@ async def get_entra_client(graph_client, tenant_id=None, preview_collectors='non
                 if isinstance(_task_result, dict) and 'available' in _task_result:
                     _reason = _task_result.get('error', '') or (f"HTTP {_task_result.get('status_code')}" if _task_result.get('status_code') else '')
                     if _task_result.get('status_code') == 403 and _task_name in {'risky_users', 'risk_detections'}:
+                        _service_reason = _reason
                         _required_permission = (
                             'IdentityRiskyUser.Read.All' if _task_name == 'risky_users'
                             else 'IdentityRiskEvent.Read.All'
@@ -548,15 +556,18 @@ async def get_entra_client(graph_client, tenant_id=None, preview_collectors='non
                             _reason = (
                                 f"Microsoft Graph returned HTTP 403 even though {_required_permission} is present. "
                                 "Full Identity Protection risk data requires Microsoft Entra ID P2 or another "
-                                "qualifying Entra entitlement; Microsoft Entra ID P1 provides only limited risk data."
+                                "qualifying Entra entitlement; Microsoft Entra ID P1 provides only limited portal risk data. "
+                                "Verify licensing and the service response; HTTP 403 alone does not establish the cause."
                             )
                         else:
                             _reason = (
                                 f"Microsoft Graph returned HTTP 403. Grant the application permission "
                                 f"{_required_permission}, provide tenant-wide admin consent, and rerun."
                             )
+                        if _service_reason and _service_reason != 'HTTP 403':
+                            _reason += ' Service response: ' + _service_reason
                         with _stdout_lock:
-                            print(f"[{get_timestamp()}] ℹ️     Entra: {_task_name.replace('_', ' ').title()} unavailable — {_reason}")
+                            console.status(f"   Entra: {_task_name.replace('_', ' ').title()} unavailable — {_reason}", tone='warning')
                     _status = {
                         'availability_status': _task_result.get('availability_status', 'available' if _task_result.get('available') else 'unavailable'),
                         'available': bool(_task_result.get('available')),
@@ -649,7 +660,7 @@ async def get_entra_client(graph_client, tenant_id=None, preview_collectors='non
                 
             except Exception as e:
                 with _stdout_lock:
-                    print(f"[{get_timestamp()}] ⚠️  Entra: CA policies parse error: {e}")
+                    console.status(f"Entra: CA policies parse error: {e}", tone='error')
         
         # Process Authentication Methods Registration
         auth_response = phase1_results.get('auth_methods')
@@ -692,7 +703,7 @@ async def get_entra_client(graph_client, tenant_id=None, preview_collectors='non
                 
             except Exception as e:
                 with _stdout_lock:
-                    print(f"[{get_timestamp()}] ⚠️  Entra: Auth methods parse error: {e}")
+                    console.status(f"Entra: Auth methods parse error: {e}", tone='error')
         
         # Process Risky Users
         risky_response = phase1_results.get('risky_users')
@@ -725,7 +736,7 @@ async def get_entra_client(graph_client, tenant_id=None, preview_collectors='non
                 
             except Exception as e:
                 with _stdout_lock:
-                    print(f"[{get_timestamp()}] ⚠️  Entra: Risky users parse error: {e}")
+                    console.status(f"Entra: Risky users parse error: {e}", tone='error')
         
         # Process Risk Detections
         risk_det_response = phase1_results.get('risk_detections')
@@ -744,7 +755,7 @@ async def get_entra_client(graph_client, tenant_id=None, preview_collectors='non
                 
             except Exception as e:
                 with _stdout_lock:
-                    print(f"[{get_timestamp()}] ⚠️  Entra: Risk detections parse error: {e}")
+                    console.status(f"Entra: Risk detections parse error: {e}", tone='error')
         
         # Process role definitions before assignments so built-in role template IDs and
         # human-readable role names are available to both scoring and workbook evidence.
@@ -768,7 +779,7 @@ async def get_entra_client(graph_client, tenant_id=None, preview_collectors='non
                 
             except Exception as e:
                 with _stdout_lock:
-                    print(f"[{get_timestamp()}] ⚠️  Entra: Role assignments parse error: {e}")
+                    console.status(f"Entra: Role assignments parse error: {e}", tone='error')
         
         # Process Role Eligibility Schedules (PIM - Eligible)
         role_elig_response = phase1_results.get('role_eligibility_schedules')
@@ -782,7 +793,7 @@ async def get_entra_client(graph_client, tenant_id=None, preview_collectors='non
                 
             except Exception as e:
                 with _stdout_lock:
-                    print(f"[{get_timestamp()}] ⚠️  Entra: Role eligibility parse error: {e}")
+                    console.status(f"Entra: Role eligibility parse error: {e}", tone='error')
         
         # Process Role Assignment Schedules (PIM - Time-bound active)
         role_sched_response = phase1_results.get('role_assignment_schedules')
@@ -813,7 +824,7 @@ async def get_entra_client(graph_client, tenant_id=None, preview_collectors='non
                 
             except Exception as e:
                 with _stdout_lock:
-                    print(f"[{get_timestamp()}] ⚠️  Entra: Role schedules parse error: {e}")
+                    console.status(f"Entra: Role schedules parse error: {e}", tone='error')
         
         # Calculate PIM metrics
         if client_obj.pim_summary['total_eligible_assignments'] > 0:
@@ -854,7 +865,7 @@ async def get_entra_client(graph_client, tenant_id=None, preview_collectors='non
                 
             except Exception as e:
                 with _stdout_lock:
-                    print(f"[{get_timestamp()}] ⚠️  Entra: Access reviews parse error: {e}")
+                    console.status(f"Entra: Access reviews parse error: {e}", tone='error')
         
         # Process Managed Devices
         devices_response = phase1_results.get('managed_devices')
@@ -894,7 +905,7 @@ async def get_entra_client(graph_client, tenant_id=None, preview_collectors='non
                 
             except Exception as e:
                 with _stdout_lock:
-                    print(f"[{get_timestamp()}] ⚠️  Entra: Devices parse error: {e}")
+                    console.status(f"Entra: Devices parse error: {e}", tone='error')
         
         # Process Compliance Policies
         compliance_response = phase1_results.get('compliance_policies')
@@ -908,7 +919,7 @@ async def get_entra_client(graph_client, tenant_id=None, preview_collectors='non
                 
             except Exception as e:
                 with _stdout_lock:
-                    print(f"[{get_timestamp()}] ⚠️  Entra: Compliance policies parse error: {e}")
+                    console.status(f"Entra: Compliance policies parse error: {e}", tone='error')
         
         # Process Groups with Licenses
         groups_response = phase1_results.get('groups')
@@ -941,7 +952,7 @@ async def get_entra_client(graph_client, tenant_id=None, preview_collectors='non
                 
             except Exception as e:
                 with _stdout_lock:
-                    print(f"[{get_timestamp()}] ⚠️  Entra: Groups parse error: {e}")
+                    console.status(f"Entra: Groups parse error: {e}", tone='error')
         
         # Process Guest Users
         guests_response = phase1_results.get('guests')
@@ -961,7 +972,7 @@ async def get_entra_client(graph_client, tenant_id=None, preview_collectors='non
                 
             except Exception as e:
                 with _stdout_lock:
-                    print(f"[{get_timestamp()}] ⚠️  Entra: Guest users parse error: {e}")
+                    console.status(f"Entra: Guest users parse error: {e}", tone='error')
         
         # Process Cross-Tenant Access Policy
         cross_tenant_response = phase1_results.get('cross_tenant_policy')
@@ -982,7 +993,7 @@ async def get_entra_client(graph_client, tenant_id=None, preview_collectors='non
                 
             except Exception as e:
                 with _stdout_lock:
-                    print(f"[{get_timestamp()}] ⚠️  Entra: Cross-tenant policy parse error: {e}")
+                    console.status(f"Entra: Cross-tenant policy parse error: {e}", tone='error')
         
         # Process Service Principals. OAuth grant clientId/resourceId values are service-
         # principal object IDs, not application IDs, so retain an object-ID index for joins.
@@ -999,7 +1010,7 @@ async def get_entra_client(graph_client, tenant_id=None, preview_collectors='non
                         service_principal_by_id[sp_id] = sp
             except Exception as e:
                 with _stdout_lock:
-                    print(f"[{get_timestamp()}] ⚠️  Entra: Service principals parse error: {e}")
+                    console.status(f"Entra: Service principals parse error: {e}", tone='error')
 
         # Process OAuth Permission Grants and count unique client applications rather than
         # grant rows. Publisher verification is evaluated only for apps with an actual grant;
@@ -1066,7 +1077,7 @@ async def get_entra_client(graph_client, tenant_id=None, preview_collectors='non
                 client_obj.consent_summary['unverified_publishers'] = len(unverified_external_clients)
             except Exception as e:
                 with _stdout_lock:
-                    print(f"[{get_timestamp()}] ⚠️  Entra: OAuth grants parse error: {e}")
+                    console.status(f"Entra: OAuth grants parse error: {e}", tone='error')
         
         # Process Permission Grant Policies
         consent_pol_response = phase1_results.get('consent_policies')
@@ -1082,7 +1093,7 @@ async def get_entra_client(graph_client, tenant_id=None, preview_collectors='non
                 
             except Exception as e:
                 with _stdout_lock:
-                    print(f"[{get_timestamp()}] ⚠️  Entra: Consent policies parse error: {e}")
+                    console.status(f"Entra: Consent policies parse error: {e}", tone='error')
 
         # Process application sign-in summary (30-day activity)
         app_signin_summary = phase1_results.get('app_signin_summary')
@@ -1177,7 +1188,7 @@ async def get_entra_client(graph_client, tenant_id=None, preview_collectors='non
                 
             except Exception as e:
                 with _stdout_lock:
-                    print(f"[{get_timestamp()}] ⚠️  Entra: Auth policy parse error: {e}")
+                    console.status(f"Entra: Auth policy parse error: {e}", tone='error')
         
         # Process Sign-in Logs
         signin_response = phase1_results.get('signin_logs')
@@ -1227,7 +1238,7 @@ async def get_entra_client(graph_client, tenant_id=None, preview_collectors='non
                 
             except Exception as e:
                 with _stdout_lock:
-                    print(f"[{get_timestamp()}] ⚠️  Entra: Sign-in logs parse error: {e}")
+                    console.status(f"Entra: Sign-in logs parse error: {e}", tone='error')
         
         # ====================================================================
         # GLOBAL SECURE ACCESS (Entra Internet Access) - NetworkAccess API (Beta)
@@ -1244,9 +1255,8 @@ async def get_entra_client(graph_client, tenant_id=None, preview_collectors='non
                     client_obj.risk_summary['risky_users_total'] >= 0 or
                     client_obj.device_summary['total_managed'] >= 0):
                 client_obj.available = True
-            progress_task.cancel()
             with _stdout_lock:
-                sys.stdout.write(f'\r[{get_timestamp()}]   ✓ Entra Data Gathering    [████████████████████] 100%\n')
+                console.detail(f'[{get_timestamp()}]   Entra data collection finished; see source coverage for completeness.\n')
                 sys.stdout.flush()
             return client_obj
         try:
@@ -1333,7 +1343,7 @@ async def get_entra_client(graph_client, tenant_id=None, preview_collectors='non
                     client_obj.private_access_summary['active_connectors'] = active_count
                     
                     with _stdout_lock:
-                        print(f"[{get_timestamp()}] ✅  Entra: {len(connectors)} Private Access connector(s) found ({active_count} active)")
+                        console.detail(f"[{get_timestamp()}] ✅  Entra: {len(connectors)} Private Access connector(s) found ({active_count} active)")
                 
                 # Application Segments (Private Access Apps)
                 try:
@@ -1349,7 +1359,7 @@ async def get_entra_client(graph_client, tenant_id=None, preview_collectors='non
                         client_obj.private_access_summary['enabled'] = True
                         
                         with _stdout_lock:
-                            print(f"[{get_timestamp()}] ✅  Entra: {len(apps)} Private Access app segment(s) configured")
+                            console.detail(f"[{get_timestamp()}] ✅  Entra: {len(apps)} Private Access app segment(s) configured")
                 except httpx.HTTPStatusError:
                     # App segments endpoint may not be available
                     pass
@@ -1371,35 +1381,35 @@ async def get_entra_client(graph_client, tenant_id=None, preview_collectors='non
                     client_obj.private_access_summary['status'] = 'Unavailable'
                     client_obj.private_access_summary['error'] = detail
                     with _stdout_lock:
-                        print(f"[{get_timestamp()}] ℹ️     Entra: Global Secure Access API is unavailable despite the required application permission; verify tenant onboarding and licensing")
+                        console.status(f"   Entra: Global Secure Access API is unavailable despite the required application permission; verify tenant onboarding and licensing", tone='warning')
                 else:
                     client_obj.network_access_summary['status'] = 'PermissionDenied'
                     client_obj.network_access_summary['error'] = 'NetworkAccess.Read.All permission required'
                     client_obj.private_access_summary['status'] = 'PermissionDenied'
                     client_obj.private_access_summary['error'] = 'NetworkAccess.Read.All permission required'
                     with _stdout_lock:
-                        print(f"[{get_timestamp()}] ℹ️     Entra: Global Secure Access API access denied (requires NetworkAccess.Read.All permission)")
+                        console.status(f"   Entra: Global Secure Access API access denied (requires NetworkAccess.Read.All permission)", tone='warning')
             elif e.response.status_code == 404:
                 client_obj.network_access_summary['status'] = 'NotLicensed'
                 client_obj.network_access_summary['error'] = 'Entra Suite license required'
                 client_obj.private_access_summary['status'] = 'NotLicensed'
                 client_obj.private_access_summary['error'] = 'Entra Suite license required'
                 with _stdout_lock:
-                    print(f"[{get_timestamp()}] ℹ️     Entra: Global Secure Access not available (requires Entra Suite license)")
+                    console.status(f"   Entra: Global Secure Access not available (requires Entra Suite license)", tone='warning')
             else:
                 client_obj.network_access_summary['status'] = 'Error'
                 client_obj.network_access_summary['error'] = f'HTTP {e.response.status_code}'
                 client_obj.private_access_summary['status'] = 'Error'
                 client_obj.private_access_summary['error'] = f'HTTP {e.response.status_code}'
                 with _stdout_lock:
-                    print(f"[{get_timestamp()}] ⚠️  Entra: Global Secure Access API error - HTTP {e.response.status_code}")
+                    console.status(f"Entra: Global Secure Access API error - HTTP {e.response.status_code}", tone='error')
         except Exception as e:
             client_obj.network_access_summary['status'] = 'Error'
             client_obj.network_access_summary['error'] = str(e)
             client_obj.private_access_summary['status'] = 'Error'
             client_obj.private_access_summary['error'] = str(e)
             with _stdout_lock:
-                print(f"[{get_timestamp()}] ⚠️  Entra: Global Secure Access data fetch failed - {str(e)}")
+                console.status(f"Entra: Global Secure Access data fetch failed - {str(e)}", tone='error')
         
         # Mark client as available if we got at least some data
         if (client_obj.ca_summary['total'] > 0 or 
@@ -1409,28 +1419,20 @@ async def get_entra_client(graph_client, tenant_id=None, preview_collectors='non
             client_obj.available = True
         else:
             with _stdout_lock:
-                print(f"[{get_timestamp()}] ⚠️  Entra: Limited data available (check permissions)")
+                console.status(f"Entra: Limited data available (check permissions)", tone='warning')
         
-        # Complete progress bar
-        progress_task.cancel()
         with _stdout_lock:
-            sys.stdout.write(f'\r[{get_timestamp()}]   ✓ Entra Data Gathering    [████████████████████] 100%\n')
+            console.detail(f'[{get_timestamp()}]   Entra data collection finished; see source coverage for completeness.\n')
             sys.stdout.flush()
         
         return client_obj
         
     except HttpResponseError as e:
-        progress_task.cancel()
         with _stdout_lock:
-            sys.stdout.write(f'\r[{get_timestamp()}]   ✓ Entra Data Gathering    [████████████████████] 100%\n')
-            sys.stdout.flush()
-            print(f"[{get_timestamp()}] ⚠️  Entra: HTTP {e.status_code} - {e.message}")
+            console.status(f'Entra: HTTP {e.status_code} - {e.message}', tone='error')
         return client_obj
     
     except Exception as e:
-        progress_task.cancel()
         with _stdout_lock:
-            sys.stdout.write(f'\r[{get_timestamp()}]   ✓ Entra Data Gathering    [████████████████████] 100%\n')
-            sys.stdout.flush()
-            print(f"[{get_timestamp()}] ❌    Entra: Unexpected error - {str(e)}")
+            console.status(f"Entra: Unexpected error - {str(e)}", tone='error')
         return client_obj

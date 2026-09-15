@@ -1,527 +1,276 @@
-# Run Automated Readiness Assessment
+﻿# Operator runbook
 
-Use the guidance below to run the Automated Readiness Assessment for Microsoft 365 Copilot and Agents. Refer to [Automated Readiness Assessment](README.md) to learn more about the assessment capabilities before running the tool.
+This is the canonical workflow for Microsoft 365 Copilot readiness: **prepare → collect and save → add exports → rebuild and review**. Use one tenant per assessment folder. Collection reads supported configuration and existing reports; it does not start Microsoft scans or change tenant policies. Application setup is a separate operation.
 
-## Prerequisites
+For another customer, start with the [new-tenant assessment checklist](NEW_TENANT_CHECKLIST.md), including access, portal captures, structured exports and pilot-owner reviews.
 
-- **Microsoft 365 Tenant**: Active M365 tenant with licenses
-- **Admin Access**: Appropriate role assignments based on services to assess ([see table below](#minimum-admin-roles))
-- **Python Environment**: Python 3.8 or later installed
-- **Network Access**: Connectivity to Microsoft Graph, Defender, Power Platform, and Purview APIs
-- **Repository Clone**: Local copy of this repository
+## 1. Prepare
 
-**Minimum Admin Roles:**
-
-| Service Area | Minimum Role | Authentication Method |
-|--------------|--------------|----------------------|
-| Service Principal Setup | Global Administrator or Application Administrator | One-time setup |
-| M365 + Entra Licenses | Any user account (read-only) | Service Principal |
-| Defender Security Data | Security Reader | Service Principal |
-| SharePoint governance | SharePoint Administrator; SAM reports can additionally require SharePoint Advanced Management Administrator | Browser or application certificate |
-| Purview core configuration | Compliance Administrator or the applicable read-only Purview role groups | Browser or application certificate |
-| Power Platform inventory export | Global Reader or another inventory-supported role | Portal export |
-
-**Note:** It is recommended that Microsoft 365 Administrators run this assessment. Alternatively, assign the appropriate roles listed above to designated users who will perform the assessment.
-
-Permissions and role assignments are tenant-specific. When assessing a different tenant, the
-app registration identified by that tenant's `CLIENT_ID` must have its own application permissions
-and admin consent. The user completing Purview or Power Platform interactive authentication must
-also hold the delegated role in that target tenant. Local PowerShell modules and cached sign-ins are
-machine-specific.
-
-## Data Collection Details
-
-The following table shows what data is collected for each service and the APIs/cmdlets used:
-
-| Service | Authentication | APIs / PowerShell Cmdlets Used | Data Collected |
-|---------|----------------|--------------------------------|----------------|
-| **M365** | Service Principal | Microsoft Graph tenant, users, groups, sites, reporting, Copilot reporting, and `/external/connections` APIs | License coverage, Copilot activation/engagement, M365 app pilot fit, sites, and connected grounding sources |
-| **Entra** | Service Principal | Microsoft Graph API:<br/>- `/identityProtection/riskyUsers`<br/>- `/identityProtection/riskDetections`<br/>- `/identity/conditionalAccess/policies`<br/>- `/policies/authorizationPolicy`<br/>- `/organization` | Risky users and risk detections when the tenant has a qualifying P2-level entitlement; conditional access policies, MFA enforcement, and external collaboration settings |
-| **Defender** | Service Principal | Graph Security alerts, incidents, Secure Score, and Defender for Endpoint `/api/machines` | Active security evidence plus device onboarding and risk. Ordinary Office traffic is never presented as AI usage. |
-| **SharePoint** | Browser or application certificate | `Get-SPOTenant`, `Get-SPOSite`, `Get-SPODataAccessGovernanceInsight`, and activity-data status cmdlets | Tenant/site sharing defaults, anonymous link behavior, legacy auth, site deviations, and existing DAG/SAM report readiness and freshness. No scan is started. |
-| **Purview** | Browser or application certificate | DLP policy/rule, sensitivity-label, retention, organization, rights-management, and audit cmdlets | Core data protection policy configuration. Specialized workloads are not queried by default. |
-| **Power Platform / Copilot Studio** | Export, or service principal for opt-in preview API | Unified Power Platform Inventory export or API | Agents, apps, flows, environments, owners, regions, managed state, and connectors. The Az.Accounts collector runs only with `--legacy-power-platform-collector`. |
-
-## Data exposure and oversharing reports
-
-Microsoft completes SharePoint Advanced Management and Purview DSPM scans asynchronously. First
-check for a recent completed result and export it. Start a new Microsoft scan only when no current
-result exists, wait for completion, and pass the export to the assessment:
+Run commands from the repository folder with Python 3.10 or later. Install dependencies before working offline:
 
 ```powershell
-python main.py --sam-report "C:\Reports\SAM" --dspm-report "C:\Reports\DSPM\assessment.csv"
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-Repeat either option to load multiple files. A directory loads supported CSV, TSV, JSON, and XLSX
-files. You can also set `SAM_DAG_REPORT_PATHS` and `DSPM_REPORT_PATHS` in the selected environment
-file. Missing, stale, or undated results are recorded in the report as Coverage items with the
-steps required to enable and run the corresponding Microsoft capability.
-
-Default freshness thresholds are 35 days for SAM and 8 days for DSPM. Override them with
-`SAM_REPORT_MAX_AGE_DAYS` and `DSPM_REPORT_MAX_AGE_DAYS` when your governance cadence differs.
-
-## Deployment Steps
-
-### 1. Install Python Dependencies
-
-Navigate to the repository folder and install required packages:
+For connected collection, complete [prereq.md](prereq.md). Reuse an existing configured application where possible. When setup or permission reconciliation is needed, have the authorized administrator run:
 
 ```powershell
-cd <path-to-repository>
-pip install -r requirements.txt
+.\setup-service-principal.ps1 -Mode Standard
 ```
 
-**Required packages:**
-- `azure-identity` and `httpx` - lightweight Microsoft Graph and service API authentication/client
-- `openpyxl` - Excel report generation
+Creating an application and granting Microsoft Graph application consent require different access. Application Administrator alone cannot grant the Graph application permissions used here; arrange Privileged Role Administrator, Global Administrator, or a suitable custom consent role. [Microsoft consent requirements](https://learn.microsoft.com/en-us/entra/identity/enterprise-apps/grant-admin-consent).
 
-The generated Microsoft Graph SDK is intentionally not installed. The assessment uses only the
-required REST endpoints, which avoids the SDK's very long generated paths on Windows.
+Start the [portal report requests](PORTAL_REPORTS_AND_OFFLINE.md#reports-to-obtain-next) early. Reuse recent completed results where suitable. Record their tenant, scope, filters, reporting period and completion date; generation can take several days.
 
-### 2. Create Service Principal
-
-Run the service principal setup script to create Azure AD app registration with required permissions:
+Create the folder for downloaded exports:
 
 ```powershell
-.\setup-service-principal.ps1
+New-Item -ItemType Directory -Force -Path ".\output\customer\exports"
 ```
 
-Use `-Mode Standard` (the default) for client-secret Graph collection with browser fallback for
-SharePoint and Purview. Use `-Mode Unattended -CertificateThumbprint <thumbprint>` (or
-`-CertificatePath`) to attach and validate certificate authentication for those PowerShell
-collectors. Unattended setup requires an explicit confirmation before adding SharePoint
-`Sites.FullControl.All`; automation can supply `-ConfirmBroadSharePointAccess`. Preview packs are
-explicit, for example `-PreviewCollectors ShadowAI`. Existing
-credentials and permissions are retained unless `-RotateCredential` or
-`-PruneUnusedPermissions` is supplied.
-
-**What the script does:**
-1. Opens browser for admin authentication (Global Administrator or Application Administrator required)
-2. Creates or reconciles the existing app registration without deleting it
-3. Builds the requested application permission set from `collector-registry.json`:
-   
-   **Microsoft Graph API:**
-   - User.Read.All - Read user profiles
-   - Organization.Read.All - Read organization info
-   - SecurityEvents.Read.All - Read security events
-   - SecurityIncident.Read.All - Read security incidents
-   - IdentityRiskyUser.Read.All - Read risky users
-   - IdentityRiskEvent.Read.All - Read risk events
-   - Policy.Read.All - Read policies
-   - Policy.Read.PermissionGrant - Read permission grant policies used by tenant consent settings
-   - RoleManagement.Read.Directory - Read directory roles
-   - UserAuthenticationMethod.Read.All - Read authentication methods
-   - AccessReview.Read.All - Read access reviews
-   - DeviceManagementManagedDevices.Read.All - Read managed devices
-   - DeviceManagementConfiguration.Read.All - Read device configurations
-   - Application.Read.All - Read applications
-   - AuditLog.Read.All - Read audit logs
-   - Reports.Read.All - Read usage reports
-   - Sites.Read.All - Read SharePoint sites
-   - ExternalConnection.Read.All - Read Graph connectors
-   Preview permissions are deliberately excluded unless `-PreviewCollectors` selects their pack.
-   `CloudApp-Discovery.Read.All` is used only for Shadow AI; `NetworkAccess.Read.All` and
-   `NetworkAccessPolicy.Read.All` are used only for Network Access.
-   
-   **Microsoft Defender for Endpoint API:**
-   - Machine.Read.All - Read machine data
-   
-4. Opens admin consent and then verifies the resulting service-principal role assignments
-5. Keeps an existing credential; a 90-day secret is created only when needed or when `-RotateCredential` is supplied
-6. Creates `.env` file with credentials (TENANT_ID, CLIENT_ID, CLIENT_SECRET)
-   - **Note:** `.env` file is excluded from git - CLIENT_SECRET is never checked into source control
-
-### 3. Configure Assessment Scope
-
-Choose **Option A** or **Option B** to configure which services to assess:
-
-**Option A: Configure in params.py**
-
-Edit `params.py` to specify your tenant and services:
-
-```python
-TENANT_ID = "contoso.onmicrosoft.com"  # or Azure AD tenant GUID
-
-# Services to analyze - valid values: "M365", "Entra", "Defender", "Purview", "Power Platform", "Copilot Studio"
-# Empty array = analyze all services
-SERVICES = []  # e.g., ["M365", "Entra"], ["Defender", "Purview"], or [] for all
-```
-
-Then run:
-```powershell
-python main.py
-```
-
-**Option B: Pass command-line switches**
-
-Override configuration using command-line arguments:
+## 2. Check access, then collect and save
 
 ```powershell
-# Specific services
-python main.py --services M365 Defender Entra
-
-# Services with spaces require double quotes
-python main.py --services "Power Platform" "Copilot Studio" Purview
-
-# Different tenant with specific services
-python main.py --tenant-id "12345678-1234-1234-1234-123456789abc" --services Purview
-
-# All services for specific tenant (empty --services flag)
-python main.py --tenant-id "contoso.onmicrosoft.com" --services
-
-# Aggregate usage is automatic. Add restricted user detail to the Excel workbook only.
-python main.py --include-user-usage-detail --report-format both
-
-# Import optional supplemental exports (the tool does not start long-running exports).
-python main.py --copilot-dashboard-export .\exports\copilot-dashboard.csv
-python main.py --power-platform-inventory .\exports\power-platform-inventory.csv
-
-# Preview collectors are disabled by default.
-python main.py --preview-collectors shadow-ai
-python main.py --preview-collectors power-platform
-python main.py --preview-collectors all
-
-# Validate selected collectors without creating reports or starting scans.
-python main.py --check-connections
-
-# Explicit compatibility fallback only; this is the only runtime path that needs Az.Accounts.
-python main.py --legacy-power-platform-collector
+.\.venv\Scripts\python.exe main.py --mode live --check-connections
+.\.venv\Scripts\python.exe main.py --mode live
 ```
 
-Connection checks return `0` when the selected configuration is usable (including legitimate
-license limitations), `2` for actionable authentication/permission/role/module gaps, and `1` for
-invalid configuration or an unexpected required-collector failure. They do not create assessment
-reports or launch Microsoft scans.
+Preflight checks access without producing an assessment or saving a collection. Its exit codes are `0` for usable configuration (including legitimate license limitations), `2` for an authentication/permission/role/module action, and `1` for invalid configuration or an unexpected failure. Review each result even when the overall check passes.
 
-**Note:** Service names with spaces (`"Power Platform"`, `"Copilot Studio"`) must be enclosed in double quotes.
+Preflight verifies selected permissions and representative requests, not every dataset request.
+Successful consent and preflight do not guarantee access to every licensed feature or a successful
+browser sign-in. The live run's per-service dataset totals and **Source collection gaps** show
+what was actually collected. If an interactive retry succeeds, use its final dataset result;
+the first failed attempt does not mean that workload is still missing.
 
-**Configuration Examples:**
-
-- **Full Assessment**: `SERVICES = []` or `--services` (analyzes all six service areas)
-- **Targeted Assessment**: `SERVICES = ["M365", "Defender", "Entra"]` or `--services M365 Defender Entra`
-- **Security Focus**: `SERVICES = ["Defender", "Entra"]` or `--services Defender Entra`
-- **Compliance Focus**: `SERVICES = ["Purview"]` or `--services Purview`
-- **Power Platform & Copilot**: `SERVICES = ["Power Platform", "Copilot Studio"]` or `--services "Power Platform" "Copilot Studio"`
-
-### SharePoint sharing and oversharing collection
-
-The default M365 run also checks SharePoint and OneDrive tenant sharing settings, site-level
-sharing configuration, and the status of existing SharePoint Advanced Management Data Access
-Governance reports. `setup-service-principal.ps1` installs the required SharePoint module, and
-`main.py` also attempts a current-user installation if the module is missing. The manual fallback is:
+The full live run automatically saves a unique collection under `output/collections/` and its adjacent portable package. At the end, find **COLLECTION INPUT (`--collection-input`)**: it gives the exact file to reuse, followed by a copyable offline command. No save switch is required. `--save-collection PATH` remains an optional custom destination:
 
 ```powershell
-Install-Module Microsoft.Online.SharePoint.PowerShell -Scope CurrentUser -Force
+.\.venv\Scripts\python.exe main.py --mode live `
+  --save-collection ".\output\customer\tenant-collection.json"
 ```
 
-Microsoft Graph does not expose these SharePoint administrative settings. With the normal
-client-secret configuration, the SharePoint-only portion therefore requests a browser sign-in
-from a SharePoint Administrator. To keep this portion unattended, configure a `.pfx` certificate
-with `SHAREPOINT_CERTIFICATE_PATH` (or its certificate-store thumbprint) and the existing
-`CLIENT_ID` and `TENANT_ID`. SharePoint app-only administrative access also requires the
-**Office 365 SharePoint Online** application permission `Sites.FullControl.All` and tenant admin
-consent. This broad permission is added only by `setup-service-principal.ps1 -Mode Unattended`
-after a certificate is supplied; Standard mode continues to use browser fallback.
+If exports are already available, include `--reports-dir ".\output\customer\exports"` in the live command. They are preserved for replay. Use `--interactive-auth fresh` when deliberately refreshing the interactive/cached collection path. In normal mode, Graph uses application authentication; SharePoint/Purview use a configured certificate or announce a browser sign-in. See [authentication requirements](prereq.md#authentication-and-permissions).
 
-The client secret remains in use for Microsoft Graph. `Connect-SPOService` supports app-only
-authentication with a certificate or managed identity, but not with a client secret.
+`--reports-dir` accepts supported structured exports and PDF captures. PDFs in that folder or
+its subfolders are automatically read using local text extraction/OCR and included with JSON
+and page previews. See [PDF import](PORTAL_REVIEW.md) for its qualifications and limits.
+The live command already produces HTML and Excel. An offline rebuild is needed only to add
+evidence or regenerate those deliverables; an immediate second run is optional.
 
-### 4. Run the Assessment
+### Read the console and copy the next command
 
-The default `python main.py` run assesses all configured service areas and automatically starts the
-core Purview collector. No separate DLP command is required. Purview results may be reused
-for eight hours; use `--interactive-auth fresh` when you need a new sign-in and collection. Using
-`--interactive-auth skip` or excluding Purview intentionally leaves these checks not assessed.
+The default console shows collection progress, warnings or failures, the deployment decision and action counts, report locations, and the final **COLLECTION INPUT** handoff. Copy its entire path into `--collection-input`, or copy the offline command printed immediately below it and add `--reports-dir` for new exports. Use the file shown there: a live package has `collection.json`; a build made only from exports or earlier reports has `rebuild.json`. Neither the HTML report, Excel workbook nor an assessment snapshot is a collection input. Preflight-only runs do not create one.
 
-**Execution Flow:**
-
-1. **Service Principal Authentication**:
-   - Tool reads credentials from `.env` file (created in step 2)
-   - Authenticates silently using CLIENT_ID and CLIENT_SECRET
-   - No browser popup - authentication is automatic
-
-2. **Data Collection Progress**:
-   - **M365, Entra, Defender**: Silent authentication via service principal
-   - **SharePoint and Purview**: Certificate first; otherwise a clearly announced browser sign-in
-   - **Power Platform & Copilot Studio**: Imported inventory by default; preview API only when selected
-   
-   See [Data Collection Details](#data-collection-details) for specific APIs and cmdlets used per service.
-   
-   ```
-   [2026-01-06 14:30:52] 🚀 Starting orchestration for: M365, Entra, Defender...
-   [2026-01-06 14:30:53] ✅ M365 licenses retrieved: 5 SKUs found
-   [2026-01-06 14:30:54] ✅ Entra identity protection: 12 risky users detected
-   [2026-01-06 14:30:56] ✅ Defender security evidence collected
-   [2026-01-06 14:31:20] 🔐 Purview: Exchange Online authentication required
-   [2026-01-06 14:31:35] ✅ Purview: 12 DLP policies retrieved
-   ```
-
-3. **Report Generation**:
-   ```
-   [2026-01-06 14:31:05] 📊 Generating recommendations report...
-   [2026-01-06 14:31:06] ✅ Report saved: Reports/m365_recommendations_20260106_143106.csv
-   ```
-
-**Estimated Execution Time:**
-- M365 + Entra only: ~10-15 seconds
-- All services (without Power Platform/Purview): ~30-45 seconds
-- Comprehensive (all services + PowerShell collectors): ~2-3 minutes
-
-## Post-Execution Steps
-
-### 1. Review Assessment Report
-
-Open the generated report from the `Reports/` folder (available in CSV and Excel formats):
-
-```
-Reports/m365_recommendations_20260106_143106.csv
-Reports/m365_recommendations_20260106_143106.xlsx
-```
-
-**Report Structure:**
-
-| Column | Description | Example Values |
-|--------|-------------|----------------|
-| Service | Service area assessed | M365, Entra, Defender, Purview, Power Platform, Copilot Studio |
-| Feature | Specific capability or control | Copilot in Apps, Conditional Access, Security Posture |
-| Status | Current state | Success, Disabled, Warning, PendingInput |
-| Priority | Implementation urgency | High, Medium, Low |
-| Observation | What was detected | "247 users with 12,450 files across 15 sites" |
-| Recommendation | Actionable next step | "Deploy Copilot training for document-heavy teams" |
-| LinkText | Reference title | "Copilot Adoption Framework" |
-| LinkUrl | Microsoft Learn link | https://learn.microsoft.com/... |
-
-### 2. Filter and Prioritize Recommendations
-
-**In Excel/CSV viewer:**
-1. Sort by **Priority** column (High → Medium → Low)
-2. Filter by **Service** to focus on specific areas
-3. Group by **Status** to identify gaps (Disabled, Warning)
-
-**Priority Definitions:**
-- **High**: Critical for Copilot security/compliance - address before deployment
-- **Medium**: Important for optimal experience - implement during deployment
-- **Low**: Enhancement opportunities - consider for future optimization
-
-### 3. Implement Recommendations
-
-For each recommendation:
-
-1. **Read the Observation**: Understand current state (e.g., "12 compromised accounts detected")
-2. **Review the Recommendation**: Specific action to take (e.g., "Revoke access, enforce MFA")
-3. **Follow the LinkUrl**: Microsoft Learn documentation for implementation steps
-4. **Track Progress**: Mark as completed in your project management system
-
-**Example Implementation Workflow:**
-
-| Recommendation | Owner | Due Date | Status |
-|----------------|-------|----------|--------|
-| Address 12 critical Defender recommendations | SecOps Team | Week 1 | In Progress |
-| Implement Copilot conditional access policy | Identity Team | Week 2 | Not Started |
-| Deploy sensitivity labels to SharePoint | Compliance Team | Week 3 | Not Started |
-
-### 4. Re-run Assessment
-
-After implementing recommendations, re-run the assessment to validate changes:
+Use `--verbose` (or `-v`) when troubleshooting to also see authentication/configuration provenance, processing details, actions by assessment area, and input receipt details:
 
 ```powershell
-python main.py
+.\.venv\Scripts\python.exe main.py --mode live --verbose
+.\.venv\Scripts\python.exe main.py --mode offline --collection-input "<collection-input>" --verbose
 ```
 
-Compare new report with baseline to measure progress. Timestamped filenames preserve history:
-- Baseline: `m365_recommendations_20260106_143106.csv`
-- Post-remediation: `m365_recommendations_20260113_091523.csv`
+Replace `<collection-input>` with the exact path from the handoff. Verbosity changes terminal messages only; the technical workbook and structured package `operator-log.jsonl` still retain detailed results.
 
-## Special Scenarios
+Colors distinguish headings, successful steps, warnings and errors. `--color auto` is the default: color is used in an interactive terminal and disabled for redirected output or when `NO_COLOR` is set. Use `--color never` for plain output, or `--color always` to explicitly force ANSI colors. Status labels remain readable without color.
 
-### Defender XDR Activation (First-Time Setup)
+### SharePoint URL and collection diagnostics
 
-If your tenant has Defender licenses but has never accessed the portal:
+The live run loads the repository's `.env`, or the file selected by `--env-file`. The SharePoint URL precedence is `--sharepoint-admin-url`, then `SHAREPOINT_ADMIN_URL`, then the tenant's initial `.onmicrosoft.com` domain. Use `--verbose` to see the chosen URL and its source. Set `SHAREPOINT_ADMIN_URL=https://contoso-admin.sharepoint.com` for a renamed SharePoint tenant; trailing slashes and quoted `.env` values are supported. An invalid configured URL is reported instead of silently using a derived URL.
 
-1. Navigate to [Microsoft Defender Portal](https://security.microsoft.com)
-2. Sign in with Security Administrator or Global Administrator account
-3. Accept the "Turn on Microsoft Defender XDR" prompt
-4. Select data residency region (EU, US, UK, etc.)
-5. Wait 2-3 minutes for provisioning
-6. Verify activation: Dashboard should display devices, incidents, recommendations
-7. Run the assessment tool
+Accepted browser sign-in confirms authentication only. Review the subsequent SharePoint dataset summary for collection gaps. Unreadable collector output is reported separately from authentication failures, with sanitized details in `Reports/collector_diagnostics.log`. An interactive retry accepts the same verified URL. Adding portal exports offline supplements saved evidence; it does not refresh sharing settings or repair a failed live collection.
 
-**Why manual activation required:**
-- Microsoft requires explicit admin consent before enabling tenant-wide monitoring
-- Data residency selection cannot be changed after provisioning
-- Ensures compliance/governance review before security data collection
+## 3. Add completed portal exports and rebuild
+
+Put the completed exports into the folder created above. Replace `<collection-input>` with the full path shown under **COLLECTION INPUT** at the end of the live run:
+
+```powershell
+.\.venv\Scripts\python.exe main.py --mode offline `
+  --collection-input "<collection-input>" `
+  --reports-dir ".\output\customer\exports" `
+  --open-html-report
+```
+
+Offline mode needs local dependencies and evidence files. It uses no tenant sign-in, live API calls, prompts or administrative PowerShell. It does not save or overwrite the collection it reads. A new build does not refresh original observations.
+
+`--reports-dir` discovers supported files directly inside a directory; it is not recursive. Repeat it for separate folders. Omit paths for unavailable reports. Retain original headers: recognition uses schemas, not filenames. [The compatibility matrix](PORTAL_REPORTS_AND_OFFLINE.md#sample-compatibility-matrix) identifies supplied real samples, fixture-only support and unsupported variants.
+
+### Lifecycle report dates and freshness
+
+Content lifecycle reports use a **90-day** freshness window. SAM permission/sharing reports keep their **35-day** window, and DSPM assessments keep **8 days**. Change only the lifecycle window with `--lifecycle-report-max-age-days DAYS`; the default comes from the saved package setting, then `LIFECYCLE_REPORT_MAX_AGE_DAYS`, then 90 days.
+
+If a lifecycle export has no report date, confirm its generation date from the original report or the person who generated it. Supply that date for the exact file, as in this invented customer example:
+
+```powershell
+.\.venv\Scripts\python.exe main.py --mode offline `
+  --collection-input "<collection-input>" `
+  --reports-dir ".\output\contoso\exports" `
+  --lifecycle-report-date ".\output\contoso\exports\content-lifecycle.csv=2026-07-16" `
+  --lifecycle-report-max-age-days 90 `
+  --evaluation-date 2026-09-15 `
+  --open-html-report
+```
+
+Repeat `--lifecycle-report-date "PATH=YYYY-MM-DD"` for each undated lifecycle file. The confirmation is a fallback for a missing source date; it does not replace a date already present in the report or establish permission coverage. The tool does not infer dates from filenames or file timestamps. Unknown or future source dates remain qualified; a confirmed date later than the evaluation date is rejected.
+
+The package saves the lifecycle window and each confirmed date against the file's SHA-256 hash. Copied or renamed files with identical contents retain their confirmation on replay; changed contents require a new confirmation. These settings are restored with the package's evaluation date, so replay does not make an older report fresh again.
+
+### Admin-center PDFs and screenshots
+
+Run live collection first. Paid Copilot activity aggregates, subscription seats and returned
+Copilot DLP details are collected automatically with existing access. Request screenshots only
+for relevant remaining portal details or optional visual context; see the [coverage table](COPILOT_AUTOMATIC_COLLECTION.md).
+
+Include PDFs in `--reports-dir`; PDF subfolders are included and duplicate contents are imported once. The tool automatically creates JSON, extracts text (using Windows OCR for image pages), and creates previews. Extracted text and originals appear in the HTML and workbook. These captures do not automatically pass controls or close actions. See [PDF import and optional reviewed manifests](PORTAL_REVIEW.md).
+
+```powershell
+.\.venv\Scripts\python.exe main.py --mode offline `
+  --collection-input "<collection-input>" `
+  --reports-dir ".\output\customer\exports"
+```
+
+The saved package includes the generated JSON and assets, so subsequent rebuilds restore them without OCR. Review the embedded contents before distributing the HTML. `--portal-review` remains available for a curated JSON manifest and accepts a PDF folder for compatibility. Input validation and PDF preparation happen before live authentication. If later packaging fails, the error prints the saved collection path for offline recovery.
+
+### More than one Copilot readiness export
+
+A saved collection restores its packaged reports automatically. `--reports-dir` adds another
+folder; it does not replace the saved inputs. If the saved package already has everything
+needed, rebuild with just `--collection-input` and omit `--reports-dir`.
+
+The error lists the competing CSV paths. First check that every folder belongs to the assessed
+customer. If there are multiple legitimate snapshots for that same tenant, select one with
+`--copilot-readiness-export "PATH\readiness.csv"`. Identical file contents are deduplicated
+automatically. Do not select a snapshot merely to bypass an accidental mix of customer folders.
+
+PDF import is separate from this error. Older saved packages may retain an "unsupported" PDF
+diagnostic without the original PDF. Supply its original folder with `--reports-dir` to include
+it. A PDF skipped warning does not stop other imports; consult the warning and import log.
+
+## Portable assessment folder
+
+A live collection has an adjacent `<collection-stem>_package/` folder. The top-level collection refers to it with a relative path. To move the assessment, copy the whole package and replay the copy's `collection.json`:
+
+```text
+<collection-stem>_package/
+  collection.json          saved service evidence and versioned manifest/settings
+  inputs/                  original reports and supplemental inputs, grouped by source
+  rebuild.json             latest successful offline build's inputs/settings
+  rebuilds/                retained build recipes and subsequently added input files
+  deliverables/            generated report artifacts
+  operator-log.jsonl        build receipts and output locations
+```
+
+```powershell
+.\.venv\Scripts\python.exe main.py --mode offline `
+  --collection-input ".\output\customer-copy\collection.json" `
+  --open-html-report
+```
+
+Copy the folder contents to `customer-copy` before using that example. Preserve `inputs/` and the relative layout. A collection JSON from before package support still works, but its external reports/settings must be supplied explicitly.
+
+The manifest validates original files with SHA-256 hashes. Do not edit, remove or add files inside recorded input directories; place revised exports in a separate directory and pass `--reports-dir` again. Version 2 collections and rebuild recipes require the same methodology version as the running tool, except for the explicit **2.0.0 → 2.1.0 compatibility migration**. That transition retains the unchanged raw collection schema, collected facts and base findings, then applies the new control matching and reviewed pilot criteria. Readiness conclusions can change. The offline build prints a migration warning and records the original/effective methodology in source context, the workbook and operator receipt. Original collection files, source hashes and evidence dates remain unchanged; a successful derived rebuild recipe records the migration. No new tenant connection is needed. Other version mismatches still require the matching tool version or a separately supported migration. Version 1 compatibility preserves precomputed conclusions as historical.
+
+Replay restores packaged reports, assessment profile, provider evidence, baseline and relevant settings. Repeated report arguments add evidence; explicit single-file supplemental arguments replace their packaged counterpart. Successful offline builds copy later external inputs into `rebuilds/` and update `rebuild.json`, so a copied package retains the latest build's evidence. The original `collection.json` stays unchanged. Downloaded DAG files are preserved when the collector supplies their local paths; a URL or summary count cannot reconstruct a missing export. The builder records the import/selection results and report locations. Review the workbook's source statuses for selected, superseded, unsupported or unreadable inputs.
+
+The package records an **evaluation date**, which is reused to make freshness assessments repeatable. Deliberately change it when asking whether old evidence is still suitable today:
+
+```powershell
+.\.venv\Scripts\python.exe main.py --mode offline `
+  --collection-input ".\output\customer-copy\collection.json" `
+  --evaluation-date 2026-09-15
+```
+
+Later evaluation dates can change conclusions about freshness. Equal supported evidence, settings, methodology and evaluation date should yield equal assessment results; report filenames and build timestamps may differ. A legacy workbook preserves conclusions made under its original methodology as historical observations.
+
+User-level Copilot workbook detail requires `--include-user-usage-detail` on every run; HTML remains aggregate-only. The package contains original confidential evidence even when user detail is excluded from generated deliverables. Keep credentials, `.env` files and private certificates outside it. Preserve the complete package, including `rebuilds/`, after adding exports; see the receipt for the exact replay inputs.
+
+## 4. Review the deliverables
+
+HTML and the default Excel workbook are generated in `Reports/`; packaged runs also preserve deliverables in the package. `--report-format both` adds CSV, while `--report-format csv` selects CSV output.
+
+The navy and teal executive dashboard includes stacked action counts by assessment area, drawn from the current assessment. Use **Evidence workbook** to open the companion workbook and **Print report** to print the report with expanded action and evidence details. Keep the HTML and workbook together so the local link works.
+
+Review the customer report in this order:
+
+1. **Executive assessment:** supported deployment recommendation, original evidence period, concerns and strengths.
+2. **Action plan:** remediation and confirmation of unresolved historical findings, with responsible roles, rollout stage and completion evidence.
+3. **Assessment areas:** identity/access; content access/ownership; data protection; applications/connectors; endpoints/threat protection; licensing/prerequisites; pilot suitability/adoption.
+4. **Rollout conditions and remaining evidence:** what must be addressed or confirmed and who can close each question.
+
+Use the technical workbook to verify source dates, selected/superseded files, coverage, detailed objects and prior evidence. Missing and unknown values differ from measured zero. A complete report can still conclude that readiness is unconfirmed. Adoption opportunities and unavailable optional capabilities do not become security blockers.
+
+For an integrity warning, review the workbook and `Reports/collector_diagnostics.log` before using the report for deployment approval. After remediation, a **new live collection** verifies changed tenant settings; replaying old evidence cannot do that. Use `--baseline` to compare with a prior workbook or assessment snapshot.
+
+## Preview and recovery workflows
+
+### Synthetic preview without a tenant
+
+```powershell
+.\.venv\Scripts\python.exe main.py --mode offline `
+  --reports-dir ".\tests\fixtures\microsoft_reports" `
+  --tenant-name "Sample tenant" --open-html-report
+```
+
+This preview uses invented data and intentionally leaves tenant controls unassessed. For portal-only customer review, substitute the customer's exports directory.
+
+### Recover an earlier workbook and Purview cache
+
+```powershell
+.\.venv\Scripts\python.exe main.py --mode offline `
+  --prior-report ".\Reports\prior-assessment.xlsx" `
+  --purview-cache ".\.cache\purview\saved-cache.json" `
+  --reports-dir ".\output\customer\exports" `
+  --open-html-report
+```
+
+Use actual same-tenant files; either historical input may be omitted. The cache supplies Purview configuration only. Historical findings retain their source dates and require confirmation when their underlying facts cannot be reassessed. The workbook preserves the complete original register. A partial Purview cache cannot overwrite a full `--collection-input`. [Recovery details](PORTAL_REPORTS_AND_OFFLINE.md#combine-an-existing-tenant-report-with-new-exports).
+
+A successful build without a collection automatically creates a portable assessment under `output/assessments/<tenant>_<UTC>_<id>/`. It contains the original inputs, deliverables, an operator log and `rebuild.json`. The tool prints its location. No tenant collection is invented or saved. Copy that whole folder, then replay the recipe:
+
+```powershell
+.\.venv\Scripts\python.exe main.py --mode offline `
+  --collection-input ".\output\customer-recovery-copy\rebuild.json" `
+  --open-html-report
+```
+
+Use the actual copied folder in that example. The same recipe workflow applies to portal-only previews. Original dates and historical qualifications remain unchanged, and user-level detail still requires a new opt-in. After this first successful recovery build, the package restores its inputs automatically.
+
+## Supported options
+
+Run `.\.venv\Scripts\python.exe main.py --help` for the implemented CLI. Keep `--mode live|offline` explicit in operator commands. `--offline` remains an alias. Omitting mode preserves live behavior unless `--collection-input`, `--prior-report` or `--purview-cache` is supplied. Saved-evidence inputs conflict with explicit live mode. Offline mode rejects `--env-file`, `--check-connections`, `--save-collection` and live preview collectors.
+
+| Option | Use |
+|---|---|
+| `--verbose`, `-v` | Show detailed processing, source provenance and input receipts in the console. |
+| `--color auto\|always\|never` | Select terminal color behavior. Auto respects `NO_COLOR` and disables color when output is redirected. |
+| `--tenant-id ID`, `--env-file PATH` | Choose the connected tenant/configuration. Consent and roles belong to that target tenant. |
+| `--services M365 Entra Defender Purview` | Restrict live service collection. An empty `--services` selects all configured service areas. Scope restrictions remain visible in assessment coverage. |
+| `--interactive-auth auto\|fresh\|skip` | Use normal authentication, deliberately refresh, or avoid delegated browser sign-in. |
+| `--sam-report PATH`, `--dspm-report PATH` | Import supported exposure exports; repeat or use directories. |
+| `--portal-review PATH` | Optional curated JSON manifest, or PDF folder for compatibility. Normally put PDFs in `--reports-dir`; see [PDF import](PORTAL_REVIEW.md). |
+| `--lifecycle-report-max-age-days DAYS` | Set the lifecycle freshness window independently of permission/sharing and DSPM reports; default 90 days. |
+| `--lifecycle-report-date "PATH=YYYY-MM-DD"` | Confirm an undated lifecycle export's generation date; repeat per file. The package binds each confirmation to the file hash. |
+| `--copilot-readiness-export PATH` | Import a Copilot Readiness CSV. Readiness is separate from actual usage. |
+| `--copilot-dashboard-export PATH` | Import a supported Copilot Dashboard CSV; arbitrary portal Usage CSV variants need schema validation. |
+| `--power-platform-inventory PATH` | Import an optional Manage > Inventory CSV. |
+| `--assessment-profile PATH`, `--provider-evidence PATH` | Scope use cases and agents/external providers. The assessment profile also accepts dated control-owner reviews and pilot/expansion records; see [Readiness reviews](READINESS_REVIEWS.md). |
+| `--baseline PATH`, `--snapshot-json PATH` | Compare with an earlier result and optionally write a result snapshot. A snapshot is not a replayable collection. |
+| `--preview-collectors power-platform\|shadow-ai\|network-access\|all` | Enable supplemental preview APIs after arranging their permission packs. They do not change the core foundation decision. |
+| `--sharepoint-admin-url URL` | Override automatic resolution for renamed or multi-geo tenants. |
+| `--legacy-power-platform-collector` | Explicit compatibility fallback requiring `Az.Accounts`. |
 
 ## Troubleshooting
 
-### Authentication Issues
+| Symptom | Next check |
+|---|---|
+| Missing Python module | Install `requirements.txt` into the same environment used to run `main.py`. |
+| Hidden browser sign-in | Check the taskbar/browser window, finish sign-in, then read the collector result. |
+| Missing PowerShell cmdlet/module | Use the supported module setup in [prereq.md](prereq.md), then repeat preflight. |
+| HTTP 403 | Distinguish application consent, workload role, missing entitlement and unprovisioned service in preflight/Collection Coverage. Adding a delegated portal role does not grant an application permission. |
+| Risk inventory unavailable despite consent | Confirm a qualifying Entra ID Protection entitlement; Conditional Access access alone does not establish risk-report access. |
+| Purview query unavailable | Check both Purview and Exchange read roles. Portal access alone does not cover all administrative cmdlets. `--interactive-auth fresh` refreshes the existing path when needed. |
+| Copilot usage unavailable | Confirm `Reports.Read.All` application consent, the returned reporting period, and the selected scope. An assigned license does not prove use. |
+| Import rejected | Keep the original file. Compare its headers with the compatibility matrix and inspect tenant/date/scope checks. Do not rename columns to force acceptance. |
+| HTTP 429 | Respect the reported retry delay and inspect diagnostics. Reduce collector scope only if the resulting coverage meets the agreed assessment. |
 
-**Problem:** Authentication prompt or browser popup is hidden behind other windows
-
-**Solution:**
-1. Press **Windows + D** to minimize all windows and show desktop
-2. Press **Windows key** again to restore windows - the authentication popup should now be highlighted/visible
-3. Alternatively, check taskbar for flashing browser icon or new window notification
-4. Look for authentication popup minimized or behind VS Code/terminal windows
-5. Click the browser icon in taskbar to bring popup to front
-6. Complete the authentication in the popup window
-7. If timeout occurs, re-run the assessment - popup should appear again
-
-### Defender API Issues
-
-**Problem:** Defender API returns empty data or "403 Forbidden"
-
-**Solution:**
-1. Verify Defender XDR is activated via [security.microsoft.com](https://security.microsoft.com)
-2. Confirm user has Security Reader role (or higher) in Defender portal
-3. Check licenses: Requires M365 E5, Microsoft 365 E5 Security, or Microsoft Defender P2
-4. Wait 10-15 minutes after first Defender XDR activation for APIs to propagate
-
-**Problem:** "DEFENDER_XDR_ACTIVATION" recommendation shows "Warning - Not Activated"
-
-**Solution:** Follow "Defender XDR Activation" steps above (manual portal activation required)
-
-### Purview Issues
-
-**Problem:** Purview collector fails with "Connect-IPPSSession not recognized"
-
-**Solution:**
-```powershell
-Install-Module -Name ExchangeOnlineManagement -Force
-Import-Module ExchangeOnlineManagement
-```
-
-Rerun only the Purview collection with a new sign-in:
-
-```powershell
-python main.py --env-file .env --services Purview --interactive-auth fresh --report-format both
-```
-
-The signed-in user needs Compliance Administrator or equivalent read access in the target tenant.
-The collector uses both Security & Compliance PowerShell and Exchange Online, so two authentication
-events may be shown.
-
-Global Reader does not grant the Purview compliance PowerShell role groups used by these cmdlets.
-For the simplest complete run, use a delegated account assigned Compliance Administrator in the
-target tenant. A least-privilege operator can instead use the relevant read-only Purview role groups,
-including View-Only DLP Compliance Management for DLP policies and rules, Information Protection
-for labels, View-Only Retention Management for retention, and Audit Reader for audit configuration.
-Role changes can take time to propagate.
-
-Insider Risk, Communication Compliance, Information Barriers, and eDiscovery require their own
-specialized Purview roles and, in some tenants, matching licenses or enabled workloads. They are
-not queried by a normal assessment. Set `PURVIEW_INCLUDE_SPECIALIZED=true` only when this optional
-context is approved and the operator has the appropriate roles.
-
-### Power Platform Issues
-
-**Problem:** AI Builder inventory is reported as not assessed
-
-**Preferred solution:** In Power Platform admin center, open **Manage > Inventory**, enable the
-inventory feature if necessary, allow Microsoft to complete its inventory, export the tenant-wide
-CSV, and supply it without waiting for the assessment to run:
-
-```powershell
-python main.py --env-file .env --power-platform-inventory .\exports\power-platform-inventory.csv --report-format both
-```
-
-The alternative preview path is:
-
-```powershell
-python main.py --env-file .env --preview-collectors power-platform --report-format both
-```
-
-Assign the assessment service principal the tenant-scoped **Power Platform Reader** RBAC role
-(role ID `c886ad2e-27f7-4874-8381-5849b8d8a090`) at `/tenants/{tenantId}` first. This inventory API
-and its RBAC support are preview. Do not grant the application the Entra Power Platform
-Administrator directory role. The legacy delegated collector remains a fallback and aggregates
-all readable environments; Power Platform availability never changes the core readiness decision.
-
-### AI Usage and Shadow AI Issues
-
-**Problem:** Copilot usage or Microsoft 365 Apps readiness says permission missing
-
-**Solution:** Confirm the app registration identified by `CLIENT_ID` has the Microsoft Graph
-application permission `Reports.Read.All`, grant admin consent in the target tenant, obtain a fresh
-application token, and rerun. Unavailable data is reported as not assessed, never as zero usage.
-
-**Problem:** Shadow AI discovery is not assessed, has no stream, or returns HTTP 403
-
-**Solution:** This source is optional and preview. Add and consent the Microsoft Graph application
-permission `CloudApp-Discovery.Read.All`, then enable a Defender for Cloud Apps discovery source:
-Defender for Endpoint continuous report forwarding, a Cloud Discovery log stream, or Global Secure
-Access Shadow AI discovery. Allow Microsoft to populate the stream and rerun with
-`--preview-collectors shadow-ai`. Purview DSPM does not substitute for this source because DSPM
-measures data and prompt risk, not aggregate adoption of external AI services.
-
-### Cross-Tenant Permission Issues
-
-**Problem:** `risky_users` or `risk_detections` returns HTTP 403 even though the matching
-`IdentityRiskyUser.Read.All` or `IdentityRiskEvent.Read.All` application permission has admin
-consent.
-
-**Solution:** Check the Entra license before changing permissions again. Microsoft Entra ID P1
-provides limited risk information; full risky-user and risk-detection reporting requires Entra ID
-P2 or another qualifying Entra entitlement. The assessment reports this as a licensing coverage
-limit and does not interpret unread risk data as zero risky users.
-
-**Problem:** `NetworkAccess.Read.All permission is not granted to the service principal`
-
-**Solution:** In the target tenant, add Microsoft Graph **application** permission
-`NetworkAccess.Read.All` to the app registration matching `CLIENT_ID`, and grant tenant-wide admin
-consent. The list operations used for filtering policies and forwarding profiles require this broad
-read permission; `NetworkAccessPolicy.Read.All` by itself does not authorize them. Consent granted
-in a different tenant is not reused. The setup script includes both permissions for target-tenant
-deployments.
-
-**Problem:** Application consent policy settings could not be read even though `Policy.Read.All`
-is granted.
-
-**Solution:** Add Microsoft Graph **application** permission `Policy.Read.PermissionGrant` and grant
-tenant-wide admin consent. `Policy.Read.All` can read the authorization policy, while the separate
-permission is required for the permission grant policy inventory used by this assessment.
-
-**Problem:** Global Secure Access still returns HTTP 403 after `NetworkAccess.Read.All` is present
-in a fresh application token.
-
-**Solution:** Do not add progressively broader Graph permissions. Confirm that the tenant is
-explicitly onboarded to Global Secure Access and has the required Entra Suite or standalone
-licensing. If the organization does not plan to use this optional control, retain the result as an
-assessment coverage limitation. The tool distinguishes this condition from a missing permission.
-
-Collector authentication and partial-data warnings are also written to
-`Reports\collector_diagnostics.log`. The log is ignored by Git and redacts bearer tokens, JWTs, and
-common secret values so it can be used for local troubleshooting without placing credentials in
-the repository.
-
-### General Issues
-
-**Problem:** "ModuleNotFoundError: No module named 'azure.identity'"
-
-**Solution:**
-```powershell
-pip install -r requirements.txt
-```
-
-**Problem:** "429 Too Many Requests" error
-
-**Solution:**
-- API throttling triggered - wait 60 seconds and retry
-- Reduce scope: Assess fewer services at once
-- For large tenants (>10,000 users): Run during off-peak hours
-
-## Next Steps
-
-- **Implement Recommendations**: Prioritize High-priority items before Copilot deployment
-- **Establish Baseline**: Save first assessment report as readiness baseline
-- **Track Progress**: Re-run monthly to measure improvement
-- **Share Results**: Review with stakeholders, security team, compliance officers
-- **Plan Deployment**: Use assessment insights to build Copilot rollout plan
-
-## Additional Resources
-
-- [Microsoft 365 Copilot Setup Guide](https://learn.microsoft.com/microsoft-365-copilot/microsoft-365-copilot-setup)
-- [Copilot Adoption Framework](https://learn.microsoft.com/microsoft-365-copilot/microsoft-365-copilot-adoption)
-- [Data, Privacy, and Security for Copilot](https://learn.microsoft.com/microsoft-365-copilot/microsoft-365-copilot-privacy)
-- [Defender for Endpoint Documentation](https://learn.microsoft.com/microsoft-365/security/defender-endpoint/)
-- [Purview Information Protection](https://learn.microsoft.com/purview/information-protection)
-- [Power Platform Admin Center](https://admin.powerplatform.microsoft.com)
+Diagnostic logs redact common token/secret values but still contain operational tenant context. Treat logs and all assessment evidence as confidential. See [prereq.md](prereq.md) for detailed authentication and [the portal guide](PORTAL_REPORTS_AND_OFFLINE.md) for role, license, delay and unavailable-report guidance.

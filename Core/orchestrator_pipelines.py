@@ -1,8 +1,44 @@
 """Service pipeline functions for orchestrator."""
 
+from . import console_reporting as console
 import os
 from .spinner import get_timestamp, _stdout_lock
 from .orchestrator_powershell import collect_purview_data_via_powershell
+
+
+def _collection_outcome(area, collected_client, *, source=''):
+    """Summarize recorded read outcomes without treating absent metadata as success."""
+    from .source_evidence import source_is_complete
+
+    states = getattr(collected_client, 'collection_status', {}) or {}
+    if not states:
+        states = {
+            key: {'available': value}
+            for key, value in (getattr(collected_client, 'data_sources', {}) or {}).items()
+            if isinstance(value, bool)
+        }
+    if not states and isinstance(getattr(collected_client, 'power_platform_inventory', None), dict):
+        states = {'inventory': collected_client.power_platform_inventory}
+    ignored = {'not_requested', 'not_selected', 'skipped', 'disabled', 'not_applicable'}
+    active = {
+        key: state for key, state in states.items()
+        if isinstance(state, dict)
+        and str(state.get('availability_status') or state.get('status') or '').lower() not in ignored
+    }
+    suffix = f' ({source})' if source else ''
+    with _stdout_lock:
+        if active:
+            complete = sum(source_is_complete(collected_client, key, state) for key, state in active.items())
+            if complete == len(active):
+                console.status(f'{area}: collection complete{suffix}; {complete}/{len(active)} datasets read.', tone='success')
+            else:
+                usable = any(state.get('available') is True for state in active.values())
+                outcome = 'partial collection' if complete or usable else 'collection unavailable'
+                console.status(f'{area}: {outcome}{suffix}; {complete}/{len(active)} datasets completely read. See source coverage.', tone='warning')
+        elif collected_client is None or getattr(collected_client, 'available', None) is False:
+            console.status(f'{area}: collection unavailable{suffix}; see source coverage.', tone='warning')
+        else:
+            console.status(f'{area}: collection finished{suffix}; dataset completeness was not recorded.')
 
 
 def create_pipelines(
@@ -91,7 +127,8 @@ def create_pipelines(
             return ([], [])
         
         try:
-            # Gathering phase (has its own progress bar inside get_m365_client)
+            console.status('M365: collecting users, sites, licensing and Copilot usage...')
+            # Gathering phase (the client logs its start and completion)
             from .get_m365_client import get_m365_client
             m365_client = await get_m365_client(
                 client,
@@ -103,11 +140,11 @@ def create_pipelines(
                 'available': False, 'reason': 'SharePoint governance collection was not requested.'
             }
             
-            # Processing phase with progress bar
+            # Processing phase
             import sys
             
             with _stdout_lock:
-                sys.stdout.write(f'\r[{get_timestamp()}]   M365 Data Processing    [░░░░░░░░░░░░░░░░░░░░]   0%')
+                console.detail(f'[{get_timestamp()}]   M365 Data Processing started.\n')
                 sys.stdout.flush()
             
             from .get_m365_info import get_m365_info
@@ -116,8 +153,10 @@ def create_pipelines(
             recommendations.extend(build_sharepoint_recommendations(m365_client.sharepoint_governance))
 
             with _stdout_lock:
-                sys.stdout.write(f'\r[{get_timestamp()}]   ✓ M365 Data Processing    [████████████████████] 100%\n')
+                console.detail(f'[{get_timestamp()}]   M365 Data Processing finished.\n')
                 sys.stdout.flush()
+
+            _collection_outcome('M365', m365_client)
 
             return (
                 {
@@ -128,8 +167,9 @@ def create_pipelines(
             )
         except Exception as e:
             import traceback
-            print(f"\n[ERROR] M365 pipeline failed: {e}")
-            traceback.print_exc()
+            console.status(f"M365 pipeline failed: {e}", tone='error')
+            if console.is_verbose():
+                traceback.print_exc()
             return ([], [])
     
     async def entra_pipeline():
@@ -138,17 +178,18 @@ def create_pipelines(
             return {'available': False, 'recommendations': []}
         
         try:
-            # Gathering phase (has its own progress bar inside get_entra_client)
+            console.status('Entra: collecting identity, access and device evidence...')
+            # Gathering phase (the client logs its start and completion)
             from .get_entra_client import get_entra_client
             entra_client = await get_entra_client(
                 client, tenant_id, preview_collectors=preview_collectors
             )
             
-            # Processing phase with progress bar
+            # Processing phase
             import sys
             
             with _stdout_lock:
-                sys.stdout.write(f'\r[{get_timestamp()}]   Entra Data Processing   [░░░░░░░░░░░░░░░░░░░░]   0%')
+                console.detail(f'[{get_timestamp()}]   Entra Data Processing started.\n')
                 sys.stdout.flush()
             
             from .get_entra_info import get_entra_info
@@ -157,11 +198,15 @@ def create_pipelines(
                 result['_client'] = entra_client
 
             with _stdout_lock:
-                sys.stdout.write(f'\r[{get_timestamp()}]   ✓ Entra Data Processing   [████████████████████] 100%\n')
+                console.detail(f'[{get_timestamp()}]   Entra Data Processing finished.\n')
                 sys.stdout.flush()
+
+            _collection_outcome('Entra', entra_client)
             
             return result
         except Exception as e:
+            with _stdout_lock:
+                console.status(f'Entra pipeline failed: {e}', tone='error')
             return {'available': False, 'recommendations': []}
     
     async def purview_pipeline():
@@ -170,6 +215,7 @@ def create_pipelines(
             return {'available': False, 'recommendations': []}
         
         try:
+            console.status('Purview: loading policy and compliance evidence...')
             # Check if Purview data is available from stdin
             purview_data_source = os.environ.get('PURVIEW_DATA_SOURCE')
             allow_purview_collection = interactive_plan['purview'].get('will_attempt', True)
@@ -187,7 +233,7 @@ def create_pipelines(
                 # Data available via stdin - normal path
                 with _stdout_lock:
                     import sys
-                    sys.stdout.write(f'\r[{get_timestamp()}]   Purview Data Gathering  [░░░░░░░░░░░░░░░░░░░░]   0%')
+                    console.detail(f'[{get_timestamp()}]   Purview Data Gathering started.\n')
                     sys.stdout.flush()
                 use_deployment_enrichment = True
             else:
@@ -201,22 +247,26 @@ def create_pipelines(
                 if not attempted_collection:
                     with _stdout_lock:
                         import sys
-                        sys.stdout.write(f'[{get_timestamp()}]   ℹ️  Purview deployment enrichment skipped; Purview configuration will be reported as not assessed\n')
+                        reason = interactive_plan['purview'].get('skip_reason') or 'optional authentication was not selected'
+                        console.status(f'Purview: skipped; {reason}. Configuration remains not assessed.', tone='warning')
+                        console.detail(f'[{get_timestamp()}]   ℹ️  Purview deployment enrichment skipped; Purview configuration will be reported as not assessed\n')
                         sys.stdout.flush()
             
             if purview_data_source == 'stdin':
                 with _stdout_lock:
                     import sys
-                    sys.stdout.write(f'\r[{get_timestamp()}]   ✓ Purview Data Gathering  [████████████████████] 100%\n')
+                    console.detail(f'[{get_timestamp()}]   Purview Data Gathering finished.\n')
                     sys.stdout.flush()
             
             if purview_client is None:
+                if attempted_collection or use_deployment_enrichment:
+                    _collection_outcome('Purview', None)
                 return {'available': False, 'recommendations': []}
             
             # Processing phase
             with _stdout_lock:
                 import sys
-                sys.stdout.write(f'\r[{get_timestamp()}]   Purview Data Processing [░░░░░░░░░░░░░░░░░░░░]   0%')
+                console.detail(f'[{get_timestamp()}]   Purview Data Processing started.\n')
                 sys.stdout.flush()
             
             from .get_purview_info import get_purview_info
@@ -226,11 +276,15 @@ def create_pipelines(
 
             with _stdout_lock:
                 import sys
-                sys.stdout.write(f'\r[{get_timestamp()}]   ✓ Purview Data Processing [████████████████████] 100%\n')
+                console.detail(f'[{get_timestamp()}]   Purview Data Processing finished.\n')
                 sys.stdout.flush()
+
+            _collection_outcome('Purview', purview_client, source='saved cache' if purview_data_source == 'cache' else '')
             
             return result
         except Exception as e:
+            with _stdout_lock:
+                console.status(f'Purview pipeline failed: {e}', tone='error')
             return {'available': False, 'recommendations': []}
     
     async def defender_pipeline(purview_result_task=None):
@@ -239,6 +293,7 @@ def create_pipelines(
             return {'available': False, 'recommendations': []}
         
         try:
+            console.status('Defender: collecting incidents, alerts and protection evidence...')
             # Gathering phase
             import sys
             
@@ -246,11 +301,12 @@ def create_pipelines(
             defender_client = await get_defender_client(tenant_id, client)
             
             if defender_client is None:
+                _collection_outcome('Defender', None)
                 return {'available': False, 'recommendations': []}
             
             # Processing phase
             with _stdout_lock:
-                sys.stdout.write(f'[{get_timestamp()}]   Defender Data Processing[░░░░░░░░░░░░░░░░░░░░]   0%')
+                console.detail(f'[{get_timestamp()}]   Defender Data Processing started.\n')
                 sys.stdout.flush()
             
             from .get_defender_info import get_defender_info
@@ -264,15 +320,18 @@ def create_pipelines(
                 result['_client'] = defender_client
 
             with _stdout_lock:
-                sys.stdout.write(f'\r[{get_timestamp()}]   ✓ Defender Data Processing[████████████████████] 100%\n')
+                console.detail(f'[{get_timestamp()}]   Defender Data Processing finished.\n')
                 sys.stdout.flush()
+
+            _collection_outcome('Defender', defender_client)
             
             return result
         except Exception as e:
             with _stdout_lock:
-                print(f"[{get_timestamp()}] ERROR in defender_pipeline: {str(e)}")
+                console.status(f"ERROR in defender_pipeline: {str(e)}", tone='error')
                 import traceback
-                traceback.print_exc()
+                if console.is_verbose():
+                    traceback.print_exc()
             return {'available': False, 'recommendations': []}
     
     async def power_platform_pipeline():
@@ -289,26 +348,28 @@ def create_pipelines(
             )
 
             if allow_pp_collection:
+                console.status('Power Platform: collecting environment and app inventory...')
                 # Data already collected in pre-flight (or not available)
                 # Just gather and process
                 with _stdout_lock:
-                    sys.stdout.write(f'\r[{get_timestamp()}]   Power Platform Gathering[░░░░░░░░░░░░░░░░░░░░]   0%')
+                    console.detail(f'[{get_timestamp()}]   Power Platform Gathering started.\n')
                     sys.stdout.flush()
                 
                 pp_client = await get_shared_power_platform_client()
                 
                 with _stdout_lock:
-                    sys.stdout.write(f'\r[{get_timestamp()}]   ✓ Power Platform Gathering[████████████████████] 100%\n')
+                    console.detail(f'[{get_timestamp()}]   Power Platform Gathering finished.\n')
                     sys.stdout.flush()
             else:
                 pp_client = None
+                console.status('Power Platform: skipped; optional inventory was not supplied or selected.')
                 with _stdout_lock:
-                    sys.stdout.write(f'[{get_timestamp()}]   ℹ️  Power Platform inventory not supplied and preview API not selected; optional extensibility inventory remains not assessed\n')
+                    console.detail(f'[{get_timestamp()}]   ℹ️  Power Platform inventory not supplied and preview API not selected; optional extensibility inventory remains not assessed\n')
                     sys.stdout.flush()
             
             # Processing phase
             with _stdout_lock:
-                sys.stdout.write(f'\r[{get_timestamp()}]   Power Platform Processing[░░░░░░░░░░░░░░░░░░░░]   0%')
+                console.detail(f'[{get_timestamp()}]   Power Platform Processing started.\n')
                 sys.stdout.flush()
             
             from .get_power_platform_info import get_power_platform_info
@@ -323,16 +384,20 @@ def create_pipelines(
                 result['_client'] = pp_client
 
             with _stdout_lock:
-                sys.stdout.write(f'\r[{get_timestamp()}]   ✓ Power Platform Processing[████████████████████] 100%\n')
+                console.detail(f'[{get_timestamp()}]   Power Platform Processing finished.\n')
                 sys.stdout.flush()
+
+            if allow_pp_collection:
+                _collection_outcome('Power Platform', pp_client)
             
             return result
         except Exception as e:
             with _stdout_lock:
-                sys.stdout.write(f'[{get_timestamp()}]   ✗ Power Platform pipeline error: {type(e).__name__}: {e}\n')
+                console.status(f'Power Platform pipeline error: {type(e).__name__}: {e}\n', tone='error')
                 sys.stdout.flush()
             import traceback
-            traceback.print_exc()
+            if console.is_verbose():
+                traceback.print_exc()
             return {'available': False, 'recommendations': []}
     
     async def copilot_studio_pipeline():
@@ -350,19 +415,21 @@ def create_pipelines(
             )
 
             if allow_pp_collection:
+                console.status('Copilot Studio: collecting agent inventory...')
                 with _stdout_lock:
-                    sys.stdout.write(f'\r[{get_timestamp()}]   Copilot Studio Gathering[░░░░░░░░░░░░░░░░░░░░]   0%')
+                    console.detail(f'[{get_timestamp()}]   Copilot Studio Gathering started.\n')
                     sys.stdout.flush()
                 
                 pp_client = await get_shared_power_platform_client()
                 
                 with _stdout_lock:
-                    sys.stdout.write(f'\r[{get_timestamp()}]   ✓ Copilot Studio Gathering[████████████████████] 100%\n')
+                    console.detail(f'[{get_timestamp()}]   Copilot Studio Gathering finished.\n')
                     sys.stdout.flush()
             else:
                 pp_client = None
+                console.status('Copilot Studio: skipped; optional inventory was not supplied or selected.')
                 with _stdout_lock:
-                    sys.stdout.write(f'[{get_timestamp()}]   ℹ️  Copilot Studio inventory not supplied and Power Platform preview API not selected; agent inventory remains supplemental and not assessed\n')
+                    console.detail(f'[{get_timestamp()}]   ℹ️  Copilot Studio inventory not supplied and Power Platform preview API not selected; agent inventory remains supplemental and not assessed\n')
                     sys.stdout.flush()
             
             # pp_client can be None (no enrichment data) - that's OK!
@@ -370,7 +437,7 @@ def create_pipelines(
             
             # Processing phase
             with _stdout_lock:
-                sys.stdout.write(f'\r[{get_timestamp()}]   Copilot Studio Processing[░░░░░░░░░░░░░░░░░░░░]   0%')
+                console.detail(f'[{get_timestamp()}]   Copilot Studio Processing started.\n')
                 sys.stdout.flush()
             
             from .get_copilot_studio_info import get_copilot_studio_info
@@ -379,16 +446,20 @@ def create_pipelines(
                 result['_client'] = pp_client
 
             with _stdout_lock:
-                sys.stdout.write(f'\r[{get_timestamp()}]   ✓ Copilot Studio Processing[████████████████████] 100%\n')
+                console.detail(f'[{get_timestamp()}]   Copilot Studio Processing finished.\n')
                 sys.stdout.flush()
+
+            if allow_pp_collection:
+                _collection_outcome('Copilot Studio', pp_client)
             
             return result
         except Exception as e:
             with _stdout_lock:
-                sys.stdout.write(f'[{get_timestamp()}]   ✗ Copilot Studio pipeline error: {type(e).__name__}: {e}\n')
+                console.status(f'Copilot Studio pipeline error: {type(e).__name__}: {e}\n', tone='error')
                 sys.stdout.flush()
             import traceback
-            traceback.print_exc()
+            if console.is_verbose():
+                traceback.print_exc()
             return {'available': False, 'recommendations': []}
     
     # Return dict of pipelines

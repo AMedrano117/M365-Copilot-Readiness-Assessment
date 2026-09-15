@@ -12,6 +12,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+$OutputEncoding = [Console]::OutputEncoding
 
 function Convert-ObjectToMap {
     param([object]$InputObject, [string[]]$Properties)
@@ -73,9 +75,9 @@ if (-not $sharePointModuleManifest) {
     throw 'Microsoft.Online.SharePoint.PowerShell is not installed. Install-Module Microsoft.Online.SharePoint.PowerShell -Scope CurrentUser'
 }
 if ($PSVersionTable.PSVersion.Major -ge 7 -and $IsWindows) {
-    Import-Module $sharePointModuleManifest -UseWindowsPowerShell -ErrorAction Stop
+    Import-Module $sharePointModuleManifest -UseWindowsPowerShell -ErrorAction Stop | Out-Null
 } else {
-    Import-Module $sharePointModuleManifest -ErrorAction Stop
+    Import-Module $sharePointModuleManifest -ErrorAction Stop | Out-Null
 }
 $loadedSharePointModule = Get-Module Microsoft.Online.SharePoint.PowerShell | Sort-Object Version -Descending | Select-Object -First 1
 if (-not $loadedSharePointModule -or $loadedSharePointModule.Version -lt [version]'16.0.27215.12000') {
@@ -86,22 +88,22 @@ $usingCertificate = -not [string]::IsNullOrWhiteSpace($CertificateThumbprint) -o
 if ($usingCertificate) {
     [Console]::Error.WriteLine('AUTH_REUSED:SharePoint:Using application certificate authentication')
     if ($CertificateThumbprint) {
-        Connect-SPOService -Url $AdminUrl -ClientId $ClientId -TenantId $TenantId -CertificateThumbprint $CertificateThumbprint
+        Connect-SPOService -Url $AdminUrl -ClientId $ClientId -TenantId $TenantId -CertificateThumbprint $CertificateThumbprint | Out-Null
     } else {
         $securePassword = $null
         if ($CertificatePassword) {
             $securePassword = ConvertTo-SecureString $CertificatePassword -AsPlainText -Force
         }
         if ($securePassword) {
-            Connect-SPOService -Url $AdminUrl -ClientId $ClientId -TenantId $TenantId -CertificatePath $CertificatePath -CertificatePassword $securePassword
+            Connect-SPOService -Url $AdminUrl -ClientId $ClientId -TenantId $TenantId -CertificatePath $CertificatePath -CertificatePassword $securePassword | Out-Null
         } else {
-            Connect-SPOService -Url $AdminUrl -ClientId $ClientId -TenantId $TenantId -CertificatePath $CertificatePath
+            Connect-SPOService -Url $AdminUrl -ClientId $ClientId -TenantId $TenantId -CertificatePath $CertificatePath | Out-Null
         }
     }
 } else {
     if ($AuthMode -eq 'Skip') { throw 'SharePoint delegated authentication was skipped and no application certificate was configured.' }
     [Console]::Error.WriteLine('AUTH_PROMPT:SharePoint:Read tenant sharing settings and existing Data Access Governance report status')
-    Connect-SPOService -Url $AdminUrl -UseSystemBrowser $true
+    Connect-SPOService -Url $AdminUrl -UseSystemBrowser $true | Out-Null
     [Console]::Error.WriteLine('AUTH_COMPLETE:SharePoint')
 }
 
@@ -109,11 +111,11 @@ if ($ConnectionOnly) {
     try {
         $null = Get-SPOTenant -ErrorAction Stop
         [ordered]@{ ready = $true; source = 'SharePoint Online Management Shell' } | ConvertTo-Json -Compress
-        Disconnect-SPOService -ErrorAction SilentlyContinue
+        Disconnect-SPOService -ErrorAction SilentlyContinue | Out-Null
         exit 0
     } catch {
         [Console]::Error.WriteLine("CONNECTION_ERROR:SharePoint:$($_.Exception.Message)")
-        Disconnect-SPOService -ErrorAction SilentlyContinue
+        Disconnect-SPOService -ErrorAction SilentlyContinue | Out-Null
         exit 2
     }
 }
@@ -245,11 +247,11 @@ $payload.collection_status['sharepoint_dag_activity_data'] = [ordered]@{
 }
 $payload.dag_reports.reports = $dagRows
 $payload.dag_reports.records_collected = $dagRows.Count
-$payload.dag_reports.available = $dagRows.Count -gt 0
+$payload.dag_reports.available = $dagRows.Count -gt 0 -or $dagErrors.Count -eq 0
 if ($dagErrors.Count -gt 0) { $payload.dag_reports.reason = ($dagErrors -join ' | ') }
-$dagStatus = if ($dagRows.Count -gt 0 -and $dagErrors.Count -gt 0) { 'partial' } elseif ($dagRows.Count -gt 0) { 'available' } else { 'unavailable' }
+$dagStatus = if ($dagRows.Count -gt 0 -and $dagErrors.Count -gt 0) { 'partial' } elseif ($dagErrors.Count -eq 0) { 'available' } else { 'unavailable' }
 $payload.collection_status['sharepoint_dag_reports'] = [ordered]@{
-    available = $dagRows.Count -gt 0
+    available = $payload.dag_reports.available
     availability_status = $dagStatus
     records_collected = $dagRows.Count
     pages_collected = 1
@@ -266,12 +268,49 @@ if ($DownloadPath -and $dagRows.Count -gt 0) {
     } | ForEach-Object {
         if ($_.ReportId) { $_.ReportId } else { $_.ReportID }
     } | Select-Object -Unique)
+    $exportErrors = @()
+    $exportedFiles = @()
     foreach ($reportId in $completedIds) {
-        try { Export-SPODataAccessGovernanceInsight -ReportID $reportId -DownloadPath $DownloadPath | Out-Null } catch { }
+        $reportDownloadPath = $null
+        $createdReportDirectory = $false
+        try {
+            # Microsoft can use the same filename for distinct completed
+            # reports (for example Everyone and EEEU). Keep each report's
+            # original filename in its own directory instead of overwriting.
+            $reportGuid = [Guid]::Empty
+            if (-not [Guid]::TryParse([string]$reportId, [ref]$reportGuid)) {
+                throw 'Completed report ID is not a valid GUID.'
+            }
+            $reportDownloadPath = Join-Path -Path $DownloadPath -ChildPath ('report-' + $reportGuid.ToString('D'))
+            New-Item -ItemType Directory -Path $reportDownloadPath -ErrorAction Stop | Out-Null
+            $createdReportDirectory = $true
+            Export-SPODataAccessGovernanceInsight -ReportID $reportId -DownloadPath $reportDownloadPath | Out-Null
+        } catch {
+            $exportErrors += "${reportId}: $($_.Exception.Message)"
+        }
+        if ($createdReportDirectory) {
+            $exportedFiles += @(Get-ChildItem -LiteralPath $reportDownloadPath -File -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
+                [ordered]@{ path = $_.FullName; modified_utc = $_.LastWriteTimeUtc.ToString('o'); report_id = [string]$reportId }
+            })
+        }
     }
-    $payload.exported_files = @(Get-ChildItem -LiteralPath $DownloadPath -File -ErrorAction SilentlyContinue | ForEach-Object {
-        [ordered]@{ path = $_.FullName; modified_utc = $_.LastWriteTimeUtc.ToString('o') }
-    })
+    $payload.exported_files = $exportedFiles
+    if ($completedIds.Count -gt 0) {
+        $payload.collection_status['sharepoint_dag_exports'] = [ordered]@{
+            available = $payload.exported_files.Count -gt 0
+            availability_status = $(if ($exportErrors.Count -gt 0 -and $payload.exported_files.Count -gt 0) { 'partial' } elseif ($payload.exported_files.Count -gt 0) { 'available' } else { 'unavailable' })
+            records_collected = $payload.exported_files.Count
+            pages_collected = 1
+            truncated = $false
+            reason = $(if ($exportErrors.Count -gt 0) { $exportErrors -join ' | ' } elseif ($payload.exported_files.Count -eq 0) { 'Completed report exports returned no files.' } else { '' })
+        }
+    }
 }
 
-$payload | ConvertTo-Json -Depth 12 -Compress
+$payload['available'] = $payload.tenant.available -or $payload.sites.available -or $payload.dag_reports.available
+# SharePoint modules may write banners/warnings to stdout. Explicit framing keeps
+# those messages separate from the single authoritative evidence document.
+[Console]::Out.WriteLine('ASSESSMENT_SHAREPOINT_JSON_BEGIN')
+[Console]::Out.WriteLine(($payload | ConvertTo-Json -Depth 12 -Compress))
+[Console]::Out.WriteLine('ASSESSMENT_SHAREPOINT_JSON_END')
+Disconnect-SPOService -ErrorAction SilentlyContinue | Out-Null

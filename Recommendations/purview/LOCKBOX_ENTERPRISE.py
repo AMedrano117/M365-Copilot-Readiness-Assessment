@@ -1,3 +1,4 @@
+from Core.source_evidence import source_is_complete
 """
 Customer Lockbox - Copilot & Agent Adoption Recommendation
 """
@@ -36,7 +37,7 @@ async def get_recommendation(sku_name, status="Success", client=None, purview_cl
     
     # Check deployment status from PowerShell data
     deployment_recs = []
-    if status == "Success" and purview_client and hasattr(purview_client, 'org_config'):
+    if status == "Success" and source_is_complete(purview_client, "org_config", getattr(purview_client, "org_config", None)):
         org_config = purview_client.org_config
         
         if org_config.get('available'):

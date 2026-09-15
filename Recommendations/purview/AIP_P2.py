@@ -1,3 +1,4 @@
+from Core.source_evidence import source_is_complete
 """
 Azure Information Protection Premium P2 - Copilot & Agent Adoption Recommendation
 """
@@ -36,7 +37,7 @@ async def get_recommendation(sku_name, status="Success", client=None, purview_cl
     
     # Check deployment status from PowerShell data (same as P1 - uses sensitivity labels)
     deployment_recs = []
-    if status == "Success" and purview_client and hasattr(purview_client, 'sensitivity_labels'):
+    if status == "Success" and source_is_complete(purview_client, "sensitivity_labels", getattr(purview_client, "sensitivity_labels", None)):
         labels_data = purview_client.sensitivity_labels
         
         if labels_data.get('available'):

@@ -4,6 +4,7 @@ Module loading progress bar for recommendation modules
 import sys
 from .spinner import _stdout_lock
 from datetime import datetime
+from . import console_reporting as console
 
 def get_timestamp():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -21,8 +22,7 @@ class ModuleLoadingProgress:
         self.total_services = total_services
         self.started = True
         with _stdout_lock:
-            sys.stdout.write(f'[{get_timestamp()}]   Loading Modules         [░░░░░░░░░░░░░░░░░░░░]   0%')
-            sys.stdout.flush()
+            console.detail('Loading recommendation modules.')
         
     def update(self, service_name, module_count):
         """Update progress when a service finishes loading modules"""
@@ -37,20 +37,7 @@ class ModuleLoadingProgress:
             if not self.started or self.total_services <= 0:
                 return
 
-            # Calculate progress
-            progress = self.loaded_services / self.total_services
-            bar_length = 20
-            filled = int(bar_length * progress)
-            bar = '█' * filled + '░' * (bar_length - filled)
-            
-            # Clear line and show progress
-            if self.loaded_services >= self.total_services:
-                # Completion - add checkmark
-                sys.stdout.write(f'\r[{get_timestamp()}]   ✓ Loading Modules         [{bar}] {int(progress * 100):3d}%\n')
-            else:
-                # In progress
-                sys.stdout.write(f'\r[{get_timestamp()}]   Loading Modules         [{bar}] {int(progress * 100):3d}%')
-            sys.stdout.flush()
+            console.detail(f'{service_name}: loaded {module_count} recommendation modules.')
 
 # Global instance
 _module_progress = None

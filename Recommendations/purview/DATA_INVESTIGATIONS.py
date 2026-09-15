@@ -1,3 +1,4 @@
+from Core.source_evidence import source_is_complete
 """
 Data Investigations - Copilot & Agent Adoption Recommendation
 """
@@ -36,7 +37,7 @@ async def get_recommendation(sku_name, status="Success", client=None, purview_cl
     
     # Check deployment status from PowerShell data
     deployment_recs = []
-    if status == "Success" and purview_client and hasattr(purview_client, 'ediscovery_cases'):
+    if status == "Success" and source_is_complete(purview_client, "ediscovery_cases", getattr(purview_client, "ediscovery_cases", None)):
         ediscovery_data = purview_client.ediscovery_cases
         
         if ediscovery_data.get('available'):

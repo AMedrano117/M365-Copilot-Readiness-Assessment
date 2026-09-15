@@ -2,6 +2,7 @@
 DefenderInsights - Pre-computed security metrics from Defender client
 Similar to pp_insights pattern for Power Platform
 """
+from Core.source_evidence import source_is_complete
 
 class DefenderInsights:
     """
@@ -72,9 +73,9 @@ class DefenderInsights:
         """Extract incident metrics"""
         inc = self.defender_client.incident_summary
         
-        self.incident_total = inc.get('total', 0)
-        self.incident_active = inc.get('active', 0)
-        self.incident_high_severity = inc.get('high_severity', 0)
+        self.incident_total = inc.get('total') or 0
+        self.incident_active = inc.get('active') or 0
+        self.incident_high_severity = inc.get('high_severity') or 0
         
         # Build metrics and recommendation
         self.incident_metrics = []
@@ -132,19 +133,13 @@ class DefenderInsights:
         return len(self.identity_metrics) > 0 if self.available else False
 
     def source_was_read(self, *dataset_keys):
-        """True only if at least one of the named Graph Security datasets was fetched.
+        """True only when every named dataset was completely fetched.
 
         Callers use this before stating that nothing was found. When it returns False the
         dataset was never successfully read, so the correct report is "Not Assessed" rather
         than "no threats detected".
         """
-        if not self.available:
-            return False
-        if not self.data_sources:
-            # Client predates per-dataset tracking: fall back to overall availability so
-            # behaviour degrades to the previous (optimistic) reporting rather than breaking.
-            return True
-        return any(self.data_sources.get(key, False) for key in dataset_keys)
+        return bool(dataset_keys) and all(source_is_complete(self.defender_client, key) for key in dataset_keys)
 
 
 def get_oauth_metrics(defender_client):
@@ -202,7 +197,7 @@ def get_incident_metrics(defender_client):
         return [], ""
     
     inc = defender_client.incident_summary
-    if inc.get('total', 0) == 0:
+    if not inc.get('total'):
         return [], ""
     
     metrics = []

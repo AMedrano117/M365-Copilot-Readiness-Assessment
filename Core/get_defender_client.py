@@ -10,6 +10,7 @@ import asyncio
 
 from .get_graph_client import GraphRequestError, get_api_client
 from .spinner import get_timestamp, _stdout_lock
+from .source_evidence import source_is_complete
 
 
 class DefenderClient:
@@ -166,7 +167,7 @@ async def get_defender_client(tenant_id, graph_client):
     client = DefenderClient()
     graph_requests = {
         "alerts": ("/v1.0/security/alerts_v2", {"$top": "999"}),
-        "incidents": ("/v1.0/security/incidents", {"$top": "999"}),
+        "incidents": ("/v1.0/security/incidents", {"$top": "50"}),
         "secure_scores": ("/v1.0/security/secureScores", {"$top": "30"}),
         "secure_score_controls": (
             "/v1.0/security/secureScoreControlProfiles", {"$top": "999"}
@@ -186,9 +187,12 @@ async def get_defender_client(tenant_id, graph_client):
                 "records_collected": 0, "pages_collected": 0, "truncated": False,
                 "status_code": getattr(result, "status_code", None), "reason": str(result),
             }
+        if not isinstance(result, dict):
+            result = {"available": False, "availability_status": "unavailable", "value": [],
+                      "reason": "The collector did not return a structured dataset result."}
         collected[name] = result
         client.collection_status[name] = _status(result)
-        client.data_sources[name] = bool(result.get("available")) and not result.get("truncated")
+        client.data_sources[name] = source_is_complete(client, name)
 
     alerts = collected["alerts"].get("value", []) if collected["alerts"].get("available") else []
     client.security_alerts = alerts
@@ -211,6 +215,8 @@ async def get_defender_client(tenant_id, graph_client):
         "resolved": sum(1 for item in incidents if str(item.get("status", "")).lower() in {"resolved", "closed"}),
         "high_severity": sum(1 for item in active_incidents if str(item.get("severity", "")).lower() == "high"),
     }
+    if not client.data_sources["incidents"]:
+        client.incident_summary = {key: None for key in client.incident_summary}
 
     scores = collected["secure_scores"].get("value", []) if collected["secure_scores"].get("available") else []
     if scores:
@@ -271,6 +277,11 @@ async def get_defender_client(tenant_id, graph_client):
         client.activation_message = "Defender for Endpoint is not provisioned in this tenant."
 
     with _stdout_lock:
-        successful = sum(1 for state in client.collection_status.values() if state["available"])
-        print(f"[{get_timestamp()}] ✓ Defender evidence: {successful}/{len(client.collection_status)} supported datasets read")
+        successful = sum(client.data_sources.values())
+        from . import console_reporting as console
+        message = f'Defender evidence: {successful}/{len(client.collection_status)} datasets completely read.'
+        if successful == len(client.collection_status):
+            console.detail(message)
+        else:
+            console.status(message, tone='warning')
     return client

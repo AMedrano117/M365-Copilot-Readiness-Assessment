@@ -4,6 +4,7 @@ Provides authenticated access to Microsoft Graph usage reports and deployment da
 Fetches and caches: usage reports, site metadata, user assignments, activity metrics.
 Used for enhanced M365 Copilot adoption observations.
 """
+from . import console_reporting as console
 import asyncio
 import csv
 import io
@@ -65,7 +66,22 @@ async def get_m365_client(
             
             # Pre-computed summaries for fast access
             self.sites_summary = {}
-            self.users_summary = {}
+            self.users_summary = {
+                'copilot_eligible_users': None,
+                'copilot_licensed': None,
+                'known_copilot_licensed_users': None,
+                'copilot_license_coverage': None,
+                'copilot_adoption_rate': None,
+                'coverage_population': '',
+                'availability_status': 'unavailable',
+                'reason': 'Copilot license coverage was not collected',
+                'subscription_catalog_available': False,
+            }
+            self.license_coverage = {
+                'available': False,
+                'availability_status': 'unavailable',
+                'reason': 'Copilot license coverage was not collected',
+            }
             self.email_summary = {}
             self.teams_summary = {}
             self.sharepoint_summary = {}
@@ -144,34 +160,14 @@ async def get_m365_client(
             preview_collectors=preview_collectors,
         )
         
-        # Execute all API calls in parallel with progress bar
+        # Execute all API calls in parallel; elapsed time is not a completion percentage.
         import sys
         
-        # Show initial progress bar
         with _stdout_lock:
-            sys.stdout.write(f'\r[{get_timestamp()}]   M365 Data Gathering     [░░░░░░░░░░░░░░░░░░░░]   0%')
+            console.detail(f'[{get_timestamp()}]   M365 data collection started.\n')
             sys.stdout.flush()
         
-        # Create progress update task
-        async def update_progress():
-            for i in range(1, 101):
-                await asyncio.sleep(0.6)  # ~60 seconds total
-                progress = i / 100
-                filled = int(20 * progress)
-                bar = '█' * filled + '░' * (20 - filled)
-                with _stdout_lock:
-                    sys.stdout.write(f'\r[{get_timestamp()}]   M365 Data Gathering     [{bar}] {i:3d}%')
-                    sys.stdout.flush()
-        
-        # Run API calls and progress updates concurrently
-        progress_task = asyncio.create_task(update_progress())
         results = await asyncio.gather(*tasks.values(), return_exceptions=True)
-        progress_task.cancel()
-        
-        # Complete progress bar
-        with _stdout_lock:
-            sys.stdout.write(f'\r[{get_timestamp()}]   ✓ M365 Data Gathering     [████████████████████] 100%\n')
-            sys.stdout.flush()
         
         # Map results to named dictionary
         response_dict = dict(zip(tasks.keys(), results))
@@ -236,52 +232,19 @@ async def get_m365_client(
                 total_users = len(client.users)
                 enabled_users = sum(1 for u in client.users if field(u, 'accountEnabled', True))
                 
-                # Count Copilot license assignments (SKU IDs for M365 Copilot)
-                copilot_sku_ids = [
-                    'c28afa23-5a37-4837-938f-7cc48d0cca5c',  # M365 Copilot
-                    'f2b5e97e-f677-4bb5-8127-5c3ce7b6a64e',  # M365 Copilot (User)
-                ]
-                copilot_sku_ids_lower = [sku.lower() for sku in copilot_sku_ids]  # Compute once
-                
-                copilot_licensed = 0
-                eligible_users = 0
-                for user in client.users:
-                    assigned_sku_ids = []
-                    has_copilot_license = False
-                    assigned_licenses = field(user, 'assignedLicenses', []) or []
-                    if assigned_licenses:
-                        for license in assigned_licenses:
-                            sku_id = field(license, 'skuId', '')
-                            if sku_id:
-                                assigned_sku_ids.append(str(sku_id).lower())
-                            if sku_id and str(sku_id).lower() in copilot_sku_ids_lower:
-                                has_copilot_license = True
-                    if has_copilot_license:
-                        copilot_licensed += 1
-                    # Graph does not expose a single authoritative "Copilot eligible" flag.
-                    # Count enabled users with a non-Copilot base license as the auditable
-                    # tenant-derived eligibility population and disclose that derivation.
-                    if field(user, 'accountEnabled', True) and any(
-                        sku_id not in copilot_sku_ids_lower for sku_id in assigned_sku_ids
-                    ):
-                        eligible_users += 1
-                
-                client.users_summary = {
+                # License coverage is resolved once by the dedicated collector,
+                # using subscribed products and paid Copilot service plans.
+                # A user inventory alone cannot establish Copilot entitlement.
+                client.users_summary.update({
                     'total': total_users,
                     'enabled': enabled_users,
                     'disabled': total_users - enabled_users,
-                    'copilot_eligible_users': eligible_users,
-                    'copilot_licensed': copilot_licensed,
-                    'copilot_license_coverage': round((copilot_licensed / eligible_users * 100), 2) if eligible_users > 0 else None,
-                    # Compatibility only. New report content must call this license coverage.
-                    'copilot_adoption_rate': round((copilot_licensed / eligible_users * 100), 2) if eligible_users > 0 else 0,
-                    'coverage_population': 'enabled users with at least one assigned non-Copilot base license (tenant-derived eligibility estimate)',
                     'sampled': bool((client.collection_status.get('users') or {}).get('truncated'))
-                }
+                })
             except Exception as e:
-                client.users_summary = {'total': 0, 'error': f'Failed to process users: {str(e)}'}
+                client.users_summary.update({'total': 0, 'error': f'Failed to process users: {str(e)}'})
         else:
-            client.users_summary = {'total': 0, 'error': 'User.Read.All permission missing or API error'}
+            client.users_summary.update({'total': 0, 'error': 'User.Read.All permission missing or API error'})
             client.missing_permissions.append('User.Read.All')
 
         connections_response = response_dict.get('external_connections')
@@ -526,23 +489,42 @@ async def get_m365_client(
             client.copilot_dashboard = ai_usage_result.get('copilot_dashboard', client.copilot_dashboard)
             client.shadow_ai_usage = ai_usage_result.get('shadow_ai_usage', client.shadow_ai_usage)
             direct_coverage = ai_usage_result.get('license_coverage', {}) or {}
-            if direct_coverage.get('available') and client.users_summary:
+            if direct_coverage:
+                client.license_coverage = direct_coverage
                 client.users_summary.update({
-                    'total': direct_coverage.get('total_users', client.users_summary.get('total', 0)),
-                    'enabled': direct_coverage.get('enabled_users', client.users_summary.get('enabled', 0)),
-                    'disabled': max(
-                        direct_coverage.get('total_users', 0) - direct_coverage.get('enabled_users', 0), 0
-                    ),
-                    'copilot_eligible_users': direct_coverage.get('eligible_users', 0),
-                    'copilot_licensed': direct_coverage.get('copilot_licensed_users', 0),
+                    key: direct_coverage[key] for key in (
+                        'availability_status', 'reason', 'known_copilot_licensed_users',
+                        'license_detection_basis', 'subscription_catalog_available',
+                        'unresolved_assigned_sku_count', 'users_without_recognized_base_license',
+                        'records_collected', 'pages_collected', 'truncated',
+                    ) if key in direct_coverage
+                })
+            if direct_coverage.get('available'):
+                client.available = True
+                # A partial license read must not replace a complete user
+                # inventory with a smaller population used by other insights.
+                if not direct_coverage.get('truncated'):
+                    client.users_summary.update({
+                        'total': direct_coverage.get('total_users', client.users_summary.get('total', 0)),
+                        'enabled': direct_coverage.get('enabled_users', client.users_summary.get('enabled', 0)),
+                        'disabled': max(
+                            direct_coverage.get('total_users', 0) - direct_coverage.get('enabled_users', 0), 0
+                        ),
+                    })
+                client.users_summary.update({
+                    'copilot_eligible_users': direct_coverage.get('eligible_users'),
+                    'copilot_licensed': direct_coverage.get('copilot_licensed_users'),
                     'copilot_license_coverage': direct_coverage.get('copilot_license_coverage'),
-                    'copilot_adoption_rate': direct_coverage.get('copilot_license_coverage') or 0,
+                    'copilot_adoption_rate': direct_coverage.get('copilot_license_coverage'),
                     'coverage_population': direct_coverage.get('coverage_population', ''),
-                    'sampled': False,
+                    'sampled': bool(direct_coverage.get('truncated')),
                 })
         elif isinstance(ai_usage_result, Exception):
-            client.copilot_usage['reason'] = 'Collection failed: {}'.format(type(ai_usage_result).__name__)
-            client.m365_app_readiness['reason'] = 'Collection failed: {}'.format(type(ai_usage_result).__name__)
+            reason = 'Collection failed: {}'.format(type(ai_usage_result).__name__)
+            client.copilot_usage['reason'] = reason
+            client.m365_app_readiness['reason'] = reason
+            client.license_coverage['reason'] = reason
+            client.users_summary['reason'] = reason
 
         # Log summary
         if client.available:
@@ -560,17 +542,19 @@ async def get_m365_client(
             # Success message removed for cleaner output
             if client.missing_permissions:
                 with _stdout_lock:
-                    print(f"[{get_timestamp()}] ⚠️  Missing permissions: {', '.join(client.missing_permissions)}")
+                    console.status(f"Missing permissions: {', '.join(client.missing_permissions)}", tone='warning')
         else:
             with _stdout_lock:
-                print(f"[{get_timestamp()}] ⚠️  M365 client: No data available (check permissions)")
+                console.status(f"M365 client: No data available (check permissions)", tone='warning')
         
+        with _stdout_lock:
+            console.detail(f'[{get_timestamp()}]   M365 data collection finished; see source coverage for completeness.')
         return client
         
     except Exception as e:
         # Catastrophic error - return minimal client
         with _stdout_lock:
-            print(f"[{get_timestamp()}] ⚠️  M365 client initialization failed: {str(e)}")
+            console.status(f"M365 client initialization failed: {str(e)}", tone='error')
         
         client.available = False
         return client
@@ -606,10 +590,14 @@ def extract_m365_insights_from_client(m365_client):
             # Users & Licensing
             'total_users': 0,
             'enabled_users': 0,
-            'copilot_eligible_users': 0,
-            'copilot_licensed_users': 0,
+            'copilot_eligible_users': None,
+            'copilot_licensed_users': None,
+            'known_copilot_licensed_users': None,
             'copilot_license_coverage': None,
-            'copilot_adoption_rate': 0,
+            'copilot_license_coverage_status': 'unavailable',
+            'copilot_license_coverage_reason': 'M365 collection unavailable',
+            'copilot_adoption_rate': None,
+            'license_coverage': {'available': False, 'availability_status': 'unavailable', 'reason': 'M365 collection unavailable'},
             'copilot_usage': {'available': False, 'reason': 'M365 collection unavailable'},
             'm365_app_readiness': {'available': False, 'reason': 'M365 collection unavailable'},
             'copilot_dashboard': {'available': False, 'reason': 'M365 collection unavailable'},
@@ -704,14 +692,18 @@ def extract_m365_insights_from_client(m365_client):
         # Users & Licensing
         'total_users': users_summary.get('total', 0),
         'enabled_users': users_summary.get('enabled', 0),
-        'copilot_eligible_users': users_summary.get('copilot_eligible_users', 0),
+        'copilot_eligible_users': users_summary.get('copilot_eligible_users'),
         'disabled_users': users_summary.get('disabled', 0),
-        'copilot_licensed_users': users_summary.get('copilot_licensed', 0),
+        'copilot_licensed_users': users_summary.get('copilot_licensed'),
+        'known_copilot_licensed_users': users_summary.get('known_copilot_licensed_users'),
         'copilot_license_coverage': users_summary.get('copilot_license_coverage'),
         'copilot_license_coverage_population': users_summary.get('coverage_population', ''),
+        'copilot_license_coverage_status': users_summary.get('availability_status', 'unavailable'),
+        'copilot_license_coverage_reason': users_summary.get('reason', 'Copilot license coverage was not collected'),
+        'license_coverage': getattr(m365_client, 'license_coverage', {}),
         # Compatibility alias for older recommendation modules. This is license coverage,
         # never proof of active Copilot use.
-        'copilot_adoption_rate': users_summary.get('copilot_adoption_rate', 0),
+        'copilot_adoption_rate': users_summary.get('copilot_adoption_rate'),
         'user_data_sampled': users_summary.get('sampled', False),
 
         # Dedicated AI usage evidence. Availability and reasons are retained so consumers

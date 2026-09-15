@@ -32,9 +32,9 @@ def get_recommendation(sku_name, status="Success", client=None, defender_client=
             
             if metrics:
                 observation += ". " + ", ".join(metrics)
-            elif defender_insights.source_was_read('incidents', 'alerts', 'email_threats'):
+            elif defender_insights.source_was_read('incidents', 'alerts'):
                 # Clean status - the threat feeds were read and came back empty
-                observation += ". No advanced threats detected in last 30 days"
+                observation += ". No active incidents or phishing/malware alerts were returned by the completed incident and alert queries"
             else:
                 # Threat data was never retrieved - do not report unread as clean
                 observation += ". Threat data could not be retrieved, so email and content threat status is unverified"

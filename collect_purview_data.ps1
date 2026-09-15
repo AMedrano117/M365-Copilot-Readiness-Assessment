@@ -287,12 +287,12 @@ if (-not $DataOnly) {
     Write-Progress2 "[2/4] Collecting Purview compliance data..." -ForegroundColor Yellow
 }
 
-$purviewData = @{}
+$purviewData = @{ collected_at = [DateTime]::UtcNow.ToString('o') }
 
 # Collect DLP Policies
 Write-Progress2 "      - DLP Compliance Policies..." -NoNewline
 try {
-    $dlpPolicies = @(Get-DlpCompliancePolicy -ErrorAction Stop | Select-Object Name, DisplayName, Mode, Enabled, Workload, ExchangeLocation, SharePointLocation, OneDriveLocation, TeamsLocation, EndpointDlpLocation, PowerBILocation, PolicyRBACScopes, Comment)
+    $dlpPolicies = @(Get-DlpCompliancePolicy -ErrorAction Stop | Select-Object Name, DisplayName, Identity, Guid, Mode, Enabled, Workload, Locations, EnforcementPlanes, ExchangeLocation, ExchangeLocationException, SharePointLocation, SharePointLocationException, OneDriveLocation, OneDriveLocationException, TeamsLocation, EndpointDlpLocation, PowerBILocation, PolicyRBACScopes, Comment)
     $purviewData['dlp_policies'] = New-CollectionSuccess -Count $dlpPolicies.Count
     $purviewData['dlp_policies']['policies'] = $dlpPolicies
     Write-Progress2 " $($dlpPolicies.Count) found" -ForegroundColor Green
@@ -305,7 +305,7 @@ try {
 # Collect DLP Rules. Policies alone do not show what data is detected or what happens on a match.
 Write-Progress2 "      - DLP Compliance Rules..." -NoNewline
 try {
-    $dlpRules = @(Get-DlpComplianceRule -ErrorAction Stop | Select-Object Name, DisplayName, ParentPolicyName, Disabled, Priority, Mode, Workload, ContentContainsSensitiveInformation, ContentIsShared, AccessScope, BlockAccess, BlockAccessScope, NotifyUser, NotifyAllowOverride, GenerateAlert, GenerateIncidentReport, ReportSeverityLevel, RestrictWebGrounding, EndpointDlpRestrictions, EncryptRMSTemplate, Quarantine, AdvancedRule)
+    $dlpRules = @(Get-DlpComplianceRule -ErrorAction Stop | Select-Object Name, DisplayName, Identity, ParentPolicyName, ParentPolicyId, Disabled, Priority, Mode, Workload, ContentContainsSensitiveInformation, ContentIsShared, AccessScope, BlockAccess, BlockAccessScope, NotifyUser, NotifyAllowOverride, GenerateAlert, GenerateIncidentReport, ReportSeverityLevel, RestrictAccess, RestrictWebGrounding, EndpointDlpRestrictions, EncryptRMSTemplate, Quarantine, AdvancedRule)
     $purviewData['dlp_rules'] = New-CollectionSuccess -Count $dlpRules.Count
     $purviewData['dlp_rules']['rules'] = $dlpRules
     Write-Progress2 " $($dlpRules.Count) found" -ForegroundColor Green

@@ -6,7 +6,6 @@ NOTE: Uses PowerShell data collector (collect_purview_data.ps1) to collect data.
 The script runs Connect-IPPSSession, collects cmdlet outputs, and pipes JSON to Python via stdin.
 No cache files are created - data is passed directly in memory.
 """
-import asyncio
 import json
 import os
 import sys
@@ -150,7 +149,7 @@ def collection_state(data, key, optional=False):
     }
 
 
-async def get_purview_client(tenant_id):
+async def get_purview_client(tenant_id, payload=None):
     """
     Create Purview client and fetch deployment data from PowerShell stdin.
     
@@ -161,6 +160,9 @@ async def get_purview_client(tenant_id):
     
     Args:
         tenant_id: Azure tenant ID (GUID or domain name)
+        payload: Explicit collected dictionary. When supplied, hydration is fully
+            local and does not inspect stdin, environment variables, or the global
+            collection cache.
     
     Returns:
         Object with deployment data hydrated from PowerShell cmdlet outputs
@@ -170,7 +172,19 @@ async def get_purview_client(tenant_id):
     graph_http = None
     
     # Load data from PowerShell stdin (no HTTP client needed - uses PowerShell cmdlets)
-    purview_data = load_purview_data_from_stdin()
+    if payload is not None and not isinstance(payload, dict):
+        raise ValueError("Purview payload must be a dictionary.")
+    purview_data = payload if payload is not None else load_purview_data_from_stdin()
+    return hydrate_purview_client(purview_data)
+
+
+def hydrate_purview_client(purview_data):
+    """Hydrate collected data without an event loop, sockets, or runtime input.
+
+    The asynchronous public client API delegates here after obtaining its payload.
+    Offline import can call this helper directly without creating asyncio's
+    Windows loopback socketpair.
+    """
     
     # Helper to safely extract nested data
     def safe_get(data, key, nested_key=None):
@@ -241,8 +255,8 @@ async def get_purview_client(tenant_id):
             }.items()
         }
     
-    # Fetch data from all endpoints in parallel
-    async def fetch_retention_labels():
+    # Normalize each section of the already collected payload.
+    def fetch_retention_labels():
         if retention_available:
             return {
                 'available': True, 
@@ -251,7 +265,7 @@ async def get_purview_client(tenant_id):
             }
         return {'available': False, 'total_labels': 0}
     
-    async def fetch_sensitivity_labels():
+    def fetch_sensitivity_labels():
         if labels_available:
             return {
                 'available': True,
@@ -260,7 +274,7 @@ async def get_purview_client(tenant_id):
             }
         return {'available': False, 'total_labels': 0}
     
-    async def fetch_label_policies():
+    def fetch_label_policies():
         if label_policies_available:
             return {
                 'available': True,
@@ -269,13 +283,13 @@ async def get_purview_client(tenant_id):
             }
         return {'available': False, 'total_policies': 0}
     
-    async def fetch_retention_events():
+    def fetch_retention_events():
         return {'available': False, 'total_events': 0}
     
-    async def fetch_retention_event_types():
+    def fetch_retention_event_types():
         return {'available': False, 'total_types': 0}
     
-    async def fetch_information_barriers():
+    def fetch_information_barriers():
         if ib_available:
             return {
                 'available': True,
@@ -284,7 +298,7 @@ async def get_purview_client(tenant_id):
             }
         return {'available': False, 'total_policies': 0}
     
-    async def fetch_ediscovery_cases():
+    def fetch_ediscovery_cases():
         if ediscovery_available:
             active_count = sum(1 for c in ediscovery_data if c.get('Status') == 'Active')
             return {
@@ -295,7 +309,7 @@ async def get_purview_client(tenant_id):
             }
         return {'available': False, 'total_cases': 0, 'active_cases': 0}
     
-    async def fetch_dlp_policies():
+    def fetch_dlp_policies():
         if dlp_available:
             enabled_count = sum(1 for p in dlp_data if _purview_enabled(p))
             endpoint_count = sum(
@@ -312,7 +326,7 @@ async def get_purview_client(tenant_id):
             }
         return {'available': False, 'total_policies': 0}
 
-    async def fetch_dlp_rules():
+    def fetch_dlp_rules():
         if dlp_rules_available:
             enabled_count = sum(1 for rule in dlp_rule_data if not _truthy(rule.get('Disabled')))
             return {
@@ -323,13 +337,13 @@ async def get_purview_client(tenant_id):
             }
         return {'available': False, 'total_rules': 0, 'enabled_rules': 0, 'rules': []}
     
-    async def fetch_dlp_alerts():
+    def fetch_dlp_alerts():
         return {'available': False, 'total_alerts': 0}
     
-    async def fetch_irm_alerts():
+    def fetch_irm_alerts():
         return {'available': False, 'total_alerts': 0}
     
-    async def fetch_insider_risk():
+    def fetch_insider_risk():
         if insider_risk_available:
             return {
                 'available': True,
@@ -338,7 +352,7 @@ async def get_purview_client(tenant_id):
             }
         return {'available': False, 'total_policies': 0}
     
-    async def fetch_comm_compliance():
+    def fetch_comm_compliance():
         if comm_comp_available:
             return {
                 'available': True,
@@ -347,7 +361,7 @@ async def get_purview_client(tenant_id):
             }
         return {'available': False, 'total_policies': 0}
     
-    async def fetch_org_config():
+    def fetch_org_config():
         if org_config_available:
             return {
                 'available': True,
@@ -356,7 +370,7 @@ async def get_purview_client(tenant_id):
             }
         return {'available': False}
     
-    async def fetch_irm_config():
+    def fetch_irm_config():
         if irm_config_available:
             return {
                 'available': True,
@@ -364,7 +378,7 @@ async def get_purview_client(tenant_id):
             }
         return {'available': False}
     
-    async def fetch_audit_config():
+    def fetch_audit_config():
         if audit_config_available:
             return {
                 'available': True,
@@ -373,37 +387,42 @@ async def get_purview_client(tenant_id):
             }
         return {'available': False}
     
-    async def fetch_audit_logs():
+    def fetch_audit_logs():
         # Audit logs come from PowerShell data, not Graph API
         # (Graph audit logs API is separate and not part of Purview)
         return {'available': False, 'recent_count': 0}
     
-    async def fetch_customer_lockbox():
+    def fetch_customer_lockbox():
         return {'available': False, 'total_requests': 0}
     
-    # Run all fetches in parallel (progress managed by orchestrator)
+    # Preserve per-section failures while normalizing without async I/O.
+    def read_section(reader):
+        try:
+            return reader()
+        except Exception as exc:
+            return exc
+
     try:
-        results = await asyncio.gather(
-            fetch_sensitivity_labels(),
-            fetch_retention_labels(),
-            fetch_label_policies(),
-            fetch_retention_events(),
-            fetch_retention_event_types(),
-            fetch_information_barriers(),
-            fetch_ediscovery_cases(),
-            fetch_dlp_policies(),
-            fetch_dlp_rules(),
-            fetch_dlp_alerts(),
-            fetch_irm_alerts(),
-            fetch_insider_risk(),
-            fetch_comm_compliance(),
-            fetch_org_config(),
-            fetch_irm_config(),
-            fetch_audit_config(),
-            fetch_audit_logs(),
-            fetch_customer_lockbox(),
-            return_exceptions=True
-        )
+        results = [read_section(reader) for reader in (
+            fetch_sensitivity_labels,
+            fetch_retention_labels,
+            fetch_label_policies,
+            fetch_retention_events,
+            fetch_retention_event_types,
+            fetch_information_barriers,
+            fetch_ediscovery_cases,
+            fetch_dlp_policies,
+            fetch_dlp_rules,
+            fetch_dlp_alerts,
+            fetch_irm_alerts,
+            fetch_insider_risk,
+            fetch_comm_compliance,
+            fetch_org_config,
+            fetch_irm_config,
+            fetch_audit_config,
+            fetch_audit_logs,
+            fetch_customer_lockbox,
+        )]
         
         (sensitivity_labels, retention_labels, label_policies, retention_events, retention_event_types,
          information_barriers, ediscovery_cases, dlp_policies, dlp_rules, dlp_alerts,
@@ -441,6 +460,7 @@ async def get_purview_client(tenant_id):
     # Build client object with all deployment data
     class PurviewClient:
         def __init__(self):
+            self.collected_at = (purview_data or {}).get('collected_at', '')
             self.sensitivity_labels = sensitivity_labels if not isinstance(sensitivity_labels, Exception) else {'available': False}
             self.label_policies = label_policies if not isinstance(label_policies, Exception) else {'available': False}
             self.retention_labels = retention_labels if not isinstance(retention_labels, Exception) else {'available': False}

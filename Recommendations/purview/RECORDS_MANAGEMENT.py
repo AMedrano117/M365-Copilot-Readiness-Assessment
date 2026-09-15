@@ -1,3 +1,4 @@
+from Core.source_evidence import source_is_complete
 """
 Records Management - Copilot & Agent Adoption Recommendation
 """
@@ -36,7 +37,7 @@ async def get_recommendation(sku_name, status="Success", client=None, purview_cl
     
     # Check retention policies from PowerShell data
     deployment_recs = []
-    if status == "Success" and purview_client and hasattr(purview_client, 'retention_labels'):
+    if status == "Success" and source_is_complete(purview_client, "retention_labels", getattr(purview_client, "retention_labels", None)):
         retention_data = purview_client.retention_labels
         
         if retention_data.get('available'):
