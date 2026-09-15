@@ -1,0 +1,2 @@
+TenantId,SiteId,WebId,ListId,ScopeId,UniqueId,ListItemId,ItemType,Item Url,Role definition,LinkId,LinkScope,Recipient,UserPrincipalName,ParentObjectID,ParentGroupName,ParentGroupEmail,ParentGroupType,TotalUserCount,ReportDate
+example-tenant,example-site,example-web,example-list,example-scope,example-item,1,File,/sites/team/Shared Documents/example.docx,Read,,,Everyone except external users,Everyone except external users,,,,,3,2026-09-14T20:41:07Z

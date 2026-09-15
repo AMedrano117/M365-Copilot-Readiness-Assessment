@@ -28,9 +28,9 @@ def get_recommendation(sku_name, status="Success", defender_client=None, defende
                     link_url="https://learn.microsoft.com/defender-office-365/safe-documents-in-e5-plus-security-about/",
                     status=status
                 )
-            else:
-                # Clean status - no threats detected
-                observation += ". No malware detected in last 30 days"
+            elif defender_insights.source_was_read('alerts'):
+                # Completed alert source - no threats detected
+                observation += ". No malware alerts were returned by the completed alert query"
         
         return new_recommendation(
             service="Defender",

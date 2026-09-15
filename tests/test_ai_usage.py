@@ -1,6 +1,7 @@
 """Evidence-model tests for aggregate AI usage and optional enrichment."""
 
 import asyncio
+import io
 import os
 import tempfile
 import unittest
@@ -24,8 +25,14 @@ from Core.assessment_model import summarize_readiness
 from Core.evidence_layer import build_evidence_bundle
 from Core.export_recommendations import export_to_html
 from Core.get_power_platform_client import _merge_environment_responses
-from Core.get_m365_client import _parse_csv_report
+from Core.get_m365_client import _parse_csv_report, extract_m365_insights_from_client, get_m365_client
 from Core.new_recommendation import NOT_ASSESSED_STATUS, new_recommendation
+from Recommendations.m365.m365_insights import (
+    get_copilot_adoption_percentage,
+    get_copilot_adoption_recommendation,
+    get_copilot_licensed_count,
+    get_users_observation,
+)
 
 
 class FakeResponse:
@@ -162,11 +169,109 @@ class CopilotUsageTests(unittest.TestCase):
                 {"accountEnabled": True, "assignedLicenses": [{"skuId": base}]},
                 {"accountEnabled": False, "assignedLicenses": [{"skuId": base}]},
             ]}),
+            FakeResponse(200, {"value": [
+                {"skuId": base, "skuPartNumber": "SPB"},
+                {"skuId": copilot, "skuPartNumber": "Microsoft_365_Copilot"},
+            ]}),
         ])
         evidence = asyncio.run(collect_license_coverage(client))
         self.assertEqual(evidence["eligible_users"], 2)
         self.assertEqual(evidence["copilot_licensed_users"], 1)
         self.assertEqual(evidence["copilot_license_coverage"], 50.0)
+
+    def test_paid_service_plans_recognize_new_business_and_bundle_skus(self):
+        # The tenant supplies product/plan identities; newer GUIDs need not be
+        # hardcoded. These fixture GUIDs are deliberately not production IDs.
+        business, bundle, premium = "new-business-sku", "new-bundle-sku", "base-premium-sku"
+        client = FakeClient([
+            FakeResponse(200, {"value": [
+                {"accountEnabled": True, "assignedLicenses": [{"skuId": business}, {"skuId": premium}]},
+                {"accountEnabled": True, "assignedLicenses": [{"skuId": bundle}]},
+                {"accountEnabled": True, "assignedLicenses": [{"skuId": premium}]},
+            ]}),
+            FakeResponse(200, {"value": [
+                {"skuId": business, "servicePlans": [
+                    {"servicePlanId": "a62f8878-de10-42f3-b68f-6149a25ceb97"},
+                ]},
+                {"skuId": bundle, "servicePlans": [
+                    {"servicePlanName": "M365_COPILOT_BUSINESS_CHAT"},
+                    {"servicePlanName": "EXCHANGE_S_STANDARD"},
+                ]},
+                {"skuId": premium, "skuPartNumber": "SPB", "servicePlans": [
+                    {"servicePlanName": "Bing_Chat_Enterprise"},
+                ]},
+            ]}),
+        ])
+        evidence = asyncio.run(collect_license_coverage(client))
+        self.assertEqual(evidence["copilot_licensed_users"], 2)
+        self.assertEqual(evidence["eligible_users"], 3)
+        self.assertEqual(evidence["copilot_license_coverage"], 66.67)
+        self.assertEqual(evidence["availability_status"], "available")
+
+    def test_chat_security_and_storage_addons_do_not_establish_base_eligibility(self):
+        client = FakeClient([
+            FakeResponse(200, {"value": [
+                {"accountEnabled": True, "assignedLicenses": [{"skuId": "addon"}]},
+            ]}),
+            FakeResponse(200, {"value": [{
+                "skuId": "addon", "skuPartNumber": "COPILOT_CHAT",
+                "servicePlans": [
+                    {"servicePlanName": "Bing_Chat_Enterprise"},
+                    {"servicePlanName": "EXCHANGE_S_FOUNDATION"},
+                    {"servicePlanName": "ATP_ENTERPRISE"},
+                    {"servicePlanName": "SHAREPOINTSTORAGE"},
+                    {"servicePlanName": "COPILOT_STUDIO_IN_COPILOT_FOR_M365"},
+                ],
+            }]}),
+        ])
+        evidence = asyncio.run(collect_license_coverage(client))
+        self.assertEqual(evidence["eligible_users"], 0)
+        self.assertEqual(evidence["copilot_licensed_users"], 0)
+        self.assertIsNone(evidence["copilot_license_coverage"])
+        self.assertEqual(evidence["users_without_recognized_base_license"], 1)
+
+    def test_catalog_permission_failure_does_not_assert_zero_paid_licenses(self):
+        client = FakeClient([
+            FakeResponse(200, {"value": [
+                {"accountEnabled": True, "assignedLicenses": [{"skuId": "new-business-sku"}]},
+            ]}),
+            FakeResponse(403, {}, "Forbidden"),
+        ])
+        evidence = asyncio.run(collect_license_coverage(client))
+        self.assertEqual(evidence["availability_status"], "partial")
+        self.assertIsNone(evidence["copilot_licensed_users"])
+        self.assertIsNone(evidence["copilot_license_coverage"])
+        self.assertIn("Subscription catalog", evidence["reason"])
+
+    def test_unresolved_sku_preserves_known_count_but_marks_total_unknown(self):
+        copilot = "639dec6b-bb19-468b-871c-c5c441c4b0cb"
+        client = FakeClient([
+            FakeResponse(200, {"value": [
+                {"accountEnabled": True, "assignedLicenses": [{"skuId": copilot}, {"skuId": "premium"}]},
+                {"accountEnabled": True, "assignedLicenses": [{"skuId": "unresolved"}, {"skuId": "premium"}]},
+            ]}),
+            FakeResponse(200, {"value": [{"skuId": "premium", "skuPartNumber": "SPB"}]}),
+        ])
+        evidence = asyncio.run(collect_license_coverage(client))
+        self.assertEqual(evidence["known_copilot_licensed_users"], 1)
+        self.assertIsNone(evidence["copilot_licensed_users"])
+        self.assertIsNone(evidence["copilot_license_coverage"])
+        self.assertEqual(evidence["unresolved_assigned_sku_count"], 1)
+
+    def test_partial_user_pagination_does_not_publish_complete_license_count(self):
+        copilot = "639dec6b-bb19-468b-871c-c5c441c4b0cb"
+        client = FakeClient([
+            FakeResponse(200, {"value": [
+                {"accountEnabled": True, "assignedLicenses": [{"skuId": copilot}, {"skuId": "premium"}]},
+            ], "@odata.nextLink": "https://graph.microsoft.com/page2"}),
+            FakeResponse(403, {}, "Forbidden"),
+            FakeResponse(200, {"value": [{"skuId": "premium", "skuPartNumber": "SPB"}]}),
+        ])
+        evidence = asyncio.run(collect_license_coverage(client))
+        self.assertEqual(evidence["known_copilot_licensed_users"], 1)
+        self.assertIsNone(evidence["copilot_licensed_users"])
+        self.assertTrue(evidence["truncated"])
+        self.assertEqual(evidence["availability_status"], "partial")
 
     def test_m365_apps_partial_usage_remains_available(self):
         client = FakeClient([
@@ -227,6 +332,93 @@ class CopilotUsageTests(unittest.TestCase):
             response = asyncio.run(_request_with_retry(client, "/report"))
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(client.paths), 2)
+
+
+class LicenseCoverageIntegrationTests(unittest.TestCase):
+    def _collect(self, coverage=None, failure=None):
+        async def collection(path, params=None):
+            return {"available": True, "value": [
+                {"accountEnabled": True, "assignedLicenses": [{
+                    "skuId": "c28afa23-5a37-4837-938f-7cc48d0cca5c",
+                }]},
+            ] if path == "/v1.0/users" else []}
+
+        graph = SimpleNamespace(
+            get_collection=mock.AsyncMock(side_effect=collection),
+            get_csv=mock.AsyncMock(return_value=[]),
+        )
+        collector = mock.AsyncMock(
+            return_value={"license_coverage": coverage or {}}, side_effect=failure,
+        )
+        with mock.patch("Core.ai_usage.collect_ai_usage", collector), mock.patch("sys.stdout", new=io.StringIO()):
+            return asyncio.run(get_m365_client(graph))
+
+    def test_partial_license_evidence_survives_client_and_recommendations(self):
+        coverage = {
+            "available": True, "availability_status": "partial",
+            "reason": "One assigned SKU could not be resolved",
+            "total_users": 3, "enabled_users": 3, "eligible_users": 2,
+            "copilot_licensed_users": None, "known_copilot_licensed_users": 1,
+            "copilot_license_coverage": None, "coverage_population": "recognized base plans",
+            "license_detection_basis": "paid service-plan identity",
+            "subscription_catalog_available": True, "unresolved_assigned_sku_count": 1,
+            "users_without_recognized_base_license": 1, "truncated": True,
+        }
+        client = self._collect(coverage)
+        self.assertEqual(client.license_coverage, coverage)
+        self.assertEqual(client.users_summary["availability_status"], "partial")
+        self.assertEqual(client.users_summary["license_detection_basis"], "paid service-plan identity")
+        self.assertEqual(client.users_summary["unresolved_assigned_sku_count"], 1)
+        self.assertTrue(client.users_summary["sampled"])
+        self.assertEqual(client.users_summary["total"], 1)  # Keep the complete primary inventory.
+        insights = extract_m365_insights_from_client(client)
+        self.assertIsNone(insights["copilot_licensed_users"])
+        self.assertIsNone(insights["copilot_adoption_rate"])
+        self.assertIsNone(get_copilot_licensed_count(insights))
+        self.assertIsNone(get_copilot_adoption_percentage(insights))
+        observation = get_users_observation(insights)
+        self.assertIn("at least 1", observation)
+        self.assertIn("could not be resolved", observation)
+        self.assertNotIn("no Copilot licenses", observation)
+        self.assertIn("subscription catalog", get_copilot_adoption_recommendation(insights))
+
+    def test_unavailable_collection_does_not_fall_back_to_old_sku_guesses(self):
+        client = self._collect({
+            "available": False, "availability_status": "unavailable", "reason": "Authentication failed",
+        })
+        insights = extract_m365_insights_from_client(client)
+        self.assertEqual(insights["total_users"], 1)
+        self.assertIsNone(insights["copilot_licensed_users"])
+        self.assertIsNone(insights["copilot_eligible_users"])
+        self.assertEqual(insights["copilot_license_coverage_reason"], "Authentication failed")
+        self.assertIn("not established", get_users_observation(insights))
+
+    def test_collector_exception_keeps_license_count_unknown(self):
+        client = self._collect(failure=RuntimeError("test failure"))
+        insights = extract_m365_insights_from_client(client)
+        self.assertIsNone(insights["copilot_licensed_users"])
+        self.assertEqual(insights["copilot_license_coverage_status"], "unavailable")
+        self.assertIn("RuntimeError", insights["copilot_license_coverage_reason"])
+
+    def test_confirmed_zero_remains_distinct_from_unknown(self):
+        client = self._collect({
+            "available": True, "availability_status": "available", "reason": "",
+            "total_users": 1, "enabled_users": 1, "eligible_users": 1,
+            "copilot_licensed_users": 0, "known_copilot_licensed_users": 0,
+            "copilot_license_coverage": 0,
+        })
+        insights = extract_m365_insights_from_client(client)
+        self.assertEqual(get_copilot_licensed_count(insights), 0)
+        self.assertEqual(get_copilot_adoption_percentage(insights), 0)
+        self.assertIn("no Copilot licenses", get_users_observation(insights))
+        self.assertIn("bounded pilot", get_copilot_adoption_recommendation(insights))
+
+    def test_unavailable_client_exposes_unknown_licensing(self):
+        insights = extract_m365_insights_from_client(None)
+        self.assertIsNone(insights["copilot_licensed_users"])
+        self.assertIsNone(insights["copilot_eligible_users"])
+        self.assertIsNone(get_copilot_adoption_percentage(insights))
+        self.assertEqual(insights["copilot_license_coverage_status"], "unavailable")
 
 
 class ShadowAiTests(unittest.TestCase):
@@ -337,17 +529,22 @@ class ReportPrivacyAndDecisionTests(unittest.TestCase):
                 os.chdir(original_cwd)
         self.assertNotIn("secret.user@contoso.com", body)
         self.assertNotIn("Secret User", body)
-        self.assertIn("AI Adoption &amp; Usage", body)
+        self.assertIn("Pilot suitability and adoption", body)
         self.assertIn("Why it matters", body)
-        self.assertIn("Pilot hypothesis", body)
-        self.assertIn("Measurement and decision", body)
+        self.assertIn("What the pilot should prove", body)
+        self.assertIn("How to decide whether to expand", body)
         self.assertNotIn("What “last 28 days” means", body)
         self.assertNotIn("“D” means days", body)
-        self.assertIn("Active users — last 28 days", body)
+        self.assertIn("28 days", body)
         self.assertNotIn("D28 active users", body)
         self.assertNotIn("1 user were", body)
-        self.assertIn("<td>Excel</td><td>2</td><td>0</td><td>0.0%</td>", body)
-        self.assertIn("<td>Word</td><td>2</td><td><span class=\"muted\">Not provided</span></td><td>N/A</td>", body)
+        metrics = bundle['assessment_result']['adoption_metrics']
+        excel = next(m for m in metrics if 'excel' in m['label'].lower())
+        self.assertEqual(excel['value'], 0)
+        self.assertIn('<td>0</td>', body)
+        unknown = [m for m in bundle['assessment_result']['evidence'] if 'word' in m.get('label', '').lower()]
+        self.assertTrue(unknown)
+        self.assertTrue(all(m['value'] is None for m in unknown))
         for mechanical_plural in (
             "recommendation(s)", "condition(s)", "section(s)", "tab(s)", "idea(s)",
             "user(s)", "policy(ies)",
@@ -357,8 +554,8 @@ class ReportPrivacyAndDecisionTests(unittest.TestCase):
 
     def test_main_value_section_is_bounded_and_has_no_roi_percentage_claims(self):
         repository = Path(__file__).resolve().parent.parent
-        source = (repository / "Core" / "export_recommendations.py").read_text(encoding="utf-8")
-        self.assertIn("opportunity_rows = opportunity_rows[:5]", source)
+        source = (repository / "Core" / "customer_report.py").read_text(encoding="utf-8")
+        self.assertIn("What the pilot should prove", source)
         for unsupported in ("20-30%", "30-40%", "15-20%", "70% while", "80% of valuable"):
             self.assertNotIn(unsupported, source)
 

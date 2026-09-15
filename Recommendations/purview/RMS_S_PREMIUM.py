@@ -1,3 +1,4 @@
+from Core.source_evidence import source_is_complete
 """
 Azure Information Protection Premium P1 - Purview & Compliance Recommendation
 """
@@ -35,7 +36,7 @@ async def get_recommendation(sku_name, status="Success", client=None, purview_cl
     
     # Check deployment status from PowerShell data
     deployment_recs = []
-    if status == "Success" and purview_client and hasattr(purview_client, 'irm_config'):
+    if status == "Success" and source_is_complete(purview_client, "irm_config", getattr(purview_client, "irm_config", None)):
         irm_data = purview_client.irm_config
         
         if irm_data.get('available'):

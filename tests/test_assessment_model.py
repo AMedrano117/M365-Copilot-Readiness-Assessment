@@ -4,6 +4,7 @@ import os
 import pathlib
 import tempfile
 import unittest
+from datetime import date
 
 from Core.assessment_model import (
     DISPOSITION_ACTION,
@@ -26,6 +27,19 @@ class DispositionTests(unittest.TestCase):
         )
         enriched = enrich_assessment_record(rec)
         self.assertEqual(enriched["Disposition"], DISPOSITION_ASSURANCE)
+        self.assertEqual(enriched["EvidenceBasis"], "License signal")
+        self.assertEqual(enriched["Confidence"], "Low")
+
+    def test_attached_inventory_does_not_upgrade_license_evidence(self):
+        record = new_recommendation(
+            "Purview", "Content Explorer",
+            "Content Explorer is active in Microsoft 365 E3.", status="Success",
+        )
+        record["EvidenceAvailable"] = "Yes"
+        record["EvidenceSheet"] = "Purview Policy Detail"
+
+        enriched = enrich_assessment_record(record)
+
         self.assertEqual(enriched["EvidenceBasis"], "License signal")
         self.assertEqual(enriched["Confidence"], "Low")
 
@@ -89,6 +103,18 @@ class DispositionTests(unittest.TestCase):
         }
         self.assertEqual(enrich_assessment_record(record)["Disposition"], DISPOSITION_OPPORTUNITY)
 
+    def test_m365_manual_deployment_check_is_supporting_context(self):
+        record = {
+            "Service": "M365",
+            "Feature": "SharePoint Content Deployment",
+            "Status": "Not Assessed",
+            "Priority": "Medium",
+            "Observation": "Content deployment status requires manual verification.",
+            "Recommendation": "Review content before choosing a pilot group.",
+            "Category": "Tenant Finding",
+        }
+        self.assertEqual(enrich_assessment_record(record)["Disposition"], DISPOSITION_OPPORTUNITY)
+
     def test_user_consent_is_classified_as_connected_app_security(self):
         record = new_recommendation(
             "Entra", "Application consent",
@@ -135,10 +161,17 @@ class ReportLaneTests(unittest.TestCase):
                                priority="High", status="Action Required"),
             new_recommendation("M365", "Exchange", "Exchange is active.", status="Success"),
             new_recommendation("M365", "Pilot", "A pilot group is available.",
-                               "Run a measured pilot.", priority="Medium", status="Success"),
+                               "Run a measured pilot.", priority="Medium", status="Success",
+                               finding_key="adoption.reviewed_pilot_opportunity", disposition="Opportunity",
+                               evidence_key="m365_activity_detail", evidence_basis="Reviewed pilot opportunity"),
             new_recommendation("Purview", "DLP", "DLP data could not be retrieved.",
                                "Rerun collection.", priority="Medium", status=NOT_ASSESSED_STATUS),
+            new_recommendation("Power Platform", "Inventory", "Optional inventory was not supplied.",
+                               "Supply an export when needed.", priority="Medium", status=NOT_ASSESSED_STATUS),
         ]
+        records[2].update(ObservationDate=date.today().isoformat(), EvidenceScope="Reviewed 20-user pilot cohort",
+                          TenantId="11111111-1111-1111-1111-111111111111", EvidenceComplete=True,
+                          SourceType="reviewed_workshop", SourceFile="pilot-review.json")
 
         original_cwd = os.getcwd()
         with tempfile.TemporaryDirectory() as tmp:
@@ -150,12 +183,15 @@ class ReportLaneTests(unittest.TestCase):
             finally:
                 os.chdir(original_cwd)
 
-        self.assertEqual(body.count('<article class="recommendation-card"'), 1)
-        self.assertIn("Prioritized adoption &amp; value opportunities (1)", body)
-        self.assertIn('<div class="label">Verified Strengths</div>', body)
+        from Core.assessment_result import build_assessment_result
+        result = build_assessment_result(records, {})
+        self.assertEqual(body.count('<article class="action"'), result['counts']['actions'])
+        self.assertEqual(len(result['opportunities']), 1)
+        self.assertIn('Verified strengths', body)
         self.assertNotIn("Verified controls &amp; available capabilities", body)
-        self.assertIn("Scan Coverage (1)", body)
-        self.assertIn("Three readiness conclusions", body)
+        self.assertIn('Remaining evidence and decisions', body)
+        self.assertNotIn("Optional inventory was not supplied", body)
+        self.assertNotIn("Three readiness conclusions", body)
 
 
 class RecommendationQualityGuardTests(unittest.TestCase):

@@ -7,14 +7,17 @@ import hashlib
 import re
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from .spinner import get_timestamp, _stdout_lock
+from . import console_reporting as console
 
 
 PURVIEW_CACHE_MAX_AGE_SECONDS = 8 * 60 * 60
+PURVIEW_CACHE_SCHEMA_VERSION = 3
 COLLECTOR_DIAGNOSTICS_PATH = (
     Path(__file__).resolve().parent.parent / "Reports" / "collector_diagnostics.log"
 )
@@ -22,7 +25,7 @@ COLLECTOR_DIAGNOSTICS_PATH = (
 
 def _sanitize_collector_detail(detail):
     """Redact bearer tokens and common secret assignments from collector diagnostics."""
-    sanitized = str(detail or "")
+    sanitized = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', str(detail or ""))
     sanitized = re.sub(r"(?i)(bearer\s+)[^\s,;]+", r"\1[REDACTED]", sanitized)
     sanitized = re.sub(
         r"(?i)((?:client[_-]?secret|access[_-]?token|refresh[_-]?token|password)\s*[:=]\s*)[^\s,;]+",
@@ -59,13 +62,33 @@ def _record_collector_diagnostics(collector, lines):
         pass
 
 
-def _launch_powershell(script_path, script_args):
-    """Launch PowerShell 7 when available, with Windows PowerShell as a fallback."""
+def _collector_failure_reason(lines):
+    """Prefer the actual PowerShell error over a wrapped error-ID or stack footer."""
     candidates = []
+    for line in lines:
+        cleaned = _sanitize_collector_detail(line).strip()
+        if not cleaned or cleaned.startswith(('AUTH_', '+', 'At ', 'CategoryInfo', 'FullyQualifiedErrorId')):
+            continue
+        candidates.append(cleaned)
+    for pattern in (r'\b(?:400|401|403|404|429|500|503)\b',
+                    r'(?i)unauthorized|forbidden|access.*denied|cannot|unable|failed|not (?:loaded|recognized)|exception|error'):
+        for line in candidates:
+            if re.search(pattern, line):
+                return line
+    return 'PowerShell collector failed. See Reports/collector_diagnostics.log for details.'
+
+
+def _launch_powershell(script_path, script_args, prefer_windows=False):
+    """Launch the PowerShell edition appropriate for the selected collector."""
+    candidates = []
+    # Discover both hosts in the conventional order, then prefer Windows
+    # PowerShell for the SharePoint Online module when requested.
     for executable_name in ("pwsh", "powershell"):
         executable = shutil.which(executable_name)
         if executable and executable not in candidates:
             candidates.append(executable)
+    if prefer_windows:
+        candidates.sort(key=lambda item: 0 if Path(item).stem.lower() == "powershell" else 1)
 
     if not candidates:
         raise FileNotFoundError(
@@ -122,6 +145,12 @@ def _inspect_purview_cache(tenant_id, max_age_seconds=PURVIEW_CACHE_MAX_AGE_SECO
 
     try:
         raw_payload = json.loads(cache_path.read_text(encoding="utf-8"))
+        if raw_payload.get("schema_version") != PURVIEW_CACHE_SCHEMA_VERSION:
+            return {
+                "usable": False,
+                "reason": "incompatible",
+                "cache_path": str(cache_path),
+            }
         cached_at = float(raw_payload.get("cached_at_epoch", 0))
         age_seconds = time.time() - cached_at
         if cached_at <= 0:
@@ -147,7 +176,13 @@ def _inspect_purview_cache(tenant_id, max_age_seconds=PURVIEW_CACHE_MAX_AGE_SECO
                 "cache_path": str(cache_path),
             }
 
-        json.loads(json_payload)
+        parsed_payload = json.loads(json_payload)
+        if not isinstance(parsed_payload, dict) or "dlp_rules" not in parsed_payload:
+            return {
+                "usable": False,
+                "reason": "incompatible",
+                "cache_path": str(cache_path),
+            }
         return {
             "usable": True,
             "reason": "fresh",
@@ -171,6 +206,7 @@ def _save_purview_cache(tenant_id, json_payload):
     try:
         cache_path = _get_purview_cache_path(tenant_id)
         cache_record = {
+            "schema_version": PURVIEW_CACHE_SCHEMA_VERSION,
             "tenant_id": tenant_id,
             "cached_at_epoch": time.time(),
             "purview_data_json": json_payload,
@@ -179,6 +215,17 @@ def _save_purview_cache(tenant_id, json_payload):
     except Exception:
         # Cache persistence is best-effort only.
         pass
+
+
+def _set_purview_runtime_payload(json_payload, source):
+    """Keep large Purview responses out of environment variables on Windows."""
+    from .get_purview_client import set_purview_data_payload
+
+    parsed_payload = json.loads(json_payload) if isinstance(json_payload, str) else json_payload
+    set_purview_data_payload(parsed_payload)
+    os.environ['PURVIEW_DATA_SOURCE'] = source
+    os.environ.pop('PURVIEW_DATA_JSON', None)
+    return parsed_payload
 
 
 async def collect_power_platform_data(
@@ -203,7 +250,7 @@ async def collect_power_platform_data(
     
     # Launch unified collector (PS1 files are in parent directory, not in Core)
     ps_script_path = os.path.join(os.path.dirname(__file__), "..", "collect_power_platform_and_copilot_studio_data.ps1")
-    
+    console.status('Power Platform / Copilot Studio: collecting deployment evidence; browser sign-in may be required.')
     process = _launch_powershell(
         ps_script_path,
         [
@@ -230,6 +277,8 @@ async def collect_power_platform_data(
 
     def start_spinner(message):
         """Start spinner with a new message."""
+        if not console.is_verbose() or not sys.stdout.isatty():
+            return
         spinner_stop_event.clear()
         spinner_thread_holder[0] = threading.Thread(target=run_spinner, args=(message,), daemon=True)
         spinner_thread_holder[0].start()
@@ -239,9 +288,10 @@ async def collect_power_platform_data(
         spinner_stop_event.set()
         if spinner_thread_holder[0] and spinner_thread_holder[0].is_alive():
             spinner_thread_holder[0].join(timeout=0.5)
-        with _stdout_lock:
-            sys.stdout.write('\r' + ' ' * 120 + '\r')
-            sys.stdout.flush()
+        if console.is_verbose() and sys.stdout.isatty():
+            with _stdout_lock:
+                sys.stdout.write('\r' + ' ' * 120 + '\r')
+                sys.stdout.flush()
     
     # Determine spinner message based on which services are running
     if run_power_platform and run_copilot_studio:
@@ -281,30 +331,30 @@ async def collect_power_platform_data(
                     stop_spinner()
                     with _stdout_lock:
                         if event_type == 'AUTH_PROMPT':
-                            sys.stdout.write(f'[{get_timestamp()}]   ℹ️  Browser sign-in requested for {service_name}\n')
+                            console.status((f'Browser sign-in requested for {service_name}\n').rstrip())
                             if service_details:
-                                sys.stdout.write(f'[{get_timestamp()}]   ℹ️  This popup is for: {service_details}\n')
+                                console.detail((f'[{get_timestamp()}]   ℹ️  This popup is for: {service_details}\n').rstrip())
                             sys.stdout.flush()
                             start_spinner(f'Waiting for {service_name} sign-in...')
                         elif event_type == 'AUTH_REUSED':
-                            sys.stdout.write(f'[{get_timestamp()}]   ℹ️  Reusing an existing {service_name} session\n')
-                            sys.stdout.write(f'[{get_timestamp()}]   ℹ️  Continuing Power Platform deployment collection...\n')
+                            console.detail((f'[{get_timestamp()}]   ℹ️  Reusing an existing {service_name} session\n').rstrip())
+                            console.detail((f'[{get_timestamp()}]   ℹ️  Continuing Power Platform deployment collection...\n').rstrip())
                             sys.stdout.flush()
                             start_spinner(spinner_message)
                         elif event_type == 'AUTH_COMPLETE':
-                            sys.stdout.write(f'[{get_timestamp()}]   ✅ {service_name} sign-in accepted\n')
-                            sys.stdout.write(f'[{get_timestamp()}]   ℹ️  Continuing Power Platform deployment collection...\n')
+                            console.detail((f'[{get_timestamp()}]   ✅ {service_name} sign-in accepted\n').rstrip())
+                            console.detail((f'[{get_timestamp()}]   ℹ️  Continuing Power Platform deployment collection...\n').rstrip())
                             sys.stdout.flush()
                             start_spinner(spinner_message)
                         elif event_type == 'AUTH_ERROR':
-                            sys.stdout.write(f'[{get_timestamp()}]   ⚠️  {service_name} sign-in failed\n')
+                            console.status((f'{service_name} sign-in failed\n').rstrip(), tone='warning')
                             if service_details:
-                                sys.stdout.write(f'[{get_timestamp()}]   ℹ️  Authentication detail: {service_details}\n')
+                                console.status((f'Authentication detail: {service_details}\n').rstrip(), tone='warning')
                             sys.stdout.flush()
                         else:
-                            sys.stdout.write(f'[{get_timestamp()}]   ⚠️  {service_name} collection was incomplete\n')
+                            console.status((f'{service_name} collection was incomplete\n').rstrip(), tone='warning')
                             if service_details:
-                                sys.stdout.write(f'[{get_timestamp()}]   ℹ️  Collector detail: {service_details}\n')
+                                console.status((f'Collector detail: {service_details}\n').rstrip(), tone='warning')
                             sys.stdout.flush()
                             start_spinner(spinner_message)
         except Exception:
@@ -354,14 +404,14 @@ async def collect_power_platform_data(
         os.environ["POWER_PLATFORM_DATA_SOURCE"] = "subprocess"
         os.environ["POWER_PLATFORM_DATA_JSON"] = json_output
         with _stdout_lock:
-            sys.stdout.write(f'[{get_timestamp()}]   ✓ Data collection complete\n')
+            console.detail((f'[{get_timestamp()}]   ✓ Data collection complete\n').rstrip())
             sys.stdout.flush()
         warnings = [line for line in stderr_lines if line.startswith('COLLECTION_WARNING')]
         _record_collector_diagnostics('Power Platform', warnings)
     elif process.returncode != 0:
         _record_collector_diagnostics('Power Platform', stderr_lines)
         with _stdout_lock:
-            sys.stdout.write(f'[{get_timestamp()}]   ⚠️  Interactive Power Platform data collection unavailable; continuing with basic recommendations\n')
+            console.status((f'Interactive Power Platform data collection unavailable; continuing with basic recommendations\n').rstrip(), tone='warning')
             sys.stdout.flush()
 
 
@@ -378,45 +428,64 @@ async def collect_purview_data_via_powershell(auth_mode='auto', tenant_id=None):
     if auth_mode == 'fresh':
         if cache_info and cache_info.get('usable'):
             with _stdout_lock:
-                sys.stdout.write(
-                    f'[{get_timestamp()}]   ℹ️  Purview cache bypassed because interactive auth mode is set to fresh\n'
-                )
+                console.detail((f'[{get_timestamp()}]   ℹ️  Purview cache bypassed because interactive auth mode is set to fresh\n').rstrip())
                 sys.stdout.flush()
     else:
         if cache_info and cache_info.get('usable'):
-            os.environ['PURVIEW_DATA_SOURCE'] = 'cache'
-            os.environ['PURVIEW_DATA_JSON'] = cache_info['json_payload']
+            _set_purview_runtime_payload(cache_info['json_payload'], 'cache')
             with _stdout_lock:
-                sys.stdout.write(
-                    f'[{get_timestamp()}]   ℹ️  Using cached Purview deployment data from a previous successful run ({_format_age(cache_info["age_seconds"])} old)\n'
-                )
-                sys.stdout.write(f'[{get_timestamp()}]   ✓ Purview Data Gathering  [████████████████████] 100%\n')
+                console.detail((f'[{get_timestamp()}]   ℹ️  Using cached Purview deployment data from a previous successful run ({_format_age(cache_info["age_seconds"])} old)\n').rstrip())
+                console.detail('Purview evidence loaded from the saved cache.')
                 sys.stdout.flush()
             return True
         if cache_info and cache_info.get('reason') == 'stale':
             with _stdout_lock:
-                sys.stdout.write(
-                    f'[{get_timestamp()}]   ℹ️  Purview cache is too old ({_format_age(cache_info["age_seconds"])} old); collecting fresh deployment data\n'
-                )
+                console.detail((f'[{get_timestamp()}]   ℹ️  Purview cache is too old ({_format_age(cache_info["age_seconds"])} old); collecting fresh deployment data\n').rstrip())
+                sys.stdout.flush()
+        elif cache_info and cache_info.get('reason') == 'incompatible':
+            with _stdout_lock:
+                console.detail((f'[{get_timestamp()}]   ℹ️  Purview cache predates the current DLP rule collection; collecting fresh deployment data\n').rstrip())
                 sys.stdout.flush()
 
     with _stdout_lock:
-        sys.stdout.write(f'[{get_timestamp()}]   ℹ️  Launching PowerShell to collect Purview data (may require interactive auth)...\n')
+        console.detail((f'[{get_timestamp()}]   ℹ️  Launching PowerShell to collect Purview data (may require interactive auth)...\n').rstrip())
         if auth_mode == 'fresh':
-            sys.stdout.write(f'[{get_timestamp()}]   ℹ️  A fresh Microsoft 365 sign-in will be requested if needed\n')
+            console.detail((f'[{get_timestamp()}]   ℹ️  A fresh Microsoft 365 sign-in will be requested if needed\n').rstrip())
         else:
-            sys.stdout.write(f'[{get_timestamp()}]   ℹ️  Existing Microsoft 365 connections in this PowerShell session will be reused when possible\n')
-            sys.stdout.write(f'[{get_timestamp()}]   ℹ️  A new background PowerShell process may still need to establish its own service connections\n')
-        sys.stdout.write(f'[{get_timestamp()}]   ⚠️  A browser sign-in window may appear if interactive authentication is needed\n')
-        sys.stdout.write(f'[{get_timestamp()}]   ⚠️  Check if browser window is hidden behind other apps/screens\n')
+            console.detail((f'[{get_timestamp()}]   ℹ️  Existing Microsoft 365 connections in this PowerShell session will be reused when possible\n').rstrip())
+            console.detail((f'[{get_timestamp()}]   ℹ️  A new background PowerShell process may still need to establish its own service connections\n').rstrip())
+        console.detail((f'[{get_timestamp()}]   ⚠️  A browser sign-in window may appear if interactive authentication is needed\n').rstrip())
+        console.detail((f'[{get_timestamp()}]   ⚠️  Check if browser window is hidden behind other apps/screens\n').rstrip())
         sys.stdout.flush()
     
     # Invoke collect_purview_data.ps1 in DataOnly mode with real-time stderr streaming
     # PS1 files are in parent directory, not in Core
     ps_script = os.path.join(os.path.dirname(__file__), '..', 'collect_purview_data.ps1')
+    collector_args = [
+        '-DataOnly', '-AuthMode', ('Fresh' if auth_mode == 'fresh' else 'Auto'),
+        '-TenantId', tenant_id or os.environ.get('TENANT_ID', ''),
+        '-ClientId', os.environ.get('CLIENT_ID', ''),
+        '-Organization', os.environ.get('PURVIEW_ORGANIZATION', ''),
+    ]
+    certificate_path = os.environ.get('PURVIEW_CERTIFICATE_PATH', '')
+    if not certificate_path and os.environ.get('CERTIFICATE_PATH', '').lower().endswith(('.pfx', '.p12')):
+        certificate_path = os.environ.get('CERTIFICATE_PATH', '')
+    certificate_thumbprint = os.environ.get('PURVIEW_CERTIFICATE_THUMBPRINT', '')
+    certificate_password = os.environ.get('PURVIEW_CERTIFICATE_PASSWORD', os.environ.get('CERTIFICATE_PASSWORD', ''))
+    if certificate_path:
+        collector_args.extend(['-CertificatePath', certificate_path])
+    if certificate_thumbprint:
+        collector_args.extend(['-CertificateThumbprint', certificate_thumbprint])
+    if certificate_password:
+        collector_args.extend(['-CertificatePassword', certificate_password])
+    if os.environ.get('PURVIEW_INCLUDE_SPECIALIZED', '').strip().lower() in {'1', 'true', 'yes'}:
+        collector_args.append('-IncludeSpecialized')
+    if (certificate_path or certificate_thumbprint) and os.environ.get('CLIENT_ID') and os.environ.get('PURVIEW_ORGANIZATION'):
+        console.status('Purview: connecting to Security & Compliance and Exchange Online with the application certificate...')
+    else:
+        console.status('Purview: connecting to Security & Compliance and Exchange Online; browser sign-in may be required.')
     process = _launch_powershell(
-        ps_script,
-        ['-DataOnly', '-AuthMode', ('Fresh' if auth_mode == 'fresh' else 'Auto')],
+        ps_script, collector_args, prefer_windows=bool(certificate_thumbprint)
     )
     
     # Spinner control
@@ -439,6 +508,8 @@ async def collect_purview_data_via_powershell(auth_mode='auto', tenant_id=None):
     def start_spinner(message):
         """Start spinner with given message"""
         nonlocal spinner_thread, current_spinner_message
+        if not console.is_verbose() or not sys.stdout.isatty():
+            return
         current_spinner_message = message
         spinner_stop_event.clear()
         spinner_thread = threading.Thread(target=run_spinner, args=(message,), daemon=True)
@@ -480,22 +551,22 @@ async def collect_purview_data_via_powershell(auth_mode='auto', tenant_id=None):
                     stop_spinner()
                     with _stdout_lock:
                         if event_type == 'AUTH_PROMPT':
-                            sys.stdout.write(f'[{get_timestamp()}]   ℹ️  Browser sign-in requested for {service_name}\n')
+                            console.status((f'Browser sign-in requested for {service_name}\n').rstrip())
                             if service_details:
-                                sys.stdout.write(f'[{get_timestamp()}]   ℹ️  This popup is for: {service_details}\n')
+                                console.detail((f'[{get_timestamp()}]   ℹ️  This popup is for: {service_details}\n').rstrip())
                             start_spinner(f'Waiting for {service_name} sign-in...')
                         elif event_type == 'AUTH_REUSED':
-                            sys.stdout.write(f'[{get_timestamp()}]   ℹ️  Reusing an existing {service_name} session\n')
-                            sys.stdout.write(f'[{get_timestamp()}]   ℹ️  Finalizing secure service connections...\n')
+                            console.detail((f'[{get_timestamp()}]   ℹ️  Reusing an existing {service_name} session\n').rstrip())
+                            console.detail((f'[{get_timestamp()}]   ℹ️  Finalizing secure service connections...\n').rstrip())
                             start_spinner('Finalizing secure service connections...')
                         elif event_type == 'AUTH_COMPLETE':
-                            sys.stdout.write(f'[{get_timestamp()}]   ✅ {service_name} sign-in accepted\n')
-                            sys.stdout.write(f'[{get_timestamp()}]   ℹ️  Finalizing secure service connections...\n')
+                            console.detail((f'[{get_timestamp()}]   ✅ {service_name} sign-in accepted\n').rstrip())
+                            console.detail((f'[{get_timestamp()}]   ℹ️  Finalizing secure service connections...\n').rstrip())
                             start_spinner('Finalizing secure service connections...')
                         else:
-                            sys.stdout.write(f'[{get_timestamp()}]   ⚠️  {service_name} sign-in failed\n')
+                            console.status((f'{service_name} sign-in failed\n').rstrip(), tone='warning')
                             if service_details:
-                                sys.stdout.write(f'[{get_timestamp()}]   ℹ️  Authentication detail: {service_details}\n')
+                                console.status((f'Authentication detail: {service_details}\n').rstrip(), tone='warning')
                         sys.stdout.flush()
         except ValueError:
             # Pipe closed, thread can exit
@@ -527,15 +598,12 @@ async def collect_purview_data_via_powershell(auth_mode='auto', tenant_id=None):
             None,
         )
         with _stdout_lock:
-            sys.stdout.write(
-                f'[{get_timestamp()}]   ⚠️  Purview interactive collection unavailable; continuing with license-based recommendations\n'
-            )
+            console.status((f'Purview interactive collection unavailable; Purview configuration will be reported as not assessed\n').rstrip(), tone='warning')
             if last_detail:
-                sys.stdout.write(f'[{get_timestamp()}]   ℹ️  Purview collector detail: {last_detail}\n')
+                console.status((f'Purview collector detail: {last_detail}\n').rstrip(), tone='warning')
             sys.stdout.flush()
         _record_collector_diagnostics('Purview', stderr_lines)
         return False
-    
     # Parse JSON output from PowerShell
     import json
     try:
@@ -568,21 +636,159 @@ async def collect_purview_data_via_powershell(auth_mode='auto', tenant_id=None):
             raise ValueError("No JSON found in PowerShell output")
 
         # Validate once more and inject data for get_purview_client to consume.
-        json.loads(json_str)
-        os.environ['PURVIEW_DATA_SOURCE'] = 'subprocess'
-        os.environ['PURVIEW_DATA_JSON'] = json_str
+        parsed_payload = _set_purview_runtime_payload(json_str, 'subprocess')
         _save_purview_cache(tenant_id, json_str)
 
         with _stdout_lock:
-            sys.stdout.write(f'\r[{get_timestamp()}]   ✓ Purview Data Gathering  [████████████████████] 100%\n')
+            console.detail('Purview policy collection finished; see source coverage for completeness.')
+            collection_summary = parsed_payload.get('collection_summary', {}) if isinstance(parsed_payload, dict) else {}
+            required_failures = collection_summary.get('required_failures', []) or []
+            optional_failures = collection_summary.get('optional_failures', []) or []
+            if required_failures:
+                names = ', '.join(str(item.get('source', 'Unknown source')) for item in required_failures)
+                console.status((f'Required Purview evidence unavailable: {names}\n').rstrip(), tone='warning')
+                for item in required_failures:
+                    role = item.get('required_role', '')
+                    reason = item.get('reason', '')
+                    detail = '; '.join(value for value in (reason, f'Read access: {role}' if role else '') if value)
+                    console.status((f'   {item.get("source", "Purview source")}: {detail}\n').rstrip(), tone='warning')
+            if optional_failures:
+                names = ', '.join(str(item.get('source', 'Unknown source')) for item in optional_failures)
+                console.status((f'Optional Purview enrichment unavailable: {names}. Core DLP results are unaffected.\n').rstrip(), tone='warning')
             sys.stdout.flush()
         return True
     except (json.JSONDecodeError, ValueError) as e:
         _record_collector_diagnostics('Purview', [*stderr_lines, str(e)])
         with _stdout_lock:
-            sys.stdout.write(
-                f'[{get_timestamp()}]   ⚠️  Purview interactive collection returned unreadable output; continuing with license-based recommendations\n'
-            )
-            sys.stdout.write(f'[{get_timestamp()}]   ℹ️  Purview collector detail: {e}\n')
+            console.status((f'Purview interactive collection returned unreadable output; Purview configuration will be reported as not assessed\n').rstrip(), tone='warning')
+            console.status((f'Purview collector detail: {e}\n').rstrip(), tone='warning')
             sys.stdout.flush()
         return False
+
+
+SHAREPOINT_JSON_BEGIN = 'ASSESSMENT_SHAREPOINT_JSON_BEGIN'
+SHAREPOINT_JSON_END = 'ASSESSMENT_SHAREPOINT_JSON_END'
+
+
+def _parse_sharepoint_payload(stdout):
+    """Read one framed JSON document, with conservative compatibility for older collectors."""
+    text = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', str(stdout or '')).lstrip('\ufeff').strip()
+    lines = text.splitlines()
+    starts = [index for index, line in enumerate(lines) if line.strip() == SHAREPOINT_JSON_BEGIN]
+    ends = [index for index, line in enumerate(lines) if line.strip() == SHAREPOINT_JSON_END]
+    if starts or ends:
+        if len(starts) != 1 or len(ends) != 1 or starts[0] >= ends[0]:
+            raise ValueError('Missing, duplicated, or out-of-order SharePoint JSON frame markers.')
+        payload = json.loads('\n'.join(lines[starts[0] + 1:ends[0]]))
+    else:
+        # A module banner can precede older collectors' JSON. Start only at the
+        # first standalone document; never salvage a nested object from broken JSON.
+        start = next((index for index, line in enumerate(lines) if line.lstrip().startswith(('{', '['))), None)
+        if start is None:
+            raise ValueError('No SharePoint JSON document found in collector stdout.')
+        candidate = '\n'.join(lines[start:]).lstrip()
+        payload, end = json.JSONDecoder().raw_decode(candidate)
+        trailing = candidate[end:].strip()
+        if trailing and any(line.lstrip().startswith(('{', '[', '}', ']', ',')) for line in trailing.splitlines()):
+            raise ValueError('Unexpected additional JSON content after the SharePoint document.')
+    if not isinstance(payload, dict):
+        raise ValueError('SharePoint JSON must be an object.')
+    for name, field, expected in (('tenant', 'settings', dict), ('sites', 'items', list), ('dag_reports', 'reports', list)):
+        section = payload.get(name)
+        if not isinstance(section, dict) or not isinstance(section.get('available'), bool) or not isinstance(section.get(field), expected):
+            raise ValueError(f'SharePoint JSON has an invalid or missing {name} section.')
+        if expected is list and any(not isinstance(row, dict) for row in section[field]):
+            raise ValueError(f'SharePoint JSON has a non-object record in {name}.{field}.')
+    states = payload.get('collection_status')
+    if not isinstance(states, dict) or not states or any(
+        not isinstance(state, dict) or not isinstance(state.get('available'), bool)
+        for state in states.values()
+    ):
+        raise ValueError('SharePoint JSON has invalid or missing collection_status records.')
+    payload['available'] = any(payload[name]['available'] for name in ('tenant', 'sites', 'dag_reports'))
+    gaps = [name for name, state in states.items() if not state['available'] or state.get('availability_status') == 'partial']
+    payload['availability_status'] = 'partial' if payload['available'] and gaps else 'available' if payload['available'] else 'unavailable'
+    if not payload['available']:
+        payload['reason'] = payload.get('reason') or 'SharePoint commands did not return usable tenant settings, site settings, or report inventory.'
+    return payload
+
+
+async def collect_sharepoint_governance_via_powershell(admin_url, tenant_id, auth_mode='auto'):
+    """Collect SharePoint tenant/site sharing settings and existing SAM report status."""
+    if not admin_url:
+        console.status('SharePoint: collection unavailable; the admin URL could not be determined.', tone='warning')
+        return {"available": False, "reason": "SharePoint admin URL could not be determined."}
+
+    console.status('SharePoint: collecting sharing settings and completed governance reports...')
+
+    client_id = os.environ.get("CLIENT_ID", "")
+    certificate_path = os.environ.get("SHAREPOINT_CERTIFICATE_PATH", "")
+    if not certificate_path and os.environ.get("CERTIFICATE_PATH", "").lower().endswith((".pfx", ".p12")):
+        certificate_path = os.environ.get("CERTIFICATE_PATH", "")
+    certificate_password = os.environ.get("SHAREPOINT_CERTIFICATE_PASSWORD", os.environ.get("CERTIFICATE_PASSWORD", ""))
+    certificate_thumbprint = os.environ.get("SHAREPOINT_CERTIFICATE_THUMBPRINT", "")
+
+    args = [
+        "-AdminUrl", admin_url, "-TenantId", tenant_id, "-ClientId", client_id,
+        "-AuthMode", "Fresh" if auth_mode == "fresh" else "Skip" if auth_mode == "skip" else "Auto",
+    ]
+    if certificate_path:
+        args.extend(["-CertificatePath", certificate_path])
+    if certificate_password:
+        args.extend(["-CertificatePassword", certificate_password])
+    if certificate_thumbprint:
+        args.extend(["-CertificateThumbprint", certificate_thumbprint])
+    download_root = Path(__file__).resolve().parent.parent / ".cache" / "sharepoint_dag"
+    download_root.mkdir(parents=True, exist_ok=True)
+    download_path = tempfile.mkdtemp(prefix="run-", dir=str(download_root))
+    args.extend(["-DownloadPath", download_path])
+
+    ps_script = os.path.join(os.path.dirname(__file__), "..", "collect_sharepoint_governance.ps1")
+    console.detail((f'[{get_timestamp()}]   ℹ️  Collecting SharePoint sharing settings and existing SAM report status').rstrip())
+    if not certificate_path and not certificate_thumbprint and auth_mode != 'skip':
+        console.status('SharePoint sign-in: complete the browser prompt when it opens.')
+    try:
+        process = _launch_powershell(ps_script, args, prefer_windows=True)
+        stdout, stderr = await __import__('asyncio').to_thread(process.communicate)
+    except Exception as exc:
+        detail = _sanitize_collector_detail(exc)
+        _record_collector_diagnostics('SharePoint', [detail])
+        console.status((f'Warning: SharePoint collector could not start: {detail}').rstrip(), tone='warning')
+        return {"available": False, "reason": detail, "failure_stage": "launch", "admin_url": admin_url, "collection_status": {}}
+
+    stderr_lines = [line.strip() for line in (stderr or "").splitlines() if line.strip()]
+    for line in stderr_lines:
+        if line.startswith("AUTH_PROMPT"):
+            console.detail('Browser sign-in requested for SharePoint governance collection.')
+        elif line.startswith("AUTH_COMPLETE"):
+            console.detail((f'[{get_timestamp()}]   ✅ SharePoint sign-in accepted').rstrip())
+        elif line.startswith("AUTH_REUSED"):
+            console.detail((f'[{get_timestamp()}]   ℹ️  Using SharePoint application certificate authentication').rstrip())
+    if process.returncode != 0:
+        detail = _collector_failure_reason(stderr_lines)
+        _record_collector_diagnostics("SharePoint", stderr_lines)
+        console.status((f'SharePoint governance collection unavailable: {_sanitize_collector_detail(detail)}').rstrip(), tone='warning')
+        return {"available": False, "reason": _sanitize_collector_detail(detail), "failure_stage": "collector", "admin_url": admin_url, "collection_status": {}}
+
+    try:
+        payload = _parse_sharepoint_payload(stdout)
+        states = payload['collection_status']
+        gaps = [(name, state) for name, state in states.items() if not state['available'] or state.get('availability_status') == 'partial']
+        complete_count = len(states) - len(gaps)
+        message = f'SharePoint evidence: {complete_count}/{len(states)} datasets complete' + ('; collection gaps remain.' if gaps else '.')
+        if gaps:
+            console.status(message, tone='warning')
+        else:
+            console.status(message, tone='success')
+        for name, state in gaps:
+            detail = _sanitize_collector_detail(state.get('reason') or state.get('availability_status') or 'unavailable')
+            console.status((f'Warning: {name}: {detail}').rstrip(), tone='warning')
+        if gaps:
+            _record_collector_diagnostics('SharePoint', [f'{name}: {state.get("reason", "unavailable")}' for name, state in gaps])
+        return payload
+    except (json.JSONDecodeError, ValueError) as exc:
+        # Record framing facts, never raw stdout: it can contain tenant records.
+        output_summary = f'stdout characters={len(stdout or "")}; nonempty lines={len((stdout or "").splitlines())}; JSON frame present={SHAREPOINT_JSON_BEGIN in (stdout or "")}'
+        _record_collector_diagnostics("SharePoint", [f'admin_url={admin_url}', *stderr_lines, output_summary, str(exc)])
+        console.status((f'Warning: SharePoint collector returned unreadable output after the process completed; sharing settings and SAM inventory remain unverified. See Reports/collector_diagnostics.log.').rstrip(), tone='warning')
+        return {"available": False, "reason": "SharePoint collector returned unreadable output.", "failure_stage": "output", "admin_url": admin_url, "collection_status": {}}

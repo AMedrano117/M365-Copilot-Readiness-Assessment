@@ -13,7 +13,7 @@ def get_recommendation(sku_name, status="Success", client=None, defender_client=
     friendly_sku = get_friendly_sku_name(sku_name)
     
     if status == "Success":
-        observation = f"{feature_name} is active, protecting Copilot workloads"
+        observation = f"{feature_name} is licensed; operational protection depends on the collected controls"
         recommendation = ""
         effective_status = status
         effective_priority = ""
@@ -37,9 +37,9 @@ def get_recommendation(sku_name, status="Success", client=None, defender_client=
             
             if metrics:
                 observation += ". " + ", ".join(metrics)
-            elif defender_insights.source_was_read('incidents', 'alerts'):
+            elif defender_insights.source_was_read('incidents'):
                 # Clean status - the incident feed was read and came back empty
-                observation += ". No security incidents detected"
+                observation += ". No active incidents were returned by the completed incident query"
             else:
                 # Incident data was never retrieved - do not report unread as clean
                 observation += ". Endpoint incident data could not be retrieved, so device threat status is unverified"

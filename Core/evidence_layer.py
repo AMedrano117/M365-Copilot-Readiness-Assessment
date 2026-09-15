@@ -4,9 +4,11 @@ Engineer follow-up evidence bundle builder.
 
 from collections import OrderedDict, defaultdict
 from datetime import datetime
+import re
 
 from .friendly_names import get_friendly_plan_name, get_friendly_sku_name
 from .assessment_model import enrich_assessment_records
+from .copilot_readiness_import import FLAG_COLUMNS
 
 
 SHEET_DEFINITIONS = OrderedDict([
@@ -71,6 +73,18 @@ SHEET_DEFINITIONS = OrderedDict([
         "default_note": "See Data Exposure Detail for the SAM/DSPM source, freshness, affected location, and explicit risk signals supporting this finding.",
         "preview_columns": ["Detail Type", "Source", "Site Name", "Risk Signals", "Severity"],
     }),
+    ("sharepoint_governance_detail", {
+        "title": "SharePoint Governance",
+        "appendix_title": "Appendix: SharePoint Sharing and SAM Report Status",
+        "default_note": "See SharePoint Governance for tenant sharing defaults, site-level sharing counts, and existing Data Access Governance report status.",
+        "preview_columns": ["Detail Type", "Setting or report", "Value or status", "Why it matters"],
+    }),
+    ("sharepoint_lifecycle_detail", {
+        "title": "SharePoint Lifecycle Detail",
+        "appendix_title": "Appendix: SharePoint Site Lifecycle",
+        "default_note": "See SharePoint Lifecycle Detail for ownership and inactivity evidence from the supplied lifecycle reports.",
+        "preview_columns": ["Report Type", "Report Date", "Lifecycle Signals"],
+    }),
     ("defender_incident_detail", {
         "title": "Defender Incident Detail",
         "appendix_title": "Appendix: Defender Incident Detail",
@@ -95,6 +109,12 @@ SHEET_DEFINITIONS = OrderedDict([
         "default_note": "See M365 Activity Detail for the workload metrics and usage baselines referenced by this recommendation.",
         "preview_columns": ["Workload", "Metric", "Value", "Detail"],
     }),
+    ("external_connection_detail", {
+        "title": "External Connections",
+        "appendix_title": "Appendix: Connected Grounding Sources",
+        "default_note": "See External Connections for Microsoft Graph connectors that can ground search and Copilot experiences in external data.",
+        "preview_columns": ["Connection Name", "Description", "State"],
+    }),
     ("ai_usage_detail", {
         "title": "AI Adoption Usage",
         "appendix_title": "Appendix: AI Adoption and Usage",
@@ -106,6 +126,18 @@ SHEET_DEFINITIONS = OrderedDict([
         "appendix_title": "Appendix: Restricted Copilot User Usage",
         "default_note": "Restricted workbook evidence contains user-level Copilot activity collected only by explicit request.",
         "preview_columns": ["Period", "Activity State", "Last Activity Date"],
+    }),
+    ("copilot_readiness_detail", {
+        "title": "Copilot Readiness Export",
+        "appendix_title": "Appendix: Copilot Readiness Export",
+        "default_note": "See Copilot Readiness Export for aggregate readiness indicators scoped to the exported rows.",
+        "preview_columns": ["Indicator", "True", "False", "Unknown", "Report Period (Days)", "Report Date"],
+    }),
+    ("copilot_readiness_user_detail", {
+        "title": "Copilot Readiness Users",
+        "appendix_title": "Appendix: Restricted Copilot Readiness Users",
+        "default_note": "Restricted workbook evidence contains exported user readiness flags only when explicitly requested.",
+        "preview_columns": [],
     }),
     ("service_plan_inventory", {
         "title": "Service Plan Inventory",
@@ -170,6 +202,12 @@ EXPLICIT_SERVICE_FALLBACKS = {
     "Power Platform": "power_platform_detail",
     "Copilot Studio": "power_platform_detail",
 }
+
+
+LICENSE_ONLY_LANGUAGE = re.compile(
+    r"\b(?:active in|included in|license|licensed|licensing|service plan)\b",
+    re.IGNORECASE,
+)
 
 
 def _camel_to_snake(value):
@@ -408,12 +446,17 @@ def build_evidence_bundle(
         ("guest_access_detail", lambda: _build_guest_access_sheet(entra_client)),
         ("purview_policy_detail", lambda: _build_purview_policy_sheet(purview_client)),
         ("data_exposure_detail", lambda: _build_data_exposure_sheet(data_exposure_info)),
+        ("sharepoint_lifecycle_detail", lambda: _build_sharepoint_lifecycle_sheet(data_exposure_info)),
+        ("sharepoint_governance_detail", lambda: _build_sharepoint_governance_sheet(m365_client)),
         ("defender_incident_detail", lambda: _build_defender_incident_sheet(defender_client)),
         ("defender_device_detail", lambda: _build_defender_device_sheet(defender_client)),
         ("power_platform_detail", lambda: _build_power_platform_sheet(pp_client)),
         ("m365_activity_detail", lambda: _build_m365_activity_sheet(m365_client)),
+        ("external_connection_detail", lambda: _build_external_connection_sheet(m365_client)),
         ("ai_usage_detail", lambda: _build_ai_usage_sheet(m365_client)),
         ("copilot_user_usage_detail", lambda: _build_copilot_user_usage_sheet(m365_client)),
+        ("copilot_readiness_detail", lambda: _build_copilot_readiness_sheet(m365_client)),
+        ("copilot_readiness_user_detail", lambda: _build_copilot_readiness_user_sheet(m365_client)),
         ("service_plan_inventory", lambda: _build_service_plan_inventory_sheet(m365_info)),
     ]
 
@@ -456,19 +499,24 @@ def build_evidence_bundle(
         "details": sheet.get("details", []),
         "preview_columns": sheet.get("preview_columns", []),
         "preview_rows": sheet.get("rows", [])[:5],
-    } for key, sheet in sheets.items()]
+    } for key, sheet in sheets.items()
+        if key not in {"copilot_user_usage_detail", "copilot_readiness_user_detail", "sharepoint_lifecycle_detail"}]
 
     return {
         "recommendations": recommendations,
         "sheets": sheets,
         "evidence_index": evidence_index,
         "appendix_sections": appendix_sections,
+        "copilot_readiness_export": {
+            key: value for key, value in (getattr(m365_client, "copilot_readiness_export", {}) or {}).items()
+            if key != "user_details"
+        } if m365_client else {},
         "ai_usage": {
             "copilot_usage": getattr(m365_client, "copilot_usage", {}) if m365_client else {},
             "m365_app_readiness": getattr(m365_client, "m365_app_readiness", {}) if m365_client else {},
             "copilot_dashboard": getattr(m365_client, "copilot_dashboard", {}) if m365_client else {},
             "shadow_ai_usage": getattr(m365_client, "shadow_ai_usage", {}) if m365_client else {},
-            "license_summary": getattr(m365_client, "users_summary", {}) if m365_client else {},
+            "license_summary": _measured_summary(getattr(m365_client, "users_summary", {})) if m365_client else {},
         },
         "power_platform_inventory": getattr(pp_client, "power_platform_inventory", {}) if pp_client else {
             "available": False,
@@ -478,6 +526,9 @@ def build_evidence_bundle(
         },
         "entra_license_context": _build_entra_license_context(m365_info),
         "purview_policy_summary": _build_purview_policy_summary(purview_client),
+        "purview_collection_status": getattr(purview_client, "collection_status", {}) if purview_client else {},
+        "verified_strengths": _build_verified_strengths(entra_client, purview_client, m365_client),
+        "sharepoint_governance": _build_sharepoint_governance_summary(m365_client),
         "data_exposure": data_exposure_info or {},
     }
 
@@ -549,25 +600,268 @@ def _build_purview_policy_summary(purview_client):
     if not dlp.get("available"):
         return {"available": False, "reason": "DLP policy details were not available from the Purview collection."}
 
+    dlp_rules = getattr(purview_client, "dlp_rules", {}) or {}
+    rules_available = bool(dlp_rules.get("available"))
+    rule_rows = []
+    rules_by_policy = defaultdict(list)
+    for rule in _ensure_list(dlp_rules.get("rules", [])):
+        policy_name = (
+            _iso_text(_safe_get(rule, "ParentPolicyName"))
+            or _iso_text(_safe_get(rule, "Policy"))
+            or "Policy not returned"
+        )
+        disabled = _safe_get(rule, "Disabled", None)
+        enabled = disabled in (None, "") or not (
+            disabled is True or str(disabled).strip().lower() in {"true", "yes", "disabled"}
+        )
+        conditions = []
+        for label, key in (
+            ("Sensitive information", "ContentContainsSensitiveInformation"),
+            ("Shared content", "ContentIsShared"),
+            ("Access scope", "AccessScope"),
+            ("Advanced condition", "AdvancedRule"),
+        ):
+            if _safe_get(rule, key) not in (None, "", [], {}, False):
+                conditions.append(label)
+        actions = []
+        for label, key in (
+            ("Block access", "BlockAccess"),
+            ("Notify users", "NotifyUser"),
+            ("Allow override", "NotifyAllowOverride"),
+            ("Generate alert", "GenerateAlert"),
+            ("Generate incident report", "GenerateIncidentReport"),
+            ("Endpoint restrictions", "EndpointDlpRestrictions"),
+            ("Restrict web grounding", "RestrictWebGrounding"),
+            ("Encrypt", "EncryptRMSTemplate"),
+            ("Quarantine", "Quarantine"),
+        ):
+            if _safe_get(rule, key) not in (None, "", [], {}, False):
+                actions.append(label)
+        row = {
+            "Policy": policy_name,
+            "Rule": _iso_text(_safe_get(rule, "DisplayName")) or _iso_text(_safe_get(rule, "Name")) or "Unnamed rule",
+            "Enabled": "Yes" if enabled else "No",
+            "Conditions": ", ".join(conditions) or "Details not returned",
+            "Actions": ", ".join(actions) or "Audit or details not returned",
+            "Severity": _iso_text(_safe_get(rule, "ReportSeverityLevel")) or "Not provided",
+        }
+        rule_rows.append(row)
+        rules_by_policy[policy_name.lower()].append(row)
+
     rows = []
     for policy in _ensure_list(dlp.get("policies", [])):
         locations = []
-        for label, key in (("Exchange", "ExchangeLocation"), ("SharePoint", "SharePointLocation"), ("OneDrive", "OneDriveLocation")):
+        for label, key in (
+            ("Exchange", "ExchangeLocation"), ("SharePoint", "SharePointLocation"),
+            ("OneDrive", "OneDriveLocation"), ("Teams", "TeamsLocation"),
+            ("Devices", "EndpointDlpLocation"), ("Power BI", "PowerBILocation"),
+        ):
             if _safe_get(policy, key) not in (None, "", [], False):
                 locations.append(label)
+        policy_name = _iso_text(_safe_get(policy, "Name")) or "Unnamed policy"
+        mode = _iso_text(_safe_get(policy, "Mode")) or "Not provided"
+        enabled_value = _safe_get(policy, "Enabled", None)
+        if enabled_value is None:
+            enabled_value = mode.lower() in {
+                "enable", "enforce", "testwithnotifications", "testwithoutnotifications"
+            }
+        matched_rules = rules_by_policy.get(policy_name.lower(), [])
+        behavior = []
+        for rule in matched_rules:
+            summary = rule["Actions"]
+            if summary not in behavior:
+                behavior.append(summary)
         rows.append({
-            "Policy": _iso_text(_safe_get(policy, "Name")) or "Unnamed policy",
-            "Enabled": _bool_text(_safe_get(policy, "Enabled")),
-            "Mode": _iso_text(_safe_get(policy, "Mode")) or "Not provided",
+            "Policy": policy_name,
+            "Enabled": _bool_text(enabled_value),
+            "Mode": mode,
             "Locations": ", ".join(locations) or "Not provided",
+            "Rules": len(matched_rules) if rules_available else "Not assessed",
+            "Protection behavior": "; ".join(behavior[:3]) if behavior else ("No rules returned" if rules_available else "Rule details unavailable"),
         })
     rows.sort(key=lambda row: row["Policy"].lower())
+    rule_rows.sort(key=lambda row: (row["Policy"].lower(), row["Rule"].lower()))
     return {
         "available": True,
         "total": len(rows),
         "enabled": sum(1 for row in rows if row["Enabled"] == "Yes"),
+        "rules_available": rules_available,
+        "total_rules": len(rule_rows),
+        "enabled_rules": sum(1 for row in rule_rows if row["Enabled"] == "Yes"),
         "rows": rows,
+        "rule_rows": rule_rows,
         "source": "Microsoft Purview compliance PowerShell",
+    }
+
+
+def _build_verified_strengths(entra_client, purview_client, m365_client=None):
+    """Create a short executive list from configured controls, never from licensing alone."""
+    rows = []
+
+    sharepoint = _build_sharepoint_governance_summary(m365_client)
+    settings = sharepoint.get("settings", {})
+    if sharepoint.get("available"):
+        default_link = str(settings.get("DefaultSharingLinkType", "") or "").lower()
+        sharing = str(settings.get("SharingCapability", "") or "").lower()
+        if default_link in {"direct", "specificpeople"} and sharing not in {"externaluserandguestsharing", "anonymousaccess"}:
+            rows.append({
+                "Area": "SharePoint sharing",
+                "Strength": "New sharing links default to named recipients and tenant-wide Anyone sharing is not enabled.",
+                "Evidence": f"Default link type: {settings.get('DefaultSharingLinkType')}; SharePoint sharing level: {settings.get('SharingCapability')}.",
+                "Benefit": "This reduces accidental broad access to content that can later ground an AI response.",
+                "Key": "sharepoint-sharing-restricted",
+            })
+
+    if entra_client:
+        ca_summary = getattr(entra_client, "ca_summary", {}) or {}
+        mfa_policies = int(ca_summary.get("require_mfa", 0) or 0)
+        if mfa_policies:
+            m365_targets = int(ca_summary.get("target_m365_apps", 0) or 0)
+            evidence = f"{mfa_policies} enabled Conditional Access polic{'y' if mfa_policies == 1 else 'ies'} require MFA"
+            if m365_targets:
+                evidence += f"; {m365_targets} target Microsoft 365 applications"
+            rows.append({
+                "Area": "Sign-in protection",
+                "Strength": "Multifactor authentication is required by Conditional Access policies.",
+                "Evidence": evidence + ".",
+                "Benefit": "This makes stolen passwords less useful for accessing organizational data through AI.",
+                "Key": "conditional-access-mfa",
+            })
+
+        consent = getattr(entra_client, "consent_summary", {}) or {}
+        if consent.get("consent_configuration_available") and consent.get("admin_consent_required"):
+            rows.append({
+                "Area": "Application access",
+                "Strength": "Default user consent to applications is restricted.",
+                "Evidence": "The tenant authorization policy did not assign a default self-service permission-grant policy.",
+                "Benefit": "This reduces the chance that users give an unreviewed AI application access to Microsoft 365 data.",
+                "Key": "app-consent-restricted",
+            })
+
+    if purview_client:
+        policies = getattr(purview_client, "dlp_policies", {}) or {}
+        rules = getattr(purview_client, "dlp_rules", {}) or {}
+        enabled_policies = [
+            policy for policy in _ensure_list(policies.get("policies", []))
+            if _bool_text(_safe_get(policy, "Enabled")) == "Yes"
+            or _iso_text(_safe_get(policy, "Mode")).lower() in {
+                "enable", "enforce", "testwithnotifications", "testwithoutnotifications"
+            }
+        ]
+        enabled_rules = [
+            rule for rule in _ensure_list(rules.get("rules", []))
+            if _safe_get(rule, "Disabled", None) in (None, "", False)
+            or str(_safe_get(rule, "Disabled", "")).strip().lower() in {"false", "no"}
+        ]
+        enforce_modes = [
+            policy for policy in enabled_policies
+            if _iso_text(_safe_get(policy, "Mode")).lower() in {"enable", "enforce"}
+        ]
+        if policies.get("available") and rules.get("available") and enabled_policies and enabled_rules and enforce_modes:
+            locations = []
+            for label, key in (
+                ("Exchange", "ExchangeLocation"), ("SharePoint", "SharePointLocation"),
+                ("OneDrive", "OneDriveLocation"), ("Teams", "TeamsLocation"),
+                ("devices", "EndpointDlpLocation"),
+            ):
+                if any(_safe_get(policy, key) not in (None, "", [], False) for policy in enabled_policies):
+                    locations.append(label)
+            rows.append({
+                "Area": "Data loss prevention",
+                "Strength": "DLP policies and their protection rules are enabled.",
+                "Evidence": (
+                    f"{len(enabled_policies)} enabled polic{'y' if len(enabled_policies) == 1 else 'ies'}, "
+                    f"{len(enabled_rules)} enabled rule{'s' if len(enabled_rules) != 1 else ''}, and "
+                    f"{len(enforce_modes)} polic{'y is' if len(enforce_modes) == 1 else 'ies are'} in enforcement mode"
+                    + (f" across {', '.join(locations)}" if locations else "") + "."
+                ),
+                "Benefit": "These rules can identify sensitive information and apply the configured restrictions when people or AI-assisted workflows share it.",
+                "Key": "dlp-enforced",
+            })
+
+        labels = getattr(purview_client, "sensitivity_labels", {}) or {}
+        label_policies = getattr(purview_client, "label_policies", {}) or {}
+        if labels.get("available") and label_policies.get("available"):
+            label_count = int(labels.get("total_labels", 0) or 0)
+            publishing_count = int(label_policies.get("total_policies", 0) or 0)
+            if label_count and publishing_count:
+                rows.append({
+                    "Area": "Content classification",
+                    "Strength": "Sensitivity labels are defined and publishing policies are present.",
+                    "Evidence": f"Purview returned {label_count} sensitivity label{'s' if label_count != 1 else ''} and {publishing_count} label publishing polic{'y' if publishing_count == 1 else 'ies'}.",
+                    "Benefit": "Published labels give the organization a consistent way to identify and handle sensitive content used by AI.",
+                    "Key": "sensitivity-labels-published",
+                })
+
+        audit = getattr(purview_client, "audit_config", {}) or {}
+        if audit.get("available") and audit.get("unified_audit_enabled"):
+            rows.append({
+                "Area": "Audit and investigation",
+                "Strength": "Microsoft 365 unified audit logging is enabled.",
+                "Evidence": "The Exchange audit configuration returned UnifiedAuditLogIngestionEnabled as true.",
+                "Benefit": "This provides activity records needed to investigate access and actions involving Microsoft 365 data.",
+                "Key": "unified-audit-enabled",
+            })
+
+        irm = getattr(purview_client, "irm_config", {}) or {}
+        if irm.get("available") and irm.get("azure_rms_enabled"):
+            rows.append({
+                "Area": "Encryption",
+                "Strength": "Azure Rights Management licensing is enabled in the tenant configuration.",
+                "Evidence": "The Exchange rights-management configuration returned AzureRMSLicensingEnabled as true.",
+                "Benefit": "Rights-management protection can remain attached to labeled documents when authorized AI experiences work with them.",
+                "Key": "azure-rms-enabled",
+            })
+
+    strength_sources = {
+        "sharepoint-sharing-restricted": (m365_client, "sharepoint_governance_detail", "content"),
+        "conditional-access-mfa": (entra_client, "conditional_access_detail", "identity"),
+        "app-consent-restricted": (entra_client, "app_consent_policy_detail", "applications"),
+        "dlp-enforced": (purview_client, "purview_policy_detail", "data_protection"),
+        "sensitivity-labels-published": (purview_client, "purview_policy_detail", "data_protection"),
+        "unified-audit-enabled": (purview_client, "purview_policy_detail", "data_protection"),
+        "azure-rms-enabled": (purview_client, "purview_policy_detail", "data_protection"),
+    }
+    for row in rows:
+        client, evidence_key, domain = strength_sources[row["Key"]]
+        provenance = getattr(client, "cache_provenance", {}) or {}
+        row.update(EvidenceKey=evidence_key, DomainId=domain)
+        from .source_evidence import source_is_complete
+        required = {
+            "dlp-enforced": ("dlp_policies", "dlp_rules"),
+            "sensitivity-labels-published": ("sensitivity_labels", "label_policies"),
+            "unified-audit-enabled": ("audit_config",),
+            "azure-rms-enabled": ("irm_config",),
+        }.get(row["Key"], ())
+        if required:
+            row["EvidenceComplete"] = all(source_is_complete(client, name, getattr(client, name, {}) or {}) for name in required)
+            row["EvidenceSource"] = "purview_" + required[0]
+        if provenance:
+            row.update(ObservationDate=provenance.get("collected_at", ""),
+                       SourceFile=provenance.get("source_file", ""),
+                       SourceType=provenance.get("source_type", ""))
+    return rows[:6]
+
+
+def _build_sharepoint_lifecycle_sheet(data_exposure_info):
+    if not isinstance(data_exposure_info, dict):
+        return None
+    rows = [dict(row) for row in data_exposure_info.get("lifecycle_evidence_rows", []) or []]
+    if not rows:
+        return None
+    summary = data_exposure_info.get("lifecycle_summary", {}) or {}
+    return {
+        "rows": rows,
+        "summary": (
+            f"{summary.get('site_count', len(rows))} exported sites: "
+            f"{summary.get('ownerless_site_count', 0)} reported ownerless and "
+            f"{summary.get('inactive_site_count', 0)} reported inactive."
+        ),
+        "details": [
+            "Lifecycle status supports ownership and content-maintenance review; it does not establish oversharing or sensitive-data exposure.",
+            "An empty owner contact does not establish that a site is ownerless. Report dates remain separate from site activity dates.",
+            "Owner contacts and individual site details are retained in this workbook for authorized follow-up.",
+        ],
     }
 
 
@@ -578,7 +872,7 @@ def _build_data_exposure_sheet(data_exposure_info):
     rows = []
     sources = data_exposure_info.get("sources", {}) or {}
     for source_key, source in sources.items():
-        if not isinstance(source, dict) or not source.get("files_loaded"):
+        if not isinstance(source, dict) or not (source.get("files_loaded") or source.get("reports")):
             continue
         source_name = "SharePoint Advanced Management" if source_key == "sam" else "Microsoft Purview DSPM"
         rows.append({
@@ -602,14 +896,31 @@ def _build_data_exposure_sheet(data_exposure_info):
             "Records Read": source.get("records_read", 0),
             "Max Age (Days)": source.get("max_age_days", ""),
         })
+        for report in source.get("reports", []) or []:
+            rows.append({
+                "RecommendationId": "", "Flagged By": "", "Detail Type": "Source Report",
+                "Source": source_name, "Source File": report.get("source_file", ""),
+                "Source Sheet": report.get("source_sheet", ""),
+                "Report Type": report.get("report_type", ""),
+                "Workload": report.get("workload", ""),
+                "Tenant ID": report.get("tenant_id", ""),
+                "Report Date": report.get("report_date", ""),
+                "Report Date Basis": report.get("date_basis", ""),
+                "Records Read": report.get("records_read", ""),
+                "Source Status": report.get("status", ""),
+                "Coverage Domains": "; ".join(report.get("domains", []) or []),
+                "Age (Days)": report.get("age_days", ""),
+                "Freshness": report.get("freshness", ""),
+                "Max Age (Days)": report.get("max_age_days", source.get("max_age_days", "")),
+            })
 
     for evidence_row in data_exposure_info.get("evidence_rows", []) or []:
         row = dict(evidence_row)
         row["Detail Type"] = "Risk Evidence"
-        row["Freshness"] = ""
-        row["Report Date"] = ""
-        row["Records Read"] = ""
-        row["Max Age (Days)"] = ""
+        row.setdefault("Freshness", "")
+        row.setdefault("Report Date", "")
+        row.setdefault("Records Read", "")
+        row.setdefault("Max Age (Days)", "")
         rows.append(row)
 
     if not rows:
@@ -622,7 +933,7 @@ def _build_data_exposure_sheet(data_exposure_info):
     )
     details = [
         "Only explicit fields from Microsoft Purview DSPM and SharePoint Advanced Management exports are treated as exposure evidence; usage volume alone is not a risk signal.",
-        "Source Summary rows record report freshness and volume. Risk Evidence rows identify the affected sites or items and the signal found in the authoritative export.",
+        "Source Summary rows record overall freshness and volume. Source Report rows retain each file's report date, selection status and coverage. Risk Evidence rows retain the date and signal from their source export.",
     ]
     if data_exposure_info.get("evidence_truncated"):
         details.append(
@@ -713,7 +1024,11 @@ def _apply_explicit_evidence_fallbacks(recommendations, sheets):
             fallback_keys = "conditional_access_detail"
         elif service == "Entra" and ("mfa" in primary_evidence_text or "authentication method" in primary_evidence_text or "passwordless" in primary_evidence_text):
             fallback_keys = "authentication_detail"
-        elif service in EXPLICIT_SERVICE_FALLBACKS:
+        elif service in EXPLICIT_SERVICE_FALLBACKS and not LICENSE_ONLY_LANGUAGE.search(
+            " ".join(str(record.get(key, "") or "") for key in (
+                "Feature", "Observation", "Recommendation"
+            ))
+        ):
             fallback_keys = EXPLICIT_SERVICE_FALLBACKS[service]
 
         filtered_keys = [key for key in _split_evidence_keys(fallback_keys) if key in available_keys]
@@ -1462,7 +1777,22 @@ def _build_purview_policy_sheet(purview_client):
                 "Additional Context": additional_context,
             })
 
-    add_objects("DLP Policy", purview_client.dlp_policies.get("policies", []))
+    dlp_summary = _build_purview_policy_summary(purview_client)
+    add_objects("DLP Policy", getattr(purview_client, "dlp_policies", {}).get("policies", []))
+    for rule in dlp_summary.get("rule_rows", []):
+        rows.append({
+            "RecommendationId": "",
+            "Flagged By": "",
+            "Object Type": "DLP Rule",
+            "Name": rule.get("Rule", "Unnamed rule"),
+            "Enabled": rule.get("Enabled", "Unknown"),
+            "Mode": rule.get("Severity", "Not provided"),
+            "Additional Context": (
+                f"Policy: {rule.get('Policy', 'Not returned')}; "
+                f"Conditions: {rule.get('Conditions', 'Not returned')}; "
+                f"Actions: {rule.get('Actions', 'Not returned')}"
+            ),
+        })
     add_objects("Communication Compliance Policy", purview_client.comm_compliance.get("policies", []))
     add_objects("Information Barrier Policy", purview_client.information_barriers.get("policies", []))
     add_objects("Sensitivity Label", purview_client.sensitivity_labels.get("labels", []), name_keys=["DisplayName", "Name"])
@@ -1513,6 +1843,8 @@ def _build_defender_incident_sheet(defender_client):
             })
 
     incident_summary = getattr(defender_client, "incident_summary", {}) or {}
+    from .source_evidence import source_is_complete
+    complete = source_is_complete(defender_client, "incidents")
     rows.sort(key=lambda row: (str(row.get("Severity", "")).lower(), str(row.get("Created Date", ""))), reverse=True)
 
     return {
@@ -1521,7 +1853,7 @@ def _build_defender_incident_sheet(defender_client):
             f"{incident_summary.get('total', 0)} security incident(s) were reviewed, "
             f"including {incident_summary.get('active', 0)} active incident(s) and "
             f"{incident_summary.get('high_severity', 0)} high-severity incident(s)."
-        ),
+        ) if complete else "The incident query did not complete. Incident counts and the absence of active incidents are not established. Any returned records below are partial evidence.",
         "details": [
             "Incident detail combines the Graph Security and Defender API incident views when they were available from the reviewed tenant.",
             "The engineer workbook shows the exact incidents that supported higher-severity security posture observations.",
@@ -1561,6 +1893,8 @@ def _build_defender_device_sheet(defender_client):
         })
 
     device_summary = getattr(defender_client, "device_summary", {}) or {}
+    from .source_evidence import source_is_complete
+    complete = source_is_complete(defender_client, "machines")
     rows.sort(key=lambda row: (str(row.get("Risk Score", "")).lower(), str(row.get("Device Name", "")).lower()))
 
     return {
@@ -1568,10 +1902,10 @@ def _build_defender_device_sheet(defender_client):
         "summary": (
             f"{device_summary.get('total', 0)} Defender device(s) were reviewed, "
             f"including {device_summary.get('high_risk', 0)} high-risk device(s)."
-        ),
+        ) if complete else "The device query did not complete. The total device population and its risk distribution are not established.",
         "details": [
             "Device detail captures the risk and exposure fields returned by Defender for Endpoint in the tenant review.",
-            "This gives the follow-up engineer a direct starting point for devices that may weaken Copilot rollout security posture.",
+            "The returned inventory does not establish coverage of the intended pilot fleet or its browser protection baseline; reconcile it against the expected device population.",
         ],
     }
 
@@ -1687,6 +2021,117 @@ def _build_power_platform_sheet(pp_client):
     }
 
 
+def _build_sharepoint_governance_summary(m365_client):
+    if not m365_client:
+        return {"available": False, "reason": "M365 collection was not run."}
+    from .sharepoint_governance import summarize_sharepoint_governance
+    return summarize_sharepoint_governance(getattr(m365_client, "sharepoint_governance", {}) or {})
+
+
+def _build_sharepoint_governance_sheet(m365_client):
+    governance = _build_sharepoint_governance_summary(m365_client)
+    rows = []
+    if not governance.get("available"):
+        rows.append({
+            "RecommendationId": "", "Flagged By": "", "Detail Type": "Collection",
+            "Setting or report": "SharePoint governance", "Value or status": "Not assessed",
+            "Why it matters": governance.get("reason", "Tenant sharing settings were not available."),
+        })
+    else:
+        labels = {
+            "SharingCapability": "SharePoint external sharing",
+            "OneDriveSharingCapability": "OneDrive external sharing",
+            "DefaultSharingLinkType": "Default sharing link",
+            "DefaultLinkPermission": "Default link permission",
+            "FileAnonymousLinkType": "Anyone file-link permission",
+            "FolderAnonymousLinkType": "Anyone folder-link permission",
+            "RequireAnonymousLinksExpireInDays": "Anyone-link expiration (days)",
+            "ExternalUserExpirationRequired": "Guest expiration enforced",
+            "ExternalUserExpireInDays": "Guest expiration (days)",
+            "PreventExternalUsersFromResharing": "Prevent guests from resharing",
+            "LegacyAuthProtocolsEnabled": "Legacy authentication permitted",
+            "LegacyBrowserAuthProtocolsEnabled": "Legacy browser authentication permitted",
+            "ConditionalAccessPolicy": "SharePoint access policy",
+            "IPAddressEnforcement": "SharePoint IP restriction enabled",
+            "ShowEveryoneClaim": "Everyone claim available",
+            "ShowEveryoneExceptExternalUsersClaim": "Everyone except external users claim available",
+            "EnableAutoExpirationVersionTrim": "Automatic version trimming",
+            "MajorVersionLimit": "Major version limit",
+            "ExpireVersionsAfterDays": "Version expiration (days)",
+        }
+        security_keys = {
+            "SharingCapability", "OneDriveSharingCapability", "DefaultSharingLinkType",
+            "DefaultLinkPermission", "FileAnonymousLinkType", "FolderAnonymousLinkType",
+            "RequireAnonymousLinksExpireInDays", "ExternalUserExpirationRequired",
+            "ExternalUserExpireInDays", "PreventExternalUsersFromResharing",
+            "LegacyAuthProtocolsEnabled", "LegacyBrowserAuthProtocolsEnabled",
+            "ConditionalAccessPolicy", "IPAddressEnforcement", "ShowEveryoneClaim",
+            "ShowEveryoneExceptExternalUsersClaim",
+        }
+        for key, value in (governance.get("settings") or {}).items():
+            if key not in labels:
+                continue
+            rows.append({
+                "RecommendationId": "", "Flagged By": "", "Detail Type": "Tenant setting",
+                "Setting or report": labels[key], "Value or status": value,
+                "Why it matters": (
+                    "Used to evaluate content access and sharing paths for AI-grounded data."
+                    if key in security_keys else "Operational lifecycle context; not scored as an AI security control by itself."
+                ),
+            })
+        rows.extend([
+            {
+                "RecommendationId": "", "Flagged By": "", "Detail Type": "Site inventory",
+                "Setting or report": "Sites assessed", "Value or status": governance.get("site_count", 0),
+                "Why it matters": f"{governance.get('anyone_site_count', 0)} site(s) permit Anyone sharing.",
+            },
+            {
+                "RecommendationId": "", "Flagged By": "", "Detail Type": "SAM report inventory",
+                "Setting or report": "Completed reports found", "Value or status": governance.get("dag_completed_count", 0),
+                "Why it matters": f"{governance.get('dag_running_count', 0)} report(s) are still running. The tool does not start scans.",
+            },
+        ])
+        for coverage in governance.get("dag_coverage", []):
+            rows.append({
+                "RecommendationId": "", "Flagged By": "", "Detail Type": "SAM coverage",
+                "Setting or report": coverage.get("report", "Data Access Governance report"),
+                "Value or status": coverage.get("status", "Not available"),
+                "Why it matters": "Recent completed evidence is needed to distinguish permissive configuration from actual oversharing.",
+            })
+        for activity in governance.get("dag_activity_states", []):
+            rows.append({
+                "RecommendationId": "", "Flagged By": "", "Detail Type": "SAM activity data",
+                "Setting or report": activity.get("RequestedEntity") or activity.get("ReportEntity") or "Activity report",
+                "Value or status": activity.get("Status") or activity.get("State") or "Not returned",
+                "Why it matters": "Recent-activity reports can be generated only after Microsoft has collected the required audit data.",
+            })
+        for report in governance.get("dag_reports", []):
+            rows.append({
+                "RecommendationId": "", "Flagged By": "", "Detail Type": "SAM report",
+                "Setting or report": " / ".join(filter(None, [
+                    str(report.get("RequestedEntity", "")), str(report.get("RequestedWorkload", "")),
+                    str(report.get("RequestedType", "")),
+                ])),
+                "Value or status": report.get("Status", "Status not returned"),
+                "Why it matters": "Existing report inventory only; a completed export is needed to analyze affected sites and links.",
+            })
+    return {
+        "rows": rows,
+        "summary": "SharePoint tenant and site sharing configuration plus existing Data Access Governance report status.",
+        "details": [
+            "The default run checks for existing reports and never starts a long-running Microsoft scan.",
+            "Site URLs and detailed objects remain in the engineer workbook; the customer HTML uses aggregate counts.",
+        ],
+    }
+
+
+def _measured_summary(value):
+    """Collector placeholders on failed reads are not measurements of zero."""
+    if not isinstance(value, dict) or value.get("available") is False or value.get("error"):
+        return {}
+    return value
+
+
 def _build_m365_activity_sheet(m365_client):
     if not m365_client:
         return None
@@ -1703,33 +2148,33 @@ def _build_m365_activity_sheet(m365_client):
             "Detail": detail,
         })
 
-    email_summary = getattr(m365_client, "email_summary", {}) or {}
-    teams_summary = getattr(m365_client, "teams_summary", {}) or {}
-    sharepoint_summary = getattr(m365_client, "sharepoint_summary", {}) or {}
-    onedrive_summary = getattr(m365_client, "onedrive_summary", {}) or {}
-    activations_summary = getattr(m365_client, "activations_summary", {}) or {}
-    active_users_summary = getattr(m365_client, "active_users_summary", {}) or {}
-    users_summary = getattr(m365_client, "users_summary", {}) or {}
+    email_summary = _measured_summary(getattr(m365_client, "email_summary", {}))
+    teams_summary = _measured_summary(getattr(m365_client, "teams_summary", {}))
+    sharepoint_summary = _measured_summary(getattr(m365_client, "sharepoint_summary", {}))
+    onedrive_summary = _measured_summary(getattr(m365_client, "onedrive_summary", {}))
+    activations_summary = _measured_summary(getattr(m365_client, "activations_summary", {}))
+    active_users_summary = _measured_summary(getattr(m365_client, "active_users_summary", {}))
+    users_summary = _measured_summary(getattr(m365_client, "users_summary", {}))
 
-    add_metric("Users", "Total Users", users_summary.get("total", 0), "Tenant user inventory reviewed for activity baselines.")
+    add_metric("Users", "Total Users", users_summary.get("total"), "Tenant user inventory reviewed for activity baselines." if users_summary else "User inventory was not supplied.")
     license_coverage = users_summary.get("copilot_license_coverage")
     coverage_text = "Not calculated" if license_coverage is None else f"{license_coverage}%"
     add_metric(
         "Users",
         "Copilot Licensed Users",
-        users_summary.get("copilot_licensed", 0),
+        users_summary.get("copilot_licensed"),
         f"License coverage {coverage_text} of {users_summary.get('coverage_population', 'the assessed population')}.",
     )
-    add_metric("Email", "Active Users", email_summary.get("active_users", 0), f"Average sent per user {email_summary.get('avg_sent_per_user', 0)}.")
-    add_metric("Email", "Total Sent", email_summary.get("total_sent", 0), f"Average received per user {email_summary.get('avg_received_per_user', 0)}.")
-    add_metric("Teams", "Active Users", teams_summary.get("active_users", 0), f"Average meetings per user {teams_summary.get('avg_meetings_per_user', 0)}.")
-    add_metric("Teams", "Total Meetings", teams_summary.get("total_meetings", 0), f"Average messages per user {teams_summary.get('avg_messages_per_user', 0)}.")
-    add_metric("SharePoint", "Active Sites", sharepoint_summary.get("active_sites", 0), f"Site activity rate {sharepoint_summary.get('site_activity_rate', 0)}%.")
-    add_metric("SharePoint", "Total Files", sharepoint_summary.get("total_files", 0), f"Average files per site {sharepoint_summary.get('avg_files_per_site', 0)}.")
-    add_metric("OneDrive", "Active Accounts", onedrive_summary.get("active_accounts", 0), f"Adoption rate {onedrive_summary.get('adoption_rate', 0)}%.")
-    add_metric("OneDrive", "Storage Used (GB)", onedrive_summary.get("storage_used_gb", 0), f"Average files per active account {onedrive_summary.get('avg_files_per_user', 0)}.")
-    add_metric("Office Activations", "Desktop Adoption Rate", activations_summary.get("desktop_adoption_rate", 0), f"Windows users {activations_summary.get('windows_users', 0)}, Mac users {activations_summary.get('mac_users', 0)}.")
-    add_metric("Active Users Snapshot", "Office 365 Active", active_users_summary.get("office_365_active", 0), f"Exchange {active_users_summary.get('exchange_active', 0)}, Teams {active_users_summary.get('teams_active', 0)}.")
+    add_metric("Email", "Active Users", email_summary.get("active_users"))
+    add_metric("Email", "Total Sent", email_summary.get("total_sent"))
+    add_metric("Teams", "Active Users", teams_summary.get("active_users"))
+    add_metric("Teams", "Total Meetings", teams_summary.get("total_meetings"))
+    add_metric("SharePoint", "Active Sites", sharepoint_summary.get("active_sites"))
+    add_metric("SharePoint", "Total Files", sharepoint_summary.get("total_files"))
+    add_metric("OneDrive", "Active Accounts", onedrive_summary.get("active_accounts"))
+    add_metric("OneDrive", "Storage Used (GB)", onedrive_summary.get("storage_used_gb"))
+    add_metric("Office Activations", "Desktop Adoption Rate", activations_summary.get("desktop_adoption_rate"))
+    add_metric("Active Users Snapshot", "Office 365 Active", active_users_summary.get("office_365_active"))
 
     return {
         "rows": rows,
@@ -1737,6 +2182,38 @@ def _build_m365_activity_sheet(m365_client):
         "details": [
             "No user-level activity is included.",
             "Use these baselines to select pilot groups and compare activity after the pilot.",
+        ],
+    }
+
+
+def _build_external_connection_sheet(m365_client):
+    if not m365_client:
+        return None
+    connections = getattr(m365_client, "external_connections", []) or []
+    status = (getattr(m365_client, "collection_status", {}) or {}).get("external_connections", {})
+    if not connections and status.get("availability_status") != "available":
+        return None
+    rows = []
+    for connection in connections:
+        rows.append({
+            "RecommendationId": "",
+            "Flagged By": "",
+            "Connection Name": _safe_get(connection, "name") or _safe_get(connection, "displayName") or "Unnamed connection",
+            "Connection ID": _safe_get(connection, "id"),
+            "Description": _safe_get(connection, "description"),
+            "State": _safe_get(connection, "state") or "Returned by Graph",
+        })
+    if not rows:
+        rows.append({
+            "RecommendationId": "", "Flagged By": "", "Connection Name": "No connections returned",
+            "Connection ID": "", "Description": "The external-connections endpoint was read successfully.",
+            "State": "Available; empty",
+        })
+    return {
+        "rows": rows,
+        "summary": f"{len(connections)} Microsoft Graph external connection(s) were returned.",
+        "details": [
+            "This is an inventory of connected grounding sources, not proof that a connection is approved or actively used.",
         ],
     }
 
@@ -1841,6 +2318,58 @@ def _build_ai_usage_sheet(m365_client):
             "Microsoft 365 workload activity indicates potential pilot fit; it does not prove Copilot value or return on investment.",
             "Optional preview and uploaded evidence is supplemental and cannot change the core readiness decision.",
         ],
+    }
+
+
+def _build_copilot_readiness_sheet(m365_client):
+    evidence = getattr(m365_client, "copilot_readiness_export", {}) or {}
+    if not evidence or evidence.get("status") == "not_supplied":
+        return None
+    metadata = {
+        "Source File": evidence.get("source_file", ""),
+        "Report Date": evidence.get("report_date", ""),
+        "Report Period (Days)": evidence.get("report_period", ""),
+        "Exported Rows": evidence.get("total_rows", 0),
+        "Status": evidence.get("status", "unknown"),
+    }
+    rows = [{
+        "Indicator": label,
+        "True": counts.get("true", 0),
+        "False": counts.get("false", 0),
+        "Unknown": counts.get("unknown", 0),
+        **metadata,
+    } for key, label in FLAG_COLUMNS.items()
+        if isinstance(counts := (evidence.get("metrics", {}) or {}).get(key), dict)]
+    if not rows:
+        rows = [{"Indicator": "Export validation", "True": "", "False": "", "Unknown": "", **metadata}]
+    return {
+        "rows": rows,
+        "summary": evidence.get("summary", "Readiness evidence is scoped to the exported rows."),
+        "details": [
+            "True, false and unknown values are distinct. None of these flags measures actual Copilot usage.",
+            "Licensed rows do not establish tenant-wide license totals or the export's coverage of the tenant.",
+            *([evidence["error"]] if evidence.get("error") else []),
+            *(evidence.get("warnings", []) or []),
+        ],
+    }
+
+
+def _build_copilot_readiness_user_sheet(m365_client):
+    evidence = getattr(m365_client, "copilot_readiness_export", {}) or {}
+    source_rows = evidence.get("user_details", []) or []
+    if not evidence.get("available") or not source_rows:
+        return None
+    rows = [{
+        "User Principal Name": row.get("user_principal_name", ""),
+        "Report Date": row.get("report_date", ""),
+        "Report Period (Days)": row.get("report_period", ""),
+        **{label: "Unknown" if row.get(key) is None else "True" if row[key] else "False"
+           for key, label in FLAG_COLUMNS.items()},
+    } for row in source_rows]
+    return {
+        "rows": rows,
+        "summary": f"{len(rows)} exported user readiness rows were explicitly requested for the restricted workbook.",
+        "details": ["Identifiable readiness indicators are excluded from HTML. These rows are not a Copilot usage report."],
     }
 
 

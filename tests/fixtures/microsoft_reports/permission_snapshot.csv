@@ -1,0 +1,2 @@
+Tenant ID,Site ID,Site name,Site URL,Site template,Primary admin,Primary admin email,External sharing,Site privacy,Site sensitivity,Number of users having access,Guest user permissions,External participant permissionst,Entra group count,File count,Items with unique permissions count,PeopleInYourOrg link count,Anyone link count,EEEU permission count,Everyone permission count,Report date
+example-tenant,example-site,Example team,https://example.sharepoint.com/sites/team,Team site,Example Owner,owner@example.com,Yes,Private,Public,12,4,2,1,100,3,8,0,2,1,2026-09-14T20:41:07Z

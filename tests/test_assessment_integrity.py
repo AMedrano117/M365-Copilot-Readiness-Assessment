@@ -407,7 +407,7 @@ class ScanCoverageSeparationTests(unittest.TestCase):
         self.assertEqual(result["Category"], "Scan Coverage")
         self.assertEqual(result["Disposition"], "Coverage")
         self.assertIn("evidence gap", result["Observation"])
-        self.assertIn("--services Purview --interactive-auth fresh", result["Recommendation"])
+        self.assertIn("python main.py --interactive-auth fresh", result["Recommendation"])
 
     def test_missing_ai_builder_inventory_is_coverage_not_zero_models(self):
         from Recommendations.power_platform.AI_BUILDER_MODELS import get_recommendation
@@ -581,17 +581,13 @@ class ScanCoverageSeparationTests(unittest.TestCase):
             finally:
                 os.chdir(original_cwd)
 
-        def tile(label):
-            match = re.search(
-                rf'<div class="label">{label}</div>\s*<div class="value">(\d+)</div>', body
-            )
-            return match.group(1) if match else None
-
-        self.assertEqual(tile("Actions"), "1", "only remediable tenant conditions are actions")
-        self.assertEqual(tile("Coverage Gaps"), "2")
-        self.assertEqual(body.count('<article class="recommendation-card"'), 1)
-        self.assertIn('<section class="coverage-panel"', body)
-        self.assertIn("Scan Coverage (2)", body)
+        from Core.assessment_result import build_assessment_result
+        result = build_assessment_result(recommendations, {})
+        self.assertEqual(result['counts']['remediation'], 0, 'Undated conditions require confirmation.')
+        self.assertEqual(result['counts']['confirmation'], 1)
+        self.assertGreaterEqual(result['counts']['evidence_gaps'], 2)
+        self.assertEqual(body.count('<article class="action"'), result['counts']['actions'])
+        self.assertIn('Remaining evidence and decisions', body)
 
     def test_not_assessed_is_a_first_class_status(self):
         from Core.export_recommendations import PREFERRED_STATUS_ORDER

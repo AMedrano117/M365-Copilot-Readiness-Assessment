@@ -8,7 +8,9 @@ from Core.evidence_layer import (
     _build_identity_risk_sheet,
     _apply_explicit_evidence_fallbacks,
     _build_entra_license_context,
+    _build_purview_policy_sheet,
     _build_purview_policy_summary,
+    _build_verified_strengths,
     build_evidence_bundle,
 )
 from Core.get_entra_client import _apply_authorization_policy, _get_attr
@@ -41,6 +43,63 @@ class EvidenceLayerTests(unittest.TestCase):
         self.assertEqual(summary["enabled"], 1)
         self.assertEqual(summary["rows"][0]["Mode"], "Enable")
         self.assertEqual(summary["rows"][0]["Locations"], "Exchange, SharePoint")
+
+    def test_purview_dlp_summary_and_workbook_include_rule_behavior(self):
+        client = SimpleNamespace(
+            dlp_policies={"available": True, "policies": [{
+                "Name": "Protect financial data", "Enabled": True, "Mode": "Enable",
+                "SharePointLocation": ["All"],
+            }]},
+            dlp_rules={"available": True, "rules": [{
+                "Name": "Block financial records", "ParentPolicyName": "Protect financial data",
+                "Disabled": False, "ContentContainsSensitiveInformation": [{"name": "Credit Card"}],
+                "BlockAccess": True, "NotifyUser": True, "ReportSeverityLevel": "High",
+            }]},
+            comm_compliance={"policies": []}, information_barriers={"policies": []},
+            sensitivity_labels={"labels": []}, label_policies={"policies": []},
+            retention_labels={"labels": []}, insider_risk={"policies": []},
+            ediscovery_cases={"cases": []},
+        )
+
+        summary = _build_purview_policy_summary(client)
+        sheet = _build_purview_policy_sheet(client)
+
+        self.assertEqual(summary["total_rules"], 1)
+        self.assertEqual(summary["rule_rows"][0]["Actions"], "Block access, Notify users")
+        rule_row = next(row for row in sheet["rows"] if row["Object Type"] == "DLP Rule")
+        self.assertIn("Conditions: Sensitive information", rule_row["Additional Context"])
+        self.assertIn("Actions: Block access, Notify users", rule_row["Additional Context"])
+
+    def test_verified_strengths_require_configured_controls(self):
+        purview = SimpleNamespace(
+            dlp_policies={"available": True, "policies": [{
+                "Name": "Protect", "Enabled": True, "Mode": "Enable",
+                "SharePointLocation": ["All"],
+            }]},
+            dlp_rules={"available": True, "rules": [{
+                "Name": "Block", "ParentPolicyName": "Protect", "Disabled": False,
+                "BlockAccess": True,
+            }]},
+            sensitivity_labels={"available": False}, label_policies={"available": False},
+            audit_config={"available": False}, irm_config={"available": False},
+        )
+
+        strengths = _build_verified_strengths(None, purview)
+
+        self.assertEqual(len(strengths), 1)
+        self.assertEqual(strengths[0]["Area"], "Data loss prevention")
+        self.assertIn("1 enabled rule", strengths[0]["Evidence"])
+
+    def test_license_only_purview_row_does_not_receive_policy_evidence(self):
+        rows = [{
+            "Service": "Purview", "Feature": "Content Explorer",
+            "Observation": "Content Explorer is active in Microsoft 365 E3.",
+            "Recommendation": "",
+        }]
+
+        resolved = _apply_explicit_evidence_fallbacks(rows, {"purview_policy_detail": {}})
+
+        self.assertFalse(resolved[0].get("EvidenceKey"))
 
     def test_entra_fallback_uses_measured_condition_not_remediation_wording(self):
         rows = [

@@ -53,7 +53,11 @@ async def get_recommendation(sku_name, status="Success", client=None, m365_insig
             deployment_rec = new_recommendation(
                 service="M365",
                 feature=f"{feature_name} - Activity Baseline",
-                observation=f"Email activity data available: {active_users} active users, averaging {avg_sent} emails sent per user. Baseline established for measuring Copilot impact",
+                observation=(
+                    f"The available email report shows {active_users} active users and an "
+                    f"average of {avg_sent} sent messages per reported user. This is workload "
+                    "context for pilot selection, not evidence of Copilot value."
+                ),
                 recommendation="Track the same customer-defined email measures before and during a Copilot pilot, such as drafting cycle time, response quality, rework, and after-hours activity. Select roles with a documented business need and make expansion contingent on measured results.",
                 link_text="Exchange Activity Reports",
                 link_url="https://learn.microsoft.com/microsoft-365/admin/activity-reports/email-activity",
@@ -61,80 +65,5 @@ async def get_recommendation(sku_name, status="Success", client=None, m365_insig
                 status=status
             )
             return [license_rec, deployment_rec]
-        elif client:
-            # Legacy: fetch data directly (slower)
-            deployment = await get_deployment_status(client)
-            
-            if deployment.get('available'):
-                deployment_rec = new_recommendation(
-                    service="M365",
-                    feature=f"{feature_name} - Activity Baseline",
-                    observation="Email activity data available, baseline established for measuring Copilot impact",
-                    recommendation="Track email metrics before and after Copilot: drafting time, volume, response quality.",
-                    link_text="Exchange Activity Reports",
-                    link_url="https://learn.microsoft.com/microsoft-365/admin/activity-reports/email-activity",
-                    priority="Low",
-                    status=status
-                )
-                return [license_rec, deployment_rec]
-            else:
-                error_msg = deployment.get('message', 'No activity data available')
-                deployment_rec = new_recommendation(
-                    service="M365",
-                    feature=f"{feature_name} - Activity Baseline",
-                    observation=f"Email activity data unavailable: {error_msg}",
-                    recommendation="Enable Reports.Read.All permission to access email activity reports. Baseline metrics are critical for measuring Copilot ROI.",
-                    link_text="Configure Reports Permission",
-                    link_url="https://learn.microsoft.com/graph/permissions-reference#reportsreadall",
-                    priority="Medium",
-                    status="PendingActivation"
-                )
-                return [license_rec, deployment_rec]
-    
-    return [license_rec]
 
-async def get_deployment_status(client):
-    """
-    Check Exchange email activity to establish baseline for Copilot adoption.
-    Returns dict with activity metrics.
-    """
-    try:
-        # Get email activity report for last 30 days
-        # Note: Reports API requires Reports.Read.All permission
-        period = 'D30'  # Last 30 days
-        
-        # Get email activity details
-        activity_response = await client.reports.get_email_activity_counts(period=period).get()
-        
-        # Parse the response to get activity metrics
-        if not activity_response:
-            return {
-                'available': False,
-                'has_activity_data': False
-            }
-        
-        return {
-            'available': True,
-            'period': '30 days',
-            'has_activity_data': True
-        }
-        
-    except Exception as e:
-        error_msg = str(e).lower()
-        if '401' in error_msg or 'unauthorized' in error_msg:
-            return {
-                'available': False,
-                'error': 'insufficient_permissions',
-                'message': 'Reports.Read.All permission required'
-            }
-        elif '403' in error_msg or 'forbidden' in error_msg:
-            return {
-                'available': False,
-                'error': 'access_denied',
-                'message': 'Admin consent required for Reports.Read.All'
-            }
-        return {
-            'available': False,
-            'error': 'unknown',
-            'message': f'Unable to check email activity: {str(e)}'
-        }
+    return [license_rec]

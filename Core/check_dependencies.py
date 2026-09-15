@@ -6,15 +6,16 @@ Validates that all required Python packages are installed before execution.
 import sys
 
 
-def check_dependencies():
+def check_dependencies(offline=False):
     """Check if all required Python packages are installed."""
     required_packages = {
         'azure.identity': 'azure-identity',
         'azure.core': 'azure-core',
-        'msgraph': 'msgraph-sdk',
         'httpx': 'httpx',
         'openpyxl': 'openpyxl'
     }
+    if offline:
+        required_packages = {'openpyxl': 'openpyxl'}
     
     missing_packages = []
     

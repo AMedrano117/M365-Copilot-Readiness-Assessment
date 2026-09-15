@@ -173,14 +173,15 @@ def infer_disposition(record):
     recommendation = str(record.get("Recommendation", "") or "").strip()
     observation = str(record.get("Observation", "") or "").strip()
 
-    if (category == CATEGORY_SCAN_COVERAGE or status in COVERAGE_STATUSES
-            or COVERAGE_LANGUAGE.search(observation)):
+    if category == CATEGORY_SCAN_COVERAGE:
         return DISPOSITION_COVERAGE
     if str(record.get("Service", "") or "") == "M365" and status != "critical":
         # M365 modules primarily describe product availability and adoption.  They do not
         # collect object-level oversharing or data-protection evidence, so they cannot create a
         # security gate.  Keep their suggested work in the value/prerequisite lane.
         return DISPOSITION_OPPORTUNITY if recommendation else DISPOSITION_ASSURANCE
+    if status in COVERAGE_STATUSES or COVERAGE_LANGUAGE.search(observation):
+        return DISPOSITION_COVERAGE
     if source_status == "insight" or status == "insight":
         return DISPOSITION_OPPORTUNITY
     if source_status == "success":
@@ -235,12 +236,13 @@ def infer_evidence(record, disposition):
         return explicit_basis, explicit_confidence or "Medium"
     if disposition == DISPOSITION_COVERAGE:
         return "Not verified", "Unknown"
+    text = _combined_text(record)
+    # A workbook tab may contain the licensed service-plan inventory, but that does not turn
+    # an entitlement statement into evidence that a control is configured or effective.
+    if re.search(r"\b(?:active in|included in|license|licensed|licensing|service plan)\b", text):
+        return "License signal", "Low"
     if str(record.get("EvidenceAvailable", "") or "").strip().lower() == "yes":
         return "Tenant evidence", "High"
-
-    text = _combined_text(record)
-    if re.search(r"\b(?:active in|license|licensed|service plan)\b", text):
-        return "License signal", "Low"
     return "Tenant observation", "Medium"
 
 
@@ -280,6 +282,13 @@ def enrich_assessment_records(records):
     return [enrich_assessment_record(record) for record in (records or [])]
 
 
+def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation_date=None, expected_tenant_id=None):
+    """Public entry point for the shared evidence-qualified assessment result."""
+    from .assessment_result import build_assessment_result as build
+    return build(recommendations, evidence_bundle, evaluation_date=evaluation_date,
+                 expected_tenant_id=expected_tenant_id)
+
+
 def summarize_readiness(records):
     enriched = enrich_assessment_records(records)
     actions = [r for r in enriched if r.get("Disposition") == DISPOSITION_ACTION]
@@ -297,7 +306,11 @@ def summarize_readiness(records):
     high = [r for r in actions if r.get("Priority") == "High"]
     medium = [r for r in actions if r.get("Priority") == "Medium"]
 
-    if critical:
+    offline_coverage = any(r.get('FindingKey') == 'offline.tenant_coverage' for r in decision_coverage)
+    if offline_coverage:
+        decision = "Assessment incomplete"
+        rationale = "The offline evidence does not include a current tenant collection. Review the available findings, but tenant readiness is not established."
+    elif critical:
         decision = "Not ready for pilot"
         noun = "condition" if len(critical) == 1 else "conditions"
         rationale = f"{len(critical)} critical {noun} require remediation before AI access is expanded."

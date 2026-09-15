@@ -1,3 +1,4 @@
+from Core.source_evidence import source_is_complete
 """
 Microsoft 365 Advanced Auditing - Copilot & Agent Adoption Recommendation
 """
@@ -84,7 +85,7 @@ async def get_recommendation(sku_name, status="Success", client=None, purview_cl
     deployment_recs = []
     
     # Check PowerShell audit configuration data first (more accurate than Graph API)
-    if status == "Success" and purview_client and hasattr(purview_client, 'audit_config'):
+    if status == "Success" and source_is_complete(purview_client, "audit_config", getattr(purview_client, "audit_config", None)):
         audit_config = purview_client.audit_config
         
         if audit_config.get('available'):

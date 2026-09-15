@@ -16,7 +16,7 @@ Feature files get pre-computed metrics via simple dict access - no parsing overh
 def get_sites_observation(m365_insights):
     """
     Generate SharePoint sites observation text.
-    
+
     Args:
         m365_insights: dict from extract_m365_insights_from_client()
     
@@ -29,13 +29,12 @@ def get_sites_observation(m365_insights):
     total_sites = m365_insights.get('total_sites', 0)
     
     if total_sites == 0:
-        return "No SharePoint sites detected (Sites.Read.All permission may be missing)"
-    elif total_sites < 5:
-        return f"{total_sites} SharePoint sites deployed (limited content available for Copilot)"
-    elif total_sites < 20:
-        return f"{total_sites} SharePoint sites deployed (moderate content foundation for Copilot)"
-    else:
-        return f"{total_sites} SharePoint sites deployed (strong content foundation for Copilot)"
+        return "No SharePoint sites were returned by the site inventory"
+    return (
+        f"{total_sites} SharePoint sites were returned by the site inventory. "
+        "Site count is workload context and does not establish content quality, "
+        "permission safety, or AI value."
+    )
 
 
 def get_sites_recommendation(m365_insights):
@@ -53,14 +52,8 @@ def get_sites_recommendation(m365_insights):
     
     total_sites = m365_insights.get('total_sites', 0)
     
-    if total_sites == 0:
-        return "Ensure Sites.Read.All permission is granted to assess SharePoint deployment. SharePoint provides the organizational knowledge base that Copilot uses to answer questions and generate insights."
-    elif total_sites < 5:
-        return "Create team sites for key departments and projects. Copilot's effectiveness depends on having organizational content in SharePoint - policies, procedures, project documentation, and collaborative workspaces. Aim for at least 10-15 active sites to provide meaningful context for AI responses."
-    elif total_sites < 20:
-        return "Expand SharePoint site deployment to cover more teams and business processes. More content diversity improves Copilot's ability to synthesize cross-functional insights and answer complex business questions."
-    
-    return ""  # Sufficient sites deployed
+    # A site count alone cannot justify creating more sites or predict AI value.
+    return ""
 
 
 def get_users_observation(m365_insights):
@@ -77,15 +70,27 @@ def get_users_observation(m365_insights):
         return ""
     
     total_users = m365_insights.get('total_users', 0)
-    copilot_licensed = m365_insights.get('copilot_licensed_users', 0)
+    copilot_licensed = m365_insights.get('copilot_licensed_users')
     license_coverage = m365_insights.get('copilot_license_coverage')
     
     if total_users == 0:
         return "User data unavailable (User.Read.All permission may be missing)"
     
-    observation_parts = [f"{total_users} total users"]
-    
-    if copilot_licensed > 0:
+    observation_parts = [
+        f"{total_users} users returned (collection incomplete)"
+        if m365_insights.get('user_data_sampled') else f"{total_users} total users"
+    ]
+
+    if copilot_licensed is None:
+        known = m365_insights.get('known_copilot_licensed_users')
+        licensing_text = "Copilot license count not established"
+        if known:
+            licensing_text += f" (at least {known} assigned licenses confirmed)"
+        reason = m365_insights.get('copilot_license_coverage_reason')
+        if reason:
+            licensing_text += f": {reason}"
+        observation_parts.append(licensing_text)
+    elif copilot_licensed > 0:
         population = m365_insights.get('copilot_license_coverage_population', 'the estimated eligible population')
         coverage_text = "coverage not calculated" if license_coverage is None else f"{license_coverage}% license coverage of {population}"
         observation_parts.append(f"{copilot_licensed} with Copilot licenses ({coverage_text})")
@@ -109,14 +114,16 @@ def get_copilot_adoption_recommendation(m365_insights):
         return ""
     
     total_users = m365_insights.get('total_users', 0)
-    copilot_licensed = m365_insights.get('copilot_licensed_users', 0)
+    copilot_licensed = m365_insights.get('copilot_licensed_users')
     license_coverage = m365_insights.get('copilot_license_coverage')
     
     if total_users == 0:
         return ""
     
+    if copilot_licensed is None:
+        return "Confirm access to user license assignments and the tenant subscription catalog, then rerun licensing collection. Review existing entitlements before making Copilot rollout or license changes."
     if copilot_licensed == 0:
-        return "Start Copilot pilot with 10-20 power users from different departments to validate value before broad rollout. Focus on users who create lots of content, attend many meetings, or need to synthesize information from multiple sources."
+        return "Define a bounded pilot from the approved use cases and intended-user profile. Establish the customer's outcome and risk measures before assigning Copilot licenses."
     elif license_coverage is not None and license_coverage < 10:
         return f"Copilot licenses currently cover {license_coverage}% of the tenant-derived eligible-user estimate. Treat this as deployment reach, not adoption: validate active use, task quality, and a customer-defined outcome before expanding to similar roles."
     elif license_coverage is not None and license_coverage < 30:
@@ -159,7 +166,7 @@ def get_reports_observation(m365_insights):
         return "Usage reports unavailable (Reports.Read.All permission may be missing)"
     
     report_list = ', '.join(available_reports)
-    return f"Usage reports available: {report_list} (30-day baseline for Copilot impact measurement)"
+    return f"Usage reports available: {report_list} (workload context for pilot selection)"
 
 
 def get_reports_recommendation(m365_insights):
@@ -188,7 +195,11 @@ def get_reports_recommendation(m365_insights):
         missing_reports.append('SharePoint')
     
     if missing_reports:
-        return f"Ensure Reports.Read.All permission is granted to access {', '.join(missing_reports)} usage data. Baseline metrics are critical for measuring Copilot's impact on productivity - meeting time reduction, email volume changes, content collaboration patterns."
+        return (
+            f"Confirm Reports.Read.All access if {', '.join(missing_reports)} workload "
+            "context is needed for pilot selection. Missing workload reports do not prove "
+            "low adoption or block a security-readiness conclusion."
+        )
     
     # If all reports available, provide ROI guidance
     return "Establish use-case-specific baselines before rollout, such as task cycle time, quality review results, rework, or risk exceptions. After deployment, compare the same measures for the pilot cohort and apply a customer-approved expand, adjust, or stop decision. Workload volume alone does not demonstrate ROI."
@@ -260,15 +271,14 @@ def get_total_users(m365_insights):
     return m365_insights.get('total_users', 0) if m365_insights else 0
 
 def get_copilot_licensed_count(m365_insights):
-    """Get number of users with Copilot licenses"""
-    return m365_insights.get('copilot_licensed_users', 0) if m365_insights else 0
+    """Get the assigned Copilot license count, or None when not established."""
+    return m365_insights.get('copilot_licensed_users') if m365_insights else None
 
 def get_copilot_adoption_percentage(m365_insights):
     """Compatibility accessor: returns license coverage, not active adoption."""
     if not m365_insights:
-        return 0
-    value = m365_insights.get('copilot_license_coverage')
-    return value if value is not None else 0
+        return None
+    return m365_insights.get('copilot_license_coverage')
 
 def is_user_data_sampled(m365_insights):
     """Check if user data is sampled (>999 users - only first 999 retrieved)"""

@@ -1,3 +1,4 @@
+from Core.source_evidence import source_is_complete
 """
 Microsoft Endpoint DLP - Copilot & Agent Adoption Recommendation
 """
@@ -41,7 +42,7 @@ async def get_recommendation(sku_name, status="Success", client=None, purview_cl
     
     # Check deployment status from PowerShell data
     deployment_recs = []
-    if status == "Success" and purview_client and hasattr(purview_client, 'dlp_policies'):
+    if status == "Success" and source_is_complete(purview_client, "dlp_policies", getattr(purview_client, "dlp_policies", None)):
         dlp_data = purview_client.dlp_policies
         
         if dlp_data.get('available'):
@@ -52,8 +53,8 @@ async def get_recommendation(sku_name, status="Success", client=None, purview_cl
                 deployment_rec = new_recommendation(
                     service="Purview",
                     feature=f"{feature_name} - Active Policies",
-                    observation=f"Endpoint DLP has {endpoint_policies} active endpoint-scoped policy/policies (of {total_policies} total DLP policies)",
-                    recommendation=f"You have {endpoint_policies} Endpoint DLP policy/policies protecting devices from Copilot-related data exfiltration. Ensure these policies: 1) Block copying sensitive Copilot responses to personal email/USB drives/unauthorized cloud storage, 2) Prevent screenshots of confidential AI-generated content, 3) Restrict printing documents that Copilot creates from sensitive sources, 4) Monitor file transfers when users export Copilot summaries containing PII/financial data. Review policy scopes to cover all devices where users access Copilot (Windows endpoints, macOS if deployed). Verify rules detect content patterns common in AI outputs (aggregated data, multi-source summaries, formatted reports). Use Get-DlpCompliancePolicy to audit configurations.",
+                    observation=f"Purview returned {endpoint_policies} enabled endpoint-scoped DLP policy/policies (of {total_policies} total DLP policies). Rule conditions and actions are listed separately in the DLP evidence.",
+                    recommendation="Test the returned endpoint policies against the organization’s approved and prohibited AI data scenarios. Confirm device onboarding, supported browser and application activities, rule actions, user notifications, overrides, alerting, and enforcement before relying on them for external-AI egress control.",
                     link_text="Manage Endpoint DLP Policies",
                     link_url="https://learn.microsoft.com/purview/endpoint-dlp-using",
                     priority="Low",

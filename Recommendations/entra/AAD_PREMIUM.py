@@ -192,7 +192,7 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
                 recommendations.append(new_recommendation(
                     service="Entra",
                     feature=feature_name,
-                    observation=f"{legacy_auth_count} legacy authentication {'sign-in' if legacy_auth_count == 1 else 'sign-ins'} detected in the past 30 days, bypassing MFA and CA protections",
+                    observation=f"{legacy_auth_count} legacy authentication {'sign-in' if legacy_auth_count == 1 else 'sign-ins'} detected in the returned sign-in records. Review the protocols and the controls that apply to those requests.",
                     recommendation="Block legacy authentication protocols (IMAP, POP3, SMTP AUTH) using Conditional Access. Legacy auth bypasses MFA and cannot be protected by Conditional Access policies, creating a backdoor for attackers to access Copilot. Migrate apps to modern authentication (OAuth 2.0) and block legacy protocols tenant-wide.",
                     link_text="Block Legacy Authentication",
                     link_url="https://learn.microsoft.com/entra/identity/conditional-access/block-legacy-authentication",
@@ -204,7 +204,7 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
                 recommendations.append(new_recommendation(
                     service="Entra",
                     feature=feature_name,
-                    observation="No legacy authentication sign-ins detected, all access uses modern authentication with full security controls",
+                    observation="No legacy authentication sign-ins were found in the returned sign-in records. This sample does not establish that all access uses modern authentication or that every security control is effective.",
                     recommendation="",
                     link_text="Modern Authentication Overview",
                     link_url="https://learn.microsoft.com/microsoft-365/enterprise/hybrid-modern-auth-overview",

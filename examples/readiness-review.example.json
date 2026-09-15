@@ -1,0 +1,77 @@
+{
+  "version": "1.0",
+  "ai_products": [
+    {"provider": "Microsoft", "product": "Microsoft 365 Copilot", "tier": "Enterprise"}
+  ],
+  "use_cases": [
+    {
+      "name": "Draft approved project summaries",
+      "business_owner": "Fictional operations sponsor",
+      "provider": "Microsoft",
+      "product": "Microsoft 365 Copilot",
+      "intended_users": ["Ten fictional pilot users"],
+      "approved_data": ["Approved internal project documents in the fictional pilot site"],
+      "prohibited_data": ["Restricted client data and personnel records"],
+      "required_outcome": "Reduce median first-draft time from 40 to 30 minutes while reviewers accept at least 9 of 10 drafts",
+      "risk_measurements": ["Unsupported statements", "Sensitive-data disclosure incidents"],
+      "expand_stop_decision": "Stop for a disclosure incident. Review quality, time and risk results with the sponsor before expanding."
+    }
+  ],
+  "readiness_review": {
+    "version": "1.0",
+    "tenant_id": "11111111-1111-1111-1111-111111111111",
+    "pilot_scope": {
+      "id": "fictional-pilot",
+      "description": "Ten fictional operations users, their managed devices and the approved internal project site",
+      "population_count": 10,
+      "reviewed_at": "2026-09-01",
+      "reviewer_role": "Business sponsor and Microsoft 365 administrator",
+      "evidence_reference": "FICTIONAL-CHARTER-001: approved pilot population and content boundary"
+    },
+    "pilot_plan": {
+      "reviewed_at": "2026-09-01",
+      "reviewer_role": "Business sponsor",
+      "use_case_names": ["Draft approved project summaries"],
+      "baseline": "Ten fictional sample documents required a median of 40 minutes per first draft; reviewers retained the quality rubric.",
+      "evidence_reference": "FICTIONAL-CHARTER-001 and FICTIONAL-BASELINE-001"
+    },
+    "control_reviews": [
+      {
+        "control_id": "DATA.RETENTION",
+        "scope_id": "fictional-pilot",
+        "reviewed_at": "2026-09-14",
+        "reviewer_role": "Information governance owner",
+        "result": "pass",
+        "rationale": "Fictional retention requirements and the applied policy were reviewed for the approved project site; the owner accepted coverage for this population.",
+        "evidence_reference": "FICTIONAL-RETENTION-REVIEW-001: requirements and policy scope record"
+      },
+      {
+        "control_id": "DATA.EXPOSURE",
+        "scope_id": "fictional-pilot",
+        "reviewed_at": "2026-09-14",
+        "reviewer_role": "Information protection owner and content owner",
+        "result": "pass",
+        "rationale": "Fictional sensitive content in the pilot site was identified and its effective access was reviewed against the approved user list.",
+        "evidence_reference": "FICTIONAL-ACCESS-REVIEW-001: reviewed sensitive content and access records"
+      },
+      {
+        "control_id": "LICENSE.ASSIGNMENT",
+        "scope_id": "fictional-pilot",
+        "reviewed_at": "2026-09-14",
+        "reviewer_role": "Microsoft 365 administrator",
+        "result": "pass",
+        "rationale": "The fictional named pilot roster was checked against assigned Copilot licenses and required base licenses.",
+        "evidence_reference": "FICTIONAL-LICENSE-REVIEW-001: reviewed roster and assignments"
+      },
+      {
+        "control_id": "LICENSE.APPS",
+        "scope_id": "fictional-pilot",
+        "reviewed_at": "2026-09-14",
+        "reviewer_role": "Microsoft 365 application administrator",
+        "result": "fail",
+        "rationale": "Two fictional pilot devices still require the approved application update before they can join the pilot.",
+        "evidence_reference": "FICTIONAL-APP-REVIEW-001: reviewed device and application prerequisite inventory"
+      }
+    ]
+  }
+}

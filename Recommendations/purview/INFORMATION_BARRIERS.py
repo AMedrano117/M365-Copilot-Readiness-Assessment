@@ -1,3 +1,4 @@
+from Core.source_evidence import source_is_complete
 """
 Information Barriers - Copilot & Agent Adoption Recommendation
 """
@@ -37,7 +38,7 @@ async def get_recommendation(sku_name, status="Success", client=None, purview_cl
     
     # Check deployment status from PowerShell data
     deployment_recs = []
-    if status == "Success" and purview_client and hasattr(purview_client, 'information_barriers'):
+    if status == "Success" and source_is_complete(purview_client, "information_barriers", getattr(purview_client, "information_barriers", None)):
         ib_data = purview_client.information_barriers
         
         # Generate recommendation whether data is available or not (0 count = not configured)

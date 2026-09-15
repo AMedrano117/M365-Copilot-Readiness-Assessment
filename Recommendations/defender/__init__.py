@@ -121,8 +121,8 @@ def get_feature_recommendation(feature_name, sku_name, status="Success", client=
                     base_recommendation = "Review anti-phishing policies for AI-themed threats"
             
             elif feature_name.upper() == "MTP":
-                incidents = defender_client.incident_summary.get('total', 0)
-                high_severity = defender_client.incident_summary.get('high_severity', 0)
+                incidents = (defender_client.incident_summary.get('total') or 0)
+                high_severity = (defender_client.incident_summary.get('high_severity') or 0)
                 if incidents > 0:
                     additional_insights.append(f"{incidents} incidents, {high_severity} high-severity")
                     if high_severity > 0:

@@ -315,8 +315,7 @@ class RecommendationTextRenderingTests(unittest.TestCase):
             finally:
                 os.chdir(original_cwd)
 
-        card = body.split('<article class="recommendation-card"')[1].split("</article>")[0]
-        visible = card.split('<div class="card-body">')[1]
+        visible = body.split('<article class="action"')[1].split("</article>")[0]
         self.assertIn("<strong>NOT READY</strong>", visible)
         self.assertNotIn("**", visible)
 
