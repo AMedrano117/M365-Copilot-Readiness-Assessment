@@ -88,7 +88,7 @@ async def get_recommendation(sku_name, status="Success", client=None, pp_client=
                 pp_assets.append(f"{teams_apps} in Teams")
             if premium_conns > 0:
                 pp_assets.append(f"{premium_conns} premium connector{'s' if premium_conns != 1 else ''}")
-            if ai_models > 0:
+            if ai_models is not None and ai_models > 0:
                 pp_assets.append(f"{ai_models} AI model{'s' if ai_models != 1 else ''}")
             pp_desc = f", Power Platform: {', '.join(pp_assets)}" if pp_assets else ""
             

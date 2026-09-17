@@ -1,8 +1,8 @@
 import asyncio
+import os
 import sys
 from pathlib import Path
 from uuid import UUID
-from urllib.parse import urlparse
 from datetime import datetime
 from azure.identity._exceptions import CredentialUnavailableError
 from azure.core.exceptions import ClientAuthenticationError, HttpResponseError
@@ -12,6 +12,7 @@ from .orchestrator_validation import validate_and_prepare_services
 from .orchestrator_setup import (
     load_modules_and_analyze,
     setup_graph_and_licenses,
+    load_license_context,
     prepare_interactive_collection_plan,
     print_interactive_collection_summary
 )
@@ -19,6 +20,7 @@ from .orchestrator_powershell import collect_power_platform_data, collect_sharep
 from .orchestrator_pipelines import create_pipelines
 from . import console_reporting as console
 from .offline_collection import CollectionPackagingError
+from .sharepoint_configuration import SHAREPOINT_ADMIN_URL_REQUIRED, is_valid_sharepoint_admin_url
 
 # Service-specific imports are now lazy-loaded based on SERVICES parameter
 
@@ -52,70 +54,77 @@ async def resolve_assessment_tenant_id(client, tenant_id):
     return tenant_id
 
 
-def is_valid_sharepoint_admin_url(value):
-    """Accept only an HTTPS SharePoint administrative host."""
+async def resolve_purview_organization(client):
+    """Resolve Purview's organization independently of the SharePoint hostname."""
+    configured = os.environ.get('PURVIEW_ORGANIZATION', '').strip()
+    if configured:
+        return configured
     try:
-        parsed = urlparse(str(value or '').strip())
-        return (
-            parsed.scheme.lower() == 'https'
-            and parsed.hostname is not None
-            and parsed.hostname.lower().endswith('-admin.sharepoint.com')
-            and not parsed.path.strip('/')
-            and not parsed.username and not parsed.password
-            and parsed.port is None and not parsed.query and not parsed.fragment
-        )
+        org = await client.organization.get()
+        if org and getattr(org, 'value', None):
+            domains = getattr(org.value[0], 'verified_domains', None) or []
+            names = [getattr(domain, 'name', '') for domain in domains]
+            initial = next((getattr(domain, 'name', '') for domain in domains if getattr(domain, 'is_initial', False)), '')
+            domain = initial or next((name for name in names if name.endswith('.onmicrosoft.com')), '')
+            if domain:
+                os.environ['PURVIEW_ORGANIZATION'] = domain
+                return domain
     except Exception:
-        return False
+        pass
+    return ''
 
 
 async def resolve_sharepoint_admin_url(
-    client, explicit_url=None, interactive_auth='auto', prompt=input
+    client, explicit_url=None, interactive_auth='auto', prompt=None
 ):
-    """Resolve the SharePoint admin URL using documented operator precedence."""
-    os = __import__('os')
+    """Select an operator-supplied URL; directory domains cannot establish it."""
     from .credentials_check import env_variable_source
     configured = (explicit_url or '').strip()
     source = '--sharepoint-admin-url'
     if not configured:
         configured = os.environ.get('SHAREPOINT_ADMIN_URL', '').strip()
         source = env_variable_source('SHAREPOINT_ADMIN_URL')
-    invalid_configured_url = bool(configured and not is_valid_sharepoint_admin_url(configured))
-    if invalid_configured_url:
-        console.status(f'{source} is not a valid HTTPS SharePoint admin URL. Correct that setting or enter a verified URL when prompted.', tone='warning')
-    resolved = configured.rstrip('/') if configured and not invalid_configured_url else ''
-
-    # The explicit URL remains authoritative, but the initial tenant domain is also
-    # useful for certificate-based Purview authentication. Resolve it independently
-    # when it was not supplied in the environment.
-    try:
-        if not os.environ.get('PURVIEW_ORGANIZATION', '').strip() or not resolved:
-            org = await client.organization.get()
-            if org and getattr(org, 'value', None):
-                domains = getattr(org.value[0], 'verified_domains', None) or []
-                names = [getattr(domain, 'name', '') for domain in domains]
-                initial = next((getattr(domain, 'name', '') for domain in domains if getattr(domain, 'is_initial', False)), '')
-                domain = initial or next((name for name in names if name.endswith('.onmicrosoft.com')), '')
-                if domain:
-                    if not os.environ.get('PURVIEW_ORGANIZATION', '').strip():
-                        os.environ['PURVIEW_ORGANIZATION'] = domain
-                    if not resolved and not invalid_configured_url:
-                        resolved = f"https://{domain.split('.')[0]}-admin.sharepoint.com"
-                        source = 'derived from the tenant initial domain; verify this URL if the SharePoint tenant was renamed'
-    except Exception:
-        pass
-    if invalid_configured_url:
+    if configured and not is_valid_sharepoint_admin_url(configured):
+        console.status(f'{source} is not a valid HTTPS SharePoint admin-center origin. Correct that setting. ' + SHAREPOINT_ADMIN_URL_REQUIRED, tone='warning')
         return ''
-    if resolved:
+    if configured:
+        resolved = configured.rstrip('/')
         console.detail(f'SharePoint admin URL: {resolved} (source: {source})')
         return resolved
     if interactive_auth != 'skip' and sys.stdin.isatty():
-        entered = prompt('SharePoint admin URL (for example https://contoso-admin.sharepoint.com): ').strip()
-        return entered.rstrip('/') if is_valid_sharepoint_admin_url(entered) else ''
+        console.status('Copy the HTTPS origin from the target tenant\'s SharePoint admin center. The tool does not infer it from the tenant domain.')
+        try:
+            entered = (prompt or input)('SharePoint admin URL (press ENTER to leave SharePoint governance not assessed): ').strip()
+        except EOFError:
+            entered = ''
+        if is_valid_sharepoint_admin_url(entered):
+            resolved = entered.rstrip('/')
+            console.detail(f'SharePoint admin URL: {resolved} (source: operator entry for this run)')
+            console.status('To reuse this URL, set SHAREPOINT_ADMIN_URL in the selected environment file.')
+            return resolved
+    console.status(SHAREPOINT_ADMIN_URL_REQUIRED, tone='warning')
+    return ''
+
+
+async def resolve_workload_configuration(client, interactive_plan, explicit_url=None,
+                                         interactive_auth='auto', permission_profile='standard'):
+    """Resolve only the administrative collectors this run will actually attempt."""
+    if permission_profile == 'restricted':
+        return ''
+    purview = interactive_plan.get('purview', {})
+    if purview.get('selected') and purview.get('will_attempt') and purview.get('application_auth'):
+        await resolve_purview_organization(client)
+    sharepoint = interactive_plan.get('sharepoint', {})
+    if sharepoint.get('selected') and sharepoint.get('will_attempt'):
+        return await resolve_sharepoint_admin_url(client, explicit_url, interactive_auth)
     return ''
 
 
 async def collect_sharepoint_with_retry(admin_url, tenant_id, interactive_auth='auto', prompt=None):
     """Retry a failed collection once without mislabeling output errors as sign-in failures."""
+    if not is_valid_sharepoint_admin_url(admin_url):
+        return {'available': False, 'availability_status': 'unavailable',
+                'configuration_required': 'SHAREPOINT_ADMIN_URL', 'reason': SHAREPOINT_ADMIN_URL_REQUIRED}
     payload = await collect_sharepoint_governance_via_powershell(
         admin_url, tenant_id, auth_mode=interactive_auth
     )
@@ -159,6 +168,7 @@ async def orchestrate(
     lifecycle_report_max_age_days=None,
     lifecycle_report_dates=None,
     portal_review=None,
+    permission_profile=None,
 ):
     """Orchestrate gathering of service information and service plans.
     
@@ -168,6 +178,10 @@ async def orchestrate(
                   "Purview", "Power Platform", "Copilot Studio". Empty list or None = all services.
     """
     try:
+        from .cli_parser import resolve_live_permission_profile
+        permission_profile = resolve_live_permission_profile(
+            permission_profile, preview_collectors, legacy_power_platform_collector
+        )
         if not check_connections:
             from .pdf_report_import import prepare_pdf_review
             if snapshot_json:
@@ -210,18 +224,43 @@ async def orchestrate(
         run_power_platform = service_config['run_power_platform']
         run_copilot_studio = service_config['run_copilot_studio']
 
+        # Verify restricted application access before even license/context reads or
+        # verbose feature analysis. The verification itself reads permission metadata.
+        restricted_preflight = None
+        if permission_profile == 'restricted':
+            from .connection_validation import connection_exit_code, print_connection_results, run_connection_checks
+            interactive_plan = prepare_interactive_collection_plan(
+                service_config, interactive_auth, permission_profile=permission_profile,
+                install_missing_modules=False,
+            )
+            client, services_and_licenses, has_license_data = await setup_graph_and_licenses(
+                tenant_id, True, collect_licenses=False
+            )
+            restricted_preflight = await run_connection_checks(
+                client, service_config, interactive_plan, probe_endpoints=check_connections,
+                tenant_id=tenant_id, permission_profile=permission_profile,
+            )
+            print_connection_results(restricted_preflight, detailed=check_connections)
+            if check_connections:
+                return connection_exit_code(restricted_preflight)
+            if any(item.get('access_audit_failed') for item in restricted_preflight):
+                console.status('Restricted access verification failed. Review the named grants before collecting tenant evidence.', tone='error')
+                return 2
+
         if check_connections:
             interactive_plan = prepare_interactive_collection_plan(
                 service_config,
                 interactive_auth,
                 legacy_power_platform_collector=legacy_power_platform_collector,
                 install_missing_modules=False,
+                permission_profile=permission_profile,
             )
             client, _, _ = await setup_graph_and_licenses(tenant_id, True)
-            resolved_sharepoint_admin_url = await resolve_sharepoint_admin_url(
-                client,
+            resolved_sharepoint_admin_url = await resolve_workload_configuration(
+                client, interactive_plan,
                 explicit_url=sharepoint_admin_url,
                 interactive_auth=interactive_auth,
+                permission_profile=permission_profile,
             )
             from .connection_validation import (
                 connection_exit_code,
@@ -237,6 +276,7 @@ async def orchestrate(
                 sharepoint_admin_url=resolved_sharepoint_admin_url,
                 interactive_auth=interactive_auth,
                 tenant_id=tenant_id,
+                permission_profile=permission_profile,
             )
             print_connection_results(results, detailed=True)
             return connection_exit_code(results)
@@ -248,6 +288,7 @@ async def orchestrate(
             service_config,
             interactive_auth,
             legacy_power_platform_collector=legacy_power_platform_collector,
+            permission_profile=permission_profile,
         )
         print_interactive_collection_summary(interactive_plan)
         
@@ -267,16 +308,20 @@ async def orchestrate(
         show_graph_messages = run_all or any(s.lower() in graph_services for s in service_config['services'])
         
         # Initialize Graph client and licenses
-        client, services_and_licenses, has_license_data = await setup_graph_and_licenses(tenant_id, show_graph_messages)
+        if restricted_preflight is None:
+            client, services_and_licenses, has_license_data = await setup_graph_and_licenses(tenant_id, show_graph_messages)
+        else:
+            has_license_data = await load_license_context(client, services_and_licenses)
         tenant_id = await resolve_assessment_tenant_id(client, tenant_id)
         tenant_name = await resolve_tenant_name(client, tenant_id)
-        resolved_sharepoint_admin_url = await resolve_sharepoint_admin_url(
-            client,
+        resolved_sharepoint_admin_url = await resolve_workload_configuration(
+            client, interactive_plan,
             explicit_url=sharepoint_admin_url,
             interactive_auth=interactive_auth,
+            permission_profile=permission_profile,
         )
         from .connection_validation import print_connection_results, run_connection_checks
-        connection_results = await run_connection_checks(
+        connection_results = restricted_preflight if restricted_preflight is not None else await run_connection_checks(
             client,
             service_config,
             interactive_plan,
@@ -286,14 +331,72 @@ async def orchestrate(
             interactive_auth=interactive_auth,
             probe_endpoints=False,
             tenant_id=tenant_id,
+            permission_profile=permission_profile,
         )
-        print_connection_results(connection_results, detailed=False)
+        if restricted_preflight is None:
+            print_connection_results(connection_results, detailed=False)
+        if any(item.get('access_audit_failed') for item in connection_results):
+            console.status('Restricted access verification failed. Review the named grants before collecting tenant evidence.', tone='error')
+            return 2
+        enabled_collectors = [name for name, enabled in (
+            ('M365', run_m365), ('Entra', run_entra), ('Defender', run_defender),
+            ('Purview', run_purview and permission_profile != 'restricted'), ('Power Platform', run_power_platform),
+            ('Copilot Studio', run_copilot_studio),
+        ) if enabled] + ([] if preview_collectors == 'none' else [f'Preview: {preview_collectors}'])
+        from .offline_collection import load_collection, collection_context, refresh_saved_freshness
+        from .collection_checkpoint import CollectionCheckpoint, run_checkpointed_pipelines
+        from .assessment_package import evaluation_day, record_package_run, render_with_failure_receipt
+        from .data_exposure_assessment import _split_env_paths, _positive_int_env
+        # Freeze settings and original inputs before long administrative collectors.
+        sam_report_paths = sam_report_paths or _split_env_paths('SAM_DAG_REPORT_PATHS')
+        dspm_report_paths = dspm_report_paths or _split_env_paths('DSPM_REPORT_PATHS')
+        evaluation_date = evaluation_day(evaluation_date)
+        from .lifecycle_report_settings import lifecycle_settings
+        lifecycle_options = lifecycle_settings(max_age_days=lifecycle_report_max_age_days,
+                                              report_dates=lifecycle_report_dates, evaluation_date=evaluation_date)
+        checkpoint = CollectionCheckpoint(
+            save_collection_path, service_config=service_config,
+            tenant_id=tenant_id, tenant_name=tenant_name,
+            enabled_collectors=enabled_collectors, connection_results=connection_results,
+            evaluation_date=evaluation_date,
+            assessment_settings={
+                **lifecycle_options,
+                'report_format': report_format, 'data_exposure_enabled': run_m365 or run_purview,
+                'preview_collectors': preview_collectors, 'permission_profile': permission_profile,
+                'include_user_usage_detail': include_user_usage_detail,
+                'provider_evidence_max_age_days': int(os.environ.get('PROVIDER_EVIDENCE_MAX_AGE_DAYS', '90')),
+                'sam_report_max_age_days': _positive_int_env('SAM_REPORT_MAX_AGE_DAYS', 35),
+                'dspm_report_max_age_days': _positive_int_env('DSPM_REPORT_MAX_AGE_DAYS', 8),
+            },
+            supplemental_inputs={
+                'sam_report': sam_report_paths, 'dspm_report': dspm_report_paths,
+                'reports_dir': reports_dirs, 'copilot_readiness_export': copilot_readiness_export,
+                'copilot_dashboard_export': copilot_dashboard_export,
+                'power_platform_inventory': power_platform_inventory,
+                'assessment_profile': assessment_profile, 'provider_evidence': provider_evidence,
+                'baseline': baseline, 'portal_review': portal_review,
+            },
+        )
+        checkpoint.save()
         sharepoint_data = {"available": False, "reason": "SharePoint governance collection was not attempted."}
+        if permission_profile == 'restricted':
+            sharepoint_data.update(
+                availability_status='not_requested',
+                reason='Restricted permission profile: SharePoint administrative collection is not requested; supply supported exports or saved evidence.',
+            )
         sharepoint_plan = interactive_plan.get('sharepoint', {})
         if sharepoint_plan.get('will_attempt'):
-            sharepoint_data = await collect_sharepoint_with_retry(
-                resolved_sharepoint_admin_url, tenant_id, interactive_auth=interactive_auth
-            )
+            try:
+                sharepoint_data = await collect_sharepoint_with_retry(
+                    resolved_sharepoint_admin_url, tenant_id, interactive_auth=interactive_auth
+                )
+            except BaseException as exc:
+                try:
+                    checkpoint.finish('interrupted' if isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt)) else 'failed')
+                except Exception:
+                    console.status('Could not update collection progress. The last successfully saved checkpoint remains available.', tone='warning')
+                console.print_collection_handoff(checkpoint.path)
+                raise
         elif sharepoint_plan.get('selected'):
             sharepoint_data['reason'] = sharepoint_plan.get('skip_reason') or sharepoint_data['reason']
             console.status('SharePoint: skipped. ' + sharepoint_data['reason'], tone='warning')
@@ -304,6 +407,11 @@ async def orchestrate(
         if exported_sam_paths:
             supplied_sam_paths = list(sam_report_paths or []) if not isinstance(sam_report_paths, str) else [sam_report_paths]
             sam_report_paths = supplied_sam_paths + exported_sam_paths
+            try:
+                checkpoint.add_supplemental_inputs({'sam_report': exported_sam_paths})
+            except (ValueError, OSError) as exc:
+                raise CollectionPackagingError(checkpoint.path, exc) from exc
+        checkpoint.record_sharepoint(sharepoint_data)
         
         # Create service pipelines with shared context
         pipelines = create_pipelines(
@@ -319,67 +427,17 @@ async def orchestrate(
             preview_collectors=preview_collectors,
             sharepoint_data=sharepoint_data,
             legacy_power_platform_collector=legacy_power_platform_collector,
+            permission_profile=permission_profile,
         )
         
         # Run service pipelines in parallel. Defender can gather its own data while
         # Purview runs, but waits for the Purview result before calculating the
         # cross-service Copilot data-governance recommendation.
-        purview_task = asyncio.create_task(pipelines['purview']())
-        (m365_result, entra_info, purview_info, defender_info, power_platform_info, copilot_studio_info) = await asyncio.gather(
-            pipelines['m365'](),
-            pipelines['entra'](),
-            purview_task,
-            pipelines['defender'](purview_task),
-            pipelines['power_platform'](),
-            pipelines['copilot_studio']()
-        )
+        saved = await run_checkpointed_pipelines(pipelines, checkpoint)
         
         from .console_reporting import detail, status, print_collection_handoff
         detail(f"[{get_timestamp()}] Collection tasks finished.")
 
-        enabled_collectors = [name for name, enabled in (
-            ("M365", run_m365), ("Entra", run_entra), ("Defender", run_defender),
-            ("Purview", run_purview), ("Power Platform", run_power_platform),
-            ("Copilot Studio", run_copilot_studio),
-        ) if enabled] + ([] if preview_collectors == "none" else [f"Preview: {preview_collectors}"])
-        from .offline_collection import save_collection, load_collection, collection_context, refresh_saved_freshness
-        from .assessment_package import evaluation_day, record_package_run, render_with_failure_receipt
-        from .data_exposure_assessment import _split_env_paths
-        from .data_exposure_assessment import _positive_int_env
-        # Freeze environment fallback inputs into the same package as CLI inputs.
-        sam_report_paths = sam_report_paths or _split_env_paths('SAM_DAG_REPORT_PATHS')
-        dspm_report_paths = dspm_report_paths or _split_env_paths('DSPM_REPORT_PATHS')
-        evaluation_date = evaluation_day(evaluation_date)
-        from .lifecycle_report_settings import lifecycle_settings
-        lifecycle_options = lifecycle_settings(max_age_days=lifecycle_report_max_age_days,
-                                              report_dates=lifecycle_report_dates, evaluation_date=evaluation_date)
-        saved = save_collection(
-            save_collection_path, tenant_id=tenant_id, tenant_name=tenant_name,
-            service_results={
-                'm365_result': m365_result, 'entra_info': entra_info,
-                'purview_info': purview_info, 'defender_info': defender_info,
-                'power_platform_info': power_platform_info, 'copilot_studio_info': copilot_studio_info,
-            }, enabled_collectors=enabled_collectors, connection_results=connection_results,
-            evaluation_date=evaluation_date,
-            assessment_settings={
-                **lifecycle_options,
-                'report_format': report_format, 'data_exposure_enabled': run_m365 or run_purview,
-                'preview_collectors': preview_collectors,
-                'include_user_usage_detail': include_user_usage_detail,
-                'provider_evidence_max_age_days': int(__import__('os').environ.get('PROVIDER_EVIDENCE_MAX_AGE_DAYS', '90')),
-                'sam_report_max_age_days': _positive_int_env('SAM_REPORT_MAX_AGE_DAYS', 35),
-                'dspm_report_max_age_days': _positive_int_env('DSPM_REPORT_MAX_AGE_DAYS', 8),
-            },
-            supplemental_inputs={
-                'sam_report': sam_report_paths, 'dspm_report': dspm_report_paths,
-                'reports_dir': reports_dirs, 'copilot_readiness_export': copilot_readiness_export,
-                'copilot_dashboard_export': copilot_dashboard_export,
-                'power_platform_inventory': power_platform_inventory,
-                'assessment_profile': assessment_profile, 'provider_evidence': provider_evidence,
-                'baseline': baseline,
-                'portal_review': portal_review,
-            },
-        )
         status('Tenant evidence saved. Building reports...', 'success')
         try:
             payload = load_collection(saved)
@@ -416,11 +474,7 @@ async def orchestrate(
             portal_review=packaged('portal_review'),
             snapshot_json=snapshot_json,
             baseline=packaged('baseline'),
-            enabled_collectors=[name for name, enabled in (
-                ("M365", run_m365), ("Entra", run_entra), ("Defender", run_defender),
-                ("Purview", run_purview), ("Power Platform", run_power_platform),
-                ("Copilot Studio", run_copilot_studio),
-            ) if enabled] + ([] if preview_collectors == "none" else [f"Preview: {preview_collectors}"]),
+            enabled_collectors=enabled_collectors,
             connection_results=connection_results,
             reports_dirs=packaged_inputs.get('reports_dir', []),
             copilot_readiness_export=packaged('copilot_readiness_export'),

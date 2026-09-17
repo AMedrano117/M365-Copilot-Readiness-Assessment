@@ -393,18 +393,21 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
             
             app_grants_read = data_sources.get('oauth_grants', False) and data_sources.get('service_principals', False)
             if not app_grants_read:
+                grant_state = (entra_insights.get('collection_status', {}) or {}).get('oauth_grants', {})
+                omitted = grant_state.get('availability_status') == 'not_requested'
                 recommendations.append(new_recommendation(
                     service="Entra",
                     feature=feature_name,
-                    observation="Enterprise application grants or publisher metadata could not be read, so connected-app access to Microsoft 365 data is unverified",
-                    recommendation="Grant Application.Read.All and DelegatedPermissionGrant.Read.All (or the documented equivalent), then rerun and review exact scopes and recent activity.",
+                    observation="Application grant inventory is not assessed. " + (grant_state.get('reason') or "Enterprise application grants or publisher metadata could not be read."),
+                    recommendation=("Review customer-provided application grant evidence separately; existing consent-policy evidence does not establish which grants are present." if omitted else "Verify Application.Read.All and Directory.Read.All with administrator consent, then rerun and review exact scopes and recent activity."),
                     link_text="Review Enterprise Applications",
                     link_url="https://learn.microsoft.com/entra/identity/enterprise-apps/overview",
                     priority="Medium",
                     status="Not Assessed",
                     disposition="Coverage",
                     evidence_key="app_access_detail",
-                    evidence_summary="The application inventory or delegated grant dataset was unavailable; no clean app-governance conclusion is supported."
+                    evidence_summary="The application inventory or delegated grant dataset was unavailable; no clean app-governance conclusion is supported.",
+                    finding_key="entra.app_consent.grant_inventory_not_assessed",
                 ))
             elif high_privilege_apps > 0:
                 risk_details = []

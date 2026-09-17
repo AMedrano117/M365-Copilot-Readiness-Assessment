@@ -1,5 +1,7 @@
 # Consolidated Copilot assessment redesign
 
+> Historical redesign record, retained for context. Its instructions, paths and validation counts describe the work at that time. Use the [current documentation](../README.md) for operating the assessment.
+
 Status: implementation and acceptance validation completed on 2026-09-15. See [validation results](ASSESSMENT_REDESIGN_VALIDATION.md). This document replaces a sequence of isolated presentation changes with one coordinated scope.
 
 ## Goal

@@ -2,6 +2,8 @@
 
 This read-only assessment helps business leaders and IT owners decide what must be addressed or confirmed before a Microsoft 365 Copilot pilot expands. It combines tenant evidence, saved collections and Microsoft portal exports into one customer HTML report and a technical evidence workbook. Agents and external AI products are included when explicitly scoped.
 
+**Start here:** [Operator runbook](docs/RUN.md) | [Customer checklist](docs/NEW_TENANT_CHECKLIST.md) | [All documentation](docs/README.md)
+
 The report produces three distinct conclusions:
 
 - Microsoft 365 foundation readiness.
@@ -39,21 +41,39 @@ The normal full run collects supported evidence for:
 
 The assessment never starts a Microsoft scan, report, site review, export, or remediation action.
 
+The identity section includes [MFA method strength and defaults](docs/MFA_METHODS.md): registered methods, phone-only MFA registration, phishing-resistant registrations, user-selected defaults, system preferences, and member/guest/administrator breakdowns. These use the existing Graph registration report; no PDF export or additional endpoint is needed.
+
 ## Authentication model
 
 Graph, Defender, and selected REST collectors use the configured application certificate or client secret. The runtime uses a small `azure-identity` and `httpx` Graph client; the generated Microsoft Graph SDK is not required.
 
-SharePoint administrative PowerShell cannot use a client secret. SharePoint and supported Purview cmdlets prefer application certificate authentication and otherwise announce and request a delegated browser sign-in. `SHAREPOINT_ADMIN_URL` is optional and is normally derived from the tenant’s initial `.onmicrosoft.com` domain.
-
-Run the idempotent setup and connection preflight:
+Customers seeking reduced application access can choose **Restricted**. It retains stable identity, device, security, usage and external-connection reads, while skipping Graph site/group/consent-grant inventories and all SharePoint/Purview administrative PowerShell. Supported exports and saved evidence can supply additional coverage; skipped sources remain explicitly unassessed. See the [permissions guide](docs/PERMISSIONS.md) for the permission matrix and remaining gaps.
 
 ```powershell
-.\setup-service-principal.ps1 -Mode Standard
+.\setup-service-principal.ps1 -PermissionProfile Restricted
+python main.py --mode live --env-file .env.restricted --check-connections
+python main.py --mode live --env-file .env.restricted --reports-dir .\exports
+# Use the exact COLLECTION INPUT path printed by the live run.
+python main.py --mode offline --collection-input "<collection-input>" --reports-dir .\exports
+```
+
+Create `exports` first or omit `--reports-dir` until exports are available. Restricted setup creates a dedicated `M365 Copilot Readiness Assessment Tool - Restricted` application and writes `.env.restricted`. Live profile selection is the explicit `--permission-profile` value, then `PERMISSION_PROFILE` in the selected environment, then `standard`. The saved collection preserves its profile during replay; older collections show an unrecorded profile. Restricted rejects unattended setup, preview packs and legacy administrative collection.
+
+SharePoint administrative PowerShell cannot use a client secret. SharePoint and supported Purview cmdlets prefer application certificate authentication and otherwise announce and request a delegated browser sign-in. Standard SharePoint administrative collection needs the actual admin-center URL. Open the customer's Microsoft 365 admin center, choose **Admin centers > SharePoint**, and copy the HTTPS origin, such as `https://<actual-prefix>-admin.sharepoint.com`, without a page path or query. The tool does not infer this hostname from the tenant's initial `.onmicrosoft.com` domain. See [URL configuration](docs/prereq.md#sharepoint-admin-url).
+
+Run the idempotent setup and connection preflight, replacing the URL placeholder with the verified origin:
+
+```powershell
+.\setup-service-principal.ps1 -Mode Standard -SharePointAdminUrl "https://<actual-prefix>-admin.sharepoint.com"
 python main.py --check-connections
 python main.py
 ```
 
-Use [RUN.md](RUN.md) as the canonical operator runbook: prepare, collect and save, add exports, rebuild and review. [prereq.md](prereq.md) covers connected access and setup; [the portal guide](PORTAL_REPORTS_AND_OFFLINE.md) covers report requests and validated export schemas.
+An explicitly selected `--env-file` must exist and be readable. Before authentication, the console shows the effective tenant, application, profile, authentication method and configured SharePoint URL without credential values. Setup verifies reused secrets, records their key ID/expiry, and saves new credentials before consent or workload configuration. See [setup recovery and rotation](docs/prereq.md).
+
+These commands retain the existing Standard default. Existing Standard apps need new administrator consent for `Directory.Read.All` and `SecurityAlert.Read.All` when those grants are absent. Neither profile requests `UserAuthenticationMethod.Read.All`; the MFA registration report uses `AuditLog.Read.All`. Setup's delegated administrator scopes are separate from runtime application grants. `--services` limits collection without revoking consent, and removing manifest entries does not revoke earlier grants. Restricted setup and preflight stop on excess requested or granted application permissions; see [cleanup guidance](docs/PERMISSIONS.md#existing-applications-and-credentials).
+
+Use [RUN.md](docs/RUN.md) as the canonical operator runbook: prepare, collect and save, add exports, rebuild and review. [prereq.md](docs/prereq.md) covers connected access and setup; [the portal guide](docs/PORTAL_REPORTS_AND_OFFLINE.md) covers report requests and validated export schemas.
 
 ## Collect once, then rebuild offline
 
@@ -75,7 +95,9 @@ python main.py --mode offline --collection-input "<collection-input>" --reports-
 
 Collections use a unique filename under `output/collections/`: `tenant-collection_<tenant>_<UTC timestamp>_<unique id>.json`. Use the **COLLECTION INPUT** path shown by the console, which points to the reusable collection or rebuild recipe for that assessment. `--save-collection PATH` is an optional override for a custom destination, such as `python main.py --mode live --save-collection .\output\customer\tenant-collection.json`. Connection preflight (`--check-connections`) does not save a collection; offline mode does not save or overwrite one.
 
-The offline command builds HTML and Excel without tenant authentication, network calls, or administrative PowerShell. The adjacent `<collection-stem>_package` folder preserves `collection.json`, original supplemental inputs, assessment settings, deliverables and an operator log. Copy that entire folder and rebuild using its `collection.json`; original cache/download paths are unnecessary. If exports are available during the live run, include `--reports-dir` then. The package restores those inputs on replay; use `--reports-dir` to add later exports. See [RUN.md](RUN.md#portable-assessment-folder) for the package layout and replay rules.
+Progress is also saved before workload collection and after each completed service. An interrupted run's collection can be rebuilt offline with explicit **not assessed** gaps for unfinished services. A new live run collects remaining evidence. Transient read failures use bounded retries and retain completed pages as partial evidence. See [collection recovery](docs/RUN.md#interrupted-collection-and-temporary-service-failures).
+
+The offline command builds HTML and Excel without tenant authentication, network calls, or administrative PowerShell. The adjacent `<collection-stem>_package` folder preserves `collection.json`, original supplemental inputs, assessment settings, deliverables and an operator log. Copy that entire folder and rebuild using its `collection.json`; original cache/download paths are unnecessary. If exports are available during the live run, include `--reports-dir` then. The package restores those inputs on replay; use `--reports-dir` to add later exports. See [RUN.md](docs/RUN.md#portable-assessment-folder) for the package layout and replay rules.
 
 Original collection dates remain unchanged. The recorded evaluation date controls freshness; `--evaluation-date YYYY-MM-DD` deliberately reassesses saved evidence as of another date. User-level workbook detail still requires `--include-user-usage-detail` on each run. To review exports before a collection is available, use `python main.py --mode offline --reports-dir .\exports`; tenant controls are explicitly unassessed.
 
@@ -83,17 +105,17 @@ The replayable collection is different from `--snapshot-json`, which stores asse
 
 Successful historical or portal-only builds also create a portable folder under `output/assessments/`, using `rebuild.json` instead of a collection. Copy the whole folder and use `--collection-input PATH\rebuild.json` to restore the saved inputs automatically. Offline builds never create an artificial tenant collection.
 
-See [Portal reports and offline reporting](PORTAL_REPORTS_AND_OFFLINE.md) for supported export schemas, report requests, permissions, licensing, and a customer email template.
+See [Portal reports and offline reporting](docs/PORTAL_REPORTS_AND_OFFLINE.md) for supported export schemas, report requests, permissions, licensing, and a customer email template.
 
-Include admin-center PDFs in [`--reports-dir`](PORTAL_REVIEW.md), including PDF subfolders. The tool automatically creates JSON, extracts text locally (Windows OCR for image pages), and embeds page previews and originals. The package preserves these for replay. Extracted context does not automatically satisfy a readiness control; `--portal-review` remains available for curated review notes.
+Include admin-center PDFs in [`--reports-dir`](docs/PORTAL_REVIEW.md), including PDF subfolders. The tool automatically creates JSON, extracts text locally (Windows OCR for image pages), and embeds page previews and originals. The package preserves these for replay. Extracted context does not automatically satisfy a readiness control; `--portal-review` remains available for curated review notes.
 
-Live collection includes paid Copilot prompt aggregates, subscription seat counts and returned Copilot DLP targeting/actions. Request only remaining relevant portal details instead of routinely exporting three PDFs. See [automatic Copilot collection coverage](COPILOT_AUTOMATIC_COLLECTION.md).
+Live collection includes paid Copilot prompt aggregates, subscription seat counts and returned Copilot DLP targeting/actions. Request only remaining relevant portal details instead of routinely exporting three PDFs. See [automatic Copilot collection coverage](docs/COPILOT_AUTOMATIC_COLLECTION.md).
 
 ### Console detail and colors
 
 Default output keeps progress, warnings, the decision, action counts and output paths visible. Add `--verbose` (or `-v`) for processing details, source provenance, actions by assessment area and input receipts. The workbook and structured operator log retain detailed results in either mode.
 
-Color defaults to `--color auto`: interactive terminals use color; redirected output and `NO_COLOR` use plain text. `--color never` disables it, and `--color always` explicitly forces it. See [the console workflow](RUN.md#read-the-console-and-copy-the-next-command) for examples.
+Color defaults to `--color auto`: interactive terminals use color; redirected output and `NO_COLOR` use plain text. `--color never` disables it, and `--color always` explicitly forces it. See [the console workflow](docs/RUN.md#read-the-console-and-copy-the-next-command) for examples.
 
 ## SharePoint oversharing and Purview data risk
 
@@ -136,6 +158,8 @@ User-level Copilot activity is opt-in and appears only in the restricted workboo
 
 Power Platform Inventory API, Defender Cloud Apps Shadow AI discovery, and Global Secure Access are opt-in. They are supplemental and cannot change the core Microsoft 365 foundation decision.
 
+These live preview collectors and the legacy administrative collector require the Standard permission profile.
+
 ```powershell
 python main.py --preview-collectors power-platform
 python main.py --preview-collectors shadow-ai
@@ -176,12 +200,31 @@ The HTML follows one narrative: executive assessment, prioritized action plan, r
 
 Reports, environment files, caches, and credentials are excluded by `.gitignore`.
 
+After the customer review, follow [assessment cleanup](docs/CLEANUP.md) to retain and verify the final package, remove the dedicated application's access, and clean up local working copies. For local artifacts, run:
+
+```powershell
+.\cleanup-local-assessment.ps1
+```
+
+It lists all customers' saved artifacts in the built-in assessment/report/cache locations and asks once before removal. Add `-WhatIf` to preview without deleting or prompting, or use optional `-Path` to narrow the selection. Cloud cleanup remains a separate preview/`-Apply` workflow. Deleting local files does not revoke tenant access.
+
 ## Quality and methodology
 
 The exporter checks for contradictory counts, malformed evidence, truncated required sources, unresolved GUIDs in name fields, unsupported high-confidence conclusions, privacy leakage, and cross-output consistency. A report that fails the integrity gate remains available for diagnosis but is marked unsuitable for deployment approval.
 
-See [METHODOLOGY.md](METHODOLOGY.md) for control definitions, evidence standards, scope boundaries, and comparison rules.
+See [METHODOLOGY.md](docs/METHODOLOGY.md) for control definitions, evidence standards, scope boundaries, and comparison rules.
 
-## Start here
+Install the tested dependency set from `requirements.lock.txt`. Automated validation runs Python regressions, PowerShell syntax checks, local documentation links and synthetic HTML/workbook audits. See [development and validation](docs/DEVELOPMENT.md) for the same local commands and dependency updates.
 
-Follow [RUN.md](RUN.md) for the supported collection and replay workflow. For a local preview, start with the synthetic offline command above.
+## Repository layout
+
+| Location | Contents |
+|---|---|
+| Repository root | Overview, security policy, configuration and commands to run the assessment |
+| [docs/](docs/README.md) | Current operator guides and reference documentation |
+| [docs/archive/](docs/archive/README.md) | Historical redesign plans and validation records |
+| `Core/`, `Recommendations/` | Collection, assessment and reporting implementation |
+| `tests/`, `examples/`, `tools/` | Tests, synthetic fixtures, input examples and maintenance helpers |
+| `output/`, `Reports/`, `.cache/` | Generated local evidence and reports; excluded from version control |
+
+Run the documented commands from the repository root. For a local preview, use the synthetic offline command above.

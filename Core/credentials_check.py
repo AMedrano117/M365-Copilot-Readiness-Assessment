@@ -18,7 +18,7 @@ def env_variable_source(name):
 
 def resolve_env_file_path(env_file=None, base_path=None):
     """Resolve the environment file path to use for this run."""
-    if env_file:
+    if env_file is not None:
         return os.path.abspath(env_file)
 
     if base_path is None:
@@ -28,16 +28,21 @@ def resolve_env_file_path(env_file=None, base_path=None):
 
 
 def load_env_file(env_file=None, base_path=None):
-    """Load an environment file if it exists.
+    """Load configuration atomically; an explicitly selected file must exist.
     
     Args:
         env_file: Optional explicit environment file path.
         base_path: Base path to look for default .env file. If None, uses parent of Core folder.
     """
     env_path = resolve_env_file_path(env_file=env_file, base_path=base_path)
-    os.environ['ASSESSMENT_ENV_FILE'] = env_path
+    if not os.path.isfile(env_path):
+        if env_file is not None or os.path.exists(env_path):
+            raise ValueError(f'Environment file does not exist or is not a file: {env_path}')
+        os.environ['ASSESSMENT_ENV_FILE'] = env_path
+        return None
 
-    if os.path.exists(env_path):
+    values = {}
+    try:
         with open(env_path, 'r', encoding='utf-8-sig') as f:
             for line in f:
                 line = line.strip()
@@ -56,21 +61,26 @@ def load_env_file(env_file=None, base_path=None):
                         value = quoted.group(2)
                     else:
                         value = re.split(r'\s+#', value, maxsplit=1)[0].rstrip()
-                    os.environ[key] = value
-                    _ENV_FILE_SOURCES[key] = env_path
-        return env_path
+                    if '\x00' in value:
+                        raise ValueError(f'Invalid value for {key} in {env_path}')
+                    values[key] = value
+    except (OSError, UnicodeError) as exc:
+        raise ValueError(f'Environment file cannot be read: {env_path}') from exc
+    os.environ.update(values)
+    os.environ['ASSESSMENT_ENV_FILE'] = env_path
+    _ENV_FILE_SOURCES.update({key: env_path for key in values})
+    return env_path
 
-    return None
 
-
-def check_credentials(env_file=None):
+def check_credentials(env_file=None, *, load_environment=True):
     """Check if required environment variables are set.
     
     Returns:
         list: List of missing variable names, empty if all present.
     """
     # Load .env file first
-    load_env_file(env_file=env_file)
+    if load_environment:
+        load_env_file(env_file=env_file)
     
     # Check required variables
     missing = []
@@ -87,13 +97,13 @@ def check_credentials(env_file=None):
     return missing
 
 
-def validate_credentials_or_exit(get_timestamp_func, env_file=None):
+def validate_credentials_or_exit(get_timestamp_func, env_file=None, *, load_environment=True):
     """Validate credentials and exit with helpful message if missing.
     
     Args:
         get_timestamp_func: Function to get formatted timestamp for messages.
     """
-    missing_vars = check_credentials(env_file=env_file)
+    missing_vars = check_credentials(env_file=env_file, load_environment=load_environment)
     if missing_vars:
         print(f"[{get_timestamp_func()}] ❌ Missing required credentials: {', '.join(missing_vars)}")
         print()
@@ -105,5 +115,29 @@ def validate_credentials_or_exit(get_timestamp_func, env_file=None):
         if env_file:
             print(f"  3. Requested environment file: {resolve_env_file_path(env_file)}")
         print()
-        print("See RUN.md for detailed setup instructions.")
+        print("See docs/RUN.md for detailed setup instructions.")
         sys.exit(1)
+
+
+def print_configuration_summary(*, tenant_id, permission_profile, env_path=None,
+                                sharepoint_admin_url=None):
+    """Show the effective connection targets without printing credential values."""
+    from .console_reporting import status
+    from .sharepoint_configuration import is_valid_sharepoint_admin_url
+
+    status(f'Configuration: {env_path or "process environment (no default .env file)"}.')
+    status(f'Tenant: {tenant_id or "not configured"}.')
+    status(f'Application: {os.environ.get("CLIENT_ID") or "not configured"}.')
+    status(f'Permission profile: {permission_profile}.')
+    method = 'certificate' if os.environ.get('CERTIFICATE_PATH') else 'client secret'
+    status(f'Graph authentication: {method}.')
+    if permission_profile == 'restricted':
+        status('SharePoint administration: not requested by Restricted profile.')
+        return
+    url = sharepoint_admin_url if sharepoint_admin_url is not None else os.environ.get('SHAREPOINT_ADMIN_URL', '')
+    if is_valid_sharepoint_admin_url(url):
+        status(f'SharePoint admin URL: {url.strip().rstrip("/")} (connection not yet verified).')
+    elif url:
+        status('SharePoint admin URL: invalid; correct the configured HTTPS origin.', 'warning')
+    else:
+        status('SharePoint admin URL: not configured; selected interactive collection may request it.')

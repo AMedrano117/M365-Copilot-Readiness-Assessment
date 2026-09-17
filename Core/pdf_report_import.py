@@ -193,7 +193,7 @@ def prepare_pdf_review(directories, existing_manifest=None, *, tenant_id=None, e
     try:
         import pymupdf
     except ImportError as exc:
-        raise ValueError('PDF import requires PyMuPDF. Run .\\.venv\\Scripts\\python.exe -m pip install -r requirements.txt before collecting.') from exc
+        raise ValueError('PDF import requires PyMuPDF. Run .\\.venv\\Scripts\\python.exe -m pip install -r requirements.lock.txt before collecting.') from exc
     folder = Path('output/portal-reviews') / (datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '_' + uuid4().hex[:8])
     folder.mkdir(parents=True)
     captures = []

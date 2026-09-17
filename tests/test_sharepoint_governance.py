@@ -53,6 +53,17 @@ class SharePointGovernanceTests(unittest.TestCase):
         self.assertEqual(1, summary["dag_completed_count"])
         self.assertEqual(1, summary["dag_running_count"])
 
+    def test_restricted_exclusion_recommends_evidence_without_administrative_access(self):
+        payload = {'available': False, 'availability_status': 'not_requested',
+                   'reason': 'Restricted permission profile: administrative collection is excluded.'}
+        self.assertEqual(summarize_sharepoint_governance(payload)['availability_status'], 'not_requested')
+        result = build_sharepoint_recommendations(payload)[0]
+        self.assertEqual(result['Status'], 'Not Assessed')
+        self.assertIn('Restricted permission profile', result['Observation'])
+        self.assertIn('exports', result['Recommendation'])
+        for instruction in ('Install', 'sign-in', 'certificate'):
+            self.assertNotIn(instruction, result['Recommendation'])
+
 
 if __name__ == "__main__":
     unittest.main()

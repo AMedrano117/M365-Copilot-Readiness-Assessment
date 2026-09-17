@@ -1,20 +1,22 @@
 # Portal reports and offline assessment
 
+[Documentation index](README.md) | [Project overview](../README.md)
+
 Preview existing portal exports immediately, or combine a saved tenant collection with Microsoft-generated portal reports without signing into the tenant again. The report builder does not start Microsoft scans or change sharing or compliance policies. Application setup is a separate operation that configures permissions and credentials.
 
 Microsoft portal references were checked on September 15, 2026. Navigation and entitlements can differ between the current DSPM experience and DSPM for AI (classic).
 
-## Preview now with existing files
+## Preview now with distributed fixtures
 
-No new tenant collection is needed to see the HTML and Excel output. In this workspace, the six supplied exports are already in `output/portal-sample-inputs`:
+No tenant collection is needed to see the HTML and Excel output. Use the repository's synthetic reports:
 
 ```powershell
 .\.venv\Scripts\python.exe main.py --mode offline `
-  --reports-dir ".\output\portal-sample-inputs" `
-  --tenant-name "Offline preview" --open-html-report
+  --reports-dir ".\tests\fixtures\microsoft_reports" `
+  --tenant-name "Sample tenant" --open-html-report
 ```
 
-For a portable example with invented tenant data, use `--reports-dir ".\tests\fixtures\microsoft_reports" --tenant-name "Sample tenant"` instead. The files in `output/` are local customer evidence and are not distributed with the repository; the test fixtures are synthetic. Both previews intentionally show incomplete tenant coverage.
+These fixtures contain invented tenant data and intentionally show incomplete tenant coverage. Customer exports in local `output/` directories are not distributed with the repository. Use a customer's own exports only for that customer's assessment.
 
 Existing HTML files in `Reports/` can also be opened directly. Markdown documents contain instructions, and `examples/` contains assessment profile/provider review examples; those are not portal exports.
 
@@ -26,7 +28,7 @@ An older assessment can provide a fuller offline review even when no collection 
 python main.py --mode offline `
   --prior-report ".\Reports\prior-assessment.xlsx" `
   --purview-cache ".\.cache\purview\saved-cache.json" `
-  --reports-dir ".\output\portal-sample-inputs" `
+  --reports-dir ".\output\customer\exports" `
   --tenant-name "Combined offline review" --open-html-report
 ```
 
@@ -73,11 +75,46 @@ Copy the entire `<collection-stem>_package` folder to move the evidence, then us
 
 Offline building requires local Python dependencies but no `.env`, credential, certificate, browser sign-in, API call or administrative PowerShell. Saved sources retain their original dates. The evaluation date is recorded and reused; `--evaluation-date YYYY-MM-DD` deliberately reassesses freshness. Offline execution alone does not establish or prevent readiness.
 
-Directory discovery is not recursive. Repeat `--reports-dir` for separate folders and omit unavailable report paths. Use one tenant per build. Select one suitable Copilot readiness snapshot; if it is discovered in a report directory, the explicit readiness option is unnecessary.
+Structured-export discovery is not recursive. Repeat `--reports-dir` for separate structured-export folders and omit unavailable report paths. PDF discovery includes subfolders. Use one tenant per build. Select one suitable Copilot readiness snapshot; if it is discovered in a report directory, the explicit readiness option is unnecessary.
 
 Without a saved collection, `--mode offline --reports-dir PATH` produces a portal-only assessment with missing tenant controls identified. `--prior-report` and `--purview-cache` are recovery inputs; `--snapshot-json` and `--baseline` are assessment comparison inputs, not raw collection replacements.
 
 HTML and Excel appear in `Reports/`, with packaged deliverables also retained in the assessment folder. `--report-format both` adds CSV. User-level Copilot detail requires `--include-user-usage-detail` for each workbook build and remains excluded from HTML. Protect the full package, including original exports, as confidential evidence; keep credentials and private certificates outside it.
+
+At closeout, retain the complete agreed package and verify its offline replay before removing local
+working copies. [CLEANUP.md](CLEANUP.md) separates dedicated application removal from local artifact
+cleanup. Cloud removal uses preview/`-Apply`; local cleanup lists saved artifacts and asks once before
+deletion, with `-WhatIf` available for a preview. Offline reporting remains available after application
+access is removed; retained copies and backups follow the customer's agreed retention process.
+
+### Restricted collection with customer exports
+
+Use the [Restricted permission profile](PERMISSIONS.md) for stable identity/device/security/usage
+reads without Graph site/group/consent-grant inventory or administrative PowerShell:
+
+```powershell
+.\setup-service-principal.ps1 -PermissionProfile Restricted
+python main.py --mode live --env-file .env.restricted --check-connections
+python main.py --mode live --env-file .env.restricted --reports-dir .\exports
+python main.py --mode offline --collection-input "<collection-input>" --reports-dir .\exports
+```
+
+Create the export directory first; substitute the live run's exact COLLECTION INPUT path.
+Setup creates a separate application and writes `PERMISSION_PROFILE=restricted` in `.env.restricted`.
+Live `--permission-profile` overrides that environment setting; the default remains Standard.
+Restricted rejects Unattended setup, preview packs and legacy administrative collection.
+Existing administrative certificates do not bypass the exclusions.
+
+Supported SAM/DAG exports establish only their exported permission/sharing scope; DSPM exports
+provide scoped sensitive-data exposure evidence. Neither replaces a tenant sharing-settings
+inventory or Purview policy/retention/audit configuration. A prior collection, report or explicit
+Purview cache preserves only its existing evidence and original dates. PDF context does not
+automatically pass those controls. See the [coverage limitations](PERMISSIONS.md#evidence-gaps-and-offline-replay).
+
+Replay preserves the collection's profile and `not_requested` reasons. Older collections remain
+usable with an unrecorded profile. Intentional exclusions remain unassessed and must never be
+read as zero exposure or a healthy result. Customer administrators still need the portal roles
+below to produce exports; those roles are separate from the assessment application's access.
 
 ## Reviewed visual context
 
@@ -108,6 +145,10 @@ Keep each report's actual generation/as-of date and selected scope. Download tim
 
 ## Permissions and licensing to arrange
 
+For application API grants, setup scopes and profile differences, use [PERMISSIONS.md](PERMISSIONS.md).
+The roles below govern customer export access. Restricted does not ask for SharePoint/Purview
+administrative sign-in during collection, and `--services` never revokes application consent.
+
 | Task | Access and licensing to confirm |
 |---|---|
 | Application setup and live APIs | An administrator who can manage the app plus **Privileged Role Administrator or Global Administrator** for Microsoft Graph application consent. Application Administrator alone cannot consent Graph application permissions. Portal roles and app consent are separate. [Microsoft consent guidance](https://learn.microsoft.com/en-us/entra/identity/enterprise-apps/grant-admin-consent). |
@@ -118,7 +159,7 @@ Keep each report's actual generation/as-of date and selected scope. Download tim
 
 Microsoft 365 E5 without SAM entitlement provides DAG activity reporting limited to 10,000 sites; permission snapshot reports are unavailable under that route. If using that route, complete the required activity-data collection setup; allow up to 24 hours and expect history to accumulate from enablement. [DAG access and limitations](https://learn.microsoft.com/en-us/sharepoint/data-access-governance-reports). Microsoft 365 Business Premium is a base subscription and is distinct from the paid Microsoft 365 Copilot add-on.
 
-For the script's Purview configuration collection, arrange read access to DLP, labels, retention, and Exchange organization, rights-management and audit settings. Purview portal access alone does not establish all Exchange permissions. Use preflight and the final Collection Coverage worksheet to identify gaps; see [Purview permissions](https://learn.microsoft.com/en-us/purview/purview-permissions). Advanced features can require additional licensing even when authentication succeeds. Report an unavailable entitlement to the services team before considering a purchase.
+For Standard's Purview configuration collection, arrange access to DLP, labels, retention, and Exchange organization, rights-management and audit settings. Purview portal access alone does not establish all Exchange permissions. Unattended setup assigns entire management roles containing the required commands; those roles may include write capabilities despite read-only group names. Review actual RBAC with the workload administrator. Use preflight and the final Collection Coverage worksheet to identify gaps; see [Purview permissions](https://learn.microsoft.com/en-us/purview/purview-permissions). Advanced features can require additional licensing even when authentication succeeds. Report an unavailable entitlement to the services team before considering a purchase.
 
 ## Reports to obtain next
 
@@ -152,7 +193,7 @@ Hi [Name],
 
 Thank you for completing the initial assessment. To finish the tenant readiness review, we need to confirm access and add the remaining Microsoft-generated reports. Please reuse recent completed results where available and let us know about any reports that are unavailable under your subscription.
 
-Please have your SharePoint administrator and Purview/Exchange administrator available for the access check. If the assessment app needs additional Microsoft Graph consent, a Privileged Role Administrator or Global Administrator must complete that step. Existing app credentials can be reused; please do not send us passwords, client secrets or private certificates. [Consent requirements](https://learn.microsoft.com/en-us/entra/identity/enterprise-apps/grant-admin-consent).
+For Standard collection, please have your SharePoint administrator and Purview/Exchange administrator available for the access check. For Restricted, arrange those administrators only for the export requests and review of remaining configuration evidence. If the assessment app needs additional Microsoft Graph consent, a Privileged Role Administrator or Global Administrator must complete that step. Existing app credentials can be reused when tenant and app identity match; please do not send us passwords, client secrets or private certificates. [Consent requirements](https://learn.microsoft.com/en-us/entra/identity/enterprise-apps/grant-admin-consent).
 
 From the assessment folder, run:
 
@@ -160,6 +201,10 @@ From the assessment folder, run:
 python main.py --mode live --check-connections
 python main.py --mode live --interactive-auth fresh
 ```
+
+For an agreed Restricted assessment, use `--env-file .env.restricted` on both commands and omit
+`--interactive-auth fresh`. The application's access and resulting coverage are described in
+[the permissions guide](PERMISSIONS.md).
 
 The assessment saves the collection JSON and adjacent portable package automatically in `output/collections/` and prints their locations. No save option is required. The access check alone does not create a collection.
 

@@ -31,11 +31,11 @@ _PRIVATE_FIELDS = {"clientsecret", "clientassertion", "secrettext", "password",
 
 
 class CollectionPackagingError(ValueError):
-    """Tenant evidence was saved successfully, but supplemental packaging failed."""
+    """A collection was saved successfully, but supplemental packaging failed."""
 
     def __init__(self, collection_path, cause):
         self.collection_path = str(Path(collection_path).resolve())
-        super().__init__(f'Tenant evidence is saved, but packaging failed: {cause}')
+        super().__init__(f'The collection is saved, but packaging failed: {cause}')
 
 
 def _safe_key(key):
@@ -80,7 +80,8 @@ def _decode(value):
 
 def save_collection(path=None, *, tenant_id, tenant_name, service_results,
                     enabled_collectors=None, connection_results=None, collected_at=None,
-                    assessment_settings=None, supplemental_inputs=None, evaluation_date=None):
+                    assessment_settings=None, supplemental_inputs=None, evaluation_date=None,
+                    collection_progress=None, _checkpoint_package=None):
     """Save evidence, defaulting to a distinct tenant/date file under output/collections."""
     results = {key: service_results[key] for key in SERVICE_KEYS}
     # The legacy Power Platform collector attaches evidence to its HTTP transport.
@@ -101,6 +102,8 @@ def save_collection(path=None, *, tenant_id, tenant_name, service_results,
         "connection_results": connection_results or [],
         "service_results": results,
     }
+    if collection_progress is not None:
+        payload['collection_progress'] = collection_progress
     from .assessment_package import SETTING_KEYS, evaluation_day
     from .cross_provider_assessment import METHODOLOGY_VERSION, ASSESSMENT_VERSION
     payload['methodology_version'] = METHODOLOGY_VERSION
@@ -118,11 +121,19 @@ def save_collection(path=None, *, tenant_id, tenant_name, service_results,
         target = Path("output") / "collections" / f"tenant-collection_{tenant_slug}_{timestamp}_{uuid4().hex[:8]}.json"
     encoded['source_file'] = target.name
     target.parent.mkdir(parents=True, exist_ok=True)
-    # Preserve the collected facts even if copying a supplemental file fails.
-    temporary = target.with_name(target.name + '.tmp')
-    temporary.write_text(json.dumps(encoded, ensure_ascii=False, indent=2, allow_nan=False), encoding='utf-8')
-    temporary.replace(target)
     from .assessment_package import package_inputs, replace_source_paths
+    if _checkpoint_package and _checkpoint_package.get('folder'):
+        # A live run owns one package. Reuse its immutable copied inputs rather
+        # than copying exports or creating another directory at every checkpoint.
+        package_folder = _checkpoint_package['folder']
+        encoded = replace_source_paths(encoded, _checkpoint_package['references'])
+        encoded['package'] = dict(_checkpoint_package['manifest'], directory='.')
+        _write_collection_json(package_folder / 'collection.json', encoded)
+        encoded['package']['directory'] = package_folder.name
+        _write_collection_json(target, encoded)
+        return str(target.resolve())
+    # Preserve the collected facts even if copying a supplemental file fails.
+    _write_collection_json(target, encoded)
     package_folder = target.with_name(target.stem + '_package')
     # A custom save destination may be reused; preserve its earlier original files
     # and deliverables by giving the new package a distinct companion directory.
@@ -132,15 +143,24 @@ def save_collection(path=None, *, tenant_id, tenant_name, service_results,
         manifest, references = package_inputs(package_folder, supplemental_inputs)
         encoded = replace_source_paths(encoded, references)
         encoded['package'] = dict(manifest, directory='.')
-        (package_folder / 'collection.json').write_text(
-            json.dumps(encoded, ensure_ascii=False, indent=2, allow_nan=False), encoding='utf-8')
+        _write_collection_json(package_folder / 'collection.json', encoded)
         encoded['package']['directory'] = package_folder.name
-        temporary = target.with_name(target.name + ".tmp")
-        temporary.write_text(json.dumps(encoded, ensure_ascii=False, indent=2, allow_nan=False), encoding="utf-8")
-        temporary.replace(target)
+        _write_collection_json(target, encoded)
+        if _checkpoint_package is not None:
+            _checkpoint_package.update(folder=package_folder, manifest=manifest, references=references)
     except (ValueError, OSError) as exc:
         raise CollectionPackagingError(target, exc) from exc
     return str(target.resolve())
+
+
+def _write_collection_json(target, payload):
+    """Replace a complete JSON document; never truncate the last saved checkpoint."""
+    temporary = target.with_name(target.name + '.' + uuid4().hex + '.tmp')
+    try:
+        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2, allow_nan=False), encoding='utf-8')
+        temporary.replace(target)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def load_collection(path):
@@ -234,5 +254,7 @@ def collection_context(payload=None, source_file=None, evaluation_date=None, mod
             "effective_methodology_version": (payload or {}).get('effective_methodology_version'),
             "methodology_migration": (payload or {}).get('methodology_migration'),
             "assessment_settings": (payload or {}).get('assessment_settings', {}),
+            "permission_profile": (payload or {}).get('assessment_settings', {}).get('permission_profile') or 'unrecorded',
+            "collection_progress": (payload or {}).get('collection_progress', {}),
             "freshness": "missing" if age is None else "unknown" if age < 0 else "stale" if age > 35 else "current",
             "scope": "Saved tenant collection plus supplied reports" if payload and payload.get('has_tenant_collection', True) else "Portal exports and historical inputs only"}

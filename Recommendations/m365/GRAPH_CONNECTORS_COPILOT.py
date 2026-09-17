@@ -3,6 +3,7 @@ Graph Connectors for Copilot - M365 Copilot & Agent Adoption Recommendation
 """
 from Core.new_recommendation import new_recommendation
 from Core.friendly_names import get_friendly_sku_name
+from .m365_insights import site_inventory_available, site_inventory_gap
 
 async def get_deployment_status(client):
     """
@@ -163,7 +164,9 @@ async def get_recommendation(sku_name, status="Success", client=None, m365_insig
             ))
     
     # RECOMMENDATION 3: Usage Context (NEW - based on m365_insights)
-    if status == "Success" and m365_insights and m365_insights.get('sharepoint_report_available'):
+    if status == "Success" and m365_insights and not site_inventory_available(m365_insights):
+        recommendations.append(site_inventory_gap(m365_insights, "Graph Connectors for Copilot"))
+    elif status == "Success" and m365_insights and site_inventory_available(m365_insights):
         total_sites = m365_insights.get('total_sites', 0)
         
         if total_sites > 50:

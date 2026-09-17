@@ -519,20 +519,66 @@ class ScanCoverageSeparationTests(unittest.TestCase):
         self.assertIn("COLLECTION_WARNING:Power Platform", ps_source)
 
     def test_purview_result_is_passed_into_defender_governance_analysis(self):
-        orchestrator_source = (
-            REPO_ROOT / "Core" / "orchestrator.py"
-        ).read_text(encoding="utf-8")
-        pipeline_source = (
-            REPO_ROOT / "Core" / "orchestrator_pipelines.py"
-        ).read_text(encoding="utf-8")
+        import io
+        import os
+        import tempfile
+        from contextlib import redirect_stdout
+        from types import SimpleNamespace
+        from unittest import mock
+        from Core.collection_checkpoint import CollectionCheckpoint, SERVICE_PIPELINES, run_checkpointed_pipelines
+        from Core.offline_collection import load_collection
+        from Core.orchestrator_pipelines import create_pipelines
+        from Recommendations.defender.COPILOT_DATA_GOVERNANCE import CORE_SOURCES, get_recommendation
 
-        self.assertIn("purview_task = asyncio.create_task(pipelines['purview']())", orchestrator_source)
-        self.assertIn("pipelines['defender'](purview_task)", orchestrator_source)
-        self.assertIn("purview_result.get('_client')", pipeline_source)
-        self.assertIn(
-            "get_defender_info(client, defender_client, services_and_licenses, purview_client_for_defender)",
-            pipeline_source,
-        )
+        async def exercise(path):
+            selected = {'run_' + name: name in {'purview', 'defender'} for name in SERVICE_PIPELINES}
+            checkpoint = CollectionCheckpoint(path, service_config=selected,
+                                              tenant_id='synthetic', tenant_name='Synthetic')
+            defender_collected = asyncio.Event()
+            purview_client = SimpleNamespace(
+                collection_status={key: {'available': True, 'availability_status': 'available'} for key in CORE_SOURCES},
+                dlp_policies={'total_policies': 7}, audit_config={'unified_audit_enabled': True},
+            )
+            defender_client = SimpleNamespace(available=True)
+
+            async def collect_purview(*args, **kwargs):
+                os.environ['PURVIEW_DATA_SOURCE'] = 'subprocess'
+                await defender_collected.wait()
+                return True
+
+            async def collect_defender(*args, **kwargs):
+                defender_collected.set()
+                return defender_client
+
+            async def analyze_defender(graph, defender, licenses, purview):
+                self.assertIs(purview, purview_client)
+                self.assertIs(defender, defender_client)
+                # Governance analysis must wait until Purview evidence is durable.
+                progress = load_collection(checkpoint.path)['collection_progress']['services']
+                self.assertEqual(progress['purview']['status'], 'completed')
+                self.assertEqual(progress['defender']['status'], 'pending')
+                return {'available': True, 'recommendations': [get_recommendation(purview, defender)]}
+
+            with mock.patch.dict(os.environ, {'PURVIEW_DATA_SOURCE': ''}), \
+                 mock.patch('Core.orchestrator_pipelines.collect_purview_data_via_powershell', side_effect=collect_purview), \
+                 mock.patch('Core.get_purview_client.get_purview_client', new=mock.AsyncMock(return_value=purview_client)), \
+                 mock.patch('Core.get_purview_info.get_purview_info', new=mock.AsyncMock(return_value={'available': True, 'recommendations': []})), \
+                 mock.patch('Core.get_defender_client.get_defender_client', side_effect=collect_defender), \
+                 mock.patch('Core.get_defender_info.get_defender_info', side_effect=analyze_defender) as analyze, \
+                 mock.patch('socket.socket.connect', side_effect=AssertionError('Unexpected tenant connection')), \
+                 mock.patch('subprocess.Popen', side_effect=AssertionError('Unexpected PowerShell launch')):
+                pipelines = create_pipelines(None, None, 'synthetic', selected,
+                                             interactive_plan={'purview': {'will_attempt': True}})
+                saved = await asyncio.wait_for(run_checkpointed_pipelines(pipelines, checkpoint), timeout=5)
+            analyze.assert_awaited_once()
+            result = load_collection(saved)
+            recommendation = result['service_results']['defender_info']['recommendations'][0]
+            self.assertIn('7 DLP policies', recommendation['Observation'])
+            self.assertEqual(recommendation['Status'], 'Success')
+            self.assertEqual(result['collection_progress']['services']['defender']['status'], 'completed')
+
+        with tempfile.TemporaryDirectory() as directory, redirect_stdout(io.StringIO()):
+            asyncio.run(exercise(pathlib.Path(directory) / 'collection.json'))
 
     def test_collector_diagnostics_redact_tokens_and_secrets(self):
         import os

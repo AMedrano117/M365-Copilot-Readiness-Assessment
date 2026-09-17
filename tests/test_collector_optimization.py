@@ -149,13 +149,13 @@ class SharePointResolutionTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual("https://cli-admin.sharepoint.com", result)
 
-    async def test_initial_domain_is_derived(self):
+    async def test_initial_domain_is_not_used_as_sharepoint_hostname(self):
         domain = SimpleNamespace(name="contoso.onmicrosoft.com", is_initial=True)
         response = SimpleNamespace(value=[SimpleNamespace(verified_domains=[domain])])
         client = SimpleNamespace(organization=SimpleNamespace(get=lambda: asyncio.sleep(0, result=response)))
         with patch.dict("os.environ", {}, clear=True):
             result = await resolve_sharepoint_admin_url(client, interactive_auth="skip")
-        self.assertEqual("https://contoso-admin.sharepoint.com", result)
+        self.assertEqual("", result)
 
     def test_admin_url_validation(self):
         self.assertTrue(is_valid_sharepoint_admin_url("https://contoso-admin.sharepoint.com"))

@@ -101,6 +101,7 @@ def print_collection_handoff(collection_input):
     print('  --open-html-report')
     print("To add exports, append: --reports-dir 'path-to-your-exports-folder'")
     print('More detail: --verbose')
+    print_paragraph('After the engagement, follow docs/CLEANUP.md to retain the final package, retire dedicated application access, and remove selected working copies.')
 
 
 def print_paragraph(message, *, indent='', tone=None):

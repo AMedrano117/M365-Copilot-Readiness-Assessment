@@ -410,6 +410,49 @@ def _progress_requirements(result):
       <p class="qualification">These are this assessment’s criteria. Microsoft recommends a phased rollout with a defined strategy, protected data, a small initial group and a review of outcomes before expansion. <a href="https://learn.microsoft.com/en-us/microsoft-365/copilot/microsoft-365-copilot-minimum-requirements-rollout">Microsoft rollout guidance</a></p></section>'''
 
 
+def _authentication_methods(bundle):
+    data = bundle.get('authentication_methods') or {}
+    if not data.get('available'):
+        return '<div class="mfa-profile"><h3>MFA method strength and defaults</h3><p>Registered methods and preferred second-factor methods were not available in this evidence. Collect the Entra authentication registration report to assess them.</p></div>'
+    metrics = data.get('metrics') or {}
+    total = data['total_users']
+    def count(key, known):
+        return str(metrics.get(key, 0)) if metrics.get(known, 0) else 'Unknown'
+    cards = ''.join(f'<div class="mfa-stat"><strong>{prose(value)}</strong><span>{prose(label)}</span></div>' for value, label in (
+        (count('phishing_resistant_registered', 'resistant_inventory_known'), 'Phishing-resistant method registered'),
+        (count('phone_only_mfa_registered', 'phone_only_inventory_known'), 'Phone-only MFA registration'),
+        (count('phone_preferred', 'phone_preference_known'), 'SMS / voice preferred in report'),
+    ))
+    date_note = ('Source report updated ' + prose(data['updated_from']) + ' to ' + prose(data['updated_to'])) if data.get('updated_from') else 'Source report update dates unavailable'
+    missing_methods = total - metrics.get('method_inventory_known', 0)
+    missing_preference = total - metrics.get('current_preference_known', 0)
+    review_note = f"{metrics.get('methods_need_review', 0)} users have methods needing classification review. "
+    if metrics.get('current_preference_needs_review'):
+        review_note += f"{metrics['current_preference_needs_review']} users have preferred methods needing classification review. "
+    if data.get('conflicting_users'):
+        review_note += f"{data['conflicting_users']} users have conflicting source rows and remain unknown. "
+    population_columns = [('Population', 'Population'), ('Users', 'Users'),
+        ('Phishing-resistant registered', 'Phishing-resistant registered'),
+        ('Phone-only MFA', 'Phone-only MFA registration'), ('SMS / voice preferred', 'SMS/voice preferred')]
+    for label, field in [('Methods unknown', 'Method inventories unknown'),
+                         ('Phishing resistance unknown', 'Phishing-resistant classification unknown'),
+                         ('Phone-only status unknown', 'Phone-only classification unknown'), ('Preferences unknown', 'Preferences unknown')]:
+        if any(row[field] for row in data['population_rows']):
+            population_columns.append((label, field))
+    return f'''<div class="mfa-profile" id="mfa-method-strength"><h3>MFA method strength and defaults</h3>
+      <p>{total} users in the returned registration report. Source coverage: {prose(data['source_state'])}. {date_note}; {data.get('dates_unknown', 0)} update dates unavailable.</p>
+      <div class="mfa-stats">{cards}</div>
+      <p class="qualification">Counts describe returned users and can overlap. {missing_methods} method inventories and {missing_preference} current preferences are unknown. {prose(review_note)} Registration does not prove enforcement or actual sign-in use.</p>
+      <p><strong>Where to focus.</strong> Prioritize administrators and users whose only reported reusable MFA method is a phone. Move SMS/voice preferences to stronger methods; use passkeys or Windows Hello where supported. Authenticator push and codes remain susceptible to phishing. Confirm Conditional Access authentication strengths for the intended users before retiring phone fallback.</p>
+      <details class="domain-evidence"><summary>Registered methods and strength</summary><p>Email is shown for recovery or guest sign-in and is not counted as workforce MFA. Phone registration does not identify whether SMS or voice is used. Certificate-based MFA requires separate configuration verification.</p>
+      {table(data['method_rows'], [('Registered method', 'Method'), ('Users', 'Registered users'), ('% of known inventories', 'Percent of known inventories'), ('Strength / purpose', 'Strength / purpose')], mobile_labels=True)}</details>
+      <details class="domain-evidence"><summary>Default and system-preferred methods</summary><p>System preference takes precedence when enabled. User-selected defaults may therefore differ from the preferred route in this report. A user can have multiple system-preferred methods; rows can overlap. These second-factor fields do not list every passwordless sign-in option or establish which method was used.</p>
+      {table(data['preference_rows'], [('Method', 'Method'), ('User-selected', 'User-selected users'), ('System-preferred (enabled)', 'System-preferred users'), ('Preferred in report', 'Preferred users in report')], mobile_labels=True)}</details>
+      <details class="domain-evidence"><summary>Members, guests and administrators</summary><p>Administrators overlap members and guests. Missing administrator flags: {total - metrics.get('admin_known', 0)}. Counts for partial fields cover only known values. These counts do not assess authentication in a guest’s home tenant.</p>
+      {table(data['population_rows'], population_columns, mobile_labels=True)}</details>
+      <p class="qualification">See Authentication Coverage, Authentication Methods, MFA Preferences and MFA Populations in the workbook for counts and qualifications. Method registration alone does not approve a rollout stage.</p></div>'''
+
+
 def _portal_captures(bundle, domain_id):
     """Display reviewed portal captures alongside their topic, without scoring screenshots."""
     captures = [row for row in (bundle.get('portal_review') or {}).get('captures', []) if row.get('domain_id') == domain_id]
@@ -515,6 +558,8 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None):
         links = [f'<a href="#action-{action_numbers[r.get("RecommendationId")]}">Action {action_numbers[r.get("RecommendationId")]}</a>'
                  for r in domain.get('actions', []) if r.get('RecommendationId') in action_numbers]
         extra = ''
+        if domain['id'] == 'identity':
+            extra = _authentication_methods(bundle)
         if domain['id'] == 'content':
             extra = _settings(bundle) + _lifecycle(bundle)
         if domain['id'] == 'licensing':
@@ -595,6 +640,7 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None):
       <p>{('<a href="' + workbook_url + '">Download ' + escape(workbook_name) + '</a>') if workbook_url else 'The workbook contains the complete evidence register.'}</p>
       <p>Evaluation date: {prose(result.get('evaluation_date'))}. Methodology: {prose(result.get('methodology_version'))}. Evidence schema: {prose(result.get('evidence_schema_version'))}.</p>
       <p>Original tenant collection: {prose(context.get('collected_at'))}. Report execution: {prose(context.get('mode') or 'Evidence supplied directly')}.</p>
+      <p>Collection permission profile: {prose(context.get('permission_profile') or 'unrecorded')}.</p>
       {migration_note}
       {operator_handoff}
       {table(context.get('historical_sources') or [], [('Source file', 'source_file'), ('Source type', 'source_type'), ('Original date', 'reported_at')]) if context.get('historical_sources') else ''}

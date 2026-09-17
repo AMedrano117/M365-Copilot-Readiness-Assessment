@@ -1,7 +1,7 @@
 import asyncio
 from .get_power_platform_client import get_power_platform_client
 from azure.core.exceptions import HttpResponseError, ClientAuthenticationError
-from .get_recommendation import get_recommendation
+from .get_recommendation import get_recommendation, recommendation_graph_gap, recommendation_graph_probes_allowed
 import sys
 from .spinner import get_timestamp, _stdout_lock
 from .service_categorization import determine_service_type
@@ -64,7 +64,7 @@ def process_power_platform_environments(pp_client):
         'has_power_platform': True
     }
 
-async def get_power_platform_info(client, services_and_licenses=None, pp_client=None, allow_enrichment_fetch=True, tenant_id=None):
+async def get_power_platform_info(client, services_and_licenses=None, pp_client=None, allow_enrichment_fetch=True, tenant_id=None, permission_profile="standard"):
     """Get Power Platform information
     
     Args:
@@ -100,7 +100,7 @@ async def get_power_platform_info(client, services_and_licenses=None, pp_client=
     # Create/ensure pp_client is available BEFORE generating recommendations
     # Recommendations need pp_client for data-driven insights
     pp_client_created = False
-    if pp_client is None and allow_enrichment_fetch:
+    if pp_client is None and allow_enrichment_fetch and recommendation_graph_probes_allowed(permission_profile):
         pp_client = await get_power_platform_client(tenant_id)
         pp_client_created = True
     
@@ -108,6 +108,8 @@ async def get_power_platform_info(client, services_and_licenses=None, pp_client=
     # This extracts from already-cached pp_client data (no API calls)
     from .get_power_platform_client import extract_pp_insights_from_client
     pp_insights = extract_pp_insights_from_client(pp_client) if pp_client else None
+    if pp_insights is not None:
+        pp_insights['permission_profile'] = permission_profile
     
     # Check for all service plans and create recommendations (blank for Success)
     # Track features already added to avoid duplicates
@@ -129,7 +131,7 @@ async def get_power_platform_info(client, services_and_licenses=None, pp_client=
             status = plan.get('status', 'Success')
             # Generate recommendations for all service plans
             # Pass pre-computed pp_insights to avoid redundant extraction
-            rec = get_recommendation('power_platform', plan_name, sku_name, status, client, pp_client, pp_insights)
+            rec = get_recommendation('power_platform', plan_name, sku_name, status, client, pp_client, pp_insights, permission_profile=permission_profile)
             
             # Collect async tasks for parallel execution
             if inspect.iscoroutine(rec):
@@ -152,15 +154,22 @@ async def get_power_platform_info(client, services_and_licenses=None, pp_client=
                 if result:
                     recommendations.append(result)
     
+    gap = recommendation_graph_gap('Power Platform', permission_profile)
+    if gap:
+        recommendations.append(gap)
+
     # Check if pp_client is available for environment data and pseudo-features
     try:
         if pp_client is None:
             # Client creation failed (no admin access)
             return {
                 'available': False,
-                'reason': 'Power Platform is licensed but API access denied. Requires Power Platform admin role.',
+                'reason': ('Power Platform inventory was not supplied; administrative collection was not requested by the Restricted permission profile.' if gap
+                           else 'Power Platform is licensed but API access denied. Requires Power Platform admin role.'),
                 'has_power_platform': False,
-                'note': 'Access requires Power Platform Administrator or Global Administrator role',
+                'note': ('Supply a customer inventory export for supported inventory checks; other deployment checks remain not assessed.' if gap
+                         else 'Access requires Power Platform Administrator or Global Administrator role'),
+                'availability_status': 'not_requested' if gap else 'unavailable',
                 'licenses': pp_plans,
                 'total_licenses': len(pp_plans),
                 'recommendations': recommendations
@@ -177,7 +186,7 @@ async def get_power_platform_info(client, services_and_licenses=None, pp_client=
         for pseudo_feature in pseudo_features:
             # Pass first SKU as placeholder (these aren't tied to specific licenses)
             placeholder_sku = pp_plans[0].get('sku_part_number', 'Unknown') if pp_plans else 'Unknown'
-            rec = get_recommendation('power_platform', pseudo_feature, placeholder_sku, 'Success', client, pp_client, pp_insights)
+            rec = get_recommendation('power_platform', pseudo_feature, placeholder_sku, 'Success', client, pp_client, pp_insights, permission_profile=permission_profile)
             
             if inspect.iscoroutine(rec):
                 rec = await rec

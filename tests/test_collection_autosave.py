@@ -1,6 +1,7 @@
 """Live orchestration persists replayable evidence without an operator save flag."""
 
 import contextlib
+import asyncio
 import io
 import os
 import shutil
@@ -95,6 +96,24 @@ class CollectionAutosaveTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(Path('output/collections').exists())
         self.processor.assert_not_called()
         self.assertNotIn('COLLECTION INPUT', self.output.getvalue())
+
+    async def test_checkpoint_exists_before_sharepoint_and_survives_interruption(self):
+        async def interrupted_sharepoint(*args, **kwargs):
+            path = next(Path('output/collections').glob('*.json'))
+            saved = load_collection(path)
+            self.assertEqual(saved['collection_progress']['status'], 'in_progress')
+            self.assertEqual(saved['collection_progress']['services']['m365']['status'], 'pending')
+            self.assertTrue(Path(saved['package_directory']).is_dir())
+            raise asyncio.CancelledError()
+        with patch('Core.orchestrator.prepare_interactive_collection_plan', return_value={
+            'power_platform': {'will_attempt': False}, 'sharepoint': {'selected': True, 'will_attempt': True},
+        }), patch('Core.orchestrator.collect_sharepoint_with_retry', side_effect=interrupted_sharepoint):
+            with self.assertRaises(asyncio.CancelledError):
+                await self.run_assessment()
+        saved = load_collection(next(Path('output/collections').glob('*.json')))
+        self.assertEqual(saved['collection_progress']['status'], 'interrupted')
+        self.assertEqual(saved['service_results']['m365_result'][1][0]['Status'], 'Not Assessed')
+        self.processor.assert_not_called()
 
     async def test_collection_survives_report_generation_failure(self):
         self.processor.side_effect = ValueError('Synthetic report rendering failure')

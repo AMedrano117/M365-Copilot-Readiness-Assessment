@@ -81,7 +81,8 @@ class EntraCollectionFailureTests(unittest.IsolatedAsyncioTestCase):
                          httpx.Response(503, text='<html>private diagnostic body</html>')):
             http = httpx.AsyncClient(base_url='https://graph.microsoft.com',
                                     transport=httpx.MockTransport(lambda request: response))
-            with patch('Core.get_entra_client._get_graph_http_client', AsyncMock(return_value=http)):
+            with patch('Core.get_entra_client._get_graph_http_client', AsyncMock(return_value=http)), \
+                 patch('Core.http_retry.asyncio.sleep', new=AsyncMock()):
                 result = await _fetch_graph_object_via_http('/v1.0/test')
             self.assertFalse(result['available'])
             self.assertEqual(result['status_code'], response.status_code)

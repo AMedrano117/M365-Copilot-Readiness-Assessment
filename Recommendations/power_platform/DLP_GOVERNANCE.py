@@ -35,7 +35,8 @@ async def get_recommendation(sku_name, status="Success", client=None, pp_client=
             link_text="Power Platform Admin Center",
             link_url="https://admin.powerplatform.microsoft.com",
             priority="Medium",
-            status="Success"
+            status=NOT_ASSESSED_STATUS,
+            disposition="Coverage",
         )]
     
     total_policies = dlp_summary.get('total', 0)

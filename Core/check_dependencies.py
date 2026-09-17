@@ -31,7 +31,7 @@ def check_dependencies(offline=False):
         for pkg in missing_packages:
             print(f"  - {pkg}")
         print("\nTo install all dependencies, run:")
-        print("  pip install -r requirements.txt")
+        print("  python -m pip install -r requirements.lock.txt")
         print("\nOr install individually:")
         print(f"  pip install {' '.join(missing_packages)}")
         sys.exit(1)

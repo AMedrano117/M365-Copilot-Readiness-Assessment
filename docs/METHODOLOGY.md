@@ -1,5 +1,7 @@
 # Microsoft 365 Copilot Readiness Assessment Methodology
 
+[Documentation index](README.md) | [Project overview](../README.md)
+
 ## Purpose
 
 This tool evaluates the Microsoft 365 foundation for a controlled Copilot deployment. Business
@@ -23,6 +25,13 @@ coverage determine what saved evidence can support. A build timestamp does not r
 The recorded evaluation date controls freshness. A later evaluation date can legitimately change
 the decision; equivalent supported evidence, settings, methodology and evaluation date should
 produce equivalent results in live and offline modes.
+
+Authentication registration and preference are descriptive evidence, separate from enforced
+authentication strength or methods used at sign-in. The [MFA method breakdown](MFA_METHODS.md)
+classifies registered credentials, preserves unknown fields and distinguishes user defaults
+from system preferences. It does not independently pass a readiness control. Earlier summaries
+that treated all Authenticator registrations as passwordless are corrected from saved raw rows;
+registration alone cannot support a phishing-resistant assurance.
 
 ## Shared evidence contract and reconciliation
 

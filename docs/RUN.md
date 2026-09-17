@@ -1,5 +1,7 @@
 ﻿# Operator runbook
 
+[Documentation index](README.md) | [Project overview](../README.md)
+
 This is the canonical workflow for Microsoft 365 Copilot readiness: **prepare → collect and save → add exports → rebuild and review**. Use one tenant per assessment folder. Collection reads supported configuration and existing reports; it does not start Microsoft scans or change tenant policies. Application setup is a separate operation.
 
 For another customer, start with the [new-tenant assessment checklist](NEW_TENANT_CHECKLIST.md), including access, portal captures, structured exports and pilot-owner reviews.
@@ -8,16 +10,28 @@ For another customer, start with the [new-tenant assessment checklist](NEW_TENAN
 
 Run commands from the repository folder with Python 3.10 or later. Install dependencies before working offline:
 
+**Repository in OneDrive?** Use the [environment setup outside OneDrive](PYTHON_ENVIRONMENT.md#recommended-setup-for-a-repository-in-onedrive) to avoid syncing dependency files and hitting path-length limits. The local `.venv` commands below remain supported for other locations; that guide shows the equivalent executable path.
+
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m pip install -r requirements.lock.txt
 ```
 
-For connected collection, complete [prereq.md](prereq.md). Reuse an existing configured application where possible. When setup or permission reconciliation is needed, have the authorized administrator run:
+For connected collection, complete [prereq.md](prereq.md). Reuse an existing configured application where possible. For Standard SharePoint administration, obtain the actual URL from the customer's **Microsoft 365 admin center > Admin centers > SharePoint** and copy only its HTTPS origin. When setup or permission reconciliation is needed, have the authorized administrator run this command, replacing the URL placeholder:
 
 ```powershell
-.\setup-service-principal.ps1 -Mode Standard
+.\setup-service-principal.ps1 -Mode Standard -SharePointAdminUrl "https://<actual-prefix>-admin.sharepoint.com"
 ```
+
+For customers choosing reduced application access, use the [Restricted profile](PERMISSIONS.md) instead:
+
+```powershell
+.\setup-service-principal.ps1 -PermissionProfile Restricted
+```
+
+This creates `M365 Copilot Readiness Assessment Tool - Restricted` and writes `.env.restricted`. It retains stable identity/device/security/usage reads and skips Graph site inventory, group licensing, delegated consent-grant inventory and all SharePoint/Purview administrative PowerShell. Plan supported exports or saved evidence for the resulting coverage gaps. Restricted rejects Unattended setup, live preview packs and legacy administrative collection. Standard setup continues writing `.env`.
+
+The setup administrator uses delegated `Application.ReadWrite.All` and `Organization.Read.All`; these are separate from the runtime application permissions. Standard apps missing `Directory.Read.All` or `SecurityAlert.Read.All` need updated administrator consent. The MFA report needs `AuditLog.Read.All`, not `UserAuthenticationMethod.Read.All`. See the [permission matrix and consent cleanup](PERMISSIONS.md).
 
 Creating an application and granting Microsoft Graph application consent require different access. Application Administrator alone cannot grant the Graph application permissions used here; arrange Privileged Role Administrator, Global Administrator, or a suitable custom consent role. [Microsoft consent requirements](https://learn.microsoft.com/en-us/entra/identity/enterprise-apps/grant-admin-consent).
 
@@ -31,12 +45,26 @@ New-Item -ItemType Directory -Force -Path ".\output\customer\exports"
 
 ## 2. Check access, then collect and save
 
+These Standard commands use the `SHAREPOINT_ADMIN_URL` saved by setup in `.env`. For another environment, select it with `--env-file` on both commands and configure the URL there, or pass `--sharepoint-admin-url` on each command. See [URL configuration](#sharepoint-url-and-collection-diagnostics) for missing-URL behavior.
+
+An explicitly selected environment file must exist and be readable. A typo stops the run before authentication, even when credentials are already present in the process environment. The default `.env` remains optional for operators configuring process environment variables directly. Before connecting, the console shows the configuration file, effective tenant/application, permission profile, Graph authentication method and configured SharePoint URL without credential values. `--tenant-id` applies consistently to the shared workload credentials.
+
 ```powershell
 .\.venv\Scripts\python.exe main.py --mode live --check-connections
 .\.venv\Scripts\python.exe main.py --mode live
 ```
 
-Preflight checks access without producing an assessment or saving a collection. Its exit codes are `0` for usable configuration (including legitimate license limitations), `2` for an authentication/permission/role/module action, and `1` for invalid configuration or an unexpected failure. Review each result even when the overall check passes.
+For Restricted, select the dedicated environment on both commands:
+
+```powershell
+.\.venv\Scripts\python.exe main.py --mode live --env-file .env.restricted --check-connections
+.\.venv\Scripts\python.exe main.py --mode live --env-file .env.restricted `
+  --reports-dir ".\output\customer\exports"
+```
+
+Live selection is `--permission-profile standard|restricted`, then `PERMISSION_PROFILE` in the selected environment, then `standard`. A CLI override does not change the app's grants. Restricted preflight audits both requested permissions and actual application grants and stops on excess access; an administrator must review and clean up unwanted grants separately. No automatic revocation occurs. Omitted sources show `not_requested` with the profile reason and do not request additional permissions. Existing certificates do not enable excluded administrative collection.
+
+Preflight checks access without producing an assessment or saving a collection. Its exit codes are `0` for usable configuration (including legitimate license limitations), `2` for an authentication/permission/role/module or workload-configuration action, and `1` for invalid startup configuration or an unexpected failure. Review each result even when the overall check passes.
 
 Preflight verifies selected permissions and representative requests, not every dataset request.
 Successful consent and preflight do not guarantee access to every licensed feature or a successful
@@ -59,6 +87,12 @@ and page previews. See [PDF import](PORTAL_REVIEW.md) for its qualifications and
 The live command already produces HTML and Excel. An offline rebuild is needed only to add
 evidence or regenerate those deliverables; an immediate second run is optional.
 
+### Interrupted collection and temporary service failures
+
+The live run saves progress before workload collection and updates it as each service finishes. If collection is interrupted, use the saved path with `--mode offline --collection-input "<collection-input>"`. Completed service evidence remains available; unfinished services remain **not assessed** in report coverage. This rebuild does not resume live requests. Start a new live run when fresh or remaining collection is required. A completed pipeline can still contain failed or partial sources; inspect source coverage rather than treating completion as full access.
+
+Graph, Entra, Defender and AI usage read requests retry transient failures up to four times. Retry sleeps total at most 120 seconds per request, excluding HTTP request timeouts. Server `Retry-After` values are honored; a delay beyond the remaining budget stops the read with an explanation. Successfully collected pages are retained as partial evidence, never represented as a complete inventory.
+
 ### Read the console and copy the next command
 
 The default console shows collection progress, warnings or failures, the deployment decision and action counts, report locations, and the final **COLLECTION INPUT** handoff. Copy its entire path into `--collection-input`, or copy the offline command printed immediately below it and add `--reports-dir` for new exports. Use the file shown there: a live package has `collection.json`; a build made only from exports or earlier reports has `rebuild.json`. Neither the HTML report, Excel workbook nor an assessment snapshot is a collection input. Preflight-only runs do not create one.
@@ -76,7 +110,11 @@ Colors distinguish headings, successful steps, warnings and errors. `--color aut
 
 ### SharePoint URL and collection diagnostics
 
-The live run loads the repository's `.env`, or the file selected by `--env-file`. The SharePoint URL precedence is `--sharepoint-admin-url`, then `SHAREPOINT_ADMIN_URL`, then the tenant's initial `.onmicrosoft.com` domain. Use `--verbose` to see the chosen URL and its source. Set `SHAREPOINT_ADMIN_URL=https://contoso-admin.sharepoint.com` for a renamed SharePoint tenant; trailing slashes and quoted `.env` values are supported. An invalid configured URL is reported instead of silently using a derived URL.
+The live run loads the repository's `.env`, or the file selected by `--env-file`. The SharePoint URL precedence is `--sharepoint-admin-url`, then `SHAREPOINT_ADMIN_URL`. The tool does not construct a SharePoint hostname from a tenant domain. Open the customer's **Microsoft 365 admin center > Admin centers > SharePoint**, verify the tenant, and copy only the actual HTTPS origin, such as `https://<actual-prefix>-admin.sharepoint.com`. Omit any `/_layouts/...` path, query, fragment, credentials or explicit port. A trailing slash and quoted `.env` values are supported. See [the URL requirements and Microsoft references](prereq.md#sharepoint-admin-url).
+
+Standard setup accepts `-SharePointAdminUrl` and saves it in `.env`. Without the parameter, setup preserves a valid URL only when the saved tenant identity matches; otherwise it leaves the setting blank. Setup checks URL syntax, not successful connection to that tenant. Use `--verbose` to see the selected URL and its source, then review the actual collection outcome.
+
+If no URL is configured, the live workflow can request it when SharePoint collection is selected and interactive authentication is allowed. An explicitly configured URL with invalid syntax must be corrected; the tool does not silently replace it or prompt over it. With `--interactive-auth skip` or unattended execution, a missing URL leaves SharePoint administration unassessed with a configuration reason, and SharePoint administrative PowerShell is not launched. Missing URL configuration is not a missing permission. Other selected sources can still run. Restricted does not use or prompt for this URL. Purview's initial `.onmicrosoft.com` organization-domain discovery is separate and does not establish the SharePoint hostname.
 
 Accepted browser sign-in confirms authentication only. Review the subsequent SharePoint dataset summary for collection gaps. Unreadable collector output is reported separately from authentication failures, with sanitized details in `Reports/collector_diagnostics.log`. An interactive retry accepts the same verified URL. Adding portal exports offline supplements saved evidence; it does not refresh sharing settings or repair a failed live collection.
 
@@ -93,7 +131,7 @@ Put the completed exports into the folder created above. Replace `<collection-in
 
 Offline mode needs local dependencies and evidence files. It uses no tenant sign-in, live API calls, prompts or administrative PowerShell. It does not save or overwrite the collection it reads. A new build does not refresh original observations.
 
-`--reports-dir` discovers supported files directly inside a directory; it is not recursive. Repeat it for separate folders. Omit paths for unavailable reports. Retain original headers: recognition uses schemas, not filenames. [The compatibility matrix](PORTAL_REPORTS_AND_OFFLINE.md#sample-compatibility-matrix) identifies supplied real samples, fixture-only support and unsupported variants.
+`--reports-dir` discovers structured exports directly inside a directory; structured discovery is not recursive. Repeat it for separate structured-export folders. PDF discovery includes subfolders. Omit paths for unavailable reports. Retain original headers: recognition uses schemas, not filenames. [The compatibility matrix](PORTAL_REPORTS_AND_OFFLINE.md#sample-compatibility-matrix) identifies supplied real samples, fixture-only support and unsupported variants.
 
 ### Lifecycle report dates and freshness
 
@@ -184,6 +222,8 @@ Later evaluation dates can change conclusions about freshness. Equal supported e
 
 User-level Copilot workbook detail requires `--include-user-usage-detail` on every run; HTML remains aggregate-only. The package contains original confidential evidence even when user detail is excluded from generated deliverables. Keep credentials, `.env` files and private certificates outside it. Preserve the complete package, including `rebuilds/`, after adding exports; see the receipt for the exact replay inputs.
 
+The saved collection's permission profile and exclusion reasons are preserved during offline replay and shown in report coverage. Rebuild a Restricted collection with the same offline command as any collection; omit `--env-file` and `--permission-profile` offline. Older collections remain compatible and show the profile as unrecorded. Supported exports do not replace every skipped administrative check; review [the evidence gap table](PERMISSIONS.md#evidence-gaps-and-offline-replay).
+
 ## 4. Review the deliverables
 
 HTML and the default Excel workbook are generated in `Reports/`; packaged runs also preserve deliverables in the package. `--report-format both` adds CSV, while `--report-format csv` selects CSV output.
@@ -235,16 +275,46 @@ A successful build without a collection automatically creates a portable assessm
 
 Use the actual copied folder in that example. The same recipe workflow applies to portal-only previews. Original dates and historical qualifications remain unchanged, and user-level detail still requires a new opt-in. After this first successful recovery build, the package restores its inputs automatically.
 
+## Close out the assessment
+
+Follow [CLEANUP.md](CLEANUP.md) after customer review and retention authorization. Retain the complete
+portable package in approved storage and verify offline replay before removing working copies.
+Preview access removal using the exact tenant/client GUIDs from the selected customer's environment:
+
+```powershell
+.\cleanup-service-principal.ps1 -PermissionProfile Restricted `
+  -TenantId "<tenant-guid>" -ClientId "<application-client-guid>"
+```
+
+Replace all placeholders. Use `-PermissionProfile Standard` for the Standard app and add `-EnvFile`
+when its configuration uses another filename. Standard Unattended cleanup also needs the reviewed
+`-IncludeWorkloadRbac` path, completed before Entra deletion. The cloud command previews access
+removal; add `-Apply` only for the reviewed targets and confirm the removal prompts.
+
+For local cleanup, run:
+
+```powershell
+.\cleanup-local-assessment.ps1
+```
+
+This lists direct children of `output/collections`, `output/assessments`, `output/portal-reviews`,
+`Reports`, `.cache/purview` and `.cache/sharepoint_dag` in this checkout, covering all customers stored there, then asks once
+before removing the listed batch. The storage folders remain. No `-Apply` or path is needed;
+`-WhatIf` lists without deletion or prompting, and optional `-Path` selects particular artifacts.
+Keep the retained copy outside the selection. The [cleanup guide](CLEANUP.md) covers retries,
+selected-environment removal, certificates and retention limits.
+
 ## Supported options
 
-Run `.\.venv\Scripts\python.exe main.py --help` for the implemented CLI. Keep `--mode live|offline` explicit in operator commands. `--offline` remains an alias. Omitting mode preserves live behavior unless `--collection-input`, `--prior-report` or `--purview-cache` is supplied. Saved-evidence inputs conflict with explicit live mode. Offline mode rejects `--env-file`, `--check-connections`, `--save-collection` and live preview collectors.
+Run `.\.venv\Scripts\python.exe main.py --help` for the implemented CLI. Keep `--mode live|offline` explicit in operator commands. `--offline` remains an alias. Omitting mode preserves live behavior unless `--collection-input`, `--prior-report` or `--purview-cache` is supplied. Saved-evidence inputs conflict with explicit live mode. Offline mode rejects `--env-file`, `--permission-profile`, `--check-connections`, `--save-collection` and live preview collectors.
 
 | Option | Use |
 |---|---|
 | `--verbose`, `-v` | Show detailed processing, source provenance and input receipts in the console. |
 | `--color auto\|always\|never` | Select terminal color behavior. Auto respects `NO_COLOR` and disables color when output is redirected. |
 | `--tenant-id ID`, `--env-file PATH` | Choose the connected tenant/configuration. Consent and roles belong to that target tenant. |
-| `--services M365 Entra Defender Purview` | Restrict live service collection. An empty `--services` selects all configured service areas. Scope restrictions remain visible in assessment coverage. |
+| `--permission-profile standard\|restricted` | Select live permission/collection policy; overrides `PERMISSION_PROFILE` in the selected environment. Defaults to Standard. |
+| `--services M365 Entra Defender Purview` | Restrict live service collection. An empty `--services` selects all configured service areas. Scope restrictions remain visible in assessment coverage. This does not revoke application consent. |
 | `--interactive-auth auto\|fresh\|skip` | Use normal authentication, deliberately refresh, or avoid delegated browser sign-in. |
 | `--sam-report PATH`, `--dspm-report PATH` | Import supported exposure exports; repeat or use directories. |
 | `--portal-review PATH` | Optional curated JSON manifest, or PDF folder for compatibility. Normally put PDFs in `--reports-dir`; see [PDF import](PORTAL_REVIEW.md). |
@@ -255,9 +325,9 @@ Run `.\.venv\Scripts\python.exe main.py --help` for the implemented CLI. Keep `-
 | `--power-platform-inventory PATH` | Import an optional Manage > Inventory CSV. |
 | `--assessment-profile PATH`, `--provider-evidence PATH` | Scope use cases and agents/external providers. The assessment profile also accepts dated control-owner reviews and pilot/expansion records; see [Readiness reviews](READINESS_REVIEWS.md). |
 | `--baseline PATH`, `--snapshot-json PATH` | Compare with an earlier result and optionally write a result snapshot. A snapshot is not a replayable collection. |
-| `--preview-collectors power-platform\|shadow-ai\|network-access\|all` | Enable supplemental preview APIs after arranging their permission packs. They do not change the core foundation decision. |
-| `--sharepoint-admin-url URL` | Override automatic resolution for renamed or multi-geo tenants. |
-| `--legacy-power-platform-collector` | Explicit compatibility fallback requiring `Az.Accounts`. |
+| `--preview-collectors power-platform\|shadow-ai\|network-access\|all` | Standard only: enable supplemental preview APIs after arranging their permission packs. They do not change the core foundation decision. |
+| `--sharepoint-admin-url URL` | Actual SharePoint admin-center HTTPS origin; overrides the selected environment's `SHAREPOINT_ADMIN_URL`. No tenant-domain inference. |
+| `--legacy-power-platform-collector` | Standard only: explicit compatibility fallback requiring `Az.Accounts`. |
 
 ## Troubleshooting
 
@@ -266,6 +336,7 @@ Run `.\.venv\Scripts\python.exe main.py --help` for the implemented CLI. Keep `-
 | Missing Python module | Install `requirements.txt` into the same environment used to run `main.py`. |
 | Hidden browser sign-in | Check the taskbar/browser window, finish sign-in, then read the collector result. |
 | Missing PowerShell cmdlet/module | Use the supported module setup in [prereq.md](prereq.md), then repeat preflight. |
+| Restricted reports excess application permissions | Have the tenant administrator inspect the dedicated app's requested permissions and actual Enterprise application grants. Removing manifest entries alone does not revoke consent. Follow [cleanup guidance](PERMISSIONS.md#existing-applications-and-credentials), then repeat preflight. |
 | HTTP 403 | Distinguish application consent, workload role, missing entitlement and unprovisioned service in preflight/Collection Coverage. Adding a delegated portal role does not grant an application permission. |
 | Risk inventory unavailable despite consent | Confirm a qualifying Entra ID Protection entitlement; Conditional Access access alone does not establish risk-report access. |
 | Purview query unavailable | Check both Purview and Exchange read roles. Portal access alone does not cover all administrative cmdlets. `--interactive-auth fresh` refreshes the existing path when needed. |

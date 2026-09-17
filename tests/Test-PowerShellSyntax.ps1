@@ -1,17 +1,17 @@
 $ErrorActionPreference = 'Stop'
 $repositoryRoot = Split-Path $PSScriptRoot -Parent
 $scripts = @(
-    'setup-service-principal.ps1',
-    'collect_purview_data.ps1',
-    'collect_sharepoint_governance.ps1',
-    'Check-PSModules.ps1'
+    Get-ChildItem -LiteralPath $repositoryRoot -Filter '*.ps1' -File
+    Get-ChildItem -LiteralPath (Join-Path $repositoryRoot 'tools') -Filter '*.ps1' -File -Recurse
+    Get-ChildItem -LiteralPath (Join-Path $repositoryRoot 'tests') -Filter '*.ps1' -File -Recurse
 )
 
 $failed = $false
-foreach ($relativePath in $scripts) {
+foreach ($script in $scripts) {
     $tokens = $null
     $parseErrors = $null
-    $path = Join-Path $repositoryRoot $relativePath
+    $path = $script.FullName
+    $relativePath = $path.Substring($repositoryRoot.Length + 1)
     [void][System.Management.Automation.Language.Parser]::ParseFile(
         $path, [ref]$tokens, [ref]$parseErrors
     )

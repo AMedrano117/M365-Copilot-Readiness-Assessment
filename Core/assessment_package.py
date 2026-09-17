@@ -23,7 +23,7 @@ INPUT_KEYS = {
 }
 LIST_INPUTS = {'sam_report', 'dspm_report', 'reports_dir'}
 DATA_SUFFIXES = {'.csv', '.tsv', '.xlsx', '.zip', '.json'}
-SETTING_KEYS = {'report_format', 'data_exposure_enabled', 'preview_collectors',
+SETTING_KEYS = {'report_format', 'data_exposure_enabled', 'preview_collectors', 'permission_profile',
                 'include_user_usage_detail', 'provider_evidence_max_age_days',
                 'sam_report_max_age_days', 'dspm_report_max_age_days',
                 'lifecycle_report_max_age_days', 'lifecycle_report_dates'}
@@ -455,7 +455,7 @@ def record_package_run(folder, *, mode, tenant_id, collected_at, evaluation_date
         print_paragraph(f"Input {item.get('source_file', 'unnamed')}: {item.get('status', 'unknown')}; {item.get('reason', '')}", tone='warning')
     if pdf_references:
         print_paragraph(f'PDF captures: {len(pdf_references)} were not included. '
-                        'Supply their original folder with --reports-dir for automatic import; check any PDF skipped messages (see PORTAL_REVIEW.md). '
+                        'Supply their original folder with --reports-dir for automatic import; check any PDF skipped messages (see docs/PORTAL_REVIEW.md). '
                         'These notices do not stop the report build.', tone='muted')
         for item in pdf_references:
             detail(f"  PDF capture: {item['source_file']}")

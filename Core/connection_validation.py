@@ -6,10 +6,12 @@ import json
 import os
 from pathlib import Path
 
-from .collector_registry import COLLECTOR_REGISTRY, selected_collector_ids
+from .collector_registry import COLLECTOR_REGISTRY, selected_collector_ids, collector_permissions
 from .get_graph_client import GRAPH_SCOPE, GraphRequestError, get_api_client
 from .orchestrator_powershell import _launch_powershell
 from . import console_reporting as console
+from .sharepoint_configuration import SHAREPOINT_ADMIN_URL_REQUIRED, is_valid_sharepoint_admin_url
+from .http_retry import get_with_retry
 
 
 READY = "Ready"
@@ -19,10 +21,11 @@ ROLE = "Role missing"
 LICENSE = "License unavailable"
 NOT_PROVISIONED = "Feature not provisioned"
 MODULE = "Module missing or incompatible"
+CONFIGURATION = "Configuration required"
 NOT_SELECTED = "Optional source not selected"
 FAILED = "Connection failed"
 
-ACTIONABLE = {SIGN_IN, PERMISSION, ROLE, MODULE}
+ACTIONABLE = {SIGN_IN, PERMISSION, ROLE, MODULE, CONFIGURATION}
 
 
 def _decode_roles(token):
@@ -86,12 +89,12 @@ async def _defender_probe(roles):
     http = None
     try:
         http = await get_api_client("defender")
-        response = await http.get("/api/machines", params={"$top": "1"})
+        response = await get_with_retry(http, "/api/machines", params={"$top": "1"})
         if response.status_code == 200:
             return _result("defender_endpoint", READY)
         return _classify_http(
             "defender_endpoint", response.status_code, response.text[:300],
-            roles, {"Machine.Read.All"},
+            roles, collector_permissions('defender_endpoint', resource='defender'),
         )
     except Exception as exc:
         return _result("defender_endpoint", FAILED, f"{type(exc).__name__}: {exc}")
@@ -181,13 +184,22 @@ async def run_connection_checks(
     interactive_auth="auto",
     probe_endpoints=True,
     tenant_id="",
+    permission_profile="standard",
 ):
     """Return one normalized connection result for every relevant collector."""
+    from .cli_parser import resolve_live_permission_profile
+    permission_profile = resolve_live_permission_profile(permission_profile, preview_collectors, legacy_power_platform_collector)
     selected = set(selected_collector_ids(
-        service_config, preview_collectors, legacy_power_platform_collector
+        service_config, preview_collectors, legacy_power_platform_collector, permission_profile
     ))
     token = await asyncio.to_thread(client.credential.get_token, GRAPH_SCOPE)
     graph_roles = _decode_roles(token.token)
+    if permission_profile == 'restricted':
+        from .permission_audit import audit_restricted_access
+        audit = await audit_restricted_access(client, os.environ.get('CLIENT_ID'), graph_roles)
+        if not audit['verified']:
+            return [_result('graph_core', PERMISSION, audit['reason'], access_audit_failed=True,
+                            permission_profile=permission_profile)]
 
     probes = {
         "graph_core": ("/v1.0/organization", {"$select": "id,displayName"}, None),
@@ -199,24 +211,7 @@ async def run_connection_checks(
         "shadow_ai": ("/beta/security/dataDiscovery/cloudAppDiscovery/uploadedStreams", {"$top": "1"}, None),
         "network_access": ("/beta/networkAccess/filteringPolicies", {"$top": "1"}, None),
     }
-    permission_map = {
-        "graph_core": {
-            "Organization.Read.All", "User.Read.All", "Group.Read.All",
-            "Application.Read.All",
-        },
-        "m365_usage": {"Reports.Read.All", "Sites.Read.All"},
-        "entra_controls": {
-            "Policy.Read.All", "Policy.Read.PermissionGrant",
-            "RoleManagement.Read.Directory", "UserAuthenticationMethod.Read.All",
-            "AccessReview.Read.All", "DeviceManagementManagedDevices.Read.All",
-            "DeviceManagementConfiguration.Read.All", "AuditLog.Read.All",
-        },
-        "entra_risk": {"IdentityRiskyUser.Read.All", "IdentityRiskEvent.Read.All"},
-        "external_connections": {"ExternalConnection.Read.All"},
-        "graph_security": {"SecurityEvents.Read.All", "SecurityIncident.Read.All"},
-        "shadow_ai": {"CloudApp-Discovery.Read.All"},
-        "network_access": {"NetworkAccess.Read.All", "NetworkAccessPolicy.Read.All"},
-    }
+    permission_map = {name: collector_permissions(name, permission_profile) for name in probes}
     tasks = {}
     for collector_id, (path, params, accept) in probes.items():
         if collector_id in selected:
@@ -235,6 +230,7 @@ async def run_connection_checks(
                     collector_id, READY, "Token role verified; the collector will perform the representative read once."
                 ))
     if "defender_endpoint" in selected:
+        required_defender = collector_permissions('defender_endpoint', permission_profile, resource='defender')
         try:
             defender_token = await asyncio.to_thread(
                 client.credential.get_token, "https://api.securitycenter.microsoft.com/.default"
@@ -242,9 +238,15 @@ async def run_connection_checks(
             defender_roles = _decode_roles(defender_token.token)
         except Exception:
             defender_roles = set()
-        if "Machine.Read.All" not in defender_roles:
+        excess_defender = defender_roles - required_defender
+        if permission_profile == 'restricted' and excess_defender:
+            return [_result('defender_endpoint', PERMISSION,
+                            'Restricted profile has excess access in the current Defender token: '
+                            + ', '.join(sorted(excess_defender)) + '. Review consent and acquire a new token after cleanup.',
+                            access_audit_failed=True, permission_profile=permission_profile)]
+        if required_defender - defender_roles:
             tasks["defender_endpoint"] = asyncio.sleep(0, result=_result(
-                "defender_endpoint", PERMISSION, "Grant and consent: Machine.Read.All"
+                "defender_endpoint", PERMISSION, "Grant and consent: " + ', '.join(sorted(required_defender - defender_roles))
             ))
         elif probe_endpoints:
             tasks["defender_endpoint"] = _defender_probe(defender_roles)
@@ -270,9 +272,13 @@ async def run_connection_checks(
                 "sharepoint_governance", MODULE,
                 "Install or update Microsoft.Online.SharePoint.PowerShell in Windows PowerShell.",
             )
-        elif not sharepoint_admin_url:
+        elif interactive_auth == "skip" and not interactive_plan.get("sharepoint", {}).get("application_auth"):
             results["sharepoint_governance"] = _result(
-                "sharepoint_governance", FAILED, "SharePoint admin URL could not be resolved."
+                "sharepoint_governance", SIGN_IN, "Browser authentication is disabled for this run."
+            )
+        elif not is_valid_sharepoint_admin_url(sharepoint_admin_url):
+            results["sharepoint_governance"] = _result(
+                "sharepoint_governance", CONFIGURATION, SHAREPOINT_ADMIN_URL_REQUIRED
             )
         elif interactive_plan.get("sharepoint", {}).get("application_auth"):
             if probe_endpoints:
@@ -291,10 +297,6 @@ async def run_connection_checks(
                     "sharepoint_governance", READY,
                     "Certificate configuration is present; the collector will perform the representative read once.",
                 )
-        elif interactive_auth == "skip":
-            results["sharepoint_governance"] = _result(
-                "sharepoint_governance", SIGN_IN, "Browser authentication is disabled for this run."
-            )
         else:
             results["sharepoint_governance"] = _result(
                 "sharepoint_governance", SIGN_IN, "Browser sign-in will be requested during collection."
@@ -336,6 +338,14 @@ async def run_connection_checks(
     for collector_id in ("power_platform", "shadow_ai", "network_access", "legacy_power_platform"):
         if collector_id not in results:
             results[collector_id] = _result(collector_id, NOT_SELECTED)
+    if permission_profile == 'restricted':
+        for collector_id in ('sharepoint_governance', 'purview'):
+            results[collector_id] = _result(
+                collector_id, NOT_SELECTED,
+                'Restricted permission profile: administrative PowerShell is not requested; supply supported exports or saved evidence.',
+            )
+    for result in results.values():
+        result['permission_profile'] = permission_profile
     return [results[key] for key in COLLECTOR_REGISTRY if key in results]
 
 

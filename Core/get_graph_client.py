@@ -19,6 +19,7 @@ import re
 
 import httpx
 from azure.identity import CertificateCredential, ClientSecretCredential
+from .http_retry import RequestRetryError, request_with_retry
 
 
 logging.getLogger("azure.identity").setLevel(logging.ERROR)
@@ -28,18 +29,10 @@ GRAPH_BASE_URL = "https://graph.microsoft.com"
 
 
 def _load_env(env_path=None):
-    """Load the selected environment file without adding another dependency."""
-    if env_path is None:
-        env_path = os.getenv("ASSESSMENT_ENV_FILE") or os.path.join(
-            os.path.dirname(__file__), "..", ".env"
-        )
-    if os.path.exists(env_path):
-        with open(env_path, "r", encoding="utf-8-sig") as env_file:
-            for line in env_file:
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    key, value = line.split("=", 1)
-                    os.environ[key.strip()] = value.strip()
+    """Use the same literal-value parser and explicit-file checks as the CLI."""
+    from .credentials_check import load_env_file
+    selected = env_path if env_path is not None else os.getenv("ASSESSMENT_ENV_FILE") or None
+    return load_env_file(selected)
 
 
 def _ensure_env_loaded():
@@ -173,25 +166,16 @@ class GraphRestClient:
     async def request(self, method, path, *, params=None, headers=None, content=None, json=None):
         request_headers = await self._authorization_header()
         request_headers.update(headers or {})
-        last_response = None
-        for attempt in range(self.max_retries + 1):
-            last_response = await self._http.request(
-                method,
-                path,
-                params=params,
-                headers=request_headers,
-                content=content,
-                json=json,
+        try:
+            last_response = await request_with_retry(
+                lambda: self._http.request(
+                    method, path, params=params, headers=request_headers,
+                    content=content, json=json,
+                ),
+                method=method, max_retries=self.max_retries,
             )
-            if last_response.status_code not in {429, 500, 502, 503, 504}:
-                break
-            if attempt >= self.max_retries:
-                break
-            try:
-                delay = min(float(last_response.headers.get("Retry-After", "")), 30.0)
-            except (TypeError, ValueError):
-                delay = min(2 ** attempt, 16)
-            await asyncio.sleep(max(delay, 0.1))
+        except RequestRetryError as exc:
+            raise GraphRequestError(exc.status_code, str(exc), exc.response) from exc
 
         if last_response is None:
             raise GraphRequestError(0, "Microsoft Graph returned no response")
@@ -240,15 +224,15 @@ class GraphRestClient:
                 "truncated": truncated,
                 "reason": "Pagination safety limit reached" if truncated else "",
             }
-        except GraphRequestError as exc:
+        except (GraphRequestError, httpx.TransportError) as exc:
             return {
-                "available": bool(items),
-                "availability_status": "partial" if items else "unavailable",
+                "available": bool(pages),
+                "availability_status": "partial" if pages else "unavailable",
                 "value": items,
                 "records_collected": len(items),
                 "pages_collected": pages,
-                "truncated": bool(items),
-                "status_code": exc.status_code,
+                "truncated": bool(pages),
+                "status_code": getattr(exc, "status_code", 0),
                 "reason": str(exc),
                 "error": str(exc),
             }

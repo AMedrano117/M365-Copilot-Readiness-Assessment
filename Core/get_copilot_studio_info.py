@@ -1,5 +1,5 @@
 import asyncio
-from .get_recommendation import get_recommendation
+from .get_recommendation import get_recommendation, recommendation_graph_gap
 import sys
 from .spinner import get_timestamp, _stdout_lock
 from azure.core.exceptions import HttpResponseError, ClientAuthenticationError
@@ -34,7 +34,7 @@ def get_copilot_studio_service_plans(subscribed_skus):
     
     return copilot_plans
 
-async def get_copilot_studio_info(client, services_and_licenses=None, pp_client=None):
+async def get_copilot_studio_info(client, services_and_licenses=None, pp_client=None, permission_profile="standard"):
     """Get Copilot Studio (Power Virtual Agents) service plan information
     
     Args:
@@ -84,6 +84,8 @@ async def get_copilot_studio_info(client, services_and_licenses=None, pp_client=
     # This extracts from already-cached pp_client data (no API calls)
     from .get_power_platform_client import extract_pp_insights_from_client
     pp_insights = extract_pp_insights_from_client(pp_client) if pp_client else None
+    if pp_insights is not None:
+        pp_insights['permission_profile'] = permission_profile
     
     # Check for all service plans and create recommendations (blank for Success)
     # Track features already added to avoid duplicates
@@ -105,7 +107,7 @@ async def get_copilot_studio_info(client, services_and_licenses=None, pp_client=
             status = plan.get('status', 'Success')
             # Generate recommendations for all service plans
             # Pass pre-computed pp_insights to avoid redundant extraction
-            rec = get_recommendation('copilot_studio', plan_name, sku_name, status, client, pp_client, pp_insights)
+            rec = get_recommendation('copilot_studio', plan_name, sku_name, status, client, pp_client, pp_insights, permission_profile=permission_profile)
             
             # Collect async tasks for parallel execution
             if inspect.iscoroutine(rec):
@@ -128,6 +130,10 @@ async def get_copilot_studio_info(client, services_and_licenses=None, pp_client=
                 if result:
                     recommendations.append(result)
     
+    gap = recommendation_graph_gap('Copilot Studio', permission_profile)
+    if gap:
+        recommendations.append(gap)
+
     return {
         'available': True,
         'has_copilot_studio': True,

@@ -36,6 +36,24 @@ SHEET_DEFINITIONS = OrderedDict([
         "default_note": "See Authentication Coverage for the aggregate registration counts returned by Microsoft Graph.",
         "preview_columns": ["Metric", "Value", "Source State"],
     }),
+    ("authentication_methods_detail", {
+        "title": "Authentication Methods",
+        "appendix_title": "Authentication method strength and registration",
+        "default_note": "See Authentication Methods for registered methods and qualified strength categories.",
+        "preview_columns": ["Method", "Registered users", "Strength / purpose"],
+    }),
+    ("authentication_preferences_detail", {
+        "title": "MFA Preferences",
+        "appendix_title": "Default and system-preferred MFA methods",
+        "default_note": "See MFA Preferences for user-selected and system-preferred second-factor methods.",
+        "preview_columns": ["Method", "User-selected users", "System-preferred users", "Preferred users in report"],
+    }),
+    ("authentication_populations_detail", {
+        "title": "MFA Populations",
+        "appendix_title": "MFA methods by population",
+        "default_note": "See MFA Populations for member, guest and overlapping administrator counts.",
+        "preview_columns": ["Population", "Users", "Phishing-resistant registered", "Phone-only MFA registration"],
+    }),
     ("identity_risk_detail", {
         "title": "Identity Risk Detail",
         "appendix_title": "Appendix: Identity Risk Detail",
@@ -435,11 +453,31 @@ def build_evidence_bundle(
         pp_client = copilot_studio_info.get("_client")
 
     sheets = OrderedDict()
+    from .authentication_methods import authentication_method_report
+    authentication = authentication_method_report(entra_client)
+    def authentication_sheet(field):
+        metrics = authentication['metrics']
+        total = authentication['total_users']
+        qualification = {
+            'method_rows': f"Known inventories: {metrics.get('method_inventory_known', 0)}/{total}. Users can register multiple methods; counts overlap. Registration does not establish use or enforcement.",
+            'preference_rows': f"Known user defaults: {metrics.get('user_preference_known', 0)}/{total}; system preferences: {metrics.get('system_preference_known', 0)}/{metrics.get('system_preferred_enabled', 0)} enabled users; selected route: {metrics.get('current_preference_known', 0)}/{total}. System preference takes precedence when enabled; rows can overlap. Not actual sign-in usage.",
+            'population_rows': f"Administrators overlap members and guests. Administrator flag unknown: {total - metrics.get('admin_known', 0)}. Each metric covers known values only; unknown counts are separate.",
+        }[field]
+        return {'rows': [dict(row, **{'Source State': authentication['source_state'],
+                        'Report updated from': authentication['updated_from'] or 'Unknown',
+                        'Report updated to': authentication['updated_to'] or 'Unknown',
+                        'Update dates unknown': authentication['dates_unknown'],
+                        'Source qualification': qualification}) for row in authentication[field]],
+                'summary': 'Aggregate authentication registration and preferences; source state: ' + authentication['source_state'],
+                'details': authentication['details']} if authentication['available'] else None
     builders = [
         ("app_access_detail", lambda: _build_app_access_sheet(entra_client, defender_client)),
         ("app_consent_policy_detail", lambda: _build_app_consent_policy_sheet(entra_client)),
         ("admin_role_detail", lambda: _build_admin_role_sheet(entra_client)),
         ("authentication_detail", lambda: _build_authentication_sheet(entra_client)),
+        ("authentication_methods_detail", lambda: authentication_sheet('method_rows')),
+        ("authentication_preferences_detail", lambda: authentication_sheet('preference_rows')),
+        ("authentication_populations_detail", lambda: authentication_sheet('population_rows')),
         ("identity_risk_detail", lambda: _build_identity_risk_sheet(entra_client)),
         ("access_review_detail", lambda: _build_access_review_sheet(entra_client)),
         ("conditional_access_detail", lambda: _build_conditional_access_sheet(entra_client)),
@@ -507,6 +545,7 @@ def build_evidence_bundle(
         "sheets": sheets,
         "evidence_index": evidence_index,
         "appendix_sections": appendix_sections,
+        "authentication_methods": authentication,
         "copilot_readiness_export": {
             key: value for key, value in (getattr(m365_client, "copilot_readiness_export", {}) or {}).items()
             if key != "user_details"
@@ -1077,6 +1116,26 @@ def _build_app_access_sheet(entra_client, defender_client):
     defender_risk_by_app = _build_defender_app_risk_index(defender_client)
     tenant_id = _iso_text(getattr(entra_client, "tenant_id", "")).lower()
     collection_status = getattr(entra_client, "collection_status", {}) or {}
+    data_sources = getattr(entra_client, "data_sources", {}) or {}
+    for source in ("oauth_grants", "service_principals"):
+        state = collection_status.get(source, {}) or {}
+        availability = state.get("availability_status")
+        if ((availability and availability != "available")
+                or (source in data_sources and not data_sources[source])):
+            reason = state.get("reason") or "The complete application or delegated grant inventory was not collected."
+            return {
+                "rows": [{
+                    "App Display Name": "Not assessed",
+                    "Source State": availability or "unavailable",
+                    "Qualification": reason,
+                    "Evidence Confidence": "Unavailable",
+                }],
+                "summary": "Application grant inventory is not assessed. " + reason,
+                "details": [
+                    "The absence of grant findings does not establish zero grants or appropriately scoped application access.",
+                    "Consent-policy settings describe the configured approval boundary; they do not replace the existing grant inventory.",
+                ],
+            }
 
     app_index = {}
 
@@ -1352,6 +1411,17 @@ def _build_authentication_sheet(entra_client):
     availability = str(state.get("availability_status", "unavailable") or "unavailable")
     if availability not in {"available", "partial"}:
         return None
+    from .authentication_methods import authentication_method_report
+    method_report = authentication_method_report(entra_client)
+    if method_report['available']:
+        return {
+            'rows': [dict(row, **{'RecommendationId': '', 'Flagged By': '', 'Source State': method_report['source_state'].title(),
+                     'Evidence Confidence': 'High' if method_report['complete'] else 'Limited',
+                     'Report updated from': method_report['updated_from'] or 'Unknown',
+                     'Report updated to': method_report['updated_to'] or 'Unknown'}) for row in method_report['summary_rows']],
+            'summary': f"Microsoft Graph returned authentication registration data for {method_report['total_users']} users.",
+            'details': method_report['details'],
+        }
     summary = getattr(entra_client, "auth_summary", {}) or {}
     total = int(summary.get("total_users", 0) or 0)
     registered = int(summary.get("mfa_registered", 0) or 0)

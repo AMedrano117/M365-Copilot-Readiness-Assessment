@@ -3,6 +3,7 @@ Graph Connectors Search Index - Copilot & Agent Adoption Recommendation
 """
 from Core.new_recommendation import new_recommendation
 from Core.friendly_names import get_friendly_sku_name
+from .m365_insights import site_inventory_available, site_inventory_gap
 
 def get_recommendation(sku_name, status="Success", m365_insights=None):
     """
@@ -42,6 +43,10 @@ def get_recommendation(sku_name, status="Success", m365_insights=None):
         )
         recommendations.append(license_rec)
     
+    if status == "Success" and m365_insights and not site_inventory_available(m365_insights):
+        recommendations.append(site_inventory_gap(m365_insights, feature_name))
+        return recommendations
+
     # M365 Insights-based Observations
     if status == "Success" and m365_insights and m365_insights.get('available'):
         sharepoint_total_files = m365_insights.get('sharepoint_total_files', 0)

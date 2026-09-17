@@ -38,6 +38,34 @@ def _attribute(attrs, name):
 
 def parse_report(path):
     source = Path(path).read_text(encoding="utf-8")
+    if 'id="action-plan"' in source:
+        # The current report renders actions, including evidence checks, and links
+        # them to identifiers in the evidence table rather than hidden legacy cards.
+        identifiers = {
+            match.group(1): _text(match.group(2)) for match in re.finditer(
+                r'<tr id="(evidence-[^"]+)">\s*<td>(.*?)</td>', source, re.I | re.S,
+            )
+        }
+        records = []
+        for match in re.finditer(r'<article class="action"(?P<attrs>.*?)>(?P<body>.*?)</article>', source, re.I | re.S):
+            attrs, body = match.group('attrs'), match.group('body')
+            title = re.search(r'<h3>(.*?)</h3>', body, re.I | re.S)
+            evidence = re.search(r'href="#(evidence-[^"]+)"', body, re.I)
+            kind = re.search(r'<span class="action-kind">(.*?)</span>', body, re.I | re.S)
+            def paragraph(label):
+                found = re.search(r'<p><strong>' + re.escape(label) + r'</strong>(.*?)</p>', body, re.I | re.S)
+                return _text(found.group(1)) if found else ''
+            action_type = _text(kind.group(1)) if kind else ''
+            records.append({
+                'RecommendationId': identifiers.get(evidence.group(1), '') if evidence else '',
+                'Feature': _text(title.group(1)) if title else '',
+                'Priority': _attribute(attrs, 'priority').title(),
+                'Observation': paragraph('What we found.'),
+                'Recommendation': paragraph('What to do.'),
+                'Disposition': 'Coverage' if action_type == 'Evidence' else 'Action',
+                'ActionType': action_type,
+            })
+        return records
     records = []
     for match in CARD_PATTERN.finditer(source):
         attrs, body = match.group("attrs"), match.group("body")
@@ -82,6 +110,8 @@ def summarize(records, html_source="", workbook=None):
         ) if records else 0,
     }
     issues = []
+    modern = 'id="action-plan"' in html_source
+    action_dispositions = {'Action', 'Coverage'} if modern else {'Action'}
     if re.search(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", html_source, re.I):
         issues.append("HTML contains a possible user identity (email address).")
     if "Validation incomplete—do not use for deployment approval" in html_source:
@@ -89,7 +119,14 @@ def summarize(records, html_source="", workbook=None):
     declared = re.search(r'<div class="label">Actions</div>\s*<div class="value">(\d+)</div>', html_source)
     if declared and int(declared.group(1)) != disposition_counts.get("Action", 0):
         issues.append("HTML action headline does not match rendered action cards.")
+    if modern:
+        declared = re.search(r'<dt>Open actions</dt>\s*<dd>(\d+) to resolve or verify</dd>', html_source)
+        if not declared or int(declared.group(1)) != len(records):
+            issues.append('HTML action headline does not match rendered action cards.')
+        if any(not row.get('RecommendationId') for row in records):
+            issues.append('A rendered HTML action has no linked evidence identifier.')
     if workbook:
+        book = None
         try:
             from openpyxl import load_workbook
             book = load_workbook(workbook, read_only=True, data_only=True)
@@ -111,31 +148,35 @@ def summarize(records, html_source="", workbook=None):
             workbook_rows = rows_for("Recommendations")
             if "Recommendations" in book.sheetnames:
                 html_ids = {row.get("RecommendationId") for row in records if row.get("RecommendationId")}
-                workbook_action_ids = {str(row.get("RecommendationId") or "") for row in workbook_rows if row.get("Disposition") == "Action"}
+                workbook_action_ids = {str(row.get("RecommendationId") or "") for row in workbook_rows if row.get("Disposition") in action_dispositions}
                 if html_ids != workbook_action_ids:
                     issues.append("HTML and workbook action identifiers do not match.")
 
             action_rows = rows_for("Action Plan")
             workbook_action_ids = {
                 str(row.get("RecommendationId") or "")
-                for row in workbook_rows if row.get("Disposition") == "Action"
+                for row in workbook_rows if row.get("Disposition") in action_dispositions
             }
-            if action_rows and "Recommendation ID" in action_rows[0]:
+            id_column = next((key for key in ('RecommendationId', 'Recommendation ID')
+                              if action_rows and key in action_rows[0]), None)
+            if id_column:
                 action_plan_ids = {
-                    str(row.get("Recommendation ID") or "")
-                    for row in action_rows if row.get("Recommendation ID")
+                    str(row.get(id_column) or "")
+                    for row in action_rows if row.get(id_column)
                 }
                 if action_plan_ids != workbook_action_ids:
                     issues.append("Action Plan and Recommendations action identifiers do not match.")
             else:
                 normalize = lambda value: re.sub(r"\s+", " ", str(value or "")).strip().lower()
+                placeholder = (len(action_rows) == 1 and not workbook_action_ids
+                    and action_rows[0].get('What We Found') == 'No deployment actions were identified from the evidence collected.')
                 action_plan_findings = Counter(
                     normalize(row.get("What We Found")) for row in action_rows
-                    if row.get("What We Found")
+                    if row.get("What We Found") and not placeholder
                 )
                 workbook_action_findings = Counter(
                     normalize(row.get("Observation")) for row in workbook_rows
-                    if row.get("Disposition") == "Action" and row.get("Observation")
+                    if row.get("Disposition") in action_dispositions and row.get("Observation")
                 )
                 if action_plan_findings != workbook_action_findings:
                     issues.append("Action Plan findings do not match the Recommendations action register.")
@@ -148,7 +189,7 @@ def summarize(records, html_source="", workbook=None):
 
             control_ids = {str(row.get("Control ID") or "") for row in rows_for("Control Results")}
             for row in workbook_rows:
-                if row.get("Disposition") != "Action":
+                if row.get("Disposition") not in action_dispositions:
                     continue
                 recommendation_id = str(row.get("RecommendationId") or "Unidentified action")
                 control_id = str(row.get("Control ID") or "")
@@ -158,7 +199,11 @@ def summarize(records, html_source="", workbook=None):
             valid_states = {"available", "partial", "unavailable", "not_requested"}
             for row in rows_for("Collection Coverage"):
                 state = str(row.get("State") or "").lower()
-                if state not in valid_states:
+                metadata = (str(row.get('Source') or ''), state) in {
+                    ('Offline report build', 'offline'),
+                    ('Methodology compatibility migration', 'migrated'),
+                }
+                if state not in valid_states and not metadata:
                     issues.append(f"Collection source {row.get('Source')} has invalid state {row.get('State')!r}.")
                 if bool(row.get("Truncated")) and state == "available":
                     issues.append(f"Truncated source {row.get('Source')} is incorrectly marked available.")
@@ -176,6 +221,9 @@ def summarize(records, html_source="", workbook=None):
                     issues.append(f"Run Manifest contains a credential field: {item}.")
         except Exception as exc:
             issues.append(f"Workbook could not be audited: {exc}")
+        finally:
+            if book is not None:
+                book.close()
     result["audit_issues"] = issues
     result["valid"] = not issues
     return result

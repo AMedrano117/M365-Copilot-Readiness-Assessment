@@ -11,7 +11,87 @@ from Core.offline_collection import empty_service_results, save_collection
 SYNTHETIC_TENANT = '33333333-3333-4333-8333-333333333333'
 
 
-def create_synthetic_package(directory):
+def _source_state(records):
+    return {'available': True, 'availability_status': 'available',
+            'records_collected': records, 'pages_collected': 1,
+            'truncated': False, 'complete': True, 'refresh_date': '2026-09-14'}
+
+
+def _attach_synthetic_source_objects(results):
+    """Back the reviewed findings with invented, dated source objects and states."""
+    m365 = results['m365_result'][0]['_client']
+    m365.external_connections = [
+        {'id': f'fictional-connection-{index}', 'name': f'Fictional approved source {index}',
+         'state': 'ready', 'description': 'Invented pilot source with reviewed permission boundaries.'}
+        for index in range(1, 3)
+    ]
+    m365.collection_status['external_connections'] = _source_state(2)
+    m365.sharepoint_governance = {
+        'available': True, 'availability_status': 'available',
+        'tenant': {'available': True, 'settings': {'SharingCapability': 'Disabled',
+                   'OneDriveSharingCapability': 'Disabled', 'DefaultSharingLinkType': 'Direct'}},
+        'sites': {'available': True, 'items': [{'Title': 'Fictional pilot',
+                  'Url': 'https://synthetic.sharepoint.com/sites/pilot', 'SharingCapability': 'Disabled'}]},
+    }
+    registrations = [
+        {'id': f'fictional-user-{index}', 'isMfaRegistered': True, 'isMfaCapable': True,
+         'isPasswordlessCapable': True, 'methodsRegistered': ['fido2'],
+         'lastUpdatedDateTime': '2026-09-14T12:00:00Z', 'userType': 'member', 'isAdmin': index <= 6}
+        for index in range(1, 151)
+    ]
+    roles = [
+        {'id': f'fictional-assignment-{index}', 'principalId': f'fictional-user-{index}',
+         'roleDefinitionId': 'fictional-role', 'directoryScopeId': '/',
+         'principal': {'displayName': f'Fictional operator {index}', '@odata.type': '#microsoft.graph.user'},
+         'roleDefinition': {'displayName': 'Security Reader'},
+         'scheduleInfo': {'expiration': {'type': 'afterDateTime', 'endDateTime': '2026-09-14T20:00:00Z'}}}
+        for index in range(1, 7)
+    ]
+    results['entra_info']['_client'] = SimpleNamespace(
+        available=True, auth_methods_registration=registrations,
+        role_assignments=[], role_assignment_schedules=roles, role_eligibility_schedules=[],
+        authorization_policy={'defaultUserRolePermissions': {'permissionGrantPoliciesAssigned': []}},
+        collection_status={'auth_methods': _source_state(150), 'role_assignments': _source_state(0),
+                           'role_assignment_schedules': _source_state(6), 'role_eligibility_schedules': _source_state(0),
+                           'authorization_policy': _source_state(1)},
+    )
+    policy_names = [f'Fictional pilot DLP {index}' for index in range(1, 6)]
+    labels = [{'Name': f'Fictional sensitivity label {index}', 'DisplayName': f'Fictional sensitivity label {index}'}
+              for index in range(1, 4)]
+    policies = [{'Name': name, 'Enabled': True, 'Mode': 'Enable',
+                 'SharePointLocation': ['https://synthetic.sharepoint.com/sites/pilot'],
+                 'OneDriveLocation': ['https://synthetic-my.sharepoint.com/personal/pilot']}
+                for name in policy_names]
+    rules = [{'Name': name + ' rule', 'ParentPolicyName': name, 'Disabled': False,
+              'ContentContainsSensitiveInformation': 'Fictional sensitive information', 'BlockAccess': True}
+             for name in policy_names]
+    results['purview_info']['_client'] = SimpleNamespace(
+        available=True, dlp_policies={**_source_state(5), 'policies': policies},
+        dlp_rules={**_source_state(5), 'rules': rules},
+        sensitivity_labels={**_source_state(3), 'labels': labels, 'total_labels': 3},
+        label_policies={**_source_state(1), 'policies': [{'Name': 'Fictional pilot publishing', 'Enabled': True}], 'total_policies': 1},
+        audit_config={**_source_state(1), 'unified_audit_enabled': True},
+        retention_labels={**_source_state(1), 'labels': [{'Name': 'Fictional approved pilot retention'}]},
+        comm_compliance={}, information_barriers={}, insider_risk={}, ediscovery_cases={},
+        collection_status={name: _source_state(count) for name, count in (
+            ('dlp_policies', 5), ('dlp_rules', 5), ('sensitivity_labels', 3),
+            ('label_policies', 1), ('audit_config', 1), ('retention_policies', 1))},
+    )
+    results['defender_info']['_client'] = SimpleNamespace(
+        available=True,
+        security_incidents=[{'id': 'fictional-resolved-incident', 'title': 'Fictional resolved exercise',
+                             'status': 'resolved', 'severity': 'low', 'createdDateTime': '2026-09-13T12:00:00Z'}],
+        incident_summary={'total': 1, 'active': 0, 'high_severity': 0},
+        defender_devices=[{'id': f'fictional-device-{index}', 'computerDnsName': f'Fictional pilot device {index}',
+                           'riskScore': 'Low', 'healthStatus': 'Active', 'onboardingStatus': 'Onboarded',
+                           'osPlatform': 'Windows11', 'lastSeen': '2026-09-14T12:00:00Z'}
+                          for index in range(1, 151)],
+        device_summary={'total': 150, 'high_risk': 0},
+        collection_status={'incidents': _source_state(1), 'machines': _source_state(150)},
+    )
+
+
+def create_synthetic_package(directory, *, active_incident=False):
     directory = Path(directory)
     exports = directory / 'original_exports'
     exports.mkdir(parents=True, exist_ok=True)
@@ -77,6 +157,11 @@ def create_synthetic_package(directory):
                                            'active_rate': 40, 'unused_licenses': 90, 'apps': {}}},
                        'complete': True, 'truncated': False, 'freshness': 'Fresh', 'stale': False},
     )
+    _attach_synthetic_source_objects(results)
+    if active_incident:
+        defender = results['defender_info']['_client']
+        defender.security_incidents[0].update(status='active', severity='high', title='Fictional active exercise')
+        defender.incident_summary.update(active=1, high_severity=1)
     controls = [
         ('entra_info', 'identity', 'Multifactor authentication coverage', 'authentication_detail', 'authentication', 'All 150 fictional pilot users have the approved sign-in policy and registered multifactor methods.'),
         ('entra_info', 'identity', 'Privileged role review', 'admin_role_detail', 'admin_role', 'All 6 fictional administrative role assignments have approved owners and time-limited activation.'),
@@ -86,7 +171,7 @@ def create_synthetic_package(directory):
         ('purview_info', 'data_protection', 'Sensitivity label publication', 'purview_policy_detail', 'sensitivity_labels', 'Three fictional sensitivity labels are published to all 150 pilot users.'),
         ('purview_info', 'data_protection', 'Data loss prevention enforcement', 'purview_policy_detail', 'dlp', 'Five fictional data loss prevention policies are enforced for the agreed pilot locations.'),
         ('purview_info', 'data_protection', 'Audit and retention review', 'purview_policy_detail', 'audit', 'Audit logging and the approved retention requirements are enabled for the fictional pilot.'),
-        ('entra_info', 'applications', 'Application consent review', 'app_consent_policy_detail', 'consent', 'All four fictional application grants have documented purpose, owner and scope.'),
+        ('entra_info', 'applications', 'Application consent review', 'app_consent_policy_detail', 'consent', 'The fictional tenant authorization policy assigns no self-consent policy to default users; application grants require an authorized administrator.'),
         ('m365_result', 'applications', 'Connected source access review', 'external_connection_detail', 'external_connection', 'Two fictional connected sources preserve the approved user permission boundaries.'),
         ('defender_info', 'endpoints', 'Pilot device protection', 'defender_device_detail', 'endpoint', 'All 150 fictional pilot devices meet the approved management, browser and threat-protection baseline.'),
         ('defender_info', 'endpoints', 'Active incident review', 'defender_incident_detail', 'incident', 'The dated fictional incident review found zero active incidents affecting the pilot.'),
@@ -95,6 +180,9 @@ def create_synthetic_package(directory):
         ('m365_result', 'adoption', 'Pilot usage baseline', 'ai_usage_detail', 'copilot_usage', 'The fictional pilot recorded 60 active users in 28 days; the sponsor approved the population and outcome measures.'),
     ]
     for service_key, domain, feature, evidence_key, finding_key, observation in controls:
+        if active_incident and finding_key == 'incident':
+            # Let the normal incident adapter create the action from the source.
+            continue
         service = {'m365_result': 'M365', 'entra_info': 'Entra', 'purview_info': 'Purview', 'defender_info': 'Defender'}[service_key]
         recommendation = {'Service': service, 'Feature': feature, 'Observation': observation,
                           'Recommendation': '', 'Status': 'Success', 'Priority': 'Low', 'Disposition': 'Assurance',

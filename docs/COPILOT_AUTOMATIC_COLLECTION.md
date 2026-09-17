@@ -1,5 +1,7 @@
 # Copilot admin-center details collected automatically
 
+[Documentation index](README.md) | [Project overview](../README.md)
+
 Run the normal live assessment first. Request only the additional portal details relevant to
 the customer's scope. The three Usage, Security and Optimize PDFs are no longer a standard
 intake requirement. They remain optional visual context. To include them, put the PDFs in

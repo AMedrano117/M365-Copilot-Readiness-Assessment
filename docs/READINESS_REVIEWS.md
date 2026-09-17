@@ -1,5 +1,7 @@
 # Readiness milestones and owner reviews
 
+[Documentation index](README.md) | [Project overview](../README.md)
+
 The report distinguishes observed Copilot adoption from verified rollout readiness. Assigned
 licenses or active users can show that adoption has begun while the next readiness milestone
 still needs evidence. No percentage or usage threshold advances readiness automatically.
@@ -21,7 +23,7 @@ a readiness score. A completed report can still contain unanswered readiness que
 ## Add reviews through the existing assessment profile
 
 Add `readiness_review` to the JSON supplied by `--assessment-profile`. The
-[sanitized example](examples/readiness-review.example.json) uses a fictional tenant, scope,
+[sanitized example](../examples/readiness-review.example.json) uses a fictional tenant, scope,
 dates and references. It intentionally includes an application prerequisite failure and leaves
 other controls unanswered. Replace its content with reviews actually performed for the tenant.
 Never copy the example's pass results as tenant evidence.

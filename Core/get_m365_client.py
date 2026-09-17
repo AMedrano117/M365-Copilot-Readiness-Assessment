@@ -11,6 +11,7 @@ import io
 from azure.core.exceptions import HttpResponseError
 from .spinner import get_timestamp, _stdout_lock
 from datetime import datetime, timedelta
+from .collector_registry import source_allowed
 
 
 def _parse_csv_report(report_data):
@@ -30,6 +31,7 @@ async def get_m365_client(
     include_user_usage_detail=False,
     copilot_dashboard_export=None,
     preview_collectors="none",
+    permission_profile="standard",
 ):
     """
     Get M365 usage analytics and deployment data from Microsoft Graph.
@@ -113,6 +115,13 @@ async def get_m365_client(
             self.missing_permissions = []
     
     client = M365Client()
+    client.permission_profile = permission_profile
+    if not source_allowed('sites', permission_profile):
+        client.collection_status['sites'] = {
+            'available': False, 'availability_status': 'not_requested',
+            'records_collected': 0, 'pages_collected': 0, 'truncated': False,
+            'reason': 'SharePoint site inventory was not requested by the Restricted permission profile.',
+        }
     
     try:
         # Phase 1: Fetch core data in parallel
@@ -124,9 +133,6 @@ async def get_m365_client(
         
         # Create tasks with labels for progress tracking
         tasks = {
-            'sites': graph_client.get_collection(
-                "/v1.0/sites", params={'$select': 'id,displayName,webUrl', '$top': '999'}
-            ),
             'users': graph_client.get_collection(
                 "/v1.0/users",
                 params={'$select': 'id,displayName,userPrincipalName,assignedLicenses,accountEnabled', '$top': '999'},
@@ -153,6 +159,10 @@ async def get_m365_client(
                 "/v1.0/reports/getOffice365ActiveUserDetail(period='D30')"
             ),
         }
+        if source_allowed('sites', permission_profile):
+            tasks['sites'] = graph_client.get_collection(
+                "/v1.0/sites", params={'$select': 'id,displayName,webUrl', '$top': '999'}
+            )
         from .ai_usage import collect_ai_usage
         tasks['ai_usage'] = collect_ai_usage(
             include_user_detail=include_user_usage_detail,
@@ -187,6 +197,11 @@ async def get_m365_client(
                         'availability_status', 'records_collected', 'pages_collected', 'truncated', 'reason'
                     )
                 }
+                if not client.collection_status[source_name].get('availability_status'):
+                    client.collection_status[source_name]['availability_status'] = (
+                        'partial' if response.get('truncated') or response.get('@odata.nextLink')
+                        else 'unavailable' if response.get('available') is False else 'available'
+                    )
                 continue
             next_link = getattr(response, 'odata_next_link', None)
             if not next_link:
@@ -203,7 +218,9 @@ async def get_m365_client(
         
         # Process Sites data
         sites_response = response_dict.get('sites')
-        if not isinstance(sites_response, Exception) and sites_response:
+        sites_status = client.collection_status.get('sites', {})
+        if (not isinstance(sites_response, Exception) and sites_response
+                and sites_status.get('availability_status') == 'available'):
             try:
                 client.sites = sites_response.get('value', []) if isinstance(sites_response, dict) else (sites_response.value if hasattr(sites_response, 'value') else [])
                 client.available = True
@@ -211,15 +228,21 @@ async def get_m365_client(
                 # Pre-compute sites summary
                 total_sites = len(client.sites)
                 client.sites_summary = {
+                    'available': True,
                     'total': total_sites,
                     'site_names': [field(site, 'displayName', '') for site in client.sites if field(site, 'displayName', '')],
                     'root_site_id': field(client.sites[0], 'id') if total_sites > 0 else None
                 }
             except Exception as e:
-                client.sites_summary = {'total': 0, 'error': f'Failed to process sites: {str(e)}'}
+                client.sites_summary = {'available': False, 'total': None, 'error': f'Failed to process sites: {str(e)}'}
         else:
-            client.sites_summary = {'total': 0, 'error': 'Sites.Read.All permission missing or API error'}
-            client.missing_permissions.append('Sites.Read.All')
+            client.sites_summary = {
+                'available': False, 'total': None,
+                'availability_status': sites_status.get('availability_status', 'unavailable'),
+                'reason': sites_status.get('reason') or 'SharePoint site inventory was not collected completely.',
+            }
+            if sites_status.get('availability_status') not in {'not_requested', 'partial'}:
+                client.missing_permissions.append('Sites.Read.All')
         
         # Process Users data
         users_response = response_dict.get('users')
@@ -529,7 +552,7 @@ async def get_m365_client(
         # Log summary
         if client.available:
             successful_apis = sum([
-                1 if client.sites_summary.get('total', 0) > 0 else 0,
+                1 if client.sites_summary.get('available') else 0,
                 1 if client.users_summary.get('total', 0) > 0 else 0,
                 1 if client.email_summary.get('available', False) else 0,
                 1 if client.teams_summary.get('available', False) else 0,
@@ -572,6 +595,7 @@ def extract_m365_insights_from_client(m365_client):
         dict with pre-computed metrics for M365 Copilot adoption observations
     """
     if not m365_client or not m365_client.available:
+        site_state = (getattr(m365_client, 'collection_status', {}) or {}).get('sites', {})
         return {
             'available': False,
 
@@ -580,8 +604,11 @@ def extract_m365_insights_from_client(m365_client):
             'active_user_data_available': False,
 
             # Sites & SharePoint
-            'total_sites': 0,
-            'sharepoint_total_sites': 0,
+            'total_sites': None,
+            'sharepoint_total_sites': None,
+            'site_inventory_available': False,
+            'site_inventory_status': site_state.get('availability_status', 'unavailable'),
+            'site_inventory_reason': site_state.get('reason') or 'SharePoint site inventory was not collected.',
             'sharepoint_active_sites': 0,
             'sharepoint_total_files': 0,
             'sharepoint_page_views': 0,
@@ -676,7 +703,10 @@ def extract_m365_insights_from_client(m365_client):
         'active_user_data_available': active_user_data_available,
 
         # Sites & SharePoint
-        'total_sites': sites_summary.get('total', 0),
+        'total_sites': sites_summary.get('total'),
+        'site_inventory_available': sites_summary.get('available', 'total' in sites_summary and sites_summary.get('total') is not None and not sites_summary.get('error')),
+        'site_inventory_status': sites_summary.get('availability_status', (getattr(m365_client, 'collection_status', {}) or {}).get('sites', {}).get('availability_status', 'unrecorded')),
+        'site_inventory_reason': sites_summary.get('reason', sites_summary.get('error', '')),
         'site_names': sites_summary.get('site_names', []),
         'sharepoint_report_available': sharepoint_summary.get('available', False),
         'sharepoint_report_period': sharepoint_summary.get('report_period', 'D30'),
@@ -686,7 +716,7 @@ def extract_m365_insights_from_client(m365_client):
         'sharepoint_activity_rate': sharepoint_summary.get('site_activity_rate', 0),
         'sharepoint_avg_files_per_site': sharepoint_summary.get('avg_files_per_site', 0),
         # Aliases used by recommendation modules
-        'sharepoint_total_sites': sites_summary.get('total', 0),
+        'sharepoint_total_sites': sites_summary.get('total'),
         'sharepoint_page_views': sharepoint_summary.get('total_page_views', 0),
         
         # Users & Licensing

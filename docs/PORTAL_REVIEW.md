@@ -1,5 +1,7 @@
 # Import admin-center PDFs
 
+[Documentation index](README.md) | [Project overview](../README.md)
+
 Put the PDFs alongside the customer's exports and use **`--reports-dir`**. No hand-written JSON or separate PDF option is required. PDF subfolders are included, and identical files are imported once.
 
 ```powershell
@@ -21,7 +23,7 @@ The same `--reports-dir` option works in live mode. The tool prepares PDFs befor
 
 This is automatic text extraction, not a human or AI interpretation of every chart. OCR can mix the reading order of dashboard cards and misread numbers. Extracted content does not pass controls, close actions or change readiness. Confirm values against the original pages; structured CSV/API evidence still drives measurements. The selected assessment tenant is recorded as context, not independently verified from the PDF. Creation metadata supplies the capture date when present; missing dates remain unknown, and a capture date does not refresh the underlying report.
 
-Install dependencies once using `.\.venv\Scripts\python.exe -m pip install -r requirements.txt`. PDF import uses PyMuPDF. Windows OCR requires an installed recognition language; the local PowerShell worker uses image APIs only and requires no tenant permissions. PDF limits are 50 files per import, 20 pages per file, 50 MiB per original, and 100 MiB total reviewed assets. Structured data exports are read from the top level of each reports folder; PDF discovery also includes subfolders.
+Install dependencies once using `.\.venv\Scripts\python.exe -m pip install -r requirements.lock.txt`. PDF import uses PyMuPDF. Windows OCR requires an installed recognition language; the local PowerShell worker uses image APIs only and requires no tenant permissions. PDF limits are 50 files per import, 20 pages per file, 50 MiB per original, and 100 MiB total reviewed assets. Structured data exports are read from the top level of each reports folder; PDF discovery also includes subfolders.
 
 The HTML embeds the full original PDFs and previews. Use customer-appropriate material and review it before sharing; text extraction does not redact content.
 

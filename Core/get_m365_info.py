@@ -1,4 +1,4 @@
-from .get_recommendation import get_recommendation
+from .get_recommendation import get_recommendation, recommendation_graph_gap
 import sys
 from .spinner import get_timestamp, _stdout_lock
 from azure.core.exceptions import HttpResponseError
@@ -105,7 +105,8 @@ async def get_m365_info(client, services_and_licenses=None, m365_client=None):
                 continue
 
             # Generate recommendations only for M365-specific features
-            rec = get_recommendation('m365', plan_name, resolved_sku, status, client, m365_insights=m365_insights)
+            rec = get_recommendation('m365', plan_name, resolved_sku, status, client, m365_insights=m365_insights,
+                                     permission_profile=getattr(m365_client, 'permission_profile', 'standard'))
             
             # Collect async tasks for parallel execution
             if inspect.iscoroutine(rec):
@@ -128,4 +129,7 @@ async def get_m365_info(client, services_and_licenses=None, m365_client=None):
             elif result:
                 recommendations.append(result)
     
+    gap = recommendation_graph_gap('M365', getattr(m365_client, 'permission_profile', 'standard'))
+    if gap:
+        recommendations.append(gap)
     return license_info, recommendations

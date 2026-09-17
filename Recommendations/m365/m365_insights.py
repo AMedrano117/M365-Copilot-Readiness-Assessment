@@ -13,6 +13,26 @@ Feature files get pre-computed metrics via simple dict access - no parsing overh
 # OBSERVATION HELPERS - Generate text for deployment status
 # ============================================================================
 
+def site_inventory_available(m365_insights):
+    """Accept complete site evidence; retain recorded counts in older saved data."""
+    if not m365_insights:
+        return False
+    if 'site_inventory_available' in m365_insights:
+        return bool(m365_insights['site_inventory_available'])
+    return m365_insights.get('total_sites', m365_insights.get('sharepoint_total_sites')) is not None
+
+
+def site_inventory_gap(m365_insights, feature):
+    from Core.new_recommendation import new_recommendation
+    reason = (m365_insights or {}).get('site_inventory_reason') or 'A complete SharePoint site inventory was not collected.'
+    return new_recommendation(
+        service='M365', feature=feature,
+        observation='SharePoint site-count context is not assessed. ' + reason,
+        recommendation='Review customer-provided site evidence separately before drawing site-count conclusions; usage reports do not establish a complete site inventory.',
+        status='Not Assessed', disposition='Coverage',
+        finding_key='m365.site_inventory.not_assessed',
+    )
+
 def get_sites_observation(m365_insights):
     """
     Generate SharePoint sites observation text.
@@ -25,6 +45,8 @@ def get_sites_observation(m365_insights):
     """
     if not m365_insights or not m365_insights.get('available'):
         return ""
+    if not site_inventory_available(m365_insights):
+        return 'SharePoint site inventory is not assessed. ' + (m365_insights.get('site_inventory_reason') or 'Complete site evidence was not collected.')
     
     total_sites = m365_insights.get('total_sites', 0)
     
@@ -218,7 +240,7 @@ def has_sufficient_data_for_observations(m365_insights):
     if not m365_insights or not m365_insights.get('available'):
         return False
     
-    has_sites = m365_insights.get('total_sites', 0) > 0
+    has_sites = site_inventory_available(m365_insights) and (m365_insights.get('total_sites') or 0) > 0
     has_users = m365_insights.get('total_users', 0) > 0
     has_any_report = (
         m365_insights.get('email_report_available', False) or
@@ -260,7 +282,7 @@ def get_missing_permissions_warning(m365_insights):
 
 def get_site_count(m365_insights):
     """Get total SharePoint sites deployed"""
-    return m365_insights.get('total_sites', 0) if m365_insights else 0
+    return m365_insights.get('total_sites') if site_inventory_available(m365_insights) else None
 
 def get_site_names(m365_insights):
     """Get list of SharePoint site display names"""

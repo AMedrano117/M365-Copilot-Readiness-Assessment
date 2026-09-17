@@ -25,7 +25,7 @@ Examples:
   python main.py
   python main.py --mode live
   python main.py --mode live --save-collection output/tenant-collection.json
-  python main.py --mode offline --reports-dir output/portal-sample-inputs
+  python main.py --mode offline --reports-dir tests/fixtures/microsoft_reports
   python main.py --mode offline --collection-input output/tenant-collection.json --reports-dir exports
   python main.py --mode offline --prior-report Reports/prior.xlsx --purview-cache .cache/purview/saved.json --reports-dir exports
   python main.py --services M365
@@ -41,6 +41,10 @@ Examples:
   python main.py --assessment-profile assessment-profile.json --provider-evidence providers.csv
   python main.py --baseline Reports/prior.xlsx --snapshot-json output/latest-snapshot.json
         '''
+    )
+    parser.add_argument(
+        '--permission-profile', choices=['standard', 'restricted'], default=None,
+        help='Live access profile. Overrides PERMISSION_PROFILE in the selected environment; defaults to standard. Offline replay preserves the recorded profile.'
     )
     parser.add_argument(
         '--tenant-id', 
@@ -64,7 +68,7 @@ Examples:
         '--env-file',
         type=str,
         default=None,
-        help='Path to the environment file to use for credentials and default tenant ID'
+        help='Existing, readable environment file for credentials and default tenant ID. An explicitly selected missing file is an error.'
     )
     parser.add_argument(
         '--open-html-report',
@@ -151,7 +155,7 @@ Examples:
         type=str,
         default=None,
         metavar='URL',
-        help='Optional SharePoint admin URL override. Normally derived from the tenant initial domain.'
+        help='Actual SharePoint admin-center HTTPS origin; overrides SHAREPOINT_ADMIN_URL. No tenant-domain inference.'
     )
     parser.add_argument(
         '--legacy-power-platform-collector',
@@ -227,4 +231,18 @@ Examples:
         parser.error('Live collectors cannot be enabled in offline mode.')
     if args.offline and args.env_file:
         parser.error('Offline mode does not use credentials or an --env-file.')
+    if args.offline and args.permission_profile:
+        parser.error('Offline mode uses the saved collection permission profile; omit --permission-profile.')
+    if args.permission_profile == 'restricted' and (args.preview_collectors != 'none' or args.legacy_power_platform_collector):
+        parser.error('The restricted permission profile cannot enable preview or legacy collectors.')
     return args
+
+
+def resolve_live_permission_profile(explicit=None, preview_collectors='none', legacy=False):
+    """Resolve profile only after the chosen environment file has been loaded."""
+    import os
+    from .collector_registry import normalize_permission_profile
+    profile = normalize_permission_profile(explicit or os.environ.get('PERMISSION_PROFILE') or 'standard')
+    if profile == 'restricted' and (preview_collectors != 'none' or legacy):
+        raise ValueError('The restricted permission profile cannot enable preview or legacy collectors.')
+    return profile

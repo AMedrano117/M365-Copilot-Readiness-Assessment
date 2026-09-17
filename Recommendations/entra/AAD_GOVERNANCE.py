@@ -181,7 +181,17 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
         print(f"[DEBUG GOV] Risky apps - High privilege: {high_privilege_apps}, Unverified: {unverified_publishers}, Graph: {apps_with_graph}, Mail: {apps_with_mail}, Files: {apps_with_files}")
         
         # High-privilege or unverified apps detected
-        if high_privilege_apps > 0 or unverified_publishers > 0:
+        sources = entra_insights.get('data_sources', {}) or {}
+        if not (sources.get('oauth_grants', False) and sources.get('service_principals', False)):
+            reason = (entra_insights.get('collection_status', {}) or {}).get('oauth_grants', {}).get('reason', '')
+            observations.append(new_recommendation(
+                service="Entra", feature=feature_name,
+                observation="Application grant inventory is not assessed. " + (reason or "Complete application and delegated grant evidence was not collected."),
+                recommendation="Review customer-provided application grant evidence separately before concluding that existing application permissions are appropriately scoped.",
+                status="Not Assessed", disposition="Coverage", evidence_key="app_access_detail",
+                finding_key="entra.app_consent.grant_inventory_not_assessed",
+            ))
+        elif high_privilege_apps > 0 or unverified_publishers > 0:
             risk_details = []
             if high_privilege_apps > 0:
                 risk_details.append(f"{high_privilege_apps} with high-privilege permissions")

@@ -13,7 +13,13 @@ from unittest.mock import AsyncMock, Mock, patch
 
 from Core.credentials_check import load_env_file
 from Core.console_reporting import configure_console
-from Core.orchestrator import collect_sharepoint_with_retry, resolve_sharepoint_admin_url
+from Core.orchestrator import (
+    collect_sharepoint_with_retry, resolve_sharepoint_admin_url,
+    resolve_purview_organization, resolve_workload_configuration,
+)
+from Core.connection_validation import CONFIGURATION, connection_exit_code, run_connection_checks
+from Core.sharepoint_configuration import is_valid_sharepoint_admin_url
+from Core.sharepoint_governance import build_sharepoint_recommendations
 from Core.orchestrator_powershell import (
     SHAREPOINT_JSON_BEGIN, SHAREPOINT_JSON_END, _parse_sharepoint_payload,
     collect_sharepoint_governance_via_powershell,
@@ -54,7 +60,7 @@ class EnvAdminUrlTests(unittest.IsolatedAsyncioTestCase):
             with redirect_stdout(output):
                 result = await resolve_sharepoint_admin_url(SimpleNamespace(), interactive_auth='skip')
             self.assertEqual('https://configured-admin.sharepoint.com', result)
-            self.assertIn(str(path), output.getvalue())
+            self.assertIn(' '.join(str(path).split()), ' '.join(output.getvalue().split()))
             self.assertEqual('a$literal#part\\path', os.environ['TEST_LITERAL'])
 
     async def test_invalid_config_does_not_silently_use_initial_domain(self):
@@ -63,8 +69,110 @@ class EnvAdminUrlTests(unittest.IsolatedAsyncioTestCase):
         client = SimpleNamespace(organization=SimpleNamespace(get=AsyncMock(return_value=organization)))
         with patch.dict(os.environ, {'SHAREPOINT_ADMIN_URL': 'https://wrong.sharepoint.com', 'PURVIEW_ORGANIZATION': ''}, clear=True), redirect_stdout(io.StringIO()):
             self.assertEqual('', await resolve_sharepoint_admin_url(client, interactive_auth='skip'))
-            self.assertEqual('initial.onmicrosoft.com', os.environ['PURVIEW_ORGANIZATION'])
+            self.assertEqual('', os.environ['PURVIEW_ORGANIZATION'])
+        client.organization.get.assert_not_awaited()
+
+    async def test_missing_url_never_uses_directory_domains_or_changes_purview(self):
+        client = SimpleNamespace(organization=SimpleNamespace(get=AsyncMock()))
+        output = io.StringIO()
+        with patch.dict(os.environ, {}, clear=True), redirect_stdout(output):
+            self.assertEqual('', await resolve_sharepoint_admin_url(client, interactive_auth='skip'))
+            self.assertNotIn('PURVIEW_ORGANIZATION', os.environ)
+        client.organization.get.assert_not_awaited()
+        self.assertIn('SHAREPOINT_ADMIN_URL', output.getvalue())
+        self.assertIn('not assessed', output.getvalue())
+
+    async def test_operator_entry_is_used_only_when_interaction_is_allowed(self):
+        for mode, interactive, expected in (
+            ('auto', True, 'https://renamed-admin.sharepoint.com'),
+            ('skip', True, ''), ('auto', False, ''),
+        ):
+            with self.subTest(mode=mode, interactive=interactive), \
+                 patch.dict(os.environ, {}, clear=True), \
+                 patch('Core.orchestrator.sys.stdin.isatty', return_value=interactive), \
+                 redirect_stdout(io.StringIO()):
+                prompt = Mock(return_value='https://renamed-admin.sharepoint.com/')
+                self.assertEqual(expected, await resolve_sharepoint_admin_url(None, interactive_auth=mode, prompt=prompt))
+                self.assertEqual(bool(expected), prompt.called)
+
+    async def test_invalid_cli_does_not_fall_back_or_prompt(self):
+        prompt = Mock(side_effect=AssertionError('Do not replace invalid explicit configuration'))
+        with patch.dict(os.environ, {'SHAREPOINT_ADMIN_URL': 'https://env-admin.sharepoint.com'}, clear=True), \
+             patch('Core.orchestrator.sys.stdin.isatty', return_value=True), redirect_stdout(io.StringIO()):
+            self.assertEqual('', await resolve_sharepoint_admin_url(None, explicit_url='https://wrong.sharepoint.com', prompt=prompt))
+        prompt.assert_not_called()
+
+    async def test_purview_organization_resolution_is_independent(self):
+        domain = SimpleNamespace(name='original.onmicrosoft.com', is_initial=True)
+        client = SimpleNamespace(organization=SimpleNamespace(get=AsyncMock(
+            return_value=SimpleNamespace(value=[SimpleNamespace(verified_domains=[domain])]))))
+        with patch.dict(os.environ, {'SHAREPOINT_ADMIN_URL': 'https://renamed-admin.sharepoint.com'}, clear=True):
+            self.assertEqual('original.onmicrosoft.com', await resolve_purview_organization(client))
+            self.assertEqual('https://renamed-admin.sharepoint.com', os.environ['SHAREPOINT_ADMIN_URL'])
+            self.assertEqual('original.onmicrosoft.com', await resolve_purview_organization(client))
         client.organization.get.assert_awaited_once()
+
+    async def test_unselected_or_unavailable_sharepoint_never_prompts(self):
+        for profile, selected, attempt in (
+            ('standard', False, False), ('standard', True, False), ('restricted', True, True),
+        ):
+            with self.subTest(profile=profile, selected=selected, attempt=attempt), \
+                 patch('Core.orchestrator.resolve_sharepoint_admin_url', AsyncMock()) as sharepoint, \
+                 patch('Core.orchestrator.resolve_purview_organization', AsyncMock()) as purview:
+                plan = {'sharepoint': {'selected': selected, 'will_attempt': attempt}}
+                self.assertEqual('', await resolve_workload_configuration(None, plan, permission_profile=profile))
+                sharepoint.assert_not_awaited()
+                purview.assert_not_awaited()
+
+    async def test_purview_certificate_only_does_not_resolve_sharepoint(self):
+        plan = {'purview': {'selected': True, 'will_attempt': True, 'application_auth': True}}
+        with patch('Core.orchestrator.resolve_sharepoint_admin_url', AsyncMock()) as sharepoint, \
+             patch('Core.orchestrator.resolve_purview_organization', AsyncMock()) as purview:
+            self.assertEqual('', await resolve_workload_configuration(None, plan))
+        sharepoint.assert_not_awaited()
+        purview.assert_awaited_once()
+
+    async def test_missing_or_invalid_url_never_launches_admin_collection_or_retry(self):
+        for value in ('', 'https://ordinary.sharepoint.com', 'https://-admin.sharepoint.com'):
+            with self.subTest(value=value), \
+                 patch.dict(os.environ, {'CERTIFICATE_PATH': 'existing.pfx'}, clear=True), \
+                 patch('Core.orchestrator_powershell._launch_powershell', side_effect=AssertionError('No PowerShell')) as launch, \
+                 patch('Core.orchestrator_powershell.tempfile.mkdtemp', side_effect=AssertionError('No download directory')), \
+                 patch('Core.orchestrator.sys.stdin.isatty', return_value=True), redirect_stdout(io.StringIO()):
+                prompt = Mock(side_effect=AssertionError('No second configuration prompt'))
+                retry = await collect_sharepoint_with_retry(value, 'synthetic', prompt=prompt)
+                direct = await collect_sharepoint_governance_via_powershell(value, 'synthetic')
+                for result in (retry, direct):
+                    self.assertFalse(result['available'])
+                    self.assertEqual('SHAREPOINT_ADMIN_URL', result['configuration_required'])
+                    recommendation = build_sharepoint_recommendations(result)[0]
+                    self.assertEqual('Not Assessed', recommendation['Status'])
+                    self.assertIn('SHAREPOINT_ADMIN_URL', recommendation['Recommendation'])
+                    self.assertNotIn('Install', recommendation['Recommendation'])
+                launch.assert_not_called()
+                prompt.assert_not_called()
+
+    async def test_preflight_reports_configuration_gap_without_certificate_probe(self):
+        client = SimpleNamespace(credential=SimpleNamespace(get_token=lambda scope: SimpleNamespace(token='synthetic')))
+        plan = {'modules': {'Microsoft.Online.SharePoint.PowerShell': True},
+                'sharepoint': {'selected': True, 'will_attempt': True, 'application_auth': True}}
+        for value in ('', 'https://ordinary.sharepoint.com'):
+            with self.subTest(value=value), \
+                 patch('Core.connection_validation._powershell_certificate_probe', side_effect=AssertionError('No PowerShell')):
+                results = await run_connection_checks(client, {'run_m365': True}, plan,
+                                                      sharepoint_admin_url=value, interactive_auth='skip')
+                sharepoint = next(row for row in results if row['collector_id'] == 'sharepoint_governance')
+                self.assertEqual(CONFIGURATION, sharepoint['status'])
+                self.assertEqual(2, connection_exit_code([sharepoint]))
+                self.assertIn('SHAREPOINT_ADMIN_URL', sharepoint['reason'])
+
+    def test_admin_url_rejects_non_origin_and_lookalike_hosts(self):
+        for value in ('https://-admin.sharepoint.com', 'https://nested.tenant-admin.sharepoint.com',
+                      'https://tenant-admin.sharepoint.com/_layouts/15/online/AdminHome.aspx',
+                      'https://tenant-admin.sharepoint.com?tenant=other',
+                      'https://user@tenant-admin.sharepoint.com', 'https://tenant-admin.sharepoint.com:443'):
+            with self.subTest(value=value):
+                self.assertFalse(is_valid_sharepoint_admin_url(value))
 
 
 class SharePointJsonTests(unittest.TestCase):

@@ -55,7 +55,7 @@ async def load_modules_and_analyze(tenant_id, service_config):
     console.detail('Selected services: ' + ('all' if service_config['run_all'] else ', '.join(service_config['services'])))
 
 
-async def setup_graph_and_licenses(tenant_id, show_graph_messages):
+async def setup_graph_and_licenses(tenant_id, show_graph_messages, collect_licenses=True):
     """Initialize Microsoft Graph client and ServicesAndLicenses container.
     
     Args:
@@ -74,6 +74,12 @@ async def setup_graph_and_licenses(tenant_id, show_graph_messages):
     
     # Setup services container (needed by all pipelines)
     services_and_licenses = ServicesAndLicenses()
+    has_license_data = await load_license_context(client, services_and_licenses) if collect_licenses else False
+    return client, services_and_licenses, has_license_data
+
+
+async def load_license_context(client, services_and_licenses):
+    """Collect license metadata after Restricted has verified application access."""
     has_license_data = False
     try:
         subscribed_skus = await client.subscribed_skus.get()
@@ -83,7 +89,7 @@ async def setup_graph_and_licenses(tenant_id, show_graph_messages):
     except Exception as e:
         pass
     
-    return client, services_and_licenses, has_license_data
+    return has_license_data
 
 
 def get_local_powershell_module_availability(install_sharepoint=False):
@@ -110,7 +116,7 @@ def get_local_powershell_module_availability(install_sharepoint=False):
     if install_sharepoint:
         install_block = (
             "$result.sharepoint_install_attempted=$true; "
-            "foreach($spec in @(@{Name='ExchangeOnlineManagement';Minimum='3.2.0'},"
+            "foreach($spec in @(@{Name='ExchangeOnlineManagement';Minimum='3.7.2'},"
             "@{Name='Microsoft.Online.SharePoint.PowerShell';Minimum='16.0.27215.12000'})){ "
             "$found=Get-Module -ListAvailable -Name $spec.Name | Sort-Object Version -Descending | Select-Object -First 1; "
             "if((-not $found)-or($found.Version -lt [version]$spec.Minimum)){ "
@@ -130,7 +136,7 @@ def get_local_powershell_module_availability(install_sharepoint=False):
         "$roots+=@((Join-Path $_.FullName 'Documents\\WindowsPowerShell\\Modules'),(Join-Path $_.FullName 'Documents\\PowerShell\\Modules')) } }; "
         "foreach($root in @($roots|Select-Object -Unique)){if((Test-Path $root)-and(($env:PSModulePath -split ';') -notcontains $root)){$env:PSModulePath=\"$root;$env:PSModulePath\"}}; "
         + install_block +
-        "$requirements=@{'ExchangeOnlineManagement'=@('3.2.0','Connect-IPPSSession');'Az.Accounts'=@('0.0','Connect-AzAccount');"
+        "$requirements=@{'ExchangeOnlineManagement'=@('3.7.2','Connect-IPPSSession');'Az.Accounts'=@('0.0','Connect-AzAccount');"
         "'Microsoft.Online.SharePoint.PowerShell'=@('16.0.27215.12000','Get-SPODataAccessGovernanceInsight')}; "
         "foreach($name in $requirements.Keys){$m=Get-Module -ListAvailable -Name $name|Sort-Object Version -Descending|Select-Object -First 1; "
         "$ok=$false;$cmd=$false;if($m){try{Import-Module $m.Path -Force -ErrorAction Stop;$cmd=[bool](Get-Command $requirements[$name][1] -ErrorAction SilentlyContinue);"
@@ -161,7 +167,7 @@ def get_local_powershell_module_availability(install_sharepoint=False):
             not status["ExchangeOnlineManagement"] or not status["Az.Accounts"]
         ):
             modern_probe = (
-                "$r=@{module_details=@{}};$requirements=@{'ExchangeOnlineManagement'=@('3.2.0','Connect-IPPSSession');'Az.Accounts'=@('0.0','Connect-AzAccount')};"
+                "$r=@{module_details=@{}};$requirements=@{'ExchangeOnlineManagement'=@('3.7.2','Connect-IPPSSession');'Az.Accounts'=@('0.0','Connect-AzAccount')};"
                 "foreach($name in $requirements.Keys){$m=Get-Module -ListAvailable -Name $name|Sort-Object Version -Descending|Select-Object -First 1;$ok=$false;$cmd=$false;"
                 "if($m){try{Import-Module $m.Path -Force -ErrorAction Stop;$cmd=[bool](Get-Command $requirements[$name][1] -ErrorAction SilentlyContinue);$ok=($m.Version -ge [version]$requirements[$name][0])-and$cmd}catch{}};"
                 "$r[$name]=$ok;$r.module_details[$name]=@{available=$ok;version=$(if($m){[string]$m.Version}else{''});path=$(if($m){[string]$m.Path}else{''});cmdlet=$cmd;host=$PSVersionTable.PSEdition}};$r|ConvertTo-Json -Depth 5 -Compress"
@@ -192,9 +198,23 @@ def get_local_powershell_module_availability(install_sharepoint=False):
 
 def prepare_interactive_collection_plan(
     service_config, interactive_auth='auto', legacy_power_platform_collector=False,
-    install_missing_modules=True,
+    install_missing_modules=True, permission_profile='standard',
 ):
     """Build a plan for optional interactive data collectors."""
+    from .collector_registry import normalize_permission_profile
+    if normalize_permission_profile(permission_profile) == 'restricted':
+        if legacy_power_platform_collector:
+            raise ValueError('The restricted permission profile cannot enable legacy collectors.')
+        reason = 'Restricted permission profile: administrative PowerShell is not requested; supply supported exports or saved evidence.'
+        return {
+            'policy': 'restricted', 'modules': {},
+            **{name: {'selected': bool(selected), 'will_attempt': False,
+                      'application_auth': False, 'skip_reason': reason}
+               for name, selected in (
+                   ('sharepoint', service_config.get('run_m365')),
+                   ('purview', service_config.get('run_purview')),
+                   ('power_platform', False))},
+        }
     modules = get_local_powershell_module_availability(
         install_sharepoint=bool(service_config.get('run_m365')) and install_missing_modules
     )
@@ -268,7 +288,9 @@ def print_interactive_collection_summary(interactive_plan):
     lines = []
 
     policy = interactive_plan['policy']
-    if policy == 'skip':
+    if policy == 'restricted':
+        lines.append('Restricted permission profile: administrative PowerShell is disabled, including certificate sessions.')
+    elif policy == 'skip':
         lines.append(
             "Interactive collection: skipped. Sources that require delegated sign-in "
             "will be reported as not assessed."

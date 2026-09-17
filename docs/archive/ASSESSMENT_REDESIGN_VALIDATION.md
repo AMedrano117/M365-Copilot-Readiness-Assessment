@@ -1,5 +1,7 @@
 # Assessment redesign validation
 
+> Historical redesign record, retained for context. Its instructions, paths and validation counts describe the work at that time. Use the [current documentation](../README.md) for operating the assessment.
+
 Validated on 2026-09-15 against `ASSESSMENT_REDESIGN_PLAN.md`.
 
 ## Baseline and preservation
@@ -27,7 +29,7 @@ git diff --check
 
 Initial automated result: **303 tests passed**. After reviewing a subsequently supplied live run, the expanded suite passes **336 tests**. The complete synthetic example reaches a controlled-pilot recommendation; incomplete evidence remains unconfirmed. Agent-run live collection was exercised with mocked collectors, never a tenant connection.
 
-Local generated paths and customer-specific validation counts are recorded in ignored `output/redesign/final-artifacts.json`. Workbook checks are in `output/redesign/workbook-validation.json`; visual review images are under `output/playwright/redesign-final-*.png`. The canonical operator commands are in [RUN.md](RUN.md).
+Local generated paths and customer-specific validation counts are recorded in ignored `output/redesign/final-artifacts.json`. Workbook checks are in `output/redesign/workbook-validation.json`; visual review images are under `output/playwright/redesign-final-*.png`. The canonical operator commands are in [RUN.md](../RUN.md).
 
 ## Follow-up: supplied live run and offline exports
 
@@ -77,7 +79,7 @@ worker; copied-package replay needs neither OCR nor administrative PowerShell.
 
 - Historical workbook conclusions cannot be recomputed as newly observed tenant facts when the underlying collection is absent. Their original methodology and dates remain available for confirmation.
 - Exported rows establish their own population only. Different snapshot populations do not prove that omitted sites were removed or remediated. Unknown source identity, filters, dates and completeness remain explicit.
-- The supplied sample set does not validate a populated DSPM risk export or every Microsoft sharing/activity/dashboard variant. See the [compatibility matrix](PORTAL_REPORTS_AND_OFFLINE.md).
+- The supplied sample set does not validate a populated DSPM risk export or every Microsoft sharing/activity/dashboard variant. See the [compatibility matrix](../PORTAL_REPORTS_AND_OFFLINE.md).
 - A sensitivity inventory with headers but no rows establishes a recognized schema, not absence of sensitive content.
 - A configured safeguard is evidence of configuration, not proof of effective coverage across all pilot users or content. Licensing, actual activity, application prerequisites, content permissions, and security controls remain separate questions.
 - No new live tenant collection, Microsoft scan, policy change, license purchase, message sending, or external runtime AI service was used.

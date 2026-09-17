@@ -7,6 +7,8 @@ Used for enhanced Entra observations focused on Copilot adoption.
 """
 from . import console_reporting as console
 import asyncio
+from .collector_registry import source_allowed
+from .http_retry import get_with_retry
 import base64
 import httpx
 import json
@@ -150,7 +152,7 @@ async def _fetch_graph_collection_via_http(path, params=None, max_pages=100, hea
 
     try:
         while next_url and pages < max_pages:
-            response = await http_client.get(next_url, params=next_params, headers=headers)
+            response = await get_with_retry(http_client, next_url, params=next_params, headers=headers)
             if response.status_code >= 400:
                 return {
                     'available': False,
@@ -180,16 +182,18 @@ async def _fetch_graph_collection_via_http(path, params=None, max_pages=100, hea
             'value': results,
             'records_collected': len(results),
             'pages_collected': pages,
+            'reason': 'Pagination safety limit reached' if next_url else '',
         }
     except Exception as exc:
         return {
             'available': False,
-            'availability_status': 'partial' if results else 'unavailable',
+            'availability_status': 'partial' if pages else 'unavailable',
+            'status_code': getattr(exc, 'status_code', None),
             'error': str(exc),
             'value': results,
             'records_collected': len(results),
             'pages_collected': pages,
-            'truncated': bool(results),
+            'truncated': bool(pages),
         }
     finally:
         await http_client.aclose()
@@ -215,7 +219,7 @@ async def _fetch_graph_object_via_http(path):
     """Fetch a Graph singleton while preserving the same collection-status contract."""
     http_client = await _get_graph_http_client()
     try:
-        response = await http_client.get(path)
+        response = await get_with_retry(http_client, path)
         if response.status_code >= 400:
             return {
                 'available': False, 'availability_status': 'unavailable',
@@ -231,13 +235,14 @@ async def _fetch_graph_object_via_http(path):
     except Exception as exc:
         return {
             'available': False, 'availability_status': 'unavailable',
+            'status_code': getattr(exc, 'status_code', None),
             'error': str(exc), 'object': None, 'records_collected': 0,
             'pages_collected': 0, 'truncated': False,
         }
     finally:
         await http_client.aclose()
 
-async def get_entra_client(graph_client, tenant_id=None, preview_collectors='none'):
+async def get_entra_client(graph_client, tenant_id=None, preview_collectors='none', permission_profile='standard'):
     """
     Get authenticated client for Microsoft Entra ID (Azure AD) APIs.
     Fetches comprehensive identity, security, and compliance data.
@@ -255,6 +260,7 @@ async def get_entra_client(graph_client, tenant_id=None, preview_collectors='non
         def __init__(self):
             self.available = False
             self.tenant_id = tenant_id
+            self.permission_profile = permission_profile
 
             # Per-dataset fetch outcome, keyed by phase-1 task name (risky_users, auth_methods,
             # role_assignments, ...). True only when that specific query returned data, so that a
@@ -535,6 +541,14 @@ async def get_entra_client(graph_client, tenant_id=None, preview_collectors='non
             'signin_logs': ("/v1.0/auditLogs/signIns", {'$filter': f'createdDateTime ge {seven_days_ago}', '$top': '999'}, None),
         }
         for task_name, (path, params, headers) in collection_requests.items():
+            if not source_allowed(task_name, permission_profile):
+                client_obj.data_sources[task_name] = False
+                client_obj.collection_status[task_name] = {
+                    'available': False, 'availability_status': 'not_requested',
+                    'records_collected': 0, 'pages_collected': 0, 'truncated': False,
+                    'reason': f'{task_name.replace("_", " ").title()} was not requested by the Restricted permission profile.',
+                }
+                continue
             phase1_tasks[task_name] = _fetch_graph_collection_via_http(path, params=params, headers=headers)
         
         # Execute all phase 1 tasks in parallel
@@ -545,7 +559,7 @@ async def get_entra_client(graph_client, tenant_id=None, preview_collectors='non
             # A task counts as read only when it neither raised nor returned nothing.
             for _task_name, _task_result in phase1_results.items():
                 if isinstance(_task_result, dict) and 'available' in _task_result:
-                    _reason = _task_result.get('error', '') or (f"HTTP {_task_result.get('status_code')}" if _task_result.get('status_code') else '')
+                    _reason = _task_result.get('error', '') or _task_result.get('reason', '') or (f"HTTP {_task_result.get('status_code')}" if _task_result.get('status_code') else '')
                     if _task_result.get('status_code') == 403 and _task_name in {'risky_users', 'risk_detections'}:
                         _service_reason = _reason
                         _required_permission = (
@@ -670,36 +684,8 @@ async def get_entra_client(graph_client, tenant_id=None, preview_collectors='non
                 registrations = _extract_response_items(auth_response)
                 client_obj.auth_methods_registration = registrations
                 
-                client_obj.auth_summary['total_users'] = len(registrations)
-                
-                for user_reg in registrations:
-                    # The pagination-aware HTTP path yields camelCase dictionaries while
-                    # older SDK fallbacks yield snake_case model objects.
-                    is_mfa_registered = bool(_get_attr(user_reg, 'isMfaRegistered', False))
-                    is_mfa_capable = bool(_get_attr(user_reg, 'isMfaCapable', False))
-                    
-                    if is_mfa_registered:
-                        client_obj.auth_summary['mfa_registered'] += 1
-                    if is_mfa_capable:
-                        client_obj.auth_summary['mfa_capable'] += 1
-                    
-                    methods = _get_attr(user_reg, 'methodsRegistered', []) or []
-                    
-                    # Check passwordless methods
-                    passwordless_methods = ['microsoftAuthenticator', 'fido2', 'windowsHello']
-                    if any(m in methods for m in passwordless_methods):
-                        client_obj.auth_summary['passwordless_enabled'] += 1
-                    
-                    # Count by method type
-                    for method in methods:
-                        if method in client_obj.auth_summary['methods']:
-                            client_obj.auth_summary['methods'][method] += 1
-                
-                # Calculate rates
-                total = client_obj.auth_summary['total_users']
-                if total > 0:
-                    client_obj.auth_summary['mfa_registration_rate'] = int((client_obj.auth_summary['mfa_registered'] / total) * 100)
-                    client_obj.auth_summary['passwordless_adoption_rate'] = int((client_obj.auth_summary['passwordless_enabled'] / total) * 100)
+                from .authentication_methods import legacy_registration_summary
+                client_obj.auth_summary = legacy_registration_summary(registrations)
                 
             except Exception as e:
                 with _stdout_lock:
@@ -922,8 +908,14 @@ async def get_entra_client(graph_client, tenant_id=None, preview_collectors='non
                     console.status(f"Entra: Compliance policies parse error: {e}", tone='error')
         
         # Process Groups with Licenses
+        client_obj.group_licensing_summary['available'] = client_obj.data_sources.get('groups', False)
+        client_obj.group_licensing_summary['reason'] = client_obj.collection_status.get('groups', {}).get('reason', '')
+        if not client_obj.group_licensing_summary['available']:
+            for metric in ('total_groups_with_licenses', 'groups_with_errors', 'total_license_errors',
+                           'copilot_license_groups', 'dynamic_groups', 'security_groups', 'distribution_groups'):
+                client_obj.group_licensing_summary[metric] = None
         groups_response = phase1_results.get('groups')
-        if groups_response and not isinstance(groups_response, Exception):
+        if client_obj.data_sources.get('groups') and groups_response and not isinstance(groups_response, Exception):
             try:
                 # SDK returns collection response objects with .value property
                 groups = _extract_response_items(groups_response)
@@ -1016,7 +1008,16 @@ async def get_entra_client(graph_client, tenant_id=None, preview_collectors='non
         # grant rows. Publisher verification is evaluated only for apps with an actual grant;
         # a blank publisher on an unused/local service principal is not a risk finding.
         oauth_response = phase1_results.get('oauth_grants')
-        if oauth_response and not isinstance(oauth_response, Exception):
+        client_obj.consent_summary['grant_inventory_available'] = (
+            client_obj.data_sources.get('oauth_grants', False)
+            and client_obj.data_sources.get('service_principals', False)
+        )
+        if not client_obj.consent_summary['grant_inventory_available']:
+            for metric in ('apps_with_delegated_permissions', 'apps_with_application_permissions',
+                           'high_privilege_apps', 'apps_with_graph_access', 'apps_with_mail_access',
+                           'apps_with_files_access', 'unverified_publishers'):
+                client_obj.consent_summary[metric] = None
+        if client_obj.consent_summary['grant_inventory_available'] and oauth_response and not isinstance(oauth_response, Exception):
             try:
                 grants = _extract_response_items(oauth_response)
                 client_obj.oauth_permission_grants = grants
@@ -1265,7 +1266,7 @@ async def get_entra_client(graph_client, tenant_id=None, preview_collectors='non
             
             try:
                 # Filtering Policies (Web Content Filtering)
-                filtering_response = await http_client.get('/beta/networkAccess/filteringPolicies')
+                filtering_response = await get_with_retry(http_client, '/beta/networkAccess/filteringPolicies')
                 filtering_response.raise_for_status()
                 filtering_data = filtering_response.json()
                 
@@ -1293,7 +1294,7 @@ async def get_entra_client(graph_client, tenant_id=None, preview_collectors='non
                     client_obj.network_access_summary['web_filtering_enabled'] = True
                 
                 # Forwarding Profiles (Traffic Forwarding Configuration)
-                forwarding_response = await http_client.get('/beta/networkAccess/forwardingProfiles')
+                forwarding_response = await get_with_retry(http_client, '/beta/networkAccess/forwardingProfiles')
                 forwarding_response.raise_for_status()
                 forwarding_data = forwarding_response.json()
                 
@@ -1328,7 +1329,7 @@ async def get_entra_client(graph_client, tenant_id=None, preview_collectors='non
             
             try:
                 # Remote Network Connectors
-                connectors_response = await http_client.get('/beta/networkAccess/connectivity/remoteNetworks')
+                connectors_response = await get_with_retry(http_client, '/beta/networkAccess/connectivity/remoteNetworks')
                 connectors_response.raise_for_status()
                 connectors_data = connectors_response.json()
                 
@@ -1348,7 +1349,7 @@ async def get_entra_client(graph_client, tenant_id=None, preview_collectors='non
                 # Application Segments (Private Access Apps)
                 try:
                     # Note: This endpoint may not be available in all tenants
-                    apps_response = await http_client.get('/beta/networkAccess/connectivity/branches')
+                    apps_response = await get_with_retry(http_client, '/beta/networkAccess/connectivity/branches')
                     apps_response.raise_for_status()
                     apps_data = apps_response.json()
                     

@@ -356,6 +356,9 @@ def extract_entra_insights_from_client(entra_client):
             'apps_with_files_access': consent_summary.get('apps_with_files_access', 0)
         },
         'group_licensing_summary': {
+            'available': bool(data_sources.get('groups', False)),
+            'availability_status': collection_status.get('groups', {}).get('availability_status', 'unavailable'),
+            'reason': collection_status.get('groups', {}).get('reason', ''),
             'total_groups_with_licenses': group_summary.get('total_groups_with_licenses', 0),
             'copilot_license_groups': group_summary.get('copilot_license_groups', 0),
             'dynamic_groups': group_summary.get('dynamic_groups', 0),
@@ -583,12 +586,12 @@ def build_app_consent_metrics(entra_insights):
     if total > 0:
         metrics.append(f"{total} applications")
         
-        high_priv = entra_insights.get('high_privilege_apps', 0)
+        high_priv = entra_insights.get('high_privilege_apps') or 0
         if high_priv > 0:
             metrics.append(f"{high_priv} high-privilege")
             recommendation = f"Review {high_priv} high-privilege app(s)"
         
-        unverified = entra_insights.get('unverified_publishers', 0)
+        unverified = entra_insights.get('unverified_publishers') or 0
         if unverified > 0:
             metrics.append(f"{unverified} unverified publishers")
     

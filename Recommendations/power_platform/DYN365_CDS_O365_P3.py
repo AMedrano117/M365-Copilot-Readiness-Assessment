@@ -85,7 +85,9 @@ async def get_recommendation(sku_name, status="Success", client=None, pp_client=
                 ai_info = ""
                 if pp_insights:
                     total_models = pp_insights.get('ai_models_total', 0)
-                    if total_models > 0:
+                    if total_models is None:
+                        ai_info = " AI Builder model inventory was not assessed by the supplied evidence."
+                    elif total_models > 0:
                         ai_info = f" You have {total_models} AI Builder model(s) ready for agent integration."
                     else:
                         ai_info = " No AI Builder models created yet - excellent opportunity to leverage included credits."

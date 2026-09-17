@@ -12,7 +12,7 @@ from Core.spinner import get_timestamp
 if __name__ == "__main__":
     from params import TENANT_ID, SERVICES
     from Core.cli_parser import parse_arguments
-    from Core.credentials_check import load_env_file, validate_credentials_or_exit
+    from Core.credentials_check import load_env_file, validate_credentials_or_exit, print_configuration_summary
     from Core.console_reporting import configure_console, detail, section, status
     
     # Parse command-line arguments
@@ -36,7 +36,15 @@ if __name__ == "__main__":
             sys.exit(1)
     
     # Use parsed values (command-line overrides or defaults from params.py)
-    load_env_file(args.env_file)
+    from Core.cli_parser import resolve_live_permission_profile
+    try:
+        selected_env_path = load_env_file(args.env_file)
+        permission_profile = resolve_live_permission_profile(
+            args.permission_profile, args.preview_collectors, args.legacy_power_platform_collector
+        )
+    except ValueError as exc:
+        status(f'Configuration error: {exc}', 'error')
+        sys.exit(1)
 
     tenant_id = args.tenant_id or os.environ.get('TENANT_ID') or TENANT_ID
     services = args.services if args.services else []  # Empty list means all services
@@ -64,7 +72,12 @@ if __name__ == "__main__":
         interactive_auth = 'fresh'
     
     # Check for required credentials before starting orchestration
-    validate_credentials_or_exit(get_timestamp, env_file=args.env_file)
+    # Apply the documented tenant override to every workload's shared credentials.
+    if tenant_id:
+        os.environ['TENANT_ID'] = tenant_id
+    validate_credentials_or_exit(get_timestamp, env_file=args.env_file, load_environment=False)
+    print_configuration_summary(tenant_id=tenant_id, permission_profile=permission_profile,
+                                env_path=selected_env_path, sharepoint_admin_url=sharepoint_admin_url)
 
     from Core.orchestrator import orchestrate
     
@@ -96,6 +109,7 @@ if __name__ == "__main__":
                 lifecycle_report_max_age_days=args.lifecycle_report_max_age_days,
                 lifecycle_report_dates=args.lifecycle_report_date,
                 portal_review=args.portal_review,
+                permission_profile=permission_profile,
             )
         )
         if isinstance(exit_code, int) and exit_code:

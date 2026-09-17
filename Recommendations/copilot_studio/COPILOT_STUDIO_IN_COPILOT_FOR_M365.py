@@ -117,8 +117,8 @@ async def get_recommendation(sku_name, status="Success", client=None, pp_client=
             status=status
         )
     
-    # Second recommendation: Agent creation readiness (only if license is active)
-    if status == "Success":
+    # Deployment checks require the transport; profile omissions are reported centrally.
+    if status == "Success" and client:
         # Extract insights from pp_client if available
         pp_insights = extract_pp_insights_from_client(pp_client) if pp_client else None
         deployment = await get_deployment_status(client, pp_insights)

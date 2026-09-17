@@ -1,5 +1,7 @@
 # Prompt for the coordinated implementation
 
+> Historical redesign record, retained for context. Its instructions, paths and validation counts describe the work at that time. Use the [current documentation](../README.md) for operating the assessment.
+
 Use the following as the next implementation request in this repository. The associated scope and acceptance criteria are in `ASSESSMENT_REDESIGN_PLAN.md`.
 
 ```text

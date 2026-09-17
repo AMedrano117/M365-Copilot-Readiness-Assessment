@@ -147,7 +147,10 @@ def build_inventory_client(rows, source, refresh_date="", preview=False):
         "custom_connectors": [], "sap": False, "salesforce": False,
         "servicenow": False, "sql": False,
     }
-    client.ai_model_summary = {"total": 0}
+    client.ai_model_summary = {
+        "available": False, "total": None,
+        "error": "AI Builder model detail is not included in this inventory import",
+    }
     client.dlp_summary = {"total": 0, "error": "DLP policy detail is not included in unified inventory"}
     client.capacity_summary = {"available": False, "error": "Capacity detail is not included in unified inventory"}
     client.solution_summary = {"total": 0}

@@ -715,9 +715,11 @@ def _parse_sharepoint_payload(stdout):
 
 async def collect_sharepoint_governance_via_powershell(admin_url, tenant_id, auth_mode='auto'):
     """Collect SharePoint tenant/site sharing settings and existing SAM report status."""
-    if not admin_url:
-        console.status('SharePoint: collection unavailable; the admin URL could not be determined.', tone='warning')
-        return {"available": False, "reason": "SharePoint admin URL could not be determined."}
+    from .sharepoint_configuration import SHAREPOINT_ADMIN_URL_REQUIRED, is_valid_sharepoint_admin_url
+    if not is_valid_sharepoint_admin_url(admin_url):
+        console.status(SHAREPOINT_ADMIN_URL_REQUIRED, tone='warning')
+        return {"available": False, "availability_status": "unavailable",
+                "configuration_required": "SHAREPOINT_ADMIN_URL", "reason": SHAREPOINT_ADMIN_URL_REQUIRED}
 
     console.status('SharePoint: collecting sharing settings and completed governance reports...')
 

@@ -26,7 +26,9 @@ async def get_recommendation(sku_name, status="Success", client=None, pp_client=
             service="Power Platform",
             feature="AI Builder - Assessment Needed",
             observation=f"AI Builder model inventory was not assessed: {error_msg}. This does not mean that the tenant has no AI Builder models.",
-            recommendation="Prefer a unified Power Platform inventory export supplied with --power-platform-inventory PATH, or explicitly opt in to the preview inventory collector after assigning tenant-scoped Power Platform Reader RBAC to the application. Use the deeper interactive Power Platform Administrator collection only when environment-level configuration review is required. Inventory is optional extensibility evidence and does not alter core readiness.",
+            recommendation=("Keep the Restricted profile and obtain a dated AI Builder inventory review from the workload owner. A unified Power Platform inventory export supports its documented resource types and does not replace an AI Builder model review. Inventory is optional extensibility evidence and does not alter core readiness."
+                            if (pp_insights or {}).get('permission_profile') == 'restricted' else
+                            "Prefer a unified Power Platform inventory export supplied with --power-platform-inventory PATH, or explicitly opt in to the preview inventory collector after assigning tenant-scoped Power Platform Reader RBAC to the application. Use the deeper interactive Power Platform Administrator collection only when environment-level configuration review is required. Inventory is optional extensibility evidence and does not alter core readiness."),
             link_text="AI Builder Overview",
             link_url="https://learn.microsoft.com/ai-builder/overview",
             priority="Medium",

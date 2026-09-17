@@ -102,7 +102,9 @@ def summarize_sharepoint_governance(payload):
     })
     return {
         "available": bool(tenant.get("available")),
+        "availability_status": payload.get("availability_status", "available" if tenant.get("available") else "unavailable"),
         "reason": tenant.get("reason") or payload.get("reason", ""),
+        "configuration_required": payload.get("configuration_required", ""),
         "source": payload.get("source", "SharePoint Online Management Shell"),
         "authentication": payload.get("authentication", ""),
         "settings": settings,
@@ -128,13 +130,23 @@ def summarize_sharepoint_governance(payload):
 def build_sharepoint_recommendations(governance):
     governance = summarize_sharepoint_governance(governance)
     if not governance.get("available"):
+        excluded = governance.get('availability_status') == 'not_requested'
+        needs_admin_url = governance.get('configuration_required') == 'SHAREPOINT_ADMIN_URL'
+        if excluded:
+            next_step = "Supply supported customer SAM/DAG exports for their covered access evidence and retain a dated owner review or saved configuration for tenant sharing settings. Exports do not reconstruct every excluded administrative check."
+        elif needs_admin_url:
+            next_step = "Open the target tenant's SharePoint admin center and copy its HTTPS origin. Set SHAREPOINT_ADMIN_URL in the selected environment file or pass --sharepoint-admin-url, then rerun preflight and collection. The initial onmicrosoft.com domain does not verify the SharePoint hostname."
+        else:
+            next_step = "Install the SharePoint Online Management Shell and rerun. Use a SharePoint application certificate for unattended collection, or allow the SharePoint browser sign-in. The existing Graph client secret cannot read these settings."
         return [new_recommendation(
             service="M365",
             feature="SharePoint sharing and oversharing assessment",
-            observation="SharePoint tenant sharing settings were not collected; permissive sharing defaults and Data Access Governance report status remain unverified.",
-            recommendation="Install the SharePoint Online Management Shell and rerun. Use a SharePoint application certificate for unattended collection, or allow the SharePoint browser sign-in. The existing Graph client secret cannot read these settings.",
-            link_text="Connect to SharePoint Online",
-            link_url="https://learn.microsoft.com/powershell/module/microsoft.online.sharepoint.powershell/connect-sposervice",
+            observation=(governance.get('reason') + ' ' if (excluded or needs_admin_url) and governance.get('reason') else '')
+                + "SharePoint tenant sharing settings were not collected; permissive sharing defaults and Data Access Governance report status remain unverified.",
+            recommendation=next_step,
+            link_text="SharePoint Data Access Governance" if excluded else "Connect to SharePoint Online",
+            link_url=("https://learn.microsoft.com/sharepoint/data-access-governance-reports" if excluded else
+                      "https://learn.microsoft.com/powershell/module/microsoft.online.sharepoint.powershell/connect-sposervice"),
             priority="High",
             status=NOT_ASSESSED_STATUS,
             category=CATEGORY_SCAN_COVERAGE,

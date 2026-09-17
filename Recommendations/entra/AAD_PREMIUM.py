@@ -142,7 +142,7 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
                     service="Entra",
                     feature=feature_name,
                     observation="MFA enrollment could not be determined - the authentication methods registration report returned no users",
-                    recommendation="Grant the assessment Reports.Read.All and UserAuthenticationMethod.Read.All, then rerun. Until MFA coverage is measured, Copilot access cannot be assumed protected against credential theft. Meanwhile, review coverage directly in Entra ID > Authentication methods > Registration.",
+                    recommendation="Verify the assessment's AuditLog.Read.All application permission, tenant-wide admin consent, and Entra ID P1/P2 access to the registration report, then rerun. Review coverage directly in Entra ID > Authentication methods > Activity > Registration.",
                     link_text="Authentication Methods Activity Report",
                     link_url="https://learn.microsoft.com/entra/identity/authentication/howto-authentication-methods-activity",
                     priority="High",
@@ -218,8 +218,8 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
                 methods = auth_metrics.get('methods', {})
                 fido2_users = methods.get('fido2', 0)
                 windows_hello_users = methods.get('windowsHello', 0)
-                authenticator_users = methods.get('microsoftAuthenticator', 0)
-                total_passwordless = fido2_users + windows_hello_users + authenticator_users
+                authenticator_users = methods.get('microsoftAuthenticatorPasswordless', 0)
+                total_passwordless = auth_metrics.get('passwordless_enabled', 0)
                 passwordless_rate = auth_metrics.get('passwordless_adoption_rate', 0)
                 
                 # Build method breakdown text
@@ -229,7 +229,7 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
                 if windows_hello_users > 0:
                     method_details.append(f"{windows_hello_users} Windows Hello")
                 if authenticator_users > 0:
-                    method_details.append(f"{authenticator_users} Authenticator app")
+                    method_details.append(f"{authenticator_users} Authenticator passwordless phone sign-in")
                 method_text = f" ({', '.join(method_details)})" if method_details else ""
                 
                 if passwordless_rate < 10:
@@ -237,7 +237,7 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
                     recommendations.append(new_recommendation(
                         service="Entra",
                         feature=feature_name,
-                        observation=f"{passwordless_rate:.1f}% of users ({total_passwordless}{method_text}) use passwordless authentication",
+                        observation=f"{passwordless_rate:.1f}% of returned users ({total_passwordless}{method_text}) have a passwordless method registered. Method counts can overlap; registration does not establish actual use.",
                         recommendation="Plan phishing-resistant authentication for administrators and high-risk users first, then expand based on risk and user readiness. Evaluate effective MFA and Conditional Access separately.",
                         link_text="Deploy Passwordless Authentication",
                         link_url="https://learn.microsoft.com/entra/identity/authentication/concept-authentication-passwordless",
@@ -250,7 +250,7 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
                     recommendations.append(new_recommendation(
                         service="Entra",
                         feature=feature_name,
-                        observation=f"{passwordless_rate:.1f}% of users ({total_passwordless}{method_text}) use passwordless authentication, making progress toward phishing-resistant Copilot access",
+                        observation=f"{passwordless_rate:.1f}% of returned users ({total_passwordless}{method_text}) have a passwordless method registered. Method counts can overlap; registration does not establish actual use or enforced phishing resistance.",
                         recommendation="Continue risk-based rollout of phishing-resistant authentication. Prioritize administrators and users with access to sensitive data; use Temporary Access Pass for onboarding where appropriate.",
                         link_text="Passwordless Deployment Guide",
                         link_url="https://learn.microsoft.com/entra/identity/authentication/howto-authentication-passwordless-deployment",
@@ -263,16 +263,26 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
                     recommendations.append(new_recommendation(
                         service="Entra",
                         feature=feature_name,
-                        observation=f"{passwordless_rate:.1f}% of users ({total_passwordless}{method_text}) use passwordless authentication, providing phishing-resistant protection for Copilot",
+                        observation=f"{passwordless_rate:.1f}% of returned users ({total_passwordless}{method_text}) have a passwordless method registered. Method counts can overlap; registration does not establish actual use or enforced phishing resistance.",
                         recommendation="",
                         link_text="Passwordless Best Practices",
                         link_url="https://learn.microsoft.com/entra/identity/authentication/concept-authentication-passwordless",
-                        status="Success"
+                        status="Insight",
+                        disposition="Reference"
                     ))
             
             # Observation 5: Group-based licensing for Copilot
             group_metrics = entra_insights.get('group_licensing_summary', {})
-            if group_metrics:
+            if not (entra_insights.get('data_sources', {}) or {}).get('groups', False):
+                reason = (entra_insights.get('collection_status', {}) or {}).get('groups', {}).get('reason', '')
+                recommendations.append(new_recommendation(
+                    service="Entra", feature=feature_name,
+                    observation="Group-based licensing is not assessed. " + (reason or "The licensed-group inventory was not collected completely."),
+                    recommendation="Review group-based license assignments using customer-provided evidence before drawing conclusions about the assignment model.",
+                    status=NOT_ASSESSED_STATUS, disposition="Coverage",
+                    finding_key="entra.group_licensing.not_assessed",
+                ))
+            elif group_metrics:
                 total_license_groups = group_metrics.get('total_groups_with_licenses', 0)
                 copilot_groups = group_metrics.get('copilot_license_groups', 0)
                 dynamic_groups = group_metrics.get('dynamic_groups', 0)

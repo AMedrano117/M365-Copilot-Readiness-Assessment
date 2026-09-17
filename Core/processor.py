@@ -299,6 +299,13 @@ def process_and_print_all_information(m365_result, entra_info,
         m365_client = m365_info.get('_client') if isinstance(m365_info, dict) else None
         entra_client = entra_info.get('_client') if isinstance(entra_info, dict) else None
         source_statuses = {}
+        progress = (collection_context or {}).get('collection_progress', {})
+        for name, state in progress.get('services', {}).items():
+            if state.get('status') not in {'completed', 'not_selected'}:
+                source_statuses[f'pipeline_{name}'] = {
+                    'availability_status': state.get('availability_status', 'unavailable'),
+                    'available': False, 'reason': state.get('reason', 'Collection did not finish.'),
+                }
         if entra_client:
             source_statuses.update(getattr(entra_client, 'collection_status', {}) or {})
         defender_client = defender_info.get('_client') if isinstance(defender_info, dict) else None
@@ -313,6 +320,11 @@ def process_and_print_all_information(m365_result, entra_info,
                 f'purview_{key}': value
                 for key, value in (getattr(purview_client, 'collection_status', {}) or {}).items()
             })
+        elif purview_info.get('availability_status') == 'not_requested':
+            source_statuses['purview'] = {
+                'availability_status': 'not_requested', 'available': False,
+                'reason': purview_info.get('reason', ''), 'records_collected': '',
+            }
         if m365_client:
             source_statuses.update({f'm365_{key}': value for key, value in (getattr(m365_client, 'collection_status', {}) or {}).items()})
             sharepoint_governance = getattr(m365_client, 'sharepoint_governance', {}) or {}
@@ -417,8 +429,19 @@ def process_and_print_all_information(m365_result, entra_info,
         evidence_bundle['run_manifest']['rows'].extend([
             {'Item': 'Tenant ID', 'Value': expected_tenant_id or 'Not established'},
             {'Item': 'Evaluation Date', 'Value': evaluation_date},
+            {'Item': 'Permission profile', 'Value': (collection_context or {}).get('permission_profile') or 'unrecorded'},
+            {'Item': 'Collection progress', 'Value': progress.get('status', 'unrecorded')},
             {'Item': 'Evidence Schema Version', 'Value': assessment_result.get('evidence_schema_version')},
         ])
+        if progress:
+            evidence_bundle['run_manifest']['rows'].extend([
+                {'Item': 'Collection checkpoint updated at', 'Value': progress.get('updated_at', '')},
+                {'Item': 'Finished service pipelines', 'Value': ', '.join(
+                    name for name, state in progress.get('services', {}).items() if state.get('status') == 'completed') or 'None'},
+                {'Item': 'Unfinished service pipelines', 'Value': ', '.join(
+                    name for name, state in progress.get('services', {}).items()
+                    if state.get('status') not in {'completed', 'not_selected', 'not_requested'}) or 'None'},
+            ])
         if collection_context and collection_context.get('mode') == 'offline':
             evidence_bundle['run_manifest']['rows'].extend([
                 {'Item': 'Report build mode', 'Value': 'Offline - no tenant connection'},

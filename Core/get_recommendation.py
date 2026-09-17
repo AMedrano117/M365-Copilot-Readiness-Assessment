@@ -3,7 +3,28 @@ Module for retrieving feature-specific recommendations
 Uses modular recommendation files organized by service
 """
 
-def get_recommendation(recommendation_type, feature_name, sku_name, status="Success", client=None, pp_client=None, pp_insights=None, purview_client=None, defender_client=None, defender_insights=None, entra_insights=None, m365_insights=None):
+from .collector_registry import source_allowed
+
+
+def recommendation_graph_probes_allowed(permission_profile="standard"):
+    """Legacy feature probes combine site/group reads and are not source-aware."""
+    return all(source_allowed(source, permission_profile) for source in ('sites', 'groups', 'oauth_grants'))
+
+
+def recommendation_graph_gap(service, permission_profile="standard"):
+    if recommendation_graph_probes_allowed(permission_profile):
+        return None
+    from .new_recommendation import new_recommendation
+    return new_recommendation(
+        service=service, feature=f"{service} deployment verification",
+        observation="Legacy Graph deployment probes are not assessed: site and group inventory probes were not requested by the Restricted permission profile.",
+        recommendation="Use the retained collector evidence and customer-provided inventory exports for the checks they support. Verify remaining deployment questions with the workload owner.",
+        status="Not Assessed", disposition="Coverage",
+        finding_key=service.lower().replace(' ', '_') + '.graph_deployment.not_assessed',
+    )
+
+
+def get_recommendation(recommendation_type, feature_name, sku_name, status="Success", client=None, pp_client=None, pp_insights=None, purview_client=None, defender_client=None, defender_insights=None, entra_insights=None, m365_insights=None, permission_profile="standard"):
     """
     Get a feature-specific recommendation based on type
     
@@ -37,6 +58,12 @@ def get_recommendation(recommendation_type, feature_name, sku_name, status="Succ
             - LinkText: Feature-specific link text
             - LinkUrl: Feature-specific documentation URL
     """
+    # Feature modules predate source-aware collectors and some mix site/group reads
+    # with other deployment probes. Withhold the transport before constructing their
+    # coroutines; cached insights and customer-export clients remain available.
+    if not recommendation_graph_probes_allowed(permission_profile):
+        client = None
+
     # Lazy load recommendation modules based on type
     if recommendation_type.lower() == "entra":
         from Recommendations.entra import get_feature_recommendation as get_entra_recommendation

@@ -21,6 +21,20 @@ def qualify_saved_recommendations(rows, service, client):
         row = dict(original)
         text = " ".join(str(row.get(k) or "") for k in ("Feature", "FindingKey", "Observation")).lower()
         observation = str(row.get("Observation") or "")
+        if service == 'Entra' and re.search(r'\b(?:use passwordless authentication|have a passwordless method registered)\b', observation, re.I):
+            from .authentication_methods import authentication_method_report
+            registration = authentication_method_report(client)
+            if registration['available'] and registration['metrics'].get('method_inventory_known'):
+                count = registration['metrics'].get('passwordless_registered', 0)
+                row['Observation'] = (f"{count} of {registration['total_users']} returned users have a recognized passwordless method registered. "
+                    'This is registration evidence, not actual sign-in use or enforcement. Authenticator passwordless phone sign-in is not phishing-resistant.')
+                row.update(EvidenceSource='auth_methods', EvidenceComplete=registration['complete'],
+                           EvidenceScope='Users returned by the authentication registration report')
+            else:
+                row['Observation'] = 'The saved passwordless summary cannot be validated from raw registration methods. Actual usage and phishing resistance remain unconfirmed.'
+                row.update(EvidenceSource='auth_methods', EvidenceComplete=False)
+            if row.get('Disposition') == 'Assurance' or row.get('Status') == 'Success':
+                row.update(Disposition='Reference', Status='Insight', Recommendation='')
         if service == "Entra" and "No legacy authentication sign-ins" in observation:
             complete = source_is_complete(client, "signin_logs")
             row.update(EvidenceSource="signin_logs", EvidenceComplete=complete, EvidenceScope="Returned sign-in log records",

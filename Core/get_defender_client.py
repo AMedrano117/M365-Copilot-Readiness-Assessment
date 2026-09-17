@@ -9,6 +9,7 @@ External-AI activity is deliberately collected by Defender Cloud Apps discovery 
 import asyncio
 
 from .get_graph_client import GraphRequestError, get_api_client
+from .http_retry import get_with_retry
 from .spinner import get_timestamp, _stdout_lock
 from .source_evidence import source_is_complete
 
@@ -121,8 +122,7 @@ async def _collect_mde_machines():
         http = await get_api_client("defender")
         next_url = "/api/machines"
         while next_url and pages < 1000:
-            response = await http.get(next_url)
-            pages += 1
+            response = await get_with_retry(http, next_url)
             if response.status_code >= 400:
                 message = ""
                 try:
@@ -130,17 +130,18 @@ async def _collect_mde_machines():
                 except Exception:
                     message = response.text[:300]
                 return {
-                    "available": bool(items),
-                    "availability_status": "partial" if items else "unavailable",
+                    "available": bool(pages),
+                    "availability_status": "partial" if pages else "unavailable",
                     "value": items,
                     "records_collected": len(items),
-                    "pages_collected": pages - 1 if not items else pages,
-                    "truncated": bool(items),
+                    "pages_collected": pages,
+                    "truncated": bool(pages),
                     "status_code": response.status_code,
                     "reason": message or f"Defender returned HTTP {response.status_code}",
                 }
             payload = response.json()
             items.extend(payload.get("value", []) or [])
+            pages += 1
             next_url = payload.get("@odata.nextLink") or payload.get("nextLink")
         return {
             "available": True,
@@ -153,8 +154,8 @@ async def _collect_mde_machines():
         }
     except Exception as exc:
         return {
-            "available": False, "availability_status": "unavailable", "value": [],
-            "records_collected": 0, "pages_collected": pages, "truncated": False,
+            "available": bool(pages), "availability_status": "partial" if pages else "unavailable", "value": items,
+            "records_collected": len(items), "pages_collected": pages, "truncated": bool(pages),
             "status_code": getattr(exc, "status_code", None), "reason": str(exc),
         }
     finally:

@@ -115,25 +115,22 @@ def _http_reason(status_code, body=""):
     return "HTTP {}{}".format(status_code, ": " + detail if detail else "")
 
 
-async def _request_with_retry(client, path, params=None, attempts=3):
-    """Apply a small bounded retry for Microsoft report throttling/transient failures."""
-    response = None
-    for attempt in range(attempts):
-        response = await client.get(path, params=params)
-        if response.status_code not in (429, 502, 503, 504) or attempt == attempts - 1:
-            return response
-        headers = getattr(response, "headers", {}) or {}
-        try:
-            retry_after = float(headers.get("Retry-After", 0) or 0)
-        except (TypeError, ValueError):
-            retry_after = 0
-        await asyncio.sleep(min(max(retry_after, 2 ** attempt), 15))
-    return response
+async def _request_with_retry(client, path, params=None, attempts=None):
+    """Use the same bounded read policy as Graph, Entra and Defender collectors."""
+    from .http_retry import DEFAULT_MAX_RETRIES, request_with_retry
+    if attempts is None:
+        attempts = DEFAULT_MAX_RETRIES + 1
+    return await request_with_retry(
+        lambda: client.get(path, params=params), max_retries=max(0, attempts - 1),
+    )
 
 
 async def _get_json(client, path, params=None):
+    from .http_retry import RequestRetryError
     try:
         response = await _request_with_retry(client, path, params=params)
+    except RequestRetryError as exc:
+        return None, str(exc)
     except Exception as exc:
         return None, "Request failed: {}".format(type(exc).__name__)
     if response.status_code != 200:
@@ -154,10 +151,17 @@ async def _get_all_json(client, path, params=None):
     pages = 1
     next_link = payload.get("@odata.nextLink")
     seen = set()
-    while next_link and next_link not in seen:
+    while next_link and next_link not in seen and pages < 1000:
         seen.add(next_link)
         page, page_error = await _get_json(client, next_link)
         if page is None:
+            combined["_collection_metadata"] = {
+                "records_collected": len(combined["value"]),
+                "pages_collected": pages,
+                "truncated": True,
+                "availability_status": "partial",
+                "reason": page_error,
+            }
             return combined, page_error
         combined["value"].extend(_value_rows(page))
         pages += 1
@@ -166,9 +170,10 @@ async def _get_all_json(client, path, params=None):
     combined["_collection_metadata"] = {
         "records_collected": len(combined["value"]),
         "pages_collected": pages,
-        "truncated": False,
+        "truncated": bool(next_link),
+        "availability_status": "partial" if next_link else "available",
     }
-    return combined, ""
+    return combined, "Pagination safety limit or repeated nextLink reached" if next_link else ""
 
 
 def _report_header_key(header):
@@ -199,8 +204,11 @@ def _csv_report_payload(text):
 
 async def _get_report_payload(client, path):
     """Request the stable CSV stream and accept JSON if Microsoft returns it instead."""
+    from .http_retry import RequestRetryError
     try:
         response = await _request_with_retry(client, path, params={"$format": "text/csv"})
+    except RequestRetryError as exc:
+        return None, str(exc)
     except Exception as exc:
         return None, "Request failed: {}".format(type(exc).__name__)
     if response.status_code == 200:

@@ -54,6 +54,7 @@ def create_pipelines(
     preview_collectors='none',
     sharepoint_data=None,
     legacy_power_platform_collector=False,
+    permission_profile='standard',
 ):
     """Create all service pipeline functions with shared context.
     
@@ -67,6 +68,8 @@ def create_pipelines(
         Dict of pipeline functions keyed by service name
     """
     # Extract flags for easier access
+    from .cli_parser import resolve_live_permission_profile
+    permission_profile = resolve_live_permission_profile(permission_profile, preview_collectors, legacy_power_platform_collector)
     run_m365 = service_config['run_m365']
     run_entra = service_config['run_entra']
     run_defender = service_config['run_defender']
@@ -127,7 +130,8 @@ def create_pipelines(
             return ([], [])
         
         try:
-            console.status('M365: collecting users, sites, licensing and Copilot usage...')
+            console.status('M365: collecting users, licensing and Copilot usage...' if permission_profile == 'restricted'
+                           else 'M365: collecting users, sites, licensing and Copilot usage...')
             # Gathering phase (the client logs its start and completion)
             from .get_m365_client import get_m365_client
             m365_client = await get_m365_client(
@@ -135,6 +139,7 @@ def create_pipelines(
                 include_user_usage_detail=include_user_usage_detail,
                 copilot_dashboard_export=copilot_dashboard_export,
                 preview_collectors=preview_collectors,
+                permission_profile=permission_profile,
             )
             m365_client.sharepoint_governance = sharepoint_data or {
                 'available': False, 'reason': 'SharePoint governance collection was not requested.'
@@ -182,7 +187,8 @@ def create_pipelines(
             # Gathering phase (the client logs its start and completion)
             from .get_entra_client import get_entra_client
             entra_client = await get_entra_client(
-                client, tenant_id, preview_collectors=preview_collectors
+                client, tenant_id, preview_collectors=preview_collectors,
+                permission_profile=permission_profile,
             )
             
             # Processing phase
@@ -213,6 +219,12 @@ def create_pipelines(
         """Purview: Gather client data, then process"""
         if not run_purview:
             return {'available': False, 'recommendations': []}
+        if permission_profile == 'restricted':
+            return {
+                'available': False, 'availability_status': 'not_requested',
+                'reason': 'Restricted permission profile: Purview administrative collection is not requested; supply supported exports or saved evidence.',
+                'recommendations': [],
+            }
         
         try:
             console.status('Purview: loading policy and compliance evidence...')
@@ -377,8 +389,11 @@ def create_pipelines(
                 client,
                 services_and_licenses,
                 pp_client,
-                allow_enrichment_fetch=allow_pp_collection,
-                tenant_id=tenant_id
+                # Reading an export never authorizes a fallback to administrative APIs.
+                allow_enrichment_fetch=bool(legacy_power_platform_collector)
+                    and interactive_plan['power_platform'].get('will_attempt', False),
+                tenant_id=tenant_id,
+                permission_profile=permission_profile,
             )
             if isinstance(result, dict):
                 result['_client'] = pp_client
@@ -441,7 +456,8 @@ def create_pipelines(
                 sys.stdout.flush()
             
             from .get_copilot_studio_info import get_copilot_studio_info
-            result = await get_copilot_studio_info(client, services_and_licenses, pp_client)
+            result = await get_copilot_studio_info(client, services_and_licenses, pp_client,
+                                                 permission_profile=permission_profile)
             if isinstance(result, dict):
                 result['_client'] = pp_client
 

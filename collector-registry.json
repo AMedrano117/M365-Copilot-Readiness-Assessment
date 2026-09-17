@@ -1,15 +1,52 @@
 {
-  "version": 1,
+  "version": 2,
+  "resource_app_ids": {
+    "graph": "00000003-0000-0000-c000-000000000000",
+    "defender": "fc780465-2017-40d4-a0c5-307022471b92",
+    "sharepoint": "00000003-0000-0ff1-ce00-000000000000",
+    "exchange": "00000002-0000-0ff1-ce00-000000000000",
+    "eop": "00000007-0000-0ff1-ce00-000000000000"
+  },
+  "permission_profiles": {
+    "standard": {
+      "excluded_sources": [],
+      "excluded_collectors": [],
+      "excluded_permissions": {}
+    },
+    "restricted": {
+      "excluded_sources": [
+        "sites",
+        "groups",
+        "oauth_grants"
+      ],
+      "excluded_collectors": [
+        "sharepoint_governance",
+        "purview",
+        "power_platform",
+        "shadow_ai",
+        "network_access",
+        "legacy_power_platform"
+      ],
+      "excluded_permissions": {
+        "graph": [
+          "Sites.Read.All",
+          "Group.Read.All",
+          "Directory.Read.All"
+        ]
+      },
+      "exclusion_reason": "Not requested by the Restricted permission profile; use supported customer exports or saved evidence where available."
+    }
+  },
   "collectors": [
     {"id":"graph_core","name":"Microsoft Graph tenant and licensing","maturity":"stable","auth_modes":["certificate","client_secret"],"permissions":["Organization.Read.All","User.Read.All","Group.Read.All","Application.Read.All"],"permission_resources":{"graph":["Organization.Read.All","User.Read.All","Group.Read.All","Application.Read.All"]},"modules":[],"license":"Microsoft 365 tenant","purpose":"Tenant identity and licensed capability inventory","decision_effect":true,"default_setup":true},
     {"id":"m365_usage","name":"Microsoft 365 and Copilot usage reports","maturity":"stable","auth_modes":["certificate","client_secret"],"permissions":["Reports.Read.All","Sites.Read.All"],"permission_resources":{"graph":["Reports.Read.All","Sites.Read.All"]},"modules":[],"license":"Workload-specific reporting availability","purpose":"License coverage, activation, engagement, and pilot fit","decision_effect":false,"default_setup":true},
-    {"id":"entra_controls","name":"Entra identity and access controls","maturity":"stable","auth_modes":["certificate","client_secret"],"permissions":["Policy.Read.All","Policy.Read.PermissionGrant","RoleManagement.Read.Directory","UserAuthenticationMethod.Read.All","AccessReview.Read.All","DeviceManagementManagedDevices.Read.All","DeviceManagementConfiguration.Read.All","AuditLog.Read.All"],"permission_resources":{"graph":["Policy.Read.All","Policy.Read.PermissionGrant","RoleManagement.Read.Directory","UserAuthenticationMethod.Read.All","AccessReview.Read.All","DeviceManagementManagedDevices.Read.All","DeviceManagementConfiguration.Read.All","AuditLog.Read.All"]},"modules":[],"license":"Microsoft Entra ID","purpose":"Conditional Access, authorization, application consent, and device controls","decision_effect":true,"default_setup":true},
+    {"id":"entra_controls","name":"Entra identity and access controls","maturity":"stable","auth_modes":["certificate","client_secret"],"permissions":["Policy.Read.All","Policy.Read.PermissionGrant","RoleManagement.Read.Directory","AccessReview.Read.All","DeviceManagementManagedDevices.Read.All","DeviceManagementConfiguration.Read.All","AuditLog.Read.All","Directory.Read.All"],"permission_resources":{"graph":["Policy.Read.All","Policy.Read.PermissionGrant","RoleManagement.Read.Directory","AccessReview.Read.All","DeviceManagementManagedDevices.Read.All","DeviceManagementConfiguration.Read.All","AuditLog.Read.All","Directory.Read.All"]},"modules":[],"license":"Microsoft Entra ID","purpose":"Conditional Access, authorization, application consent, and device controls","decision_effect":true,"default_setup":true},
     {"id":"entra_risk","name":"Entra ID Protection risk evidence","maturity":"stable","auth_modes":["certificate","client_secret"],"permissions":["IdentityRiskyUser.Read.All","IdentityRiskEvent.Read.All"],"permission_resources":{"graph":["IdentityRiskyUser.Read.All","IdentityRiskEvent.Read.All"]},"modules":[],"license":"Full risky-user and risk-detection evidence requires Microsoft Entra ID P2","purpose":"Risky-user and risk-detection evidence, kept separate from Conditional Access","decision_effect":true,"default_setup":true},
     {"id":"external_connections","name":"Microsoft Graph external connections","maturity":"stable","auth_modes":["certificate","client_secret"],"permissions":["ExternalConnection.Read.All"],"permission_resources":{"graph":["ExternalConnection.Read.All"]},"modules":[],"license":"Feature availability varies","purpose":"Connected grounding sources and Copilot connectors","decision_effect":true,"default_setup":true},
-    {"id":"graph_security","name":"Microsoft Graph Security","maturity":"stable","auth_modes":["certificate","client_secret"],"permissions":["SecurityEvents.Read.All","SecurityIncident.Read.All"],"permission_resources":{"graph":["SecurityEvents.Read.All","SecurityIncident.Read.All"]},"modules":[],"license":"Defender workload licensing","purpose":"Security alerts, incidents, and Secure Score","decision_effect":true,"default_setup":true},
+    {"id":"graph_security","name":"Microsoft Graph Security","maturity":"stable","auth_modes":["certificate","client_secret"],"permissions":["SecurityEvents.Read.All","SecurityIncident.Read.All","SecurityAlert.Read.All"],"permission_resources":{"graph":["SecurityEvents.Read.All","SecurityIncident.Read.All","SecurityAlert.Read.All"]},"modules":[],"license":"Defender workload licensing","purpose":"Security alerts, incidents, and Secure Score","decision_effect":true,"default_setup":true},
     {"id":"defender_endpoint","name":"Defender for Endpoint device risk","maturity":"stable","auth_modes":["certificate","client_secret"],"permissions":["Machine.Read.All"],"permission_resources":{"defender":["Machine.Read.All"]},"modules":[],"license":"Defender for Endpoint","purpose":"Device onboarding and risk inventory","decision_effect":true,"default_setup":true},
     {"id":"sharepoint_governance","name":"SharePoint sharing and Data Access Governance","maturity":"stable","auth_modes":["certificate","delegated_browser"],"permissions":["Sites.FullControl.All (app-only only)"],"permission_resources":{"sharepoint":["Sites.FullControl.All"]},"modules":["Microsoft.Online.SharePoint.PowerShell >= 16.0.27215.12000"],"license":"SharePoint; advanced reports require SharePoint Advanced Management","purpose":"Tenant/site sharing defaults and existing oversharing report status","decision_effect":true,"default_setup":false,"setup_when":"Unattended"},
-    {"id":"purview","name":"Microsoft Purview policy configuration","maturity":"stable","auth_modes":["certificate","delegated_browser"],"permissions":["Exchange.ManageAsApp on Exchange Online and EOP (app-only)"],"permission_resources":{"exchange":["Exchange.ManageAsApp"],"eop":["Exchange.ManageAsApp"]},"modules":["ExchangeOnlineManagement >= 3.2.0"],"license":"Purview features vary by subscription","purpose":"DLP, labels, retention, rights management, and audit","decision_effect":true,"default_setup":false,"setup_when":"Unattended"},
+    {"id":"purview","name":"Microsoft Purview policy configuration","maturity":"stable","auth_modes":["certificate","delegated_browser"],"permissions":["Exchange.ManageAsApp on Exchange Online and EOP (app-only)"],"permission_resources":{"exchange":["Exchange.ManageAsApp"],"eop":["Exchange.ManageAsApp"]},"modules":["ExchangeOnlineManagement >= 3.7.2"],"license":"Purview features vary by subscription","purpose":"DLP, labels, retention, rights management, and audit","decision_effect":true,"default_setup":false,"setup_when":"Unattended"},
     {"id":"power_platform","name":"Power Platform unified inventory API","maturity":"preview","auth_modes":["certificate","client_secret"],"permissions":["Power Platform Reader tenant RBAC"],"permission_resources":{},"modules":[],"license":"Inventory must be enabled","purpose":"Agents, apps, flows, environments, and connectors","decision_effect":false,"default_setup":false,"preview_pack":"PowerPlatform"},
     {"id":"shadow_ai","name":"Defender Cloud Apps discovery","maturity":"preview","auth_modes":["certificate","client_secret"],"permissions":["CloudApp-Discovery.Read.All"],"permission_resources":{"graph":["CloudApp-Discovery.Read.All"]},"modules":[],"license":"Cloud Discovery data stream required","purpose":"Aggregate external generative-AI activity","decision_effect":false,"default_setup":false,"preview_pack":"ShadowAI"},
     {"id":"network_access","name":"Global Secure Access","maturity":"preview","auth_modes":["certificate","client_secret"],"permissions":["NetworkAccess.Read.All","NetworkAccessPolicy.Read.All"],"permission_resources":{"graph":["NetworkAccess.Read.All","NetworkAccessPolicy.Read.All"]},"modules":[],"license":"Global Secure Access provisioning and licensing","purpose":"Optional network egress controls","decision_effect":false,"default_setup":false,"preview_pack":"NetworkAccess"},
