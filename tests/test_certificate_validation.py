@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -82,6 +83,26 @@ class GraphCertificateValidationTests(unittest.TestCase):
                 self.assertEqual(password == "test-only-password", json.loads(result.stdout)["valid"])
                 self.assertNotIn(password, result.stdout + result.stderr)
                 self.assertNotIn("PRIVATE KEY", result.stdout + result.stderr)
+
+    def test_utf8_stdin_accepts_optional_bom_with_non_ascii_path_and_password(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "certificate-\u00fc.pfx"
+            password = "test-\u00fc-\u03a9-password"
+            thumbprint = certificate_fixture(path, password=password)
+            request = json.dumps({"path": str(path), "password": password}, ensure_ascii=False)
+            for encoding in ("utf-8", "utf-8-sig"):
+                with self.subTest(encoding=encoding):
+                    result = subprocess.run(
+                        [sys.executable, str(Path(__file__).resolve().parents[1] / "Core/certificate_validation.py")],
+                        input=request.encode(encoding), capture_output=True, timeout=15,
+                        env={**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"},
+                    )
+                    self.assertEqual(0, result.returncode, result.stderr.decode("utf-8"))
+                    metadata = json.loads(result.stdout)
+                    self.assertTrue(metadata["valid"])
+                    self.assertEqual(thumbprint, metadata["thumbprint"])
+                    self.assertNotIn(password.encode("utf-8"), result.stdout + result.stderr)
+                    self.assertNotIn(b"PRIVATE KEY", result.stdout + result.stderr)
 
 
 if __name__ == "__main__":

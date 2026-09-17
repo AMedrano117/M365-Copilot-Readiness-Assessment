@@ -366,17 +366,27 @@ function Get-GraphCertificateMetadata {
         $startInfo.RedirectStandardOutput = $true
         $startInfo.RedirectStandardError = $true
         $startInfo.EnvironmentVariables['PYTHONIOENCODING'] = 'utf-8'
+        $utf8WithoutBom = [System.Text.UTF8Encoding]::new($false)
+        $supportsInputEncoding = $null -ne $startInfo.PSObject.Properties['StandardInputEncoding']
+        if ($supportsInputEncoding) { $startInfo.StandardInputEncoding = $utf8WithoutBom }
         $process = [System.Diagnostics.Process]::new()
         $process.StartInfo = $startInfo
         try {
-            if (-not $process.Start()) { continue }
-            # BaseStream works on Windows PowerShell 5.1, whose ProcessStartInfo
-            # does not expose StandardInputEncoding. Encode explicitly for passwords
-            # and paths containing characters outside the local console code page.
-            $inputBytes = [System.Text.Encoding]::UTF8.GetBytes((@{path=$Path;password=$Password} | ConvertTo-Json -Compress) + "`n")
-            $process.StandardInput.BaseStream.Write($inputBytes, 0, $inputBytes.Length)
-            $process.StandardInput.BaseStream.Flush()
-            $process.StandardInput.Close()
+            # Windows PowerShell 5.1 inherits Console.InputEncoding when constructing
+            # the redirected writer. Its AutoFlush can emit a UTF-8 BOM during Start,
+            # before a direct BaseStream write. Select a BOM-free encoding temporarily.
+            $previousInputEncoding = [Console]::InputEncoding
+            try {
+                if (-not $supportsInputEncoding) { [Console]::InputEncoding = $utf8WithoutBom }
+                if (-not $process.Start()) { continue }
+                $standardInput = $process.StandardInput
+            } finally {
+                if (-not $supportsInputEncoding) { [Console]::InputEncoding = $previousInputEncoding }
+            }
+            $inputBytes = $utf8WithoutBom.GetBytes((@{path=$Path;password=$Password} | ConvertTo-Json -Compress) + "`n")
+            $standardInput.BaseStream.Write($inputBytes, 0, $inputBytes.Length)
+            $standardInput.BaseStream.Flush()
+            $standardInput.Close()
             $output = $process.StandardOutput.ReadToEnd()
             $null = $process.StandardError.ReadToEnd()
             $process.WaitForExit()

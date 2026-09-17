@@ -20,8 +20,12 @@ from Core.source_evidence import source_is_complete
 
 class RetryPolicyTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        self.sleep = self.enterContext(patch('Core.http_retry.asyncio.sleep', new=AsyncMock()))
-        self.enterContext(patch('Core.http_retry.random.uniform', return_value=0.2))
+        sleep_patch = patch('Core.http_retry.asyncio.sleep', new=AsyncMock())
+        self.sleep = sleep_patch.start()
+        self.addCleanup(sleep_patch.stop)
+        jitter_patch = patch('Core.http_retry.random.uniform', return_value=0.2)
+        jitter_patch.start()
+        self.addCleanup(jitter_patch.stop)
 
     async def test_honors_retry_after_larger_than_old_delay_cap(self):
         send = AsyncMock(side_effect=[httpx.Response(429, headers={'Retry-After': '45'}), httpx.Response(200)])
@@ -92,7 +96,9 @@ class RetryPolicyTests(unittest.IsolatedAsyncioTestCase):
 
 class CollectorRetryTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        self.sleep = self.enterContext(patch('Core.http_retry.asyncio.sleep', new=AsyncMock()))
+        sleep_patch = patch('Core.http_retry.asyncio.sleep', new=AsyncMock())
+        self.sleep = sleep_patch.start()
+        self.addCleanup(sleep_patch.stop)
 
     def raw_client(self, responder, base='https://graph.microsoft.com'):
         return httpx.AsyncClient(base_url=base, transport=httpx.MockTransport(responder))

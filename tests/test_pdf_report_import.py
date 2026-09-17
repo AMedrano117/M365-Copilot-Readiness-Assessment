@@ -34,7 +34,7 @@ def pdf_fixture(path, *, blank=False):
 class PdfImportTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self.temporary.name)
+        self.root = Path(self.temporary.name).resolve()
         previous = Path.cwd()
         os.chdir(self.root)
         self.addCleanup(self.temporary.cleanup)

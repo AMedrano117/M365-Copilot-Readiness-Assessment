@@ -103,7 +103,7 @@ class PortalReviewTests(unittest.TestCase):
 
     def test_collection_and_recipe_package_keep_all_review_assets_after_move(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()
             original, _ = reviewed_fixture(root / 'source')
             collection = save_collection(root / 'collection.json', tenant_id=TENANT, tenant_name='Invented review',
                                          service_results=empty_service_results(),

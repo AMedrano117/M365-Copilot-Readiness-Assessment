@@ -17,6 +17,7 @@ SECOND = '22222222-2222-4222-8222-222222222222'
 @unittest.skipUnless(POWERSHELL, 'A local PowerShell host is required')
 class SharePointExportDirectoryTests(unittest.TestCase):
     def run_export(self, directory, report_ids, failed_id=''):
+        directory = Path(directory).resolve()
         source = (ROOT / 'collect_sharepoint_governance.ps1').read_text(encoding='utf-8-sig')
         start = source.index('if ($DownloadPath -and $dagRows.Count -gt 0) {')
         end = source.index("$payload['available']", start)

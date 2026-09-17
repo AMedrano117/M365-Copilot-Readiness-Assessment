@@ -47,7 +47,9 @@ def main():
     # Passwords arrive on redirected stdin and are never copied to command arguments,
     # environment variables, files, output, or exception diagnostics.
     try:
-        request = json.load(sys.stdin)
+        # The PowerShell bridge sends UTF-8 bytes regardless of the host code page.
+        # Accept one optional preamble from older .NET redirected input writers.
+        request = json.loads(sys.stdin.buffer.read().decode("utf-8-sig"))
         metadata = inspect_graph_certificate(request["path"], request.get("password"))
     except ValueError as exc:
         print(json.dumps({"valid": False, "reason": str(exc)}))

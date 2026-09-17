@@ -44,7 +44,7 @@ class AssessmentPackageTests(unittest.TestCase):
 
     def test_package_moves_without_original_inputs_and_restores_settings(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()
             source = root / 'original reports'
             source.mkdir()
             report = source / 'permissions.csv'
@@ -72,7 +72,7 @@ class AssessmentPackageTests(unittest.TestCase):
 
     def test_offline_additions_survive_move_without_collection_mutation(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()
             collection = self.saved(root)
             payload = load_collection(collection)
             folder = Path(payload['package_directory'])
@@ -214,7 +214,7 @@ class AssessmentPackageTests(unittest.TestCase):
 
     def test_collectionless_offline_recipe_preserves_originals_without_raw_collection(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()
             report = root / 'portal.csv'
             report.write_text('Tenant ID,Anyone link count\n' + TENANT + ',0\n', encoding='utf-8')
             args = self.parse('--mode', 'offline', '--sam-report', report, '--tenant-name', 'Example portal review')

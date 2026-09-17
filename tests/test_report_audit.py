@@ -24,8 +24,10 @@ def modern_html(*, count=1, linked=True, kind='Remediation'):
 
 class ReportAuditTests(unittest.TestCase):
     def setUp(self):
-        self.directory = self.enterContext(tempfile.TemporaryDirectory())
-        self.root = Path(self.directory)
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.directory = temporary.name
+        self.root = Path(self.directory).resolve()
 
     def report(self, source):
         target = self.root / 'report.html'

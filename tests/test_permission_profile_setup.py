@@ -163,6 +163,10 @@ function Read-Host { throw 'Unexpected interactive prompt in offline setup test.
 $message = ''
 try {
     $extraArguments = @{}
+    if ($Scenario -eq 'utf8_bom_console') {
+        $env:PYTHONUTF8 = '1'
+        [Console]::InputEncoding = [System.Text.Encoding]::UTF8
+    }
     if ($PSBoundParameters.ContainsKey('SharePointUrl')) { $extraArguments.SharePointAdminUrl = $SharePointUrl }
     if ($Scenario -like 'thumbprint*') { $extraArguments.CertificateThumbprint = 'mock-thumb' }
     if ($Scenario -in @('thumbprint_rotate','rotate','consent_interrupted','replace_failure','write_failure','env_reread_failure')) { $extraArguments.RotateCredential = $true }
@@ -227,6 +231,18 @@ class OfflineSetupProfileTests(unittest.TestCase):
                 from cryptography.hazmat.primitives import serialization
                 from cryptography.hazmat.primitives.serialization import pkcs12
 
+                if certificate_options.get("require_bom_free_input"):
+                    shutil.copyfile(root / "Core/certificate_validation.py", root / "Core/certificate_validation_impl.py")
+                    (root / "Core/certificate_validation.py").write_text(
+                        'import codecs, io, json, sys\n'
+                        'raw = sys.stdin.buffer.read()\n'
+                        'if raw.startswith(codecs.BOM_UTF8):\n'
+                        '    print(json.dumps({"valid": False, "reason": "Setup emitted a UTF-8 preamble."}))\n'
+                        '    raise SystemExit(1)\n'
+                        'sys.stdin = io.TextIOWrapper(io.BytesIO(raw), encoding="utf-8")\n'
+                        'from certificate_validation_impl import main\n'
+                        'raise SystemExit(main())\n', encoding="utf-8",
+                    )
                 cert_path = root / "graph.pfx"
                 password = certificate_options.get("password", "test-only-password")
                 thumbprint = certificate_fixture(cert_path, password=password, expired=certificate_options.get("expired", False))
@@ -414,6 +430,15 @@ class OfflineSetupProfileTests(unittest.TestCase):
                 self.assertEqual("", result["error"])
                 self.assertIn(options.get("password", "test-only-password"), result["restricted_env"])
                 self.assertNotIn("Password", result["calls"])
+
+    def test_utf8_console_does_not_add_bom_to_non_ascii_certificate_request(self):
+        password = "test-\u00fc-\u03a9-password"
+        result = self.run_setup("utf8_bom_console", certificate_options={
+            "registered": True, "password": password, "require_bom_free_input": True,
+        })
+        self.assertEqual("", result["error"])
+        self.assertNotIn("Password", result["calls"])
+        self.assertNotIn(password, result["error"] + result["output"])
 
     def test_unusable_or_mismatched_saved_certificate_stops_before_application_changes(self):
         for options, expected_error in (
