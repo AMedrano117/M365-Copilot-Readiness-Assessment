@@ -50,7 +50,25 @@ Examples:
         '--tenant-id', 
         type=str, 
         default=None,
-        help=f'Tenant ID to analyze. Fallback order: --tenant-id, selected env file TENANT_ID, params.py ({tenant_id_default})'
+        help='Tenant ID to analyze. Order: --tenant-id, then TENANT_ID in the selected environment file. There is no built-in default tenant.'
+    )
+    parser.add_argument(
+        '--confirm-tenant',
+        type=str,
+        default=None,
+        metavar='DOMAIN',
+        help='Expected initial *.onmicrosoft.com domain. Collection stops if the signed-in tenant differs. Overrides EXPECTED_TENANT_DOMAIN and PURVIEW_ORGANIZATION.'
+    )
+    parser.add_argument(
+        '--delegated',
+        choices=['auto', 'off', 'required'],
+        default='auto',
+        help='Delegated sign-in for data that Microsoft only exposes to signed-in administrators. auto=use a cached sign-in or prompt when a terminal is available; off=application permissions only; required=fail preflight without a delegated sign-in.'
+    )
+    parser.add_argument(
+        '--no-progress',
+        action='store_true',
+        help='Do not draw live progress bars during collection (they are drawn only on an interactive terminal).'
     )
     parser.add_argument(
         '--services', 
@@ -146,9 +164,9 @@ Examples:
     )
     parser.add_argument(
         '--preview-collectors',
-        choices=['none', 'power-platform', 'shadow-ai', 'network-access', 'all'],
+        choices=['none', 'power-platform', 'shadow-ai', 'network-access', 'copilot-audit', 'all'],
         default='none',
-        help='Opt in to supplemental Microsoft preview APIs. Preview data never changes the core readiness decision.'
+        help='Opt in to supplemental Microsoft preview APIs. copilot-audit reads aggregate Copilot interaction events from the unified audit log. Preview data never changes the core readiness decision.'
     )
     parser.add_argument(
         '--sharepoint-admin-url',
@@ -233,8 +251,12 @@ Examples:
         parser.error('Offline mode does not use credentials or an --env-file.')
     if args.offline and args.permission_profile:
         parser.error('Offline mode uses the saved collection permission profile; omit --permission-profile.')
+    if args.offline and (args.confirm_tenant or args.delegated == 'required'):
+        parser.error('Offline mode does not sign in; omit --confirm-tenant and --delegated required.')
     if args.permission_profile == 'restricted' and (args.preview_collectors != 'none' or args.legacy_power_platform_collector):
         parser.error('The restricted permission profile cannot enable preview or legacy collectors.')
+    if args.permission_profile == 'restricted' and args.delegated == 'required':
+        parser.error('The restricted permission profile does not use delegated sign-in; omit --delegated required.')
     return args
 
 

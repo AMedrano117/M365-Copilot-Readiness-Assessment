@@ -9,6 +9,7 @@ import webbrowser
 from datetime import datetime
 from html import escape
 from pathlib import Path
+from .auth_plan import collected_with_label, next_better_option
 from .copilot_readiness_import import FLAG_COLUMNS
 
 
@@ -216,6 +217,65 @@ def _add_excel_table(ws, table_name):
     table.tableStyleInfo = style
     ws.add_table(table)
 
+
+_OPTIONAL_EXCEL_TEXT = {
+    'observation', 'recommendation', 'supporting observation', 'qualification',
+    'reason', 'completion evidence', 'description', 'details', 'evidence summary',
+    'evidencesummary', 'what we found', 'recommended action', 'extracted text',
+    'summary', 'rationale', 'limitations', 'value', 'investigation qualification',
+}
+_NARRATIVE_EXCEL_SHEETS = {
+    'Action Plan', 'Recommendations', 'Evidence Index', 'Assessment Summary',
+    'Domain Results', 'Run Manifest', 'Evidence Observations', 'Collection Coverage',
+    'PDF Extracted Text',
+}
+
+
+def _utf16_chunks(value, limit=32000):
+    encoded = value.encode('utf-16-le')
+    while encoded:
+        boundary = min(len(encoded), limit * 2)
+        if boundary < len(encoded) and 0xD800 <= int.from_bytes(encoded[boundary - 2:boundary], 'little') <= 0xDBFF:
+            boundary -= 2
+        yield encoded[:boundary].decode('utf-16-le')
+        encoded = encoded[boundary:]
+
+
+def _excel_safe_rows(rows, sheet_title):
+    """Keep optional long narratives from suppressing the entire workbook.
+
+    Investigation and identifying fields retain their full values in adjacent
+    continuation columns. Optional narrative truncation is always explicit.
+    """
+    output = []
+    for original in rows:
+        row = {}
+        extra_columns = {}
+        continued = []
+        for header, value in original.items():
+            if isinstance(value, (dict, list, tuple)):
+                value = json.dumps(value, ensure_ascii=False, sort_keys=True)
+            if not isinstance(value, str) or len(value.encode('utf-16-le')) // 2 <= 32767:
+                row[header] = value
+                continue
+            chunks = list(_utf16_chunks(value))
+            if str(header).casefold() in _OPTIONAL_EXCEL_TEXT and sheet_title in _NARRATIVE_EXCEL_SHEETS:
+                row[header] = chunks[0] + '\n[Truncated for Excel: this optional text exceeds the cell limit.]'
+                continue
+            row[header] = chunks[0]
+            for index, chunk in enumerate(chunks[1:], 2):
+                continuation = f'{header} (continued {index})'
+                while continuation in original or continuation in extra_columns:
+                    continuation += '_'
+                extra_columns[continuation] = chunk
+            continued.append(str(header))
+        row.update(extra_columns)
+        if continued:
+            note = 'Full values continue in adjacent numbered columns: ' + '; '.join(continued)
+            row['Excel Export Note'] = (str(row.get('Excel Export Note') or '') + '\n' + note).strip()
+        output.append(row)
+    return output
+
 def export_to_csv(recommendations, filename=None, tenant_name=None):
     """
     Export recommendations to CSV file
@@ -245,7 +305,7 @@ def export_to_csv(recommendations, filename=None, tenant_name=None):
     if not recommendations:
         print("No recommendations to export.")
         return None
-    
+
     # Define CSV headers
     fieldnames = RECOMMENDATION_EXPORT_FIELDS
 
@@ -298,6 +358,7 @@ def _append_dict_rows_to_sheet(ws, rows, header_fill, header_font, wrap_alignmen
     if not rows:
         return
 
+    rows = _excel_safe_rows(rows, ws.title)
     headers = list(dict.fromkeys(header for row in rows for header in row))
     ws.append(headers)
     for cell in ws[1]:
@@ -398,6 +459,13 @@ def _append_prior_report_workbook(workbook, prior, header_fill, header_font, wra
     )
 
 
+def _adoption_guidance_rows(result):
+    """30/60/90-day guidance; advisory only and never a control result."""
+    from .adoption_guidance import build_adoption_guidance, guidance_rows
+    numbers = {row.get('RecommendationId'): index for index, row in enumerate(result.get('actions') or [], 1)}
+    return guidance_rows(build_adoption_guidance(result, numbers))
+
+
 def export_to_excel(recommendations, filename=None, tenant_name=None, evidence_bundle=None):
     """
     Export recommendations to Excel file
@@ -411,11 +479,13 @@ def export_to_excel(recommendations, filename=None, tenant_name=None, evidence_b
         str: Path to created Excel file
     """
     from .assessment_result import build_assessment_result
+    from .investigation_details import prepare_investigation_details
     evidence_bundle = evidence_bundle if evidence_bundle is not None else {}
     result = evidence_bundle.get('assessment_result')
     if result is None:
         result = build_assessment_result(recommendations, evidence_bundle)
         evidence_bundle['assessment_result'] = result
+    prepare_investigation_details(evidence_bundle, result)
     recommendations = result['recommendations']
 
     try:
@@ -474,8 +544,11 @@ def export_to_excel(recommendations, filename=None, tenant_name=None, evidence_b
         "Target Date": "",
         "Completion Evidence": rec.get("CompletionEvidence", ""),
         "Observed": rec.get("ObservationDate", ""),
-        "Qualification": rec.get("Qualification", ""),
-        "Evidence": "Evidence Index",
+        "Qualification": " ".join(str(value) for value in (rec.get("Qualification"), rec.get("InvestigationQualification")) if value),
+        "Evidence": rec.get('InvestigationRange') or rec.get('InvestigationStatus') or 'Supporting location not supplied',
+        "Investigation Details": (rec.get("InvestigationSummary") or rec.get("InvestigationStatus", ""))
+            if rec.get('InvestigationCount') else ': '.join(dict.fromkeys(str(value) for value in
+                (rec.get('InvestigationStatus'), rec.get('InvestigationSummary')) if value)),
     } for index, rec in enumerate(result['actions'], 1)]
     _append_dict_rows_to_sheet(ws, action_rows or [{
         "Priority": "", "What We Found": "No deployment actions were identified from the evidence collected.",
@@ -491,7 +564,10 @@ def export_to_excel(recommendations, filename=None, tenant_name=None, evidence_b
             'Domain': row.get('Domain', ''), 'Finding': row.get('Feature', ''),
             'Original Date': row.get('ObservationDate', ''),
             'Evidence Basis': row.get('EvidenceBasis', ''), 'Confidence': row.get('Confidence', ''),
-            'Qualification': row.get('Qualification', ''), 'Workbook Tab': row.get('EvidenceSheet', ''),
+            'Qualification': ' '.join(str(value) for value in (row.get('Qualification'), row.get('InvestigationQualification')) if value),
+            'Investigation Status': row.get('InvestigationStatus', ''),
+            'Supporting Records': row.get('InvestigationCount', ''),
+            'Workbook Tab': row.get('EvidenceSheet', ''),
             'Source File': row.get('SourceFile', ''),
             'Supporting Observation': row.get('Evidence') or row.get('Observation', ''),
         } for row in recommendations]
@@ -537,6 +613,37 @@ def export_to_excel(recommendations, filename=None, tenant_name=None, evidence_b
                 "Refresh Date": state.get("refresh_date", ""),
                 "Freshness": state.get("freshness", ""),
                 "Reason": state.get("reason", ""),
+                "Collected With": collected_with_label(state) if not str(source).startswith(("connection_", "pipeline_")) else "",
+                "Coverage": state.get("coverage", ""),
+                "Evidence Quality": state.get("evidence_quality", ""),
+                "How To Unlock": state.get("unlock", ""),
+            })
+        for dataset_id, entry in ((evidence_bundle.get('auth_plan') or {}).get('datasets') or {}).items():
+            if entry.get("selected_path"):
+                continue
+            # Datasets no auth path could reach are listed with the unlock step.
+            coverage_rows.append({
+                "Source": f"plan_{dataset_id}", "State": "not_collected", "Records": "", "Pages": "",
+                "Truncated": "", "Refresh Date": "", "Freshness": "",
+                "Reason": "; ".join(item.get("reason", "") for item in entry.get("skipped", []) if item.get("reason"))[:500],
+                "Collected With": "", "Coverage": "none", "Evidence Quality": "",
+                "How To Unlock": next_better_option(entry),
+            })
+        for key, detail in (evidence_bundle.get('sheets') or {}).items():
+            notes = [detail.get('reconciliation_note'), detail.get('unavailability_reason'), *(detail.get('details') or [])]
+            if not any(notes):
+                continue
+            source_row = next(iter(detail.get('rows') or []), {})
+            coverage_rows.append({
+                'Source': detail.get('title', key),
+                'State': 'available' if detail.get('rows') else 'unavailable',
+                'Records': len(detail.get('rows') or []),
+                'Pages': detail.get('pages_collected', source_row.get('Pages Collected', '')),
+                'Truncated': detail.get('truncated', source_row.get('Truncated', '')),
+                'Refresh Date': detail.get('collected_at') or source_row.get('Collected At') or collection_context.get('collected_at', ''),
+                'Freshness': detail.get('freshness', ''),
+                'Source File': detail.get('source_file') or source_row.get('Source File', ''),
+                'Reason': '\n'.join(dict.fromkeys(str(note) for note in notes if note)),
             })
         if not coverage_rows:
             coverage_rows.append({
@@ -556,7 +663,8 @@ def export_to_excel(recommendations, filename=None, tenant_name=None, evidence_b
                     if str(sheet.get('title', '')).strip().lower() in evidence_titles:
                         action_evidence.add(key)
         for key, sheet in evidence_bundle.get('sheets', {}).items():
-            if key not in action_evidence or not sheet.get('rows'):
+            if (key not in action_evidence and sheet.get('title') != 'Investigation Items'
+                    and not key.startswith('declared_investigation.')) or not sheet.get('rows'):
                 continue
             detail_sheet = wb.create_sheet(sheet.get('title', 'Evidence'))
             _append_dict_rows_to_sheet(detail_sheet, sheet['rows'], header_fill, header_font, wrap_alignment, table_name=sheet.get('title', 'Evidence'))
@@ -587,8 +695,11 @@ def export_to_excel(recommendations, filename=None, tenant_name=None, evidence_b
         "Evidence Summary",
         "Evidence Basis",
         "Confidence",
+        "Investigation Status",
+        "Supporting Records",
+        "Investigation Qualification",
     ]
-    ws.append(summary_headers)
+    summary_rows = []
     for rec in recommendations:
         row = [
             rec.get("RecommendationId", ""),
@@ -614,20 +725,20 @@ def export_to_excel(recommendations, filename=None, tenant_name=None, evidence_b
             rec.get("EvidenceSummary", ""),
             rec.get("EvidenceBasis", ""),
             rec.get("Confidence", ""),
+            rec.get('InvestigationStatus', ''),
+            rec.get('InvestigationCount', ''),
+            rec.get('InvestigationQualification', ''),
         ]
-        ws.append(row)
+        summary_rows.append(dict(zip(summary_headers, row)))
 
-        # Color code priority
+    _append_dict_rows_to_sheet(ws, summary_rows, header_fill, header_font, wrap_alignment, table_name="Recommendations")
+    for row_num, rec in enumerate(recommendations, 2):
         priority = rec.get("Priority", "")
         if priority in priority_colors:
-            row_num = ws.max_row
             priority_cell = ws.cell(row=row_num, column=14)  # Priority column
             priority_cell.fill = PatternFill(start_color=priority_colors[priority], 
                                             end_color=priority_colors[priority], 
                                             fill_type="solid")
-
-    _apply_excel_sheet_formatting(ws, summary_headers, header_fill, header_font, wrap_alignment)
-    _add_excel_table(ws, "Recommendations")
 
     # Create control, decision, reproducibility, and remaining evidence sheets.
     if evidence_bundle:
@@ -692,6 +803,7 @@ def export_to_excel(recommendations, filename=None, tenant_name=None, evidence_b
         ('Portal Review Remaining', (evidence_bundle.get('copilot_admin_review') or {}).get('manual_checks', [])),
         ('Rollout Progress', _rollout_progress_rows(result)),
         ('Readiness Reviews', _readiness_review_rows(result)),
+        ('Adoption Guidance', _adoption_guidance_rows(result)),
     ):
         if rows:
             sheet = wb.create_sheet(title)
@@ -714,22 +826,67 @@ def export_to_excel(recommendations, filename=None, tenant_name=None, evidence_b
                 original_titles = str(cell.value or '').split(';')
                 targets = [prior_tabs[t.strip()] for t in original_titles if t.strip() in prior_tabs]
                 cell.value = '; '.join(targets) or prior_tabs.get('Recommendations', '')
-        index_rows = {index_sheet.cell(i, headers['RecommendationId']).value: i for i in range(2, index_sheet.max_row + 1)}
-        action_sheet = wb['Action Plan']
-        action_headers = {cell.value: cell.column for cell in action_sheet[1]}
-        if 'RecommendationId' in action_headers:
-            for i in range(2, action_sheet.max_row + 1):
-                target = index_rows.get(action_sheet.cell(i, action_headers['RecommendationId']).value)
-                if target:
-                    cell = action_sheet.cell(i, action_headers['Evidence'])
-                    cell.hyperlink = f"#'Evidence Index'!A{target}"
-                    cell.style = 'Hyperlink'
         for i in range(2, index_sheet.max_row + 1):
             cell = index_sheet.cell(i, headers['Workbook Tab'])
             candidates = str(cell.value or '').split(';')
             target = next((item.strip() for item in candidates if item.strip() in wb.sheetnames), None)
             if target:
                 cell.hyperlink = "#'" + target.replace("'", "''") + "'!A1"
+                cell.style = 'Hyperlink'
+
+    # Specific investigations are a compact optional addition to the original
+    # evidence register. A missing detail target never suppresses the workbook.
+    from openpyxl.comments import Comment
+    from openpyxl.utils.cell import range_boundaries
+    exact_range = re.compile(r"^'((?:[^']|'')+)'!([A-Z]+[1-9][0-9]*:[A-Z]+[1-9][0-9]*)$")
+    investigations = {row.get('RecommendationId'): row for row in recommendations}
+    def valid_location(location):
+        match = exact_range.fullmatch(str(location or ''))
+        if not match:
+            return False
+        target_title = match.group(1).replace("''", "'")
+        if target_title not in wb:
+            return False
+        first_column, first_row, last_column, last_row = range_boundaries(match.group(2))
+        target_sheet = wb[target_title]
+        return (first_row >= 2 and first_row <= last_row <= target_sheet.max_row
+                and 1 <= first_column <= last_column <= target_sheet.max_column)
+
+    for title, column_name in (('Action Plan', 'Investigation Details'), ('Action Plan', 'Evidence'),
+                               ('Evidence Index', 'Workbook Tab'), ('Recommendations', 'Evidence Sheet'),
+                               ('Evidence Index', 'Supporting Records'), ('Recommendations', 'Supporting Records')):
+        if title not in wb:
+            continue
+        sheet = wb[title]
+        columns = {cell.value: cell.column for cell in sheet[1]}
+        if column_name not in columns or 'RecommendationId' not in columns:
+            continue
+        for row_number in range(2, sheet.max_row + 1):
+            rec = investigations.get(sheet.cell(row_number, columns['RecommendationId']).value)
+            if not rec:
+                continue
+            cell = sheet.cell(row_number, columns[column_name])
+            if title == 'Action Plan' and rec.get('InvestigationNote'):
+                cell.comment = Comment(str(rec['InvestigationNote']), 'Assessment')
+            location = str(rec.get('InvestigationRange') or '')
+            if not valid_location(location):
+                continue
+            if column_name in {'Workbook Tab', 'Evidence Sheet'}:
+                cell.value = location
+            cell.hyperlink = '#' + location
+            cell.style = 'Hyperlink'
+
+    # The compact worklist points to the actual records behind each item,
+    # including separate grant rows for a single application.
+    for sheet in wb:
+        columns = {cell.value: cell.column for cell in sheet[1]}
+        if 'Source Detail' not in columns:
+            continue
+        for row_number in range(2, sheet.max_row + 1):
+            cell = sheet.cell(row_number, columns['Source Detail'])
+            location = str(cell.value or '')
+            if valid_location(location):
+                cell.hyperlink = '#' + location
                 cell.style = 'Hyperlink'
 
     # All imported strings, including register cells and headers, remain inert.
@@ -746,19 +903,26 @@ def export_to_excel(recommendations, filename=None, tenant_name=None, evidence_b
 def export_to_html(recommendations, filename=None, tenant_name=None, evidence_bundle=None, excel_path=None):
     """Render the same assessed result used by the workbook and operator receipt."""
     from .assessment_result import build_assessment_result
+    from .investigation_details import prepare_investigation_details
     from .customer_report import render_customer_report
     bundle = evidence_bundle if evidence_bundle is not None else {}
     result = bundle.get('assessment_result')
     if result is None:
         result = build_assessment_result(recommendations, bundle)
         bundle['assessment_result'] = result
+    prepare_investigation_details(bundle, result)
     folder = Path('Reports')
     folder.mkdir(exist_ok=True)
     name = filename or build_report_filename('html', tenant_name=tenant_name)
     if not name.endswith('.html'):
         name += '.html'
     path = folder / name
-    path.write_text(render_customer_report(result, bundle, tenant_name, excel_path), encoding='utf-8')
+    summary_path = path.with_name(path.stem + '_summary.html')
+    path.write_text(render_customer_report(result, bundle, tenant_name, excel_path, summary_path=summary_path), encoding='utf-8')
+    # A short pilot-readiness summary beside the full report; both come from the same result.
+    from .pilot_summary import render_pilot_summary
+    summary_path.write_text(render_pilot_summary(result, bundle, tenant_name, path, excel_path), encoding='utf-8')
+    bundle['summary_html_path'] = str(summary_path)
     return str(path)
 
 
@@ -853,6 +1017,7 @@ def print_recommendations_summary(
     print_source_gaps((evidence_bundle or {}).get('source_statuses'))
     if html_path or excel_path or csv_path:
         section('OUTPUT FILES')
-        for label, path in (('HTML', html_path), ('Workbook', excel_path), ('CSV', csv_path)):
+        summary_path = (evidence_bundle or {}).get('summary_html_path')
+        for label, path in (('Summary', summary_path), ('HTML', html_path), ('Workbook', excel_path), ('CSV', csv_path)):
             if path:
                 print(f"{label}: {style(display_path(path), 'path')}")

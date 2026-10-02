@@ -4,7 +4,7 @@ from .service_categorization import determine_service_type, resolve_plan_statuse
 from Recommendations.defender.defender_insights import DefenderInsights
 import sys
 from .spinner import get_timestamp, _stdout_lock
-from azure.core.exceptions import HttpResponseError
+from .access_errors import ACCESS_ERRORS, describe_access_failure
 
 async def fetch_defender_licenses(client):
     """Fetch license data to check if Defender is licensed"""
@@ -65,15 +65,13 @@ async def get_defender_info(client, defender_client=None, services_and_licenses=
         
         defender_plans = get_defender_service_plans(subscribed_skus)
     
-    except HttpResponseError as e:
+    except ACCESS_ERRORS as e:
+        _category, message = describe_access_failure("Defender information", e)
         with _stdout_lock:
-            if e.status_code == 403:
-                print(f"[{get_timestamp()}] ⚠️  Defender information: Insufficient permissions (requires admin role)")
-            else:
-                print(f"[{get_timestamp()}] ⚠️  Defender information: HTTP {e.status_code}")
+            print(f"[{get_timestamp()}] ⚠️  {message}")
         return {
             'available': False,
-            'reason': f'Insufficient permissions (HTTP {e.status_code})',
+            'reason': message,
             'has_defender': False,
             'recommendations': []
         }
@@ -105,9 +103,9 @@ async def get_defender_info(client, defender_client=None, services_and_licenses=
     if xdr_recommendation:
         recommendations.append(xdr_recommendation)
     
-    # Check for Defender for Endpoint device onboarding status
-    # This replaces console warnings with an actionable recommendation
-    # when API returns 403 due to no devices onboarded
+    # Check for Defender for Endpoint device onboarding status. An unreadable
+    # machines query (for example HTTP 403 for a missing Machine.Read.All grant)
+    # is reported as a coverage gap, never as zero onboarded devices.
     from Recommendations.defender.DEFENDER_ENDPOINT_ONBOARDING import get_recommendation as get_onboarding_rec
     onboarding_recommendation = await get_onboarding_rec(client, defender_client, services_and_licenses, purview_client)
     if onboarding_recommendation:

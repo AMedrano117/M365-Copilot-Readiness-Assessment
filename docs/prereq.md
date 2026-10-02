@@ -26,13 +26,16 @@ The runtime Graph client uses `azure-identity` and `httpx`; it does not require 
 
 ## Recommended setup
 
-Standard mode is the normal operator-assisted configuration:
+Standard mode is the normal operator-assisted configuration. Keep one environment file per customer; `-EnvironmentFile` makes setup sign in to that file's tenant and reconcile that file's application:
 
 ```powershell
-.\setup-service-principal.ps1 -Mode Standard -SharePointAdminUrl "https://<actual-prefix>-admin.sharepoint.com"
-python main.py --mode live --check-connections
-python main.py --mode live
+.\setup-service-principal.ps1 -Mode Standard -EnvironmentFile .\contoso.env `
+  -SharePointAdminUrl "https://<actual-prefix>-admin.sharepoint.com"
+python main.py --mode live --env-file .\contoso.env --check-connections
+python main.py --mode live --env-file .\contoso.env
 ```
+
+The Standard permission profile assigns Global Reader by default in both Standard and Unattended modes, granting broad tenant read access for application collection. Setup requests delegated `RoleManagement.ReadWrite.Directory` to assign that role. Use `-WorkloadRbac SecurityReader` for narrower coverage, `-WorkloadRbac RoleGroups` for explicit workload role groups, or `-WorkloadRbac None` to skip assignment. `None` does not remove existing roles or guarantee a browser fallback: an application session can connect successfully while lacking cmdlet access. Restricted defaults to `None` and rejects role assignments. Add `-EnableSharePointAppOnly` only if the customer approves `Sites.FullControl.All` for unattended SharePoint administration. See [workload roles](PERMISSIONS.md#workload-roles-for-app-only-purview-and-exchange).
 
 Replace the URL placeholder with the actual origin copied from the customer's **Microsoft 365 admin center > Admin centers > SharePoint**. Setup saves it in `.env` for preflight and collection; see [SharePoint URL requirements](#sharepoint-admin-url).
 
@@ -47,7 +50,19 @@ python main.py --mode offline --collection-input "<collection-input>" --reports-
 
 Create `exports` first or omit `--reports-dir`; replace `<collection-input>` with the path printed by the live run. Restricted uses its own application, `M365 Copilot Readiness Assessment Tool - Restricted`, and `.env.restricted`. Live profile precedence is `--permission-profile`, then `PERMISSION_PROFILE` from the selected environment, then `standard`. Restricted omits Graph site/group/consent-grant inventory and all SharePoint/Purview administrative PowerShell, while retaining stable identity/device/security/usage reads. It rejects Unattended setup, preview packs and legacy administrative collection before setup changes or collection. See [PERMISSIONS.md](PERMISSIONS.md) for the exact access matrix and evidence gaps.
 
-The setup script reuses an unambiguous application with the configured display name, reconciles its permission manifest, and installs or updates modules for the selected profile. Multiple matching applications cause setup to stop. It keeps an existing usable credential only when its saved tenant and client identity match, unless `-RotateCredential` is supplied. Standard mode uses the client secret or certificate for application APIs and requests browser sign-in for SharePoint and Purview when no certificate is configured. Restricted neither installs/checks workload modules nor starts administrative PowerShell.
+The setup script reuses an unambiguous application with the configured display name (or the application saved in `-EnvironmentFile`, or `-ApplicationId`), reconciles its permission manifest, and installs or updates modules for the selected profile. Multiple matching applications cause setup to stop, and an explicitly selected application is never replaced by a new one. It keeps an existing usable credential only when its saved tenant and client identity match, unless `-RotateCredential` is supplied. Standard mode uses the client secret or certificate for application APIs, including Purview and Exchange through an application token when a workload role is assigned; it requests a browser sign-in for SharePoint and Purview only when no application path is available. Restricted neither installs/checks workload modules nor starts administrative PowerShell.
+
+### Customer-run update of an existing application
+
+When the customer's administrator must make the tenant changes and the assessor authenticates only with a client secret the assessor already holds, the administrator runs setup with `-SkipCredential` and the existing application's client ID. Setup then reconciles permissions, opens admin consent and assigns the workload role, but never creates, rotates, reads or saves a client secret, and it stops rather than create a new application:
+
+```powershell
+.\setup-service-principal.ps1 -ApplicationId <client ID> -TenantId <tenant>.onmicrosoft.com `
+  -SharePointAdminUrl https://<tenant>-admin.sharepoint.com `
+  -SkipCredential -NoDelegatedEnrichment
+```
+
+`-SkipCredential` cannot be combined with `-RotateCredential`, `-CertificatePath` or `-Mode Unattended`. Setup does not need local administrator rights: it installs PowerShell modules for the current user only. Run it in a normal PowerShell window signed in to Windows as the person running it. When PowerShell must run elevated as a different Windows account, the default Windows sign-in window (Web Account Manager) can fail; add `-UseDeviceCode` to sign in at https://microsoft.com/devicelogin instead. Setup also prints the admin consent link in case no browser opens. If the directory role cannot be assigned, setup reports Microsoft's error and the manual steps (Microsoft Entra admin center > Roles & admins > Global Reader > Add assignments for the default role). The administrator needs Global Administrator or Privileged Role Administrator. The assessor then runs `python main.py --env-file <their file> --check-connections --interactive-auth skip --delegated off` with the existing secret; SharePoint site-level reports and Copilot limited mode need an administrator sign-in and are otherwise listed to confirm.
 
 Setup verifies a reused secret with a token request and checks its recorded `CLIENT_SECRET_KEY_ID` against the application's active credentials. It saves that ID and `CLIENT_SECRET_EXPIRES_AT`, warning when expiry is within 14 days. An older secret can still be verified without metadata; if several active keys exist, setup cannot infer which expiry belongs to it and recommends `-RotateCredential`. A network or inconclusive authentication failure stops setup before credential changes.
 
@@ -58,14 +73,14 @@ New credentials and their complete environment configuration are saved atomicall
 Standard setup installs:
 
 - Microsoft Graph PowerShell modules used only to configure the application.
-- ExchangeOnlineManagement 3.7.2 or later (stable) for Purview and Exchange configuration. This is the minimum supported stable version for the scripts' `-DisableWAM` use. [Microsoft parameter documentation](https://learn.microsoft.com/en-us/powershell/module/exchangepowershell/connect-ippssession?view=exchange-ps#-disablewam).
+- ExchangeOnlineManagement 3.7.2 or later (stable) for Purview and Exchange configuration. This is the minimum supported stable version for the scripts' `-DisableWAM` use. [Microsoft parameter documentation](https://learn.microsoft.com/en-us/powershell/module/exchangepowershell/connect-ippssession?view=exchange-ps#-disablewam). Application-token access to Security & Compliance PowerShell (`Connect-IPPSSession -AccessToken`) needs 3.8.0 or later; preflight reports an older module as the reason the token path is unavailable.
 - SharePoint Online Management Shell in Windows PowerShell, including the Data Access Governance cmdlets. Item-level Everyone/EEEU coverage requires version 16.0.27215.12000 or later.
 
 `Az.Accounts` is not installed or used by a normal assessment. It is needed only when `--legacy-power-platform-collector` is explicitly selected.
 
 ## Authentication and permissions
 
-The [canonical permissions guide](PERMISSIONS.md) distinguishes setup administrator scopes, runtime application permissions, delegated customer roles and workload RBAC. Setup uses delegated Graph `Application.ReadWrite.All` and `Organization.Read.All`, then the administrator consent flow for runtime access. Standard apps missing `Directory.Read.All` (delegated grant inventory) or `SecurityAlert.Read.All` (alerts v2) require updated consent. `UserAuthenticationMethod.Read.All` is not requested: `AuditLog.Read.All` covers the registration report.
+The [canonical permissions guide](PERMISSIONS.md) distinguishes setup administrator scopes, runtime application permissions, delegated customer roles and workload RBAC. Setup uses delegated Graph `Application.ReadWrite.All` and `Organization.Read.All`, plus `RoleManagement.ReadWrite.Directory` for Standard's default Global Reader assignment, then the administrator consent flow for runtime access. Standard apps missing `Directory.Read.All` (delegated grant inventory) or `SecurityAlert.Read.All` (alerts v2) require updated consent. `UserAuthenticationMethod.Read.All` is not requested: `AuditLog.Read.All` covers the registration report.
 
 Restricted setup and live preflight stop on excess requested or granted application permissions. Have an authorized administrator remove unwanted manifest entries and separately revoke unwanted service-principal grants before retrying. The tool does not automatically revoke access. `--services` changes collection scope without reducing granted access.
 
@@ -73,8 +88,12 @@ Restricted setup and live preflight stop on excess requested or granted applicat
 |---|---|---|---|
 | Microsoft Graph tenant, licensing, usage, identity, consent, devices, security, and external connections | Application certificate or client secret | Application permissions reconciled by `setup-service-principal.ps1` | Individual workloads can still be unavailable when the tenant is not licensed or provisioned. |
 | Defender for Endpoint device inventory | Application certificate or client secret | `Machine.Read.All` on WindowsDefenderATP | Requires Defender for Endpoint provisioning. |
-| SharePoint tenant, sites, sharing, and existing DAG reports (Standard only) | Delegated browser sign-in, or application certificate | SharePoint Administrator for delegated use; `Sites.FullControl.All` for app-only administrative PowerShell | Snapshot reports require SharePoint Advanced Management entitlement. Detailed Everyone/EEEU reports additionally require the SharePoint Advanced Management Administrator role. |
-| Purview DLP, labels, retention, rights management, and audit configuration (Standard only) | Delegated browser sign-in, or supported application certificate | Appropriate delegated Purview/Exchange roles, or the application role groups configured by Unattended setup | Feature availability depends on the tenant’s Purview and Exchange subscriptions. |
+| SharePoint tenant sharing settings (both profiles) | Application certificate or client secret through Microsoft Graph | `SharePointTenantSettings.Read.All` | Partial coverage: Graph does not return default link type, anonymous link expiry or per-site settings. |
+| SharePoint sites, sharing, and existing DAG reports (Standard only) | Application certificate (opt-in), otherwise delegated browser sign-in | `Sites.FullControl.All` for app-only administrative PowerShell; SharePoint Administrator for delegated use | Snapshot reports require SharePoint Advanced Management entitlement. Detailed Everyone/EEEU reports additionally require the SharePoint Advanced Management Administrator role. |
+| Sensitivity label definitions (Standard) | Application certificate or client secret through Microsoft Graph beta | `InformationProtectionPolicy.Read.All` | Preview-quality evidence; label publishing policies need Purview PowerShell. |
+| Purview DLP, labels, retention, rights management, and audit configuration (Standard only) | Application token from the existing credential, application certificate, then delegated browser sign-in | `Exchange.ManageAsApp` on Exchange Online and Exchange Online Protection plus a read-only role (`-WorkloadRbac`), or delegated Purview/Exchange roles | Feature availability depends on the tenant’s Purview and Exchange subscriptions. |
+| Report privacy setting (both profiles) | Application certificate or client secret | `ReportSettings.Read.All` | Shows whether usage reports conceal user names. |
+| Copilot limited mode (Standard, optional) | Delegated sign-in (`--delegated auto`) | `CopilotSettings-LimitedMode.Read`; at least Global Reader | Microsoft does not expose this setting to applications. |
 | Power Platform inventory export | No live sign-in | An exported Manage > Inventory CSV | Supplemental only. |
 | Power Platform inventory API | Application credential | Tenant-scoped Power Platform Reader RBAC | Preview and opt-in. |
 | Defender Cloud Apps discovery | Application credential | `CloudApp-Discovery.Read.All` | Preview and opt-in; requires a populated discovery data stream. |
@@ -88,7 +107,7 @@ Portal report roles are separate from application API permissions. Confirm curre
 
 ## Unattended SharePoint and Purview
 
-A client secret is sufficient for Graph, Defender, and selected preview REST APIs. SharePoint administrative PowerShell requires a certificate or delegated session. Supported Purview app-only cmdlets also require a certificate and workload role assignments. Unattended setup is available only with the Standard permission profile.
+A client secret is sufficient for Graph, Defender, selected preview REST APIs and, with a workload role and ExchangeOnlineManagement 3.8.0 or later, Purview and Exchange PowerShell through an application token. SharePoint administrative PowerShell requires a certificate or delegated session; `-EnableSharePointAppOnly` creates and attaches a certificate without full Unattended mode. Unattended setup is available only with the Standard permission profile.
 
 For initial certificate setup, use a readable, unprotected PFX containing its private key. Setup attaches the certificate to the assessment application:
 
@@ -108,7 +127,7 @@ Unattended setup:
 
 - Requires explicit confirmation before requesting broad SharePoint `Sites.FullControl.All` access.
 - Requests the two documented `Exchange.ManageAsApp` application roles.
-- Creates or reconciles application role groups using whole existing management roles that contain the required commands. These roles can include write capabilities; read-only group names do not guarantee read-only or narrowly scoped effective access. Review actual role entries and prior assignments with the workload administrator. See [workload role limitations](PERMISSIONS.md#setup-delegated-access-and-workload-roles).
+- Assigns Global Reader by default, granting broad tenant read access. `-WorkloadRbac RoleGroups` explicitly selects application role groups instead; those groups use whole existing management roles that can include write capabilities despite read-only group names. Review actual role entries and prior assignments with the workload administrator. See [workload role limitations](PERMISSIONS.md#workload-roles-for-app-only-purview-and-exchange).
 - Verifies application-role consent after the consent step.
 
 Specialized Purview workloads such as eDiscovery, Insider Risk, Communication Compliance, and Information Barriers are not queried by default. Set `PURVIEW_INCLUDE_SPECIALIZED=true` only when those additional workloads and roles are intentionally in scope.
@@ -121,7 +140,10 @@ Standard setup does not request preview access unless selected. Restricted rejec
 .\setup-service-principal.ps1 -PreviewCollectors ShadowAI
 .\setup-service-principal.ps1 -PreviewCollectors NetworkAccess
 .\setup-service-principal.ps1 -PreviewCollectors PowerPlatform
+.\setup-service-principal.ps1 -PreviewCollectors CopilotAudit
 ```
+
+`CopilotAudit` requests `AuditLogsQuery.Read.All` for `--preview-collectors copilot-audit`, which reads aggregate Copilot interaction events from the unified audit log. No prompt or response content is requested.
 
 Power Platform Reader is a tenant-scoped Power Platform RBAC role, not the Entra Power Platform Administrator directory role. If the setup operator cannot assign it, use the Power Platform Admin Center inventory export instead.
 
@@ -180,7 +202,7 @@ Use the result wording to distinguish a missing application permission from a mi
 
 Plan an owner and date for removing the dedicated application's access. [CLEANUP.md](CLEANUP.md)
 provides cloud preview/apply commands and local discovery with one deletion confirmation, their separate administrator requirements,
-and the Standard Unattended workload cleanup sequence. Cleanup installs no modules automatically.
+and the workload cleanup sequence for Standard's default Global Reader or other assigned roles. Cleanup installs no modules automatically.
 Retain and verify the agreed evidence package first. A client secret's expiry or deletion of a local
 environment file does not remove application grants; certificates and shared resources need a separate
 ownership review.

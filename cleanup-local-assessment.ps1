@@ -3,8 +3,8 @@
   Finds local assessment artifacts and confirms their removal.
 .DESCRIPTION
   Defaults to the contents of this checkout's output/collections,
-  output/assessments, output/portal-reviews, Reports, .cache/purview, and
-  .cache/sharepoint_dag folders.
+  output/assessments, output/portal-reviews, Reports, .cache/purview,
+  .cache/sharepoint_dag and .cache/delegated (delegated sign-in cache) folders.
   Lists all discovered assessments, then asks once before removing them. The
   standard storage folders are retained. Use -WhatIf for a preview, or -Path
   to select individual files or subdirectories instead. The output, Reports, and
@@ -31,7 +31,7 @@ $repositoryRoot = [IO.Path]::GetFullPath($PSScriptRoot).TrimEnd([IO.Path]::Direc
 $allowedRoots = @('output', 'Reports', '.cache' | ForEach-Object {
     [IO.Path]::GetFullPath((Join-Path $repositoryRoot $_))
 })
-$defaultLocations = @('output/collections', 'output/assessments', 'output/portal-reviews', 'Reports', '.cache/purview', '.cache/sharepoint_dag')
+$defaultLocations = @('output/collections', 'output/assessments', 'output/portal-reviews', 'Reports', '.cache/purview', '.cache/sharepoint_dag', '.cache/delegated')
 
 function Test-DescendantPath {
     param([string]$Candidate, [string]$Parent)

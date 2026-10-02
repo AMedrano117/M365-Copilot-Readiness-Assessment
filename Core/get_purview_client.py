@@ -137,7 +137,7 @@ def collection_state(data, key, optional=False):
         available = bool(container.get('available'))
     else:
         available = bool(container) and not bool(container.get('permission_denied'))
-    return {
+    state = {
         'availability_status': container.get('availability_status', 'available' if available else 'unavailable'),
         'available': available,
         'records_collected': int(container.get('count', 1 if available else 0) or 0),
@@ -147,6 +147,13 @@ def collection_state(data, key, optional=False):
         'optional': bool(container.get('optional', optional)),
         'technical_error': container.get('technical_error', ''),
     }
+    # Provenance and completeness recorded by the collector (PowerShell or the
+    # Microsoft Graph baseline). Preview-quality sources set complete=False.
+    for field in ('complete', 'truncated', 'credential_type', 'auth_path_id', 'coverage',
+                  'evidence_quality', 'source', 'unlock', 'graph_label_count', 'active_count'):
+        if field in container:
+            state[field] = container[field]
+    return state
 
 
 async def get_purview_client(tenant_id, payload=None):
@@ -363,10 +370,27 @@ def hydrate_purview_client(purview_data):
     
     def fetch_org_config():
         if org_config_available:
+            # Keep the actual property names and values so a saved False can be
+            # distinguished from a source that never returned the setting.
+            raw_fields = {key: value for key, value in org_config_data.items()
+                          if str(key).replace('_', '').casefold() in {'customerlockboxenabled', 'auditdisabled'}}
+            def explicit_boolean(name):
+                values = []
+                for key, value in raw_fields.items():
+                    if str(key).replace('_', '').casefold() != name:
+                        continue
+                    if type(value) is bool:
+                        values.append(value)
+                    elif isinstance(value, str) and value.strip().casefold() in {'true', 'false'}:
+                        values.append(value.strip().casefold() == 'true')
+                    else:
+                        return None
+                return values[0] if values and len(set(values)) == 1 else None
             return {
                 'available': True,
-                'customer_lockbox_enabled': org_config_data.get('CustomerLockBoxEnabled', False),
-                'audit_disabled': org_config_data.get('AuditDisabled', False)
+                'customer_lockbox_enabled': explicit_boolean('customerlockboxenabled'),
+                'audit_disabled': explicit_boolean('auditdisabled'),
+                'raw_data': raw_fields,
             }
         return {'available': False}
     

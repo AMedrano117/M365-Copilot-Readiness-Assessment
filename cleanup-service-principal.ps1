@@ -5,8 +5,12 @@
   Preview is the default. -Apply requires confirmation before any removal;
   -WhatIf never invokes removal cmdlets, including workload cmdlets whose own
   WhatIf behavior is unsupported. TenantId and ClientId must match the selected
-  environment file. No customer evidence, certificates, shared groups, or role
-  definitions are deleted. See docs/CLEANUP.md before applying this teardown.
+  environment file. No customer evidence, shared groups, or role definitions
+  are deleted. -IncludeWorkloadRbac also removes Purview/Exchange role-group
+  references and directory role assignments (Security Reader/Global Reader)
+  held by the dedicated application. -RemoveLocalCertificate removes only the
+  certificate that setup -EnableSharePointAppOnly created in the current
+  user's store. See docs/CLEANUP.md before applying this teardown.
 #>
 #Requires -Version 5.1
 [CmdletBinding(SupportsShouldProcess=$true, ConfirmImpact='High')]
@@ -18,7 +22,8 @@ param(
     [guid]$ServicePrincipalObjectId = [guid]::Empty,
     [switch]$IncludeWorkloadRbac,
     [switch]$Apply,
-    [switch]$RemoveEnvironmentFile
+    [switch]$RemoveEnvironmentFile,
+    [switch]$RemoveLocalCertificate
 )
 
 $ErrorActionPreference = 'Stop'
@@ -167,7 +172,8 @@ $script:cleanupWorkloadConnection = $null
 try {
     Import-Module Microsoft.Graph.Authentication -ErrorAction Stop
     Import-Module Microsoft.Graph.Applications -ErrorAction Stop
-    $scope = if ($Apply) { 'Application.ReadWrite.All' } else { 'Application.Read.All' }
+    $scope = @(if ($Apply) { 'Application.ReadWrite.All' } else { 'Application.Read.All' })
+    if ($IncludeWorkloadRbac) { $scope += $(if ($Apply) { 'RoleManagement.ReadWrite.Directory' } else { 'RoleManagement.Read.Directory' }) }
     Connect-MgGraph -TenantId $TenantId -ContextScope Process -Scopes $scope -NoWelcome -ErrorAction Stop | Out-Null
     $graphConnected = $true
     if ([string](Get-MgContext).TenantId -ne [string]$TenantId) { throw 'Graph authenticated to a different tenant; no cleanup was performed.' }
@@ -212,7 +218,29 @@ try {
             } finally { Close-CleanupWorkloadConnection }
         }
     } else {
-        Write-Host 'Workload RBAC was not inspected. Standard unattended setups require -IncludeWorkloadRbac or manual workload cleanup before deleting the application.'
+        Write-Host 'Workload RBAC was not inspected. Standard setup assigns Global Reader by default, including in Unattended mode. Applications with workload roles require -IncludeWorkloadRbac or manual workload cleanup before deleting the application.'
+    }
+
+    $directoryRoleAssignments = @()
+    if ($IncludeWorkloadRbac -and $sp) {
+        $roleFilter = [uri]::EscapeDataString("principalId eq '$($sp.Id)'")
+        $directoryRoleAssignments = @((Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignments?`$filter=$roleFilter" -ErrorAction Stop).value | Where-Object { $_ })
+        foreach ($assignment in $directoryRoleAssignments) {
+            if ([string]$assignment.principalId -ne [string]$sp.Id) { throw 'A directory role assignment does not belong to the dedicated enterprise application; review it manually.' }
+            Write-Host "Directory role assignment $($assignment.id): role template $($assignment.roleDefinitionId), scope $($assignment.directoryScopeId)"
+        }
+    }
+
+    $localCertificate = $null
+    if ($RemoveLocalCertificate) {
+        $thumbprint = Get-CleanupEnvironmentValue -Path $environmentPath -Name 'SHAREPOINT_CERTIFICATE_THUMBPRINT'
+        if (-not $thumbprint) { $thumbprint = Get-CleanupEnvironmentValue -Path $environmentPath -Name 'PURVIEW_CERTIFICATE_THUMBPRINT' }
+        if ($thumbprint -and $thumbprint -notmatch '^[0-9A-Fa-f]{40}$') { throw 'The saved certificate thumbprint is not a valid SHA-1 thumbprint; review it manually.' }
+        if ($thumbprint) { $localCertificate = Get-Item -LiteralPath "Cert:\CurrentUser\My\$thumbprint" -ErrorAction SilentlyContinue }
+        if ($localCertificate -and [string]$localCertificate.Subject -notlike "CN=*workload access") {
+            throw 'The saved certificate was not created by setup -EnableSharePointAppOnly; it was retained. Remove it manually if it is no longer needed.'
+        }
+        if (-not $localCertificate) { Write-Host 'Local assessment certificate: not found in Cert:\CurrentUser\My.' }
     }
 
     $actions = @()
@@ -220,8 +248,10 @@ try {
         if ($plan.RemoveMember) { $actions += [pscustomobject]@{ Target="$($plan.Workload): $($plan.GroupName), member $($plan.ObjectId)"; Action='Remove only the assessment principal membership' } }
         if ($plan.RemovePrincipal) { $actions += [pscustomobject]@{ Target="$($plan.Workload): principal $($plan.ObjectId)"; Action='Remove the assessment workload principal reference' } }
     }
+    foreach ($assignment in $directoryRoleAssignments) { $actions += [pscustomobject]@{ Target="Tenant $TenantId, directory role assignment $($assignment.id)"; Action='Remove the directory role assignment held by the assessment application' } }
     if ($sp) { $actions += [pscustomobject]@{ Target="Tenant $TenantId, enterprise application $($sp.Id)"; Action='Delete the dedicated enterprise application and its grants' } }
     if ($app) { $actions += [pscustomobject]@{ Target="Tenant $TenantId, application $($app.Id)"; Action='Delete the dedicated application registration and all its credentials' } }
+    if ($localCertificate) { $actions += [pscustomobject]@{ Target="Cert:\CurrentUser\My\$($localCertificate.Thumbprint)"; Action='Delete the local assessment certificate after remote cleanup succeeds' } }
     if ($RemoveEnvironmentFile) { $actions += [pscustomobject]@{ Target=$environmentPath; Action='Delete the selected environment file after remote cleanup succeeds' } }
     foreach ($action in $actions) { Write-Host "Planned: $($action.Action) [$($action.Target)]" }
     if (-not $Apply) { Write-Host 'Preview only. Review the identities, then rerun with -Apply to request these removals.'; return }
@@ -248,11 +278,18 @@ try {
             }
         } finally { Close-CleanupWorkloadConnection }
     }
+    foreach ($assignment in $directoryRoleAssignments) {
+        Invoke-MgGraphRequest -Method DELETE -Uri "https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignments/$($assignment.id)" -ErrorAction Stop | Out-Null
+    }
     if ($sp) { Remove-MgServicePrincipal -ServicePrincipalId $sp.Id -Confirm:$false -ErrorAction Stop }
     if ($app) { Remove-MgApplication -ApplicationId $app.Id -Confirm:$false -ErrorAction Stop }
     $remaining = Get-CleanupGraphObjects
     if ($remaining.Application -or $remaining.Principal) {
         throw 'The application or enterprise application is still visible. Allow deletion to propagate and rerun; the environment file was retained.'
+    }
+    if ($localCertificate) {
+        Remove-Item -LiteralPath "Cert:\CurrentUser\My\$($localCertificate.Thumbprint)" -Force -Confirm:$false -ErrorAction Stop
+        Write-Host 'Removed the local assessment certificate.'
     }
     if ($RemoveEnvironmentFile) {
         $verifiedPath = Assert-CleanupEnvironment -Path $environmentPath
@@ -260,7 +297,7 @@ try {
         Remove-Item -LiteralPath $verifiedPath -Force -Confirm:$false -ErrorAction Stop
         Write-Host 'Removed the selected environment file.'
     }
-    Write-Host 'Requested remote cleanup completed. Other profiles, shared groups, certificates, and saved evidence were retained.'
+    Write-Host 'Requested remote cleanup completed. Other profiles, shared groups, other certificates, and saved evidence were retained.'
 } finally {
     try { Close-CleanupWorkloadConnection } finally {
         if ($graphConnected) { Disconnect-MgGraph -ErrorAction Stop | Out-Null }

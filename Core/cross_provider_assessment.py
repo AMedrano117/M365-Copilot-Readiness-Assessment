@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-METHODOLOGY_VERSION = "2.1.0"
+METHODOLOGY_VERSION = "3.0.0"
 ASSESSMENT_VERSION = "2.1.0"
 GUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
 
@@ -347,7 +347,7 @@ def build_run_manifest(tenant_name, inputs, collectors, source_statuses=None):
 
 
 def run_integrity_checks(recommendations, evidence_bundle):
-    issues = []
+    issues = list(evidence_bundle.get("investigation_validation") or [])
     sheets = evidence_bundle.get("sheets", {})
     for key, sheet in sheets.items():
         for index, row in enumerate(sheet.get("rows", []), start=2):

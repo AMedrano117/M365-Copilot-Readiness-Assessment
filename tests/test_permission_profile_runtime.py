@@ -57,6 +57,7 @@ class AuditClient:
             self.graph_roles if 'graph.microsoft.com' in scope else {'Machine.Read.All'}))
         self.calls = []
         self.incomplete = False
+        self.directory_roles = []
 
     async def get_collection(self, path, params=None):
         self.calls.append((path, params))
@@ -67,6 +68,9 @@ class AuditClient:
             rows = [self.resources[app_id]]
         elif path == f'/v1.0/servicePrincipals/{PRINCIPAL_ID}/appRoleAssignments':
             rows = self.assignments
+        elif path == '/v1.0/roleManagement/directory/roleAssignments':
+            assert params['$filter'] == f"principalId eq '{PRINCIPAL_ID}'"
+            rows = self.directory_roles
         else:
             raise AssertionError(f'Unexpected endpoint: {path}')
         return {'value': copy.deepcopy(rows), 'available': True,
@@ -172,6 +176,14 @@ class RestrictedAuditTests(unittest.IsolatedAsyncioTestCase):
         result = await audit_restricted_access(client, APP_ID, client.graph_roles | {'Directory.Read.All'})
         self.assertFalse(result['verified'])
         self.assertIn('Current Graph token: Directory.Read.All', result['reason'])
+
+    async def test_directory_role_assignment_is_excess(self):
+        client = AuditClient()
+        client.directory_roles = [{'id': 'assignment', 'principalId': PRINCIPAL_ID,
+                                   'roleDefinitionId': '5d6b6bb7-de71-4623-b4af-96380a352509', 'directoryScopeId': '/'}]
+        result = await audit_restricted_access(client, APP_ID, client.graph_roles)
+        self.assertFalse(result['verified'])
+        self.assertIn('Directory role assignment: 5d6b6bb7-de71-4623-b4af-96380a352509', result['reason'])
 
     async def test_incomplete_permission_inventory_fails_closed(self):
         client = AuditClient()

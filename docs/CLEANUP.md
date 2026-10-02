@@ -58,9 +58,9 @@ Install-Module -Name ExchangeOnlineManagement -MinimumVersion 3.7.2 -Scope Curre
 
 Cleanup does not require the complete Microsoft Graph module bundle or the SharePoint management module. Follow the customer's approved module-installation process where PowerShell Gallery installation is restricted.
 
-### Standard Unattended workload assignments
+### Standard workload roles
 
-For an app configured by Standard Unattended setup, include `-IncludeWorkloadRbac` in preview, `-Apply -WhatIf`, and apply.
+For an app assigned Global Reader by default Standard setup, or explicitly configured with Security Reader or role groups, include `-IncludeWorkloadRbac` in preview, `-Apply -WhatIf`, and apply. This applies to both Standard and Unattended modes. The Graph sign-in then also requests `RoleManagement.Read.Directory` for preview or `RoleManagement.ReadWrite.Directory` for apply, so the administrator needs Privileged Role Administrator.
 
 Run workload cleanup in a fresh PowerShell session. The script closes its verified connections, but Exchange's disconnect command can also close legacy remote PowerShell sessions in the same host. [Disconnect behavior](https://learn.microsoft.com/en-us/powershell/module/exchangepowershell/disconnect-exchangeonline?view=exchange-ps).
 
@@ -72,7 +72,7 @@ Run workload cleanup in a fresh PowerShell session. The script closes its verifi
   -TenantId "<tenant-guid>" -ClientId "<application-client-guid>" -IncludeWorkloadRbac -Apply
 ```
 
-The script verifies the target's identity in both workloads before removing its membership from `AI Readiness Purview Read-Only` and `AI Readiness Exchange Read-Only`, and then removes the matching workload service-principal references. These steps precede Entra deletion while the target IDs are available. Shared role groups and management-role definitions remain intact. Restricted omits workload cleanup and does not support this flag.
+The script verifies the target's identity in both workloads before removing its membership from `AI Readiness Purview Read-Only` and `AI Readiness Exchange Read-Only`, and then removes the matching workload service-principal references. It also lists every directory role assignment held by the dedicated enterprise application (for example Security Reader) and removes them before the enterprise application is deleted. These steps precede Entra deletion while the target IDs are available. Shared role groups and management-role definitions remain intact. Restricted omits workload cleanup and does not support this flag.
 
 Record the enterprise application's **service-principal object ID** printed by preview. If Entra deletion already occurred and a workload retry is needed, supply that exact retained ID with `-ServicePrincipalObjectId "<enterprise-application-object-guid>"`. It must match the live enterprise application when one exists. Do not substitute the client ID or an ID from another tenant.
 
@@ -82,7 +82,9 @@ Additional manually assigned Entra roles, other workload role groups, custom ass
 
 Optionally add `-RemoveEnvironmentFile` to the reviewed apply command. That file's removal is separately confirmed with the plan, then performed only after successful remote deletion and verification that both Entra objects are absent. Keep the file until identity checks and any cleanup retries are complete. Deleting a local environment file alone does not revoke consent, and application grants do not expire when a client secret expires.
 
-Application deletion does not remove local certificate files, private keys in certificate stores, other environment files, modules, Python environments, backups or copied evidence. Review ownership and reuse of certificates manually before deleting any private key; a certificate may serve another application. Review any additional registrations or service principals in other tenants separately. [Microsoft application removal guidance](https://learn.microsoft.com/en-us/entra/identity-platform/howto-remove-app).
+Add `-RemoveLocalCertificate` to remove the certificate that setup `-EnableSharePointAppOnly` created in `Cert:\CurrentUser\My`. The script reads its thumbprint from the selected environment file, refuses any certificate setup did not create (subject ending in "workload access"), and removes it only after remote cleanup succeeds. Otherwise application deletion does not remove local certificate files, private keys in certificate stores, other environment files, modules, Python environments, backups or copied evidence. Review ownership and reuse of other certificates manually before deleting any private key; a certificate may serve another application.
+
+Delegated enrichment keeps a DPAPI-protected token cache and an account record under `.cache/delegated/`. Remove that folder, or run `cleanup-local-assessment.ps1`, when the engagement ends. Review any additional registrations or service principals in other tenants separately. [Microsoft application removal guidance](https://learn.microsoft.com/en-us/entra/identity-platform/howto-remove-app).
 
 If the environment file is unavailable or the application was renamed, use that Microsoft admin-center removal procedure after verifying the tenant, client ID and object IDs against the engagement record. Complete workload cleanup first, then verify both the app registration and enterprise application are absent. Shared applications require removal of only the reviewed assessment credentials and actual consent grants; changing the requested-permissions manifest alone is insufficient.
 

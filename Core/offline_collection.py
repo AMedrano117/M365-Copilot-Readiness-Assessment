@@ -81,7 +81,7 @@ def _decode(value):
 def save_collection(path=None, *, tenant_id, tenant_name, service_results,
                     enabled_collectors=None, connection_results=None, collected_at=None,
                     assessment_settings=None, supplemental_inputs=None, evaluation_date=None,
-                    collection_progress=None, _checkpoint_package=None):
+                    collection_progress=None, _checkpoint_package=None, auth_plan=None):
     """Save evidence, defaulting to a distinct tenant/date file under output/collections."""
     results = {key: service_results[key] for key in SERVICE_KEYS}
     # The legacy Power Platform collector attaches evidence to its HTTP transport.
@@ -104,6 +104,9 @@ def save_collection(path=None, *, tenant_id, tenant_name, service_results,
     }
     if collection_progress is not None:
         payload['collection_progress'] = collection_progress
+    if auth_plan:
+        # Which identity and auth path each dataset used (or why it was skipped).
+        payload['auth_plan'] = auth_plan
     from .assessment_package import SETTING_KEYS, evaluation_day
     from .cross_provider_assessment import METHODOLOGY_VERSION, ASSESSMENT_VERSION
     payload['methodology_version'] = METHODOLOGY_VERSION
@@ -256,5 +259,6 @@ def collection_context(payload=None, source_file=None, evaluation_date=None, mod
             "assessment_settings": (payload or {}).get('assessment_settings', {}),
             "permission_profile": (payload or {}).get('assessment_settings', {}).get('permission_profile') or 'unrecorded',
             "collection_progress": (payload or {}).get('collection_progress', {}),
+            "auth_plan": (payload or {}).get('auth_plan') or {},
             "freshness": "missing" if age is None else "unknown" if age < 0 else "stale" if age > 35 else "current",
             "scope": "Saved tenant collection plus supplied reports" if payload and payload.get('has_tenant_collection', True) else "Portal exports and historical inputs only"}

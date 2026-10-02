@@ -32,25 +32,25 @@ DOMAIN_LOOKUP = {row[0]: row for row in (*DOMAINS, *OPTIONAL_DOMAINS)}
 # Required questions deliberately separate permissions, settings and lifecycle.
 # EvidenceKey identifies the question; a service-wide licensing row cannot pass it.
 QUESTIONS = (
-    ("IDENTITY.AUTH", "identity", "Confirm sign-in policy coverage for the pilot", ("conditional_access_detail",), ("conditional_access", "sign-in_policy"), True),
+    ("IDENTITY.AUTH", "identity", "Require MFA and block legacy sign-in for all users", ("conditional_access_detail",), ("conditional_access", "sign-in_policy"), True),
     ("IDENTITY.MFA", "identity", "Confirm multifactor authentication registration coverage", ("authentication_detail",), ("authentication_registration", "mfa_registration", "enrolled_in_mfa"), True),
     ("IDENTITY.ADMIN", "identity", "Review privileged access and administrative roles", ("admin_role_detail",), ("admin_role", "privileged", "role_assignment"), True),
     ("CONTENT.SHARING", "content", "Confirm tenant sharing defaults", ("sharepoint_governance_detail",), ("sharing_settings", "tenant_sharing"), True),
     ("CONTENT.PERMISSIONS", "content", "Review broad permissions to business content", ("data_exposure_detail",), ("oversharing", "permissions_snapshot", "broad_access"), True),
     ("CONTENT.OWNERSHIP", "content", "Confirm accountable owners and inactive-site decisions", ("sharepoint_lifecycle_detail",), ("lifecycle", "ownerless", "inactive_sites"), True),
     ("DATA.LABELS", "data_protection", "Confirm sensitivity label definitions for business content", ("purview_policy_detail",), ("sensitivity_label", "labels_are_defined"), True),
-    ("DATA.PUBLISHING", "data_protection", "Confirm sensitivity labels are published to intended users", ("purview_policy_detail",), ("label_policies", "publishing", "publish", "publication"), True),
+    ("DATA.PUBLISHING", "data_protection", "Confirm sensitivity labels are published to users", ("purview_policy_detail",), ("label_policies", "publishing", "publish", "publication"), True),
     ("DATA.DLP", "data_protection", "Confirm data loss prevention coverage and enforcement", ("purview_policy_detail",), ("dlp", "data_loss_prevention"), True),
     ("DATA.AUDIT", "data_protection", "Confirm audit coverage for investigation", ("purview_policy_detail",), ("audit",), True),
     ("DATA.RETENTION", "data_protection", "Confirm content retention requirements", ("purview_policy_detail",), ("retention",), True),
-    ("DATA.EXPOSURE", "data_protection", "Confirm who can access sensitive pilot content", ("data_exposure_detail",), ("sensitive_data", "sensitive-data", "dspm"), True),
+    ("DATA.EXPOSURE", "data_protection", "Confirm who can access sensitive content", ("data_exposure_detail",), ("sensitive_data", "sensitive-data", "dspm"), True),
     ("APPS.CONSENT", "applications", "Review application consent and granted permissions", ("app_consent_policy_detail", "app_access_detail"), ("consent", "oauth", "app_access"), True),
     ("APPS.CONNECTIONS", "applications", "Confirm connected sources and their access boundaries", ("external_connection_detail",), ("external_connection", "connector"), True),
-    ("ENDPOINT.POSTURE", "endpoints", "Confirm the pilot device and browser protection baseline", ("defender_device_detail",), ("device", "endpoint", "browser"), True),
-    ("THREAT.INCIDENTS", "endpoints", "Review active incidents affecting the pilot", ("defender_incident_detail",), ("incident", "threat"), True),
-    ("LICENSE.ASSIGNMENT", "licensing", "Confirm Copilot license assignment for the pilot population", ("copilot_readiness_detail", "ai_usage_detail"), ("copilot_license", "license_coverage", "portal_copilot_readiness"), True),
-    ("LICENSE.APPS", "licensing", "Confirm application prerequisites for pilot users", ("copilot_readiness_detail", "ai_usage_detail"), ("m365_app_readiness", "portal_copilot_readiness", "prerequisite"), True),
-    ("ADOPTION.BASELINE", "adoption", "Agree a pilot population, usage baseline and success measures", ("ai_usage_detail", "m365_activity_detail"), ("copilot_usage", "activity", "adoption", "pilot"), False),
+    ("ENDPOINT.POSTURE", "endpoints", "Confirm the device and browser protection baseline", ("defender_device_detail",), ("device", "endpoint", "browser"), True),
+    ("THREAT.INCIDENTS", "endpoints", "Review active security incidents", ("defender_incident_detail",), ("incident", "threat"), True),
+    ("LICENSE.ASSIGNMENT", "licensing", "Confirm Copilot licenses are available", ("copilot_readiness_detail", "ai_usage_detail"), ("copilot_license", "license_coverage", "portal_copilot_readiness"), True),
+    ("LICENSE.APPS", "licensing", "Confirm Microsoft 365 Apps prerequisites", ("copilot_readiness_detail", "ai_usage_detail"), ("m365_app_readiness", "portal_copilot_readiness", "prerequisite"), True),
+    ("ADOPTION.BASELINE", "adoption", "Agree pilot use cases, a usage baseline and success measures", ("ai_usage_detail", "m365_activity_detail"), ("copilot_usage", "activity", "adoption", "pilot"), False),
 )
 OPTIONAL_QUESTIONS = (
     ("AGENTS.BOUNDARIES", "agents", "Confirm agent owners, identities, knowledge sources and action permissions", ("power_platform_detail",), ("agent", "power_platform", "connector"), False),
@@ -172,6 +172,8 @@ def _provenance(row, bundle, expected_tenant_id):
         **({"max_age_days": row['EvidenceMaxAgeDays']} if row.get('EvidenceMaxAgeDays') else {}),
         **({"qualifications": ["Report date confirmed by the operator; the original export is retained unchanged."]}
            if row.get("EvidenceDateBasis") == "Operator-confirmed report date" else {}),
+        # Removed before the evidence ID is computed; provenance never changes IDs.
+        "_source_state": source,
     }
 
 
@@ -197,6 +199,7 @@ def _qualify_record(original, bundle, day, expected_tenant_id, *, historical=Fal
         row.update(Disposition="Reference", EvidenceBasis="Collection context")
     domain = domain_for(row)
     meta = _provenance(row, bundle, expected_tenant_id)
+    source_state = meta.pop("_source_state", {}) or {}
     historical = historical or original.get("SourceType") == "prior_assessment"
     if historical:
         prior = bundle.get("prior_report") or {}
@@ -223,6 +226,14 @@ def _qualify_record(original, bundle, day, expected_tenant_id, *, historical=Fal
                                   or row.get("EvidenceBasis") == "License signal"):
         status = "limited"
     qualification = fact["qualification"]
+    if (status == "limited" and not gap and row.get("Disposition") == "Action" and fact["source_type"] == "portal_export"
+            and fact["freshness"] == "current" and fact["scope"] and fact["tenant_id"] and not fact["complete"]):
+        # A current Microsoft export that measures a condition (for example
+        # 957 permissions granted to Everyone except external users) proves the
+        # condition exists, even if the export may omit some objects.
+        # Completeness matters only for claiming something is absent.
+        status = "supported"
+        qualification = (qualification + " The export may not include every object; the condition is measured in the objects it includes.").strip()
     if historical:
         report_date = f" dated {parse_date(row['PriorReportDate']).isoformat()}" if parse_date(row["PriorReportDate"]) else " with no recorded report date"
         qualification = f"Earlier assessment{report_date}. Its conclusion has not been revalidated from saved facts. " + qualification
@@ -236,6 +247,11 @@ def _qualify_record(original, bundle, day, expected_tenant_id, *, historical=Fal
         "EvidenceScope": fact["scope"], "EvidenceComplete": fact["complete"],
         "MethodologyVersion": METHODOLOGY_VERSION,
     })
+    if not historical and source_state:
+        from .auth_plan import collected_with_label
+        label = collected_with_label(source_state)
+        if label:
+            row["CollectedWith"] = label
     if status != "supported" and row.get("Disposition") in {"Action", "Assurance"}:
         row["Confidence"] = "Unknown" if fact["freshness"] in {"unknown", "future"} else "Low"
     return row, fact
@@ -461,23 +477,69 @@ def _matches_question(row, question):
     return (key_match and marker_match) if domain == "data_protection" else key_match or marker_match
 
 
+# What an unanswered required check means and how to answer it. Methodology 3.0
+# judges controls tenant-wide, so the text never asks for a pilot roster.
+GAP_GUIDANCE = {
+    "IDENTITY.AUTH": ("Conditional Access policies and security defaults were not collected.",
+                      "Collect them (Microsoft Graph Policy.Read.All), or confirm in the Microsoft Entra admin center that MFA is required for all users and legacy authentication is blocked."),
+    "IDENTITY.MFA": ("MFA registration details were not collected.",
+                     "Collect them (Microsoft Graph AuditLog.Read.All), or review Microsoft Entra admin center > Authentication methods > User registration details."),
+    "IDENTITY.ADMIN": ("Directory role assignments were not collected.",
+                       "Collect them (Microsoft Graph RoleManagement.Read.Directory), or review Microsoft Entra admin center > Roles and administrators."),
+    "CONTENT.SHARING": ("SharePoint tenant sharing settings were not collected.",
+                        "Grant SharePointTenantSettings.Read.All and rerun, or confirm the external sharing and default link settings in SharePoint admin center > Policies > Sharing."),
+    "CONTENT.PERMISSIONS": ("No SharePoint permissions or oversharing report was available.",
+                            "Run the SharePoint Advanced Management Data access governance reports and supply them with --reports-dir, or run with a SharePoint administrator sign-in or certificate."),
+    "CONTENT.OWNERSHIP": ("Site ownership and activity were not collected.",
+                          "Run with a SharePoint administrator sign-in or certificate, or review SharePoint admin center > Active sites for sites without owners and sites with no recent activity."),
+    "DATA.LABELS": ("Sensitivity label definitions were not collected.",
+                    "Grant InformationProtectionPolicy.Read.All or enable Purview PowerShell collection, or confirm the labels in the Microsoft Purview portal."),
+    "DATA.PUBLISHING": ("Sensitivity label publishing policies were not collected.",
+                        "Enable Purview PowerShell collection (setup-service-principal.ps1 -WorkloadRbac GlobalReader), or confirm in the Microsoft Purview portal that labels are published to users."),
+    "DATA.DLP": ("Data loss prevention policies were not collected.",
+                 "Enable Purview PowerShell collection (setup-service-principal.ps1 -WorkloadRbac GlobalReader), or confirm in the Microsoft Purview portal which DLP policies are enforced."),
+    "DATA.AUDIT": ("The audit configuration was not collected.",
+                   "Enable Purview PowerShell collection, or confirm in the Microsoft Purview portal that auditing is on."),
+    "DATA.RETENTION": ("Retention policies were not collected.",
+                       "Assign a role that can read them (setup-service-principal.ps1 -WorkloadRbac GlobalReader), or confirm in Microsoft Purview > Data lifecycle management how Copilot interactions and content are retained."),
+    "DATA.EXPOSURE": ("No data security posture report on sensitive content was available.",
+                      "Run the DSPM for AI data risk assessment in Microsoft Purview and supply the export with --reports-dir, or record the owner's review of who can reach sensitive content."),
+    "APPS.CONSENT": ("Application consent settings and grants were not collected.",
+                     "Collect them (Microsoft Graph Policy.Read.All and Directory.Read.All), or review Microsoft Entra admin center > Enterprise applications > Consent and permissions."),
+    "APPS.CONNECTIONS": ("Copilot connectors were not collected.",
+                         "Collect them (Microsoft Graph ExternalConnection.Read.All), or review Microsoft 365 admin center > Copilot > Connectors."),
+    "ENDPOINT.POSTURE": ("Device and browser protection evidence was not available.",
+                         "Confirm how devices used with Copilot are protected (Intune compliance, another MDM, app protection or browser controls) and that Conditional Access enforces it."),
+    "THREAT.INCIDENTS": ("Security incidents were not collected.",
+                         "Collect them (Microsoft Graph SecurityIncident.Read.All), or review the Microsoft Defender portal for active high-severity incidents."),
+    "LICENSE.ASSIGNMENT": ("Copilot license information was not collected.",
+                           "Collect it (Microsoft Graph Organization.Read.All), or check Microsoft 365 admin center > Billing > Licenses."),
+    "LICENSE.APPS": ("Microsoft 365 Apps versions and update channels are not available through Microsoft Graph.",
+                     "Check Microsoft 365 admin center > Reports > Usage > Microsoft 365 Copilot readiness, and supply the export with --reports-dir so the prerequisites can be verified."),
+    "ADOPTION.BASELINE": ("Pilot use cases, a usage baseline and success measures have not been recorded yet.",
+                          "Agree three to five use cases, how success will be measured and who takes part with the business sponsor. This is a planning step; it does not change the readiness verdict."),
+}
+
+
 def _gap(question, day):
     control, domain, title, keys, _, security_gate = question
     identifier = "GAP-" + control.replace(".", "-")
+    observation, next_step = GAP_GUIDANCE.get(control, ("The collected evidence does not answer this check.",
+                                                        "Confirm the tenant-wide setting and record the result and observation date."))
     return {
         "RecommendationId": identifier, "FindingKey": "coverage." + control.lower(),
         "ControlId": control, "MethodologyVersion": METHODOLOGY_VERSION,
         "Service": DOMAIN_LOOKUP[domain][1], "Feature": title,
-        "Observation": "The supplied evidence does not establish this check for the intended pilot population.",
-        "Recommendation": title + ". Record the scope, observation date and the result of the review.",
+        "Observation": observation,
+        "Recommendation": next_step,
         "Priority": "Medium", "Status": "Not Assessed", "Disposition": "Coverage",
         "ReadinessStage": "Before pilot" if security_gate else "Pilot planning",
         "ImpactArea": DOMAIN_LOOKUP[domain][1], "DomainId": domain, "Domain": DOMAIN_LOOKUP[domain][1],
-        "OwnerRole": DOMAIN_LOOKUP[domain][2], "CompletionEvidence": "A dated review covering the pilot population, with the result and any agreed remediation recorded.",
+        "OwnerRole": DOMAIN_LOOKUP[domain][2], "CompletionEvidence": "A dated confirmation of the tenant-wide setting, with the result and any follow-up recorded.",
         "EvidenceKey": ";".join(keys), "EvidenceSheet": "", "EvidenceAvailable": "No",
         "EvidenceBasis": "Not verified", "EvidenceStatus": "gap", "Confidence": "Unknown",
         "ActionType": "Evidence", "Historical": "No", "ObservationDate": "", "Freshness": "unknown",
-        "Qualification": "This is an unanswered assessment question, not a measured control failure.",
+        "Qualification": "This check could not be answered from the collected evidence; it is not a measured control failure.",
         "SourceType": "assessment_requirement", "SourceFile": "", "SecurityGate": security_gate,
         "EvidenceId": "", "EvidenceScope": "", "EvidenceComplete": False,
     }
@@ -487,6 +549,9 @@ def _supports_question(row, control):
     if row.get("EvidenceStatus") != "supported" or row.get("Disposition") not in {"Action", "Assurance"}:
         return False
     if row.get("Disposition") == "Action":
+        return True
+    if row.get("BaselineCheck"):
+        # Tenant-wide baseline checks evaluate enforcement and scope explicitly.
         return True
     # Inventory and configuration summaries establish that policies exist. They
     # do not establish that the intended users/content are covered or that the
@@ -535,7 +600,7 @@ def _action(row):
         elif result['ActionTitle'].startswith('Confirm remediation of Review '):
             result['ActionTitle'] = 'Confirm the review of ' + original[7:]
         result["Feature"] = result["ActionTitle"]
-        result["Recommendation"] = "Confirm whether this condition still applies to the pilot population. " + str(result.get("Recommendation") or "Record the outcome and close or update the finding.")
+        result["Recommendation"] = "Confirm whether this condition still applies. " + str(result.get("Recommendation") or "Record the outcome and close or update the finding.")
         result["ReadinessStage"] = "Before pilot" if result.get("Status", "").lower() == "critical" else "Before broad rollout"
     else:
         result["ActionType"] = "Remediation"
@@ -687,6 +752,14 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
             # scoped review may answer its question; it cannot close an Action.
             row.update(Disposition="Reference", OriginalDisposition="Coverage", ReviewClosure="Question answered by a current scoped operator review",
                        ReviewEvidenceIds=[reviewed_passes[control]["evidence_id"] for control in matching_questions])
+    observed_controls = {control["control_id"] for control in controls if control["status"] == "Observed"}
+    for row in records:
+        # A tenant-wide "confirm" row (for example connectors to review) is
+        # answered when other supported evidence, such as a current owner
+        # review, already establishes the same control.
+        if row.get("BaselineCheck") and row.get("Disposition") == "Coverage" and row.get("ControlId") in observed_controls:
+            row.update(Disposition="Reference", OriginalDisposition="Coverage",
+                       ReviewClosure="Answered by other supported evidence for this control")
     for fact in explicit:
         if fact["selection"] == "conflict" and fact["domain_id"] in enabled:
             question = ("CONFLICT." + fact["metric_id"], fact["domain_id"], "Resolve conflicting evidence for " + fact.get("label", fact["metric_id"]), (), (), True)
@@ -719,22 +792,59 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
     historical_strengths = [row for row in records if row.get("Disposition") == "Assurance" and row["EvidenceStatus"] != "supported" and has_historical_support(row)]
     opportunities = [row for row in records if row.get("Disposition") == "Opportunity" and row["Historical"] != "Yes"]
     coverage = [row for row in actions if row["ActionType"] == "Evidence"]
-    unresolved = [row for row in controls if row["security_gate"] and row["status"] == "Not established"]
     confirmed_actions = [row for row in actions if row["ActionType"] == "Remediation" and row["SecurityGate"]]
     critical = [row for row in confirmed_actions if str(row.get("Status", "")).lower() == "critical"]
     high = [row for row in confirmed_actions if row.get("Priority") == "High"]
     medium = [row for row in confirmed_actions if row.get("Priority") == "Medium"]
     confirmation = [row for row in actions if row["ActionType"] == "Confirmation"]
+    # Methodology 3.0: the pilot decision rests on the tenant-wide baseline. A
+    # control enforced for all users covers any pilot group, so no pilot roster
+    # is needed. Confirmed critical or high-priority conditions block the pilot;
+    # checks the evidence could not answer are conditions to confirm before the
+    # pilot starts, unless too few required checks were answered to decide.
+    # Conflicting dated reviews (one records a failure) and critical earlier
+    # findings must be resolved before a pilot, even though neither is a
+    # current measured failure.
+    unresolved_critical = [row for row in actions if row["SecurityGate"] and (
+        row.get("EvidenceStatus") == "conflict"
+        or row["ActionType"] == "Confirmation" and str(row.get("Status", "")).lower() == "critical")]
+    blockers = critical + [row for row in high if row not in critical] + [
+        row for row in unresolved_critical if row not in critical and row not in high]
+    gates = [row for row in controls if row["security_gate"]]
+    answered = [row for row in gates if row["status"] != "Not established"]
+    for row in actions:
+        if not row["SecurityGate"]:
+            row["PilotImpact"] = ""
+        elif row in blockers:
+            row["PilotImpact"], row["ReadinessStage"] = "Blocks pilot", "Before pilot"
+        elif row["ActionType"] == "Remediation":
+            row["PilotImpact"], row["ReadinessStage"] = "Fix before broad rollout", "Before broad rollout"
+        else:
+            row["PilotImpact"], row["ReadinessStage"] = "Confirm before pilot", "Before pilot"
+    pilot_conditions = [row for row in actions if row["SecurityGate"] and row not in blockers]
     if critical:
         decision, rationale = "Not ready for pilot", "Confirmed critical conditions require remediation before the pilot proceeds."
-    elif unresolved or any(row["SecurityGate"] for row in coverage) or any(row["SecurityGate"] for row in confirmation):
-        decision, rationale = "Readiness unconfirmed", "Readiness is not established. Confirm the unresolved controls and earlier findings for the intended pilot population before authorizing expansion."
-    elif high:
-        decision, rationale = "Pilot only — remediation required", "Address the confirmed high-priority conditions before broad deployment and agree the pilot boundaries."
-    elif medium:
-        decision, rationale = "Controlled pilot with conditions", "The required checks are covered; complete the remaining measured conditions within the agreed pilot plan."
+    elif blockers:
+        fix_count = sum(row["ActionType"] == "Remediation" for row in blockers)
+        resolve_count = len(blockers) - fix_count
+        parts = []
+        if fix_count:
+            parts.append(f"{fix_count} high-priority tenant condition{'s' if fix_count != 1 else ''} must be fixed")
+        if resolve_count:
+            parts.append(f"{resolve_count} conflicting or critical earlier finding{'s' if resolve_count != 1 else ''} must be resolved")
+        decision, rationale = "Not ready for pilot", (
+            " and ".join(parts) + " before a pilot starts. Every other required check is either met or listed as a condition.")
+    elif gates and len(answered) * 2 < len(gates):
+        decision, rationale = "Readiness unconfirmed", (
+            f"Only {len(answered)} of {len(gates)} required checks could be answered from the collected evidence, too few to decide. "
+            "Collect the missing sources listed under Open checks, then rebuild the report.")
+    elif pilot_conditions:
+        decision, rationale = "Controlled pilot with conditions", (
+            "No blocking condition was found in the tenant-wide baseline. Confirm the listed checks before the pilot starts "
+            "and schedule the remaining fixes before broad rollout.")
     else:
-        decision, rationale = "Ready for a controlled pilot", "The required checks are supported by the supplied evidence. Start with a bounded population and review the agreed success measures."
+        decision, rationale = "Ready for a controlled pilot", (
+            "Every required check passed tenant-wide. Choose a bounded pilot group and agree its success measures.")
     counts = {
         "actions": len(actions), "remediation": sum(row["ActionType"] == "Remediation" for row in actions), "confirmation": len(confirmation),
         "evidence_gaps": len(coverage), "strengths": len(strengths), "opportunities": len(opportunities),
@@ -758,15 +868,15 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
         if domain_strengths:
             summary = ' '.join(str(row.get('Observation') or row.get('Strength') or '') for row in domain_strengths[:2])
             if domain_gaps:
-                summary += ' The remaining checks establish how these controls cover the intended pilot.'
+                summary += ' Some checks in this area could not be answered from the collected evidence; they are listed to confirm.'
         elif any(row['ActionType'] == 'Remediation' for row in domain_actions):
             summary = 'The evidence identifies conditions that require remediation. Use the action plan to agree their treatment before the next rollout stage.'
         elif historical_count:
-            summary = 'Earlier or limited observations identify conditions requiring attention. Confirm their current status and coverage of the intended pilot population.'
+            summary = 'Earlier or limited observations identify conditions requiring attention. Confirm their current status.'
         else:
-            summary = 'The supplied evidence does not yet establish the required checks for the pilot population.'
+            summary = 'The collected evidence does not yet answer the required checks in this area.'
         if domain == 'adoption' and metrics:
-            summary = 'Dated usage and workload observations support pilot planning. Agree the intended population and outcome measures with the business sponsor.'
+            summary = 'Dated usage and workload observations support pilot planning. Agree the pilot use cases and outcome measures with the business sponsor.'
         domains.append({
             "id": domain, "title": title, "owner_role": owner, "why_it_matters": why,
             "status": status, "summary": summary, "findings": findings, "actions": domain_actions,
@@ -803,11 +913,13 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
         "strengths": strengths, "historical_strengths": historical_strengths, "opportunities": opportunities,
         "coverage": coverage, "decision_coverage": [row for row in coverage if row["SecurityGate"]],
         "optional_coverage": optional_records, "counts": counts, "critical": critical, "high": high, "medium": medium,
+        "blockers": blockers, "pilot_conditions": pilot_conditions,
+        "answered_controls": len(answered), "required_controls": len(gates),
         "evidence": observations, "adoption_metrics": [row for row in metrics if row["selection"] == "selected"],
         "superseded_findings": superseded, "evidence_period": {"start": dates[0] if dates else None, "end": dates[-1] if dates else None},
         "rollout_conditions": [
-            {"stage": "Prepare", "condition": "Agree a bounded pilot population, business owner and permitted use cases."},
-            {"stage": "Authorize pilot", "condition": "Close critical findings and confirm required controls for that population."},
+            {"stage": "Prepare", "condition": "Fix the blocking conditions and confirm the checks the evidence could not answer."},
+            {"stage": "Authorize pilot", "condition": "Choose a bounded pilot group, a business owner and the permitted use cases."},
             {"stage": "Expand", "condition": "Close or approve the remaining remediation, confirm earlier findings and review pilot outcomes."},
         ],
     }
@@ -818,8 +930,13 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
     if milestone == "broader":
         result["decision"] = "Ready for broader adoption"
         result["rationale"] = "The pilot outcomes, sponsor approval and current control reviews support the explicitly defined larger population."
-    elif milestone != "pilot" and result["decision"] in {
+    elif milestone == "pilot" and result["decision"] == "Not ready for pilot" and not critical:
+        # Every high-priority condition has a current, documented pilot treatment.
+        result["decision"] = "Controlled pilot with conditions"
+        result["rationale"] = ("Documented pilot treatments cover the high-priority conditions. They remain open and must be "
+                               "fixed before broad rollout.")
+    elif milestone not in {"pilot", "broader"} and result["decision"] in {
             "Ready for a controlled pilot", "Controlled pilot with conditions", "Pilot only — remediation required"}:
         result["decision"] = "Readiness unconfirmed"
-        result["rationale"] = "Complete the dated pilot scope, reviewed plan and remaining pilot requirements before authorizing the next rollout stage."
+        result["rationale"] = "Complete the remaining pilot requirements before authorizing the next rollout stage."
     return result

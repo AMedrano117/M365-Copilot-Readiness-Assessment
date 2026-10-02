@@ -23,6 +23,10 @@ page previews. This does not refresh the PDFs from the portal or establish score
 | Other security/configuration evidence | Existing audit configuration, label/policy evidence, identity/security checks, SharePoint sharing settings and visible external connections. | These do not reproduce the portal's recommendation percentages or referenced file/site totals. |
 | Unlicensed Copilot Chat | Not returned by the Graph Copilot reporting endpoints. | Review the Chat usage report if this adoption measure is in scope. Audit activity is a different measure. |
 | Agent activity, Search, credits and assisted hours | The collectors do not reproduce these portal metrics. | Request relevant cards only when these experiences or value/cost measures are in scope. |
+| Copilot limited mode | Collected when a delegated administrator sign-in is available (`--delegated auto`, the default). | With `--delegated off` or no terminal, review the setting in the admin center. |
+| Report privacy | Whether usage reports conceal user names (`ReportSettings.Read.All`). When names are concealed, per-user detail shows pseudonymous identifiers; aggregate counts are unaffected. | The privacy owner decides whether to reveal names for the assessment period. |
+| Copilot interaction audit (opt-in preview) | Aggregate Copilot interaction events per day, per app and distinct users from the unified audit log (`--preview-collectors copilot-audit`). | Audit events have a different scope from the licensed-user usage reports; use them together. |
+| SharePoint Copilot content controls | Restricted SharePoint Search mode and allowed-site count, Restricted Content Discovery per site, and restricted access control, when SharePoint administration runs and the installed module exposes them. | Reference only; decide whether to use them while oversharing is remediated. |
 | Full Optimize checklist | Some underlying configuration is collected; the full checklist is not. | Review applicable remaining settings. Screenshots are optional evidence of the review. |
 
 The HTML places these observations under **Collected Copilot configuration and activity**
@@ -48,14 +52,18 @@ read. Explicit offline imports still accept versions 2 and 3. No tenant settings
 changed by this collection.
 
 The full Optimize checklist is not exposed through the interfaces used here. Microsoft's
-individual Limited Mode API currently requires delegated access; it is not added to the
-service-principal workflow. Preview-only settings are also not added to the default collection.
+Limited Mode API supports delegated access only, so it is collected as optional delegated
+enrichment: the application-permission collection never depends on it, and the collection
+records the signed-in administrator as the identity that read it. Preview-only settings are
+not added to the default collection.
 
 ## Microsoft references
 
 - [Copilot usage user-detail API: v2 fields, permissions and unlicensed Chat limitation](https://learn.microsoft.com/en-us/microsoft-365/copilot/extensibility/api/admin-settings/reports/copilotreportroot-getmicrosoft365copilotusageuserdetail).
 - [Read DLP policies](https://learn.microsoft.com/en-us/powershell/module/exchangepowershell/get-dlpcompliancepolicy?view=exchange-ps) and [read DLP rules](https://learn.microsoft.com/en-us/powershell/module/exchangepowershell/get-dlpcompliancerule?view=exchange-ps).
 - [Limited Mode API and supported permission types](https://learn.microsoft.com/en-us/microsoft-365/copilot/extensibility/api/admin-settings/copilotadminlimitedmode-get).
+- [Report settings API](https://learn.microsoft.com/en-us/graph/api/adminreportsettings-get?view=graph-rest-1.0) and [Audit Log Query API](https://learn.microsoft.com/en-us/graph/api/security-auditcoreroot-post-auditlogqueries?view=graph-rest-1.0).
+- [Audit logs for Copilot and AI applications](https://learn.microsoft.com/en-us/purview/audit-copilot).
 - [Optimize configuration guidance](https://learn.microsoft.com/en-us/microsoft-365/copilot/optimize-microsoft-365-configuration-settings).
 
 For optional captures, see [Reviewed portal captures](PORTAL_REVIEW.md). For the complete

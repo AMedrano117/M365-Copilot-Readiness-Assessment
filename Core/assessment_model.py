@@ -112,48 +112,8 @@ FOUNDATION_IMPACT_AREAS = {
 }
 
 
-CROSS_PLATFORM_MANUAL_CHECKS = [
-    {
-        "control": "Approved AI service inventory",
-        "why": "Identify sanctioned and unsanctioned AI services, owners, user populations, and data flows.",
-        "verify": "Review SaaS discovery, browser/network telemetry, procurement records, and employee use cases.",
-    },
-    {
-        "control": "Enterprise workspace and identity controls",
-        "why": "Personal AI accounts bypass centralized access, offboarding, role, and sharing controls.",
-        "verify": "For each provider, validate enterprise terms, domain controls, SSO, provisioning/deprovisioning, MFA, and admin RBAC.",
-    },
-    {
-        "control": "Provider data handling",
-        "why": "Training use, retention, residency, subprocessors, and deletion behavior differ by product and contract.",
-        "verify": "Record the contracted settings for prompts, files, outputs, logs, abuse monitoring, retention, residency, and model training.",
-    },
-    {
-        "control": "Sensitive-data egress controls",
-        "why": "Users can paste or upload M365 data to browser, desktop, IDE, extension, API, or agent experiences.",
-        "verify": "Validate endpoint/browser DLP or equivalent controls on managed devices and test representative upload and paste scenarios.",
-    },
-    {
-        "control": "Connectors, tools, actions, and agents",
-        "why": "Connected AI can read or change business data with the user's or agent's permissions.",
-        "verify": "Inventory connectors and agent identities; require least privilege, trusted publishers, bounded actions, and human approval for consequential writes.",
-    },
-    {
-        "control": "Use-case and data policy",
-        "why": "A technical control cannot decide which regulated, confidential, or safety-sensitive use cases are acceptable.",
-        "verify": "Map approved use cases to data classifications, prohibited uses, human-review requirements, and accountable business owners.",
-    },
-    {
-        "control": "Audit, response, and legal readiness",
-        "why": "AI activity must fit existing investigation, records, privacy, and incident-response processes.",
-        "verify": "Confirm provider logs, retention, eDiscovery/export, alerting, incident playbooks, and evidence ownership.",
-    },
-    {
-        "control": "Outcome measurement",
-        "why": "Usage volume alone does not show that AI improves quality, cycle time, risk, or employee experience.",
-        "verify": "Define pilot baselines, success measures, quality checks, risk thresholds, and stop/expand decisions by use case.",
-    },
-]
+# Moved to adoption_guidance_content; re-exported for existing imports.
+from .adoption_guidance_content import CROSS_PLATFORM_MANUAL_CHECKS  # noqa: E402,F401
 
 
 def _combined_text(record):

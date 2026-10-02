@@ -85,6 +85,7 @@ def validate_report_tenants(paths, expected_tenant_id=None, receipt=None):
     """Prevent accidental combinations of different customers' tenant-tagged reports."""
     found = set()
     sources = {}
+    with_rows = set()
     def normalized(value):
         value = str(value or '').strip().lower()
         try:
@@ -101,6 +102,7 @@ def validate_report_tenants(paths, expected_tenant_id=None, receipt=None):
             for row in _read_records(candidate):
                 if row.get("_headers_only"):
                     continue
+                with_rows.add(str(candidate.resolve()))
                 for key, value in row.items():
                     if str(key).replace(" ", "").replace("_", "").lower() == "tenantid" and value:
                         identifier = normalized(value)
@@ -109,6 +111,10 @@ def validate_report_tenants(paths, expected_tenant_id=None, receipt=None):
     expected = normalized(expected_tenant_id)
     if receipt is not None:
         for source, identifiers in sources.items():
+            if source not in with_rows:
+                receipt.append({'Source': Path(source).name, 'Status': 'no_rows', 'Original Date': '', 'Scope': '',
+                                'Reason': 'The export has column headers only, so it adds no tenant data.'})
+                continue
             verified = bool(identifiers and expected and identifiers == {expected})
             receipt.append({
                 'Source': Path(source).name,

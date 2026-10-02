@@ -94,9 +94,14 @@ For a new Restricted configuration in this customer working copy:
 Setup writes `PERMISSION_PROFILE=restricted`. Live profile precedence is explicit
 `--permission-profile standard|restricted`, then `PERMISSION_PROFILE` in the selected environment,
 then `standard`. A CLI override must be used with the intended app; it does not change its grants.
-The commands below show the existing Standard workflow with a manually selected customer file:
+For Standard, create or reconcile one environment file per customer. `-EnvironmentFile` makes setup
+sign in to that file's tenant and reuse its application. Setup assigns Global Reader by default,
+granting broad tenant read access for Purview and Exchange application collection. The setup
+administrator needs role-assignment access; see [workload roles](PERMISSIONS.md#workload-roles-for-app-only-purview-and-exchange).
 
 ```powershell
+.\setup-service-principal.ps1 -EnvironmentFile ".\.env.newcustomer" `
+  -SharePointAdminUrl "https://<actual-prefix>-admin.sharepoint.com"
 .\.venv\Scripts\python.exe main.py --mode live `
   --env-file ".\.env.newcustomer" `
   --check-connections
@@ -160,7 +165,7 @@ administrative configuration check. No skipped source should appear as zero expo
 - [ ] Confirm the selected cleanup environment contains the exact tenant/client GUIDs and agreed profile;
       retain the enterprise application's object ID for any workload-cleanup retry.
 - [ ] Preview removal of the dedicated assessment application's access using [CLEANUP.md](CLEANUP.md).
-      For Standard Unattended, review workload RBAC cleanup before deleting Entra objects.
+      For Standard with its default Global Reader or another assigned workload role, review workload RBAC cleanup before deleting Entra objects.
 - [ ] After authorization, apply reviewed access removal and separately run `cleanup-local-assessment.ps1`.
       Review its list of all customers' artifacts in the built-in storage locations before the single
       deletion confirmation, or use optional `-Path` to select only this customer's copies.

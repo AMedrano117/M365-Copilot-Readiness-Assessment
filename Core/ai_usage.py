@@ -886,7 +886,7 @@ async def collect_ai_usage(include_user_detail=False, copilot_dashboard_export=N
     from .get_graph_client import get_shared_credential
 
     credential = get_shared_credential()
-    token = credential.get_token("https://graph.microsoft.com/.default")
+    token = await asyncio.to_thread(credential.get_token, "https://graph.microsoft.com/.default")
     async with httpx.AsyncClient(
         base_url=GRAPH_BASE,
         headers={"Authorization": "Bearer {}".format(token.token), "Accept": "application/json"},

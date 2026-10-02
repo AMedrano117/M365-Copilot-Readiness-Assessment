@@ -203,19 +203,21 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
                 recommendations.append(new_recommendation(
                     service="Entra",
                     feature=feature_name,
-                    observation=f"{legacy_auth_count} legacy authentication {sign_in_label} detected in the past 30 days, bypassing MFA and CA protections",
-                    recommendation="Block legacy authentication protocols (IMAP, POP3, SMTP AUTH) using Conditional Access. Legacy auth bypasses MFA and cannot be protected by Conditional Access policies, creating a backdoor for attackers to access Copilot. Migrate apps to modern authentication (OAuth 2.0) and block legacy protocols tenant-wide.",
+                    observation=f"{legacy_auth_count} legacy authentication {sign_in_label} detected in the returned sign-in records. Review the protocols and the controls that apply to those requests.",
+                    recommendation="Review the linked sign-in records to identify the accounts, applications, clients and IP addresses involved. Distinguish successful requests from failed or blocked attempts using the error code and Conditional Access result. Confirm business dependencies, migrate required clients to modern authentication, and test a policy to block legacy authentication before enforcement.",
                     link_text="Block Legacy Authentication",
                     link_url="https://learn.microsoft.com/entra/identity/conditional-access/block-legacy-authentication",
                     priority="High",
-                    status="Action Required"
+                    status="Action Required",
+                    finding_key="entra.signins.legacy_auth",
+                    evidence_key="legacy_signin_detail"
                 ))
             else:
                 # Success: No legacy auth
                 recommendations.append(new_recommendation(
                     service="Entra",
                     feature=feature_name,
-                    observation="No legacy authentication sign-ins detected, all access uses modern authentication with full security controls",
+                    observation="No legacy authentication sign-ins were found in the returned sign-in records. This sample does not establish that all access uses modern authentication or that every security control is effective.",
                     recommendation="",
                     link_text="Modern Authentication Overview",
                     link_url="https://learn.microsoft.com/microsoft-365/enterprise/hybrid-modern-auth-overview",

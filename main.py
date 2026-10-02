@@ -46,7 +46,15 @@ if __name__ == "__main__":
         status(f'Configuration error: {exc}', 'error')
         sys.exit(1)
 
-    tenant_id = args.tenant_id or os.environ.get('TENANT_ID') or TENANT_ID
+    # No built-in fallback: a consultant working across customers must never
+    # collect from a tenant that was not explicitly selected for this run.
+    tenant_id = (args.tenant_id or os.environ.get('TENANT_ID') or TENANT_ID or '').strip()
+    if not tenant_id:
+        status('Configuration error: no tenant selected. Pass --tenant-id or set TENANT_ID in the selected --env-file.', 'error')
+        sys.exit(1)
+    if permission_profile == 'restricted' and args.delegated == 'required':
+        status('Configuration error: the restricted permission profile does not use delegated sign-in.', 'error')
+        sys.exit(1)
     services = args.services if args.services else []  # Empty list means all services
     interactive_auth = args.interactive_auth
     open_html_report = args.open_html_report
@@ -110,6 +118,10 @@ if __name__ == "__main__":
                 lifecycle_report_dates=args.lifecycle_report_date,
                 portal_review=args.portal_review,
                 permission_profile=permission_profile,
+                confirm_tenant=args.confirm_tenant,
+                delegated=args.delegated,
+                interactive_tenant_confirmation=sys.stdin.isatty() and sys.stdout.isatty(),
+                show_progress=not getattr(args, 'no_progress', False),
             )
         )
         if isinstance(exit_code, int) and exit_code:

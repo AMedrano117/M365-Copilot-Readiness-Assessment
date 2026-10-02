@@ -7,6 +7,8 @@ import subprocess
 import tempfile
 import unittest
 
+from Core.orchestrator_powershell import powershell_environment
+
 
 POWERSHELL = shutil.which('powershell') or shutil.which('pwsh')
 ROOT = Path(__file__).resolve().parents[1]
@@ -30,6 +32,7 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $dagRows = @(Get-Content -LiteralPath $InputPath -Raw | ConvertFrom-Json)
 $payload = @{ exported_files = @(); collection_status = @{} }
+function Write-CollectionStep { param($Kind, $Value) }
 function Export-SPODataAccessGovernanceInsight {
     param([string]$ReportID, [string]$DownloadPath)
     if ($ReportID -eq $FailedId) { throw 'Synthetic download failure' }
@@ -47,7 +50,7 @@ function Export-SPODataAccessGovernanceInsight {
         result = subprocess.run([POWERSHELL, '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
                                  '-File', str(script), '-DownloadPath', str(download), '-InputPath', str(inputs),
                                  '-FailedId', failed_id], capture_output=True, text=True, encoding='utf-8',
-                                errors='replace', timeout=20, check=False)
+                                errors='replace', timeout=20, check=False, env=powershell_environment(POWERSHELL))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(unrelated.read_text(encoding='utf-8'), 'preserve this original')
         return json.loads(result.stdout), download

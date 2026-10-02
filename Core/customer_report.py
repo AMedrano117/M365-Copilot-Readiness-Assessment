@@ -116,6 +116,7 @@ def _heading(row):
         ('risky users detected', 'Review unresolved identity risks'),
         ('intune query returned no managed devices', 'Verify device and browser protection'),
         ('sharepoint tenant sharing settings were not collected', 'Confirm tenant sharing settings'),
+        ('conditional access policies:', 'Conditional Access policies'),
         ('conditional access policies found', 'Conditional Access policies'),
         ('no legacy authentication sign-ins', 'Sign-in sample'),
         ('use passwordless authentication', 'Passwordless authentication'),
@@ -146,29 +147,29 @@ def _action_text(row):
     # Keep the action brief; report procedures are linked from the action card.
     key = row.get('FindingKey')
     if key == 'sharepoint.dag.not_assessed':
-        return 'Review the permission exports already available, confirm their coverage of the pilot sites, and obtain any missing sharing-activity reports. The report guide below explains where to find them.'
+        return 'Review the permission exports already available, confirm they cover the sites that hold business content, and obtain any missing sharing-activity reports. The report guide below explains where to find them.'
     if key == 'coverage.adoption.baseline':
-        return 'Agree the pilot users, work tasks and success measures with the business sponsor. Reuse the available usage evidence where its population and period match the pilot.'
+        return 'Agree the pilot use cases, work tasks and success measures with the business sponsor, and reuse the available usage evidence as the baseline. This is a planning step; it does not change the readiness verdict.'
     if key == 'coverage.license.assignment':
-        return 'Match the agreed pilot roster to assigned Copilot licenses and application prerequisites. Reuse the supplied readiness export where it covers those users, and review any missing or unknown assignments.'
+        return 'Check Microsoft 365 admin center > Billing > Licenses for Microsoft 365 Copilot licenses, and plan to assign them to the pilot group through a group.'
     if key == 'coverage.license.apps':
-        return 'Check the named pilot users against the required Microsoft 365 applications, update channels and enabled services. Reuse the readiness export, and validate any users or prerequisites it does not cover.'
+        return 'Check the Microsoft 365 Copilot readiness report (Microsoft 365 admin center > Reports > Usage) for supported Microsoft 365 Apps versions and update channels, and supply the export so the assessment can verify it.'
     if key == 'coverage.apps.connections':
-        return 'Identify which connected data sources the pilot is intended to use, and review their permissions and ownership. If none are needed, document that scope decision; enabling a connector is not a prerequisite for every pilot.'
+        return 'Review each Copilot connector: its owner, the content it indexes and how item permissions are mapped. Enabling a connector is not a prerequisite for a pilot.'
     if key == 'coverage.data.retention':
-        return 'Ask the compliance and content owners to agree retention requirements for the pilot content and verify which policies meet them.'
+        return 'Ask the compliance and content owners to agree retention requirements for Copilot interactions and business content, and verify which policies meet them.'
     feature = str(row.get('Feature', '')).lower()
     if 'offline tenant evidence coverage' in feature or 'saved tenant collection freshness' in feature:
-        return 'Ask the tenant administrators to confirm the outstanding controls for the intended pilot population and record the evidence date.'
+        return 'Ask the tenant administrators to confirm the outstanding controls and record the evidence date.'
     if 'sensitive-data exposure evidence' in feature:
-        return 'Ask the data protection owner for a completed risk assessment or a dated access review covering sensitive pilot content and the people who can access it. Record the scope, findings and supporting evidence.'
+        return 'Ask the data protection owner for a completed risk assessment or a dated access review covering sensitive content and the people who can access it. Record the scope, findings and supporting evidence.'
     if 'sharepoint oversharing evidence' in feature:
-        return 'Ask the SharePoint owner for the missing permissions or sharing reports for the intended pilot sites. Record their scope and completion dates.'
+        return 'Ask the SharePoint owner for the missing permissions or sharing reports. Record their scope and completion dates.'
     if 'scan freshness' in feature:
-        return 'Confirm the dated observations that still apply to the pilot content. Obtain a completed, current report for any remaining checks, and retain its selected scope and completion date.'
+        return 'Confirm the dated observations that still apply. Obtain a completed, current report for any remaining checks, and retain its selected scope and completion date.'
     text = row.get('Recommendation') or ''
     if any(marker in text for marker in ('--', '_PATHS', '_DAYS', 'main.py', 'PowerShell', 'Connect-')):
-        return 'Ask the responsible administrator to complete this check for the pilot population. Record the result, original observation date, and any required remediation in the evidence workbook.'
+        return 'Ask the responsible administrator to complete this check. Record the result, original observation date, and any required remediation in the evidence workbook.'
     return row.get('Recommendation') or row.get('CompletionEvidence') or 'Confirm this condition with the responsible owner and record the outcome.'
 
 
@@ -182,7 +183,7 @@ def _observation(row, bundle):
     permission_reports = [report for report in (bundle.get('data_exposure') or {}).get('sources', {}).get('sam', {}).get('reports', [])
                           if report.get('report_type') in {'permission_snapshot', 'special_group_permissions'} and report.get('records_read', 0)]
     if row.get('FindingKey') == 'sharepoint.dag.not_assessed' and permission_reports:
-        return 'The saved collection recorded incomplete SharePoint report coverage. Permission exports were also supplied and assessed in the content findings. Confirm that the combined evidence covers the pilot sites and the remaining sharing activity.'
+        return 'The saved collection recorded incomplete SharePoint report coverage. Permission exports were also supplied and assessed in the content findings. Confirm that the combined evidence covers the business sites and the remaining sharing activity.'
     return text
 
 
@@ -190,27 +191,27 @@ def _completion(row):
     requested = {
         'sharepoint.dag.not_assessed': 'Completed permission and sharing-activity exports, with their dates, workloads, selected sites and filters recorded; document any unavailable report.',
         'data_exposure.freshness.sam': 'Current permission evidence for the sites still represented only by older reports, or a dated administrator review explaining their present status.',
-        'data_exposure.coverage.sensitive-data_exposure_evidence': 'A completed data-risk assessment or dated owner review of sensitive pilot content and access, with the covered population, findings and supporting evidence recorded.',
+        'data_exposure.coverage.sensitive-data_exposure_evidence': 'A completed data-risk assessment or dated owner review of sensitive content and access, with the covered scope, findings and supporting evidence recorded.',
         'data_exposure.snapshot_scope': 'A dated comparison of the site populations and filters, with an explanation for each site omitted from the newer report.',
-        'coverage.adoption.baseline': 'A sponsor-approved pilot roster, work tasks, baseline period and success measures. A usage export alone does not establish this agreement.',
-        'coverage.license.assignment': 'A dated check of named pilot users against assigned Copilot licenses and application prerequisites, with exceptions resolved or recorded.',
-        'coverage.license.apps': 'A dated check of the pilot users’ application prerequisites and update channels, with unsupported or unknown configurations identified and addressed.',
+        'coverage.adoption.baseline': 'Sponsor-approved pilot use cases, a baseline period and success measures. A usage export alone does not establish this agreement.',
+        'coverage.license.assignment': 'The number of Microsoft 365 Copilot licenses available for the pilot, with the assignment group recorded.',
+        'coverage.license.apps': 'The Microsoft 365 Copilot readiness export, or a dated check of Microsoft 365 Apps versions and update channels, with unsupported configurations identified.',
         'coverage.apps.connections': 'The approved list of connected sources, their owners and reviewed access boundaries, or a dated confirmation that no connected sources are in scope.',
-        'coverage.data.exposure': 'A completed risk assessment or dated owner review identifying sensitive pilot content, who can access it, and the treatment of any access concerns.',
+        'coverage.data.exposure': 'A completed risk assessment or dated owner review identifying sensitive content, who can access it, and the treatment of any access concerns.',
         'coverage.data.retention': 'Agreed retention requirements, the policies and locations that meet them, and the compliance owner’s decision on any gaps.',
         'data_exposure.inactive_sites': 'The reviewed site list, each business owner’s decision to retain, restrict or archive it, and confirmation of any completed changes.',
         'data_exposure.ownerless_sites': 'The reviewed site list with an accountable owner for each retained site, plus confirmation that the ownership details are current.',
-        'defender.incidents.current': 'Incident IDs, their impact on pilot users or devices, and closure or the security owner’s approved response.',
+        'defender.incidents.current': 'Incident IDs, their impact on users or devices, and closure or the security owner’s approved response.',
         'entra.app_consent.high_impact_grants': 'A reviewed list of application grants, their business owners and approved permissions, with unnecessary access removed or an approved treatment recorded.',
     }
     if row.get('FindingKey') in requested:
         return requested[row['FindingKey']]
     observation = str(row.get('Observation') or '').lower()
     for token, deliverable in (
-        ('intune query returned no managed devices', 'A dated record of the actual device or browser protection method, its coverage of pilot users, and a test that the required access controls are enforced.'),
-        ('enrolled in mfa', 'Named pilot users, multifactor authentication registration status, and a successful test of the required sign-in controls.'),
+        ('intune query returned no managed devices', 'A dated record of the actual device or browser protection method, the users it covers, and a test that the required access controls are enforced.'),
+        ('enrolled in mfa', 'Current multifactor authentication registration coverage for all users, with unregistered accounts followed up, and a successful test of the required sign-in controls.'),
         ('role assignment schedules have no expiration', 'The reviewed administrator assignments, their business need and expiry or approval, with unnecessary standing access removed.'),
-        ('risky users detected', 'The reviewed risky-user cases affecting the pilot, investigation outcomes, and remediation or the identity owner’s approved response.'),
+        ('risky users detected', 'The reviewed risky-user cases, investigation outcomes, and remediation or the identity owner’s approved response.'),
         ('user consent enabled for applications', 'The reviewed application consent policy, allowed permissions, approval process and a test of the intended restrictions.'),
     ):
         if token in observation:
@@ -388,7 +389,7 @@ def _progress_requirements(result):
         return ''
     numbers = {row.get('RecommendationId'): n for n, row in enumerate(result.get('actions', []), 1)}
     stages = []
-    labels = {'met': 'Met', 'open': 'Evidence needed', 'issue': 'Action required', 'condition': 'Pilot condition'}
+    labels = {'met': 'Met', 'open': 'Evidence needed', 'issue': 'Blocks pilot', 'condition': 'Pilot condition'}
     for stage in progress.get('stages', []):
         items = []
         for requirement in stage.get('requirements', []):
@@ -406,7 +407,7 @@ def _progress_requirements(result):
     return f'''<section id="readiness-requirements"><div class="section-heading"><span class="section-index">→</span><div><div class="eyebrow">HOW TO MOVE FORWARD</div><h2>What each readiness stage requires</h2></div></div>
       <p>Current stage: <strong>{prose(progress.get('current_stage'))}</strong>. These stages describe readiness supported by the assessment. Existing Copilot use is shown separately in the adoption section.</p>
       <p class="section-description">{prose(progress.get('qualification'))}</p>{totals}{''.join(stages)}
-      <details class="domain-evidence"><summary>How to record an owner review</summary><div class="guide-body"><p>Return a dated review identifying the pilot population, responsible role, result, supporting evidence and any conditions. The assessment operator records these in the assessment profile and rebuilds the report. A documented review can establish an unanswered check; an observed failure still needs remediation evidence.</p><p>For broader adoption, record the pilot outcomes, sponsor approval and control coverage for the larger population. Usage counts alone do not establish approval to expand.</p></div></details>
+      <details class="domain-evidence"><summary>How to record an owner review</summary><div class="guide-body"><p>Return a dated review identifying its scope (for example, all users), responsible role, result, supporting evidence and any conditions. The assessment operator records these in the assessment profile and rebuilds the report. A documented review can establish an unanswered check; an observed failure still needs remediation evidence.</p><p>For broader adoption, record the pilot outcomes, sponsor approval and control coverage for the larger population. Usage counts alone do not establish approval to expand.</p></div></details>
       <p class="qualification">These are this assessment’s criteria. Microsoft recommends a phased rollout with a defined strategy, protected data, a small initial group and a review of outcomes before expansion. <a href="https://learn.microsoft.com/en-us/microsoft-365/copilot/microsoft-365-copilot-minimum-requirements-rollout">Microsoft rollout guidance</a></p></section>'''
 
 
@@ -507,6 +508,39 @@ def _collected_admin_context(bundle, area):
     return '<details class="domain-evidence admin-review"><summary>Collected Copilot configuration and activity</summary><div class="guide-body"><p>Available values come from collected data and do not require a PDF export. Missing details include the next step. ' + prose(context.get('qualification')) + '</p>' + content + '</div></details>'
 
 
+def _mode_label(mode):
+    mode = str(mode or '').lower()
+    return {'enable': 'Enforced', 'enforce': 'Enforced', 'testwithnotifications': 'Simulation with tips',
+            'testwithoutnotifications': 'Simulation', 'disable': 'Off', 'disabled': 'Off'}.get(mode, mode.title() or 'Not reported')
+
+
+def _purview_policy_table(bundle, workbook_url=''):
+    """Compact Purview view for the Data protection area; the workbook holds every object."""
+    summary = bundle.get('purview_policy_summary') or {}
+    if not summary.get('available'):
+        return ''
+    rows = summary.get('rows') or []
+    order = {'Enforced': 0, 'Simulation with tips': 1, 'Simulation': 2, 'Off': 3}
+    display = sorted(({'Policy': row.get('Policy'), 'Mode': _mode_label(row.get('Mode')) if row.get('Enabled') != 'No' else 'Off',
+                       'Applies to': row.get('Locations'), 'Rules': row.get('Rules')} for row in rows),
+                     key=lambda row: (order.get(row['Mode'], 4), str(row['Policy']).lower()))
+    counts = {label: sum(row['Mode'] == label for row in display) for label in ('Enforced', 'Simulation with tips', 'Simulation', 'Off')}
+    simulation = counts['Simulation with tips'] + counts['Simulation']
+    labels = bundle.get('purview_label_summary') or {}
+    facts = [f"{len(display)} DLP policies: {counts['Enforced']} enforced, {simulation} in simulation, {counts['Off']} off."]
+    if labels.get('labels') is not None:
+        facts.append(f"{labels['labels']} sensitivity labels; {labels.get('active_policies', 0)} active label publishing policies.")
+    if labels.get('retention') is not None:
+        facts.append(labels['retention'])
+    shown = display[:10]
+    more = len(display) - len(shown)
+    link = (f' <a href="{workbook_url}">The Purview Policy Detail tab</a> lists every policy, rule, label and label policy.' if workbook_url
+            else ' The workbook Purview Policy Detail tab lists every policy, rule, label and label policy.')
+    return ('<h3>Purview policies at a glance</h3><p>' + prose(' '.join(facts)) + link + '</p>'
+            + table(shown, [('DLP policy', 'Policy'), ('Mode', 'Mode'), ('Applies to', 'Applies to'), ('Rules', 'Rules')], mobile_labels=True)
+            + (f'<p class="qualification">{more} more DLP policies in the workbook.</p>' if more > 0 else ''))
+
+
 def _remaining_portal_review(bundle):
     rows = (bundle.get('copilot_admin_review') or {}).get('manual_checks') or []
     if not rows:
@@ -514,7 +548,52 @@ def _remaining_portal_review(bundle):
     return '<details class="domain-evidence admin-review"><summary>Portal details that still need a review</summary><div class="guide-body"><p>Review these items when relevant to the agreed scope. The tool does not request a full PDF for data already collected. An unavailable optional dashboard metric does not add a readiness failure.</p>' + table(rows, [('Portal detail', 'Topic'), ('Why it is separate', 'Reason'), ('When to request it', 'When needed')], mobile_labels=True) + '</div></details>'
 
 
-def render_customer_report(result, bundle, tenant_name, workbook_path=None):
+def _getting_started(result, action_numbers):
+    """Findings-driven 30/60/90-day roadmap; guidance only, never a control result."""
+    from .adoption_guidance import build_adoption_guidance
+    guidance = build_adoption_guidance(result, action_numbers, title_for=_heading)
+    phase_html = []
+    for index, phase in enumerate(guidance['phases'], 1):
+        actions = phase['actions'][:8]
+        action_items = ''
+        for item in actions:
+            link = ''
+            if item.get('number'):
+                link = '<a href="#action-' + str(item['number']) + '">Action ' + str(item['number']) + '</a>: '
+            gate = ' <span class="muted">(security gate)</span>' if item['security_gate'] else ''
+            action_items += '<li>' + link + prose(item['title']) + gate + '</li>'
+        more = len(phase['actions']) - len(actions)
+        if more > 0:
+            action_items += f'<li class="muted">{more} more action(s) in the action plan.</li>'
+        steps = ''.join(f'<li>{prose(step)}</li>' for step in phase['steps'])
+        checklist = ''.join(f'<li><strong>{prose(item["topic"])}.</strong> {prose(item["guidance"])} '
+                            f'<span class="muted">Owner: {prose(item["owner"])}.</span></li>' for item in phase['checklist'])
+        phase_html.append(
+            f'<div class="phase"><span class="phase-number">{index}</span><h3>{prose(phase["title"])}</h3>'
+            f'<p>{prose(phase["goal"])}</p><ul>{steps}</ul>'
+            + (f'<h4>From this assessment</h4><ul>{action_items}</ul>' if action_items else '')
+            + (f'<h4>Adoption checklist</h4><ul>{checklist}</ul>' if checklist else '') + '</div>')
+    baseline = table(guidance['baseline'], [('Readiness check', 'title'), ('Baseline to reach', 'expectation'),
+                                            ('Current status', 'status'), ('Owner', 'owner')],
+                     'Security baseline before and during the pilot', mobile_labels=True)
+    external = ''.join(f'<li><strong>{prose(item["topic"])}.</strong> {prose(item["verify"])}</li>'
+                       for item in guidance['external_ai_checks'])
+    return (f'<section id="getting-started"><div class="section-heading"><span class="section-index">04</span><div>'
+            f'<div class="eyebrow">HOW TO GET STARTED</div><h2>First 90 days with Copilot and AI</h2></div></div>'
+            f'<p class="section-description">A practical sequence for this tenant: secure the pilot, run it with real work, then '
+            f'measure and decide. Items from this assessment are linked to the action plan; the remaining steps are standard practice.</p>'
+            f'<div class="phase-grid">{"".join(phase_html)}</div><h3>Security baseline</h3>{baseline}'
+            f'<details class="appendix-panel"><summary>External and third-party AI services: owner review checklist</summary>'
+            f'<p>Review these with the owners of any AI service outside Microsoft 365 before it handles business data.</p>'
+            f'<ul>{external}</ul></details><p class="qualification">{prose(guidance["qualification"])}</p></section>')
+
+
+def context_has_collection(bundle):
+    context = bundle.get('collection_context') or {}
+    return bool(context.get('collected_at'))
+
+
+def render_customer_report(result, bundle, tenant_name, workbook_path=None, summary_path=None):
     actions = result['actions']
     domains = result['domains']
     counts = result['counts']
@@ -523,6 +602,24 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None):
     def evidence_link(row):
         key = row.get('RecommendationId') or row.get('FindingKey') or row.get('Feature')
         return f'<a href="#evidence-{slug(key)}">Evidence and qualifications</a>'
+    def investigation_link(row):
+        qualification = row.get('InvestigationPublicQualification', row.get('InvestigationQualification'))
+        note = f'<p class="qualification">{prose(qualification)}</p>' if qualification else ''
+        if not workbook_url:
+            status = row.get('InvestigationStatus') if not row.get('InvestigationCount') else ''
+            return (f'<p class="evidence-link">{prose(status)}</p>' if status else '') + note
+        try:
+            count = int(row.get('InvestigationCount') or 0)
+        except (TypeError, ValueError):
+            return note
+        location = str(row.get('InvestigationRange') or '')
+        if count <= 0 and not location:
+            status = row.get('InvestigationStatus')
+            return (f'<p class="evidence-link">{prose(status)}</p>' if status else '') + note
+        target = workbook_url + ('#' + quote(location, safe='!:$') if location else '')
+        label = (f'{count} item{"s" if count != 1 else ""} to review in workbook' if count > 0
+                 else str(row.get('InvestigationSummary') or row.get('InvestigationStatus') or 'Supporting context') + ' in workbook')
+        return f'<p class="evidence-link"><a href="{escape(target)}">{prose(label)}</a></p>' + note
     def record(row, with_action=False):
         description = _observation(row, bundle)
         support = row.get('Evidence') if row.get('Evidence') != description else ''
@@ -532,6 +629,7 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None):
         return f'''<article class="finding"><div class="eyebrow">{prose(status)} · {prose(_date_text(row))}</div>
           <h4>{prose(_heading(row))}</h4><p>{prose(description)}</p>{('<p>' + prose(support) + '</p>') if support else ''}
           {('<p><strong>What to do.</strong> ' + prose(_action_text(row)) + '</p>') if with_action else ''}
+          {investigation_link(row) if row.get('Recommendation') else ''}
           {('<p class="qualification">' + prose(qualification) + '</p>') if qualification else ''}
           <p class="evidence-link">{evidence_link(row)}</p></article>'''
 
@@ -540,9 +638,9 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None):
         guide = guide_for(row)
         guidance_link = (f'<p class="evidence-link"><a href="#report-guide-{guide}">How to obtain the reports</a> · <a href="#report-handoff">How to return the evidence</a></p>' if guide else '')
         action_html.append(f'''<article class="action" data-priority="{slug(row.get('Priority'))}" id="action-{index}"><div class="action-number">{index:02d}</div><details class="action-detail"{' open' if index <= 3 else ''}><summary>
-          <div class="action-tags"><span class="priority-badge" data-priority="{slug(row.get('Priority'))}">{prose(row.get('Priority') or 'Review')} priority</span><span class="action-kind">{prose(row.get('ActionType'))}</span><span class="action-domain">{prose(row.get('Domain'))}</span></div>
+          <div class="action-tags"><span class="priority-badge" data-priority="{slug(row.get('Priority'))}">{prose(row.get('Priority') or 'Review')} priority</span>{('<span class="action-kind">' + prose(row.get('PilotImpact')) + '</span>') if row.get('PilotImpact') else ''}<span class="action-kind">{prose(row.get('ActionType'))}</span><span class="action-domain">{prose(row.get('Domain'))}</span></div>
           <h3>{prose(_heading(row))}</h3></summary><div class="action-body"><p><strong>What we found.</strong> {prose(_observation(row, bundle))}</p>
-          <p><strong>What to do.</strong> {prose(_action_text(row))}</p>
+          <p><strong>What to do.</strong> {prose(_action_text(row))}</p>{investigation_link(row)}
           <div class="action-meta"><p><strong>Responsible role</strong><br>{prose(row.get('OwnerRole'))}</p>
           <p><strong>Rollout stage</strong><br>{prose(row.get('ReadinessStage'))}</p></div>
           <p><strong>Evidence of completion.</strong> {prose(_completion(row))}</p>{guidance_link}
@@ -554,7 +652,9 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None):
     for domain_index, domain in enumerate(domains, 1):
         rows = domain.get('customer_findings', domain.get('findings')) or []
         # Findings are already selected and qualified by the shared model.
-        findings_html = '<details class="domain-evidence"><summary>Evidence observations and qualifications (' + str(len(rows)) + ')</summary>' + ''.join(record(row) for row in rows) + '</details>' if rows else ''
+        findings_html = '<details class="domain-evidence"><summary>Evidence observations and qualifications (' + str(len(rows)) + ')</summary>' + ''.join(
+            record(row, with_action=bool(row.get('Recommendation')) and row.get('RecommendationId') not in action_numbers)
+            for row in rows) + '</details>' if rows else ''
         links = [f'<a href="#action-{action_numbers[r.get("RecommendationId")]}">Action {action_numbers[r.get("RecommendationId")]}</a>'
                  for r in domain.get('actions', []) if r.get('RecommendationId') in action_numbers]
         extra = ''
@@ -562,13 +662,15 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None):
             extra = _authentication_methods(bundle)
         if domain['id'] == 'content':
             extra = _settings(bundle) + _lifecycle(bundle)
+        if domain['id'] == 'data_protection':
+            extra = _purview_policy_table(bundle, workbook_url)
         if domain['id'] == 'licensing':
             extra = _readiness_export(bundle) + _license_context(bundle)
         if domain['id'] in {'agents', 'external_ai'}:
             extra = _scoped_products(bundle)
         if domain['id'] == 'adoption':
             extra = _adoption_report(result)
-            extra += '<h3>What the pilot should prove</h3><p>Select a small group with a defined work task, accountable content owners, and approved access. Agree how the group will judge output quality and time saved.</p><h3>How to decide whether to expand</h3><p>Review actual Copilot activity, task quality, and user feedback before expanding. Familiarity with Teams, email, or Office can guide pilot selection; it does not measure Copilot use.</p>'
+            extra += '<h3>What the pilot should prove</h3><p>Select a small group with a defined work task, accountable content owners, and approved access. The readiness checks are tenant-wide, so the group can be chosen after this assessment. Agree how the group will judge output quality and time saved.</p><h3>How to decide whether to expand</h3><p>Review actual Copilot activity, task quality, and user feedback before expanding. Familiarity with Teams, email, or Office can guide pilot selection; it does not measure Copilot use.</p>'
         extra += _collected_admin_context(bundle, domain['id'])
         extra += _portal_captures(bundle, domain['id'])
         summary = re.sub(r'(?<![.!?]) (?=No legacy authentication sign-ins)', '. ', str(domain.get('summary') or ''))
@@ -603,15 +705,18 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None):
     evidence_rows = []
     for row in all_records:
         key = row.get('RecommendationId') or row.get('FindingKey') or row.get('Feature')
-        tabs = row.get('EvidenceSheet') or 'Evidence Index'
-        evidence_rows.append(f'<tr id="evidence-{slug(key)}"><td>{prose(key)}</td><td>{prose(row.get("OriginalFeature") or row.get("Feature"))}</td><td>{prose(_date_text(row))}</td><td>{prose(row.get("EvidenceBasis"))}{("<br>" + prose(row.get("Qualification"))) if row.get("Qualification") else ""}</td><td>{prose(tabs)}</td></tr>')
+        location = row.get('InvestigationRange') or row.get('EvidenceSheet')
+        tabs = prose(location or row.get('InvestigationStatus') or 'Supporting location not supplied')
+        if workbook_url and location and re.fullmatch(r"'((?:[^']|'')+)'![A-Z]+[1-9][0-9]*:[A-Z]+[1-9][0-9]*", str(location)):
+            tabs = '<a href="' + escape(workbook_url + '#' + quote(str(location), safe='!:$')) + '">' + tabs + '</a>'
+        evidence_rows.append(f'<tr id="evidence-{slug(key)}"><td>{prose(key)}</td><td>{prose(row.get("OriginalFeature") or row.get("Feature"))}</td><td>{prose(_date_text(row))}</td><td>{prose(row.get("EvidenceBasis"))}{("<br>" + prose(row.get("Qualification"))) if row.get("Qualification") else ""}</td><td>{tabs}</td></tr>')
     # Some curated strengths arrive independently of the recommendation register.
     seen_ids = {r.get('RecommendationId') or r.get('FindingKey') or r.get('Feature') for r in all_records}
     for row in strength_rows + (result.get('historical_strengths') or []):
         key = row.get('RecommendationId') or row.get('FindingKey') or row.get('Feature')
         if key not in seen_ids:
             seen_ids.add(key)
-            evidence_rows.append(f'<tr id="evidence-{slug(key)}"><td>{prose(key)}</td><td>{prose(_heading(row))}</td><td>{prose(_date_text(row))}</td><td>{prose(row.get("Qualification"))}</td><td>Evidence Index</td></tr>')
+            evidence_rows.append(f'<tr id="evidence-{slug(key)}"><td>{prose(key)}</td><td>{prose(_heading(row))}</td><td>{prose(_date_text(row))}</td><td>{prose(row.get("Qualification"))}</td><td>{prose(row.get("InvestigationRange") or row.get("EvidenceSheet") or "Supporting location not supplied")}</td></tr>')
     source_rows = [r for source in (bundle.get('data_exposure') or {}).get('sources', {}).values() for r in source.get('reports', [])]
     sources = table(source_rows, [('Source file', 'source_file'), ('Report type', 'report_type'), ('Workload', 'workload'), ('Original date', 'report_date'), ('Date basis', 'date_basis'), ('Selection', 'status'), ('Rows', 'records_read'), ('Freshness', 'freshness')])
     collection_rows = []
@@ -619,10 +724,28 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None):
         if name.startswith('connection_') or not isinstance(state, dict):
             continue
         status = state.get('availability_status') or state.get('status') or ('available' if state.get('available') else 'unavailable')
+        from .auth_plan import collected_with_label
         collection_rows.append({'source': name, 'status': status,
                                 'records': state.get('records_collected', state.get('record_count')),
-                                'reason': state.get('reason') or state.get('error') or ('Read succeeded.' if status == 'available' else 'No additional detail recorded.')})
-    collection_table = table(collection_rows, [('Source', 'source'), ('Read status', 'status'), ('Rows returned', 'records'), ('Reason or qualification', 'reason')]) if collection_rows else ''
+                                'collected_with': '' if name.startswith('pipeline_') else collected_with_label(state),
+                                'reason': state.get('reason') or state.get('error') or ('Read succeeded.' if status == 'available' else 'No additional detail recorded.'),
+                                'unlock': state.get('unlock', '')})
+    collection_table = table(collection_rows, [('Source', 'source'), ('Read status', 'status'), ('Rows returned', 'records'), ('Collected with', 'collected_with'), ('Reason or qualification', 'reason'), ('How to collect it', 'unlock')]) if collection_rows else ''
+    auth_plan = bundle.get('auth_plan') or {}
+    identity_labels = []
+    for identity in auth_plan.get('identities') or []:
+        if identity.get('type') == 'service_principal':
+            identity_labels.append('assessment application (' + ('certificate' if identity.get('credential_type') == 'certificate' else 'client secret')
+                                   + ', application permissions only)')
+        elif identity.get('type') == 'user':
+            identity_labels.append('signed-in administrator ' + str(identity.get('upn') or '') + ' (delegated, enrichment only)')
+    if identity_labels:
+        identity_note = ('<p>Access used for this assessment: ' + prose('; '.join(identity_labels))
+                         + '. Each source below records which identity read it.</p>')
+    elif context_has_collection(bundle):
+        identity_note = '<p>Access used for this assessment was not recorded by this collection.</p>'
+    else:
+        identity_note = ''
     context = bundle.get('collection_context') or {}
     migration = context.get('methodology_migration') or {}
     migration_note = (
@@ -641,6 +764,7 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None):
       <p>Evaluation date: {prose(result.get('evaluation_date'))}. Methodology: {prose(result.get('methodology_version'))}. Evidence schema: {prose(result.get('evidence_schema_version'))}.</p>
       <p>Original tenant collection: {prose(context.get('collected_at'))}. Report execution: {prose(context.get('mode') or 'Evidence supplied directly')}.</p>
       <p>Collection permission profile: {prose(context.get('permission_profile') or 'unrecorded')}.</p>
+      {identity_note}
       {migration_note}
       {operator_handoff}
       {table(context.get('historical_sources') or [], [('Source file', 'source_file'), ('Source type', 'source_type'), ('Original date', 'reported_at')]) if context.get('historical_sources') else ''}
@@ -671,8 +795,9 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None):
         period_text = str(period)
     decision = result['decision']
     progress = result.get('rollout_progress') or {}
-    headline = progress.get('current_stage') or decision
-    decision_badge = ('Assessment status: ' + decision) if progress else 'Assessment outcome'
+    from .pilot_summary import VERDICTS
+    headline = VERDICTS.get(decision, (progress.get('current_stage') or decision, ''))[0]
+    decision_badge = ('Rollout stage: ' + progress['current_stage']) if progress.get('current_stage') else 'Assessment outcome'
     observed_use = any(row.get('metric_id') == 'copilot.active_users' and isinstance(row.get('value'), (int, float))
                        and row['value'] > 0 for row in result.get('adoption_metrics', []))
     adoption_note = ('<p class="qualification">The supplied reports show existing Copilot use. This stage identifies what is verified for the next rollout decision.</p>' if progress and observed_use else '')
@@ -683,15 +808,19 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None):
     portal_intro = ('<p class="qualification">Admin-center captures: ' + portal_links + '</p>') if portal_count else ''
     decision_state = 'ready' if decision in {'Ready for a controlled pilot', 'Ready for broader adoption'} else 'blocked' if decision == 'Not ready for pilot' else 'unknown'
     workbook_button = f'<a class="button button-primary" href="{workbook_url}">Evidence workbook <span aria-hidden="true">↗</span></a>' if workbook_url else ''
+    summary_name = Path(summary_path).name if summary_path else ''
+    if summary_name:
+        workbook_button = f'<a class="button button-secondary" href="{quote(summary_name)}">One-page summary</a>' + workbook_button
     return f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{escape(str(tenant_name or 'Tenant'))} — Copilot readiness</title><style>{REPORT_CSS}</style></head><body>
       <a class="skip-link" href="#executive">Skip to assessment</a>
       <header class="report-header"><div class="brand"><span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span><span></span></span><div>MICROSOFT 365 COPILOT<span class="brand-subtitle">Readiness assessment</span></div></div><div class="header-meta"><strong>{escape(str(tenant_name or 'Tenant assessment'))}</strong><span>Executive briefing · {prose(result.get('evaluation_date'))}</span></div></header>
-      <nav class="report-nav" aria-label="Report sections"><div class="nav-links"><a href="#executive">Overview</a><a href="#action-plan">Action plan</a><a href="#readiness-domains">Areas</a><a href="#rollout">Rollout</a><a href="#remaining-evidence">Open checks</a><a href="#engineer-appendix">Evidence</a></div><div class="nav-tools">{workbook_button}<button class="button button-secondary" id="print-report" type="button" hidden>Print report</button></div></nav>
+      <nav class="report-nav" aria-label="Report sections"><div class="nav-links"><a href="#executive">Overview</a><a href="#action-plan">Action plan</a><a href="#readiness-domains">Areas</a><a href="#rollout">Rollout</a><a href="#getting-started">Getting started</a><a href="#remaining-evidence">Open checks</a><a href="#engineer-appendix">Evidence</a></div><div class="nav-tools">{workbook_button}<button class="button button-secondary" id="print-report" type="button" hidden>Print report</button></div></nav>
       <main><section class="executive" id="executive"><div class="hero-grid"><div class="hero-main"><div class="hero-kicker">YOUR ROLLOUT READINESS</div><div class="decision-label" data-state="{decision_state}">{prose(decision_badge)}</div>
       <h1>{prose(headline)}</h1><p class="hero-copy">{prose(result.get('rationale'))}</p>{adoption_note}</div><aside class="hero-aside" aria-label="Assessment scope and dates"><div class="hero-kicker">ASSESSMENT SCOPE</div><h2>{prose(scope)}</h2><div class="hero-meta"><dl><div><dt>Evaluation date</dt><dd>{prose(result.get('evaluation_date'))}</dd></div><div><dt>Evidence period</dt><dd>{prose(period_text)}</dd></div><div><dt>Open actions</dt><dd>{len(actions)} to resolve or verify</dd></div></dl></div></aside></div>
       {_progress_timeline(result)}<div class="stats">{cards}</div><div class="executive-brief two-column"><div class="brief-card"><div class="eyebrow">WHERE TO START</div><h2>First actions</h2><ol>{first_actions or '<li>Confirm the pilot scope and maintain the assessed controls.</li>'}</ol></div><div class="brief-card strengths-card"><div class="eyebrow">WHAT IS WORKING</div><h2>Observed strengths</h2><ul>{strengths}</ul></div></div></section>{_progress_requirements(result)}
       <section id="action-plan"><div class="section-title"><div class="section-heading"><span class="section-index">01</span><div><div class="eyebrow">PRIORITIES AND ACCOUNTABILITY</div><h2>Prioritized action plan</h2></div></div><span class="badge">{len(actions)} actions</span></div><p class="section-description">Start with the highest-priority conditions. Remediation actions address observed issues. Confirmation actions check whether earlier or limited findings still apply. Evidence checks need a report, validation or owner decision.</p>{''.join(action_html) or '<p>No outstanding actions were identified.</p>'}</section>
       <section id="readiness-domains"><div class="section-heading"><span class="section-index">02</span><div><div class="eyebrow">THE ASSESSMENT AT A GLANCE</div><h2>Readiness by assessment area</h2></div></div><p class="section-description">Open actions by assessment area. Counts reflect the action plan and workbook; they describe the work remaining.</p>{portal_intro}<div class="chart-legend"><span><i class="legend-dot" data-kind="remediation" aria-hidden="true"></i>Remediation</span><span><i class="legend-dot" data-kind="confirmation" aria-hidden="true"></i>Confirmation</span><span><i class="legend-dot" data-kind="evidence_gaps" aria-hidden="true"></i>Evidence checks</span></div><div class="chart" aria-label="Actions by assessment area">{chart}</div></section>{''.join(domain_html)}
-      <section id="rollout"><div class="section-heading"><span class="section-index">03</span><div><div class="eyebrow">FROM ASSESSMENT TO PILOT</div><h2>Conditions for the next rollout stage</h2></div></div><div class="phase-grid"><div class="phase"><span class="phase-number">1</span><h3>Prepare the pilot</h3><p>Define the pilot users, work tasks, permitted data, and accountable owners. Validate licensing and application prerequisites for those users.</p></div><div class="phase"><span class="phase-number">2</span><h3>Before enabling access</h3><p>Resolve critical safeguards and the evidence checks that affect the pilot population. Confirm unresolved historical findings and record the security owner's decision against the action plan.</p></div><div class="phase"><span class="phase-number">3</span><h3>Before expanding</h3><p>Close the high-priority conditions, verify access to the intended content, and demonstrate that the agreed controls cover the larger group. Review actual Copilot usage and task outcomes with the business sponsor.</p></div></div><p class="qualification">Adoption opportunities guide the value of a pilot. They do not establish that security controls are effective.</p></section>
-      <section id="remaining-evidence"><div class="section-heading"><span class="section-index">04</span><div><div class="eyebrow">COMPLETE THE PICTURE</div><h2>Remaining evidence and decisions</h2></div></div><p class="section-description">{prose(gap_intro)}</p><ul class="gap-list">{gap_html or '<li>No required evidence gaps remain for the assessed scope.</li>'}</ul>{report_guides}</section>{technical}</main>
+      <section id="rollout"><div class="section-heading"><span class="section-index">03</span><div><div class="eyebrow">FROM ASSESSMENT TO PILOT</div><h2>Conditions for the next rollout stage</h2></div></div><div class="phase-grid"><div class="phase"><span class="phase-number">1</span><h3>Clear the blockers</h3><p>Fix the conditions marked “Blocks pilot” and confirm the checks the assessment could not read. They apply tenant-wide, so they protect whichever group runs the pilot.</p></div><div class="phase"><span class="phase-number">2</span><h3>Choose and run the pilot</h3><p>Pick a bounded group with clear work tasks, agree success measures with the business sponsor, assign licenses through a group, and record the security owner's decision against the action plan.</p></div><div class="phase"><span class="phase-number">3</span><h3>Before expanding</h3><p>Close the high-priority conditions, verify access to the intended content, and demonstrate that the agreed controls cover the larger group. Review actual Copilot usage and task outcomes with the business sponsor.</p></div></div><p class="qualification">Adoption opportunities guide the value of a pilot. They do not establish that security controls are effective.</p></section>
+      {_getting_started(result, action_numbers)}
+      <section id="remaining-evidence"><div class="section-heading"><span class="section-index">05</span><div><div class="eyebrow">COMPLETE THE PICTURE</div><h2>Remaining evidence and decisions</h2></div></div><p class="section-description">{prose(gap_intro)}</p><ul class="gap-list">{gap_html or '<li>No required evidence gaps remain for the assessed scope.</li>'}</ul>{report_guides}</section>{technical}</main>
       <footer class="report-footer"><strong>Microsoft 365 Copilot readiness</strong><span>{escape(str(tenant_name or 'Tenant'))} · Evaluation {prose(result.get('evaluation_date'))}</span></footer><script>{REPORT_SCRIPT}</script></body></html>'''

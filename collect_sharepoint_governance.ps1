@@ -7,13 +7,32 @@ param(
     [string]$CertificatePassword,
     [string]$CertificateThumbprint,
     [string]$DownloadPath,
-    [switch]$ConnectionOnly
+    [switch]$ConnectionOnly,
+    # Read secrets as one JSON line from stdin so they never appear in the
+    # process command line. The Python orchestrator always uses this path.
+    [switch]$SecretsFromStdin
 )
+
+if ($SecretsFromStdin) {
+    $secretLine = [Console]::In.ReadLine()
+    if ($secretLine) {
+        $secretPayload = $secretLine | ConvertFrom-Json
+        if ($secretPayload.certificate_password) { $CertificatePassword = [string]$secretPayload.certificate_password }
+    }
+    Remove-Variable -Name secretLine, secretPayload -ErrorAction SilentlyContinue
+}
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 $OutputEncoding = [Console]::OutputEncoding
+
+# Live progress for the Python orchestrator (stderr):
+# PROGRESS:TOTAL:<n>, PROGRESS:STEP:<dataset starting>, PROGRESS:NOTE:<text>, PROGRESS:END.
+function Write-CollectionStep {
+    param([string]$Kind, [string]$Value = '')
+    [Console]::Error.WriteLine("PROGRESS:${Kind}:$Value")
+}
 
 function Convert-ObjectToMap {
     param([object]$InputObject, [string[]]$Properties)
@@ -27,6 +46,9 @@ function Convert-ObjectToMap {
 
 function New-SourceState {
     param([bool]$Available, [string]$Reason = '', [int]$Records = 0)
+    # Provenance: which identity read this dataset (see collector-registry.json auth_paths).
+    $credentialType = if ($script:usingCertificate) { 'workload_app_certificate' } else { 'delegated_user' }
+    $authPathId = if ($script:usingCertificate) { 'spo_admin_certificate' } else { 'spo_admin_delegated' }
     return [ordered]@{
         available = $Available
         availability_status = $(if ($Available) { 'available' } else { 'unavailable' })
@@ -34,6 +56,10 @@ function New-SourceState {
         pages_collected = 1
         truncated = $false
         reason = $Reason
+        credential_type = $credentialType
+        auth_path_id = $authPathId
+        coverage = 'full'
+        evidence_quality = 'standard'
     }
 }
 
@@ -84,7 +110,9 @@ if (-not $loadedSharePointModule -or $loadedSharePointModule.Version -lt [versio
     throw "Microsoft.Online.SharePoint.PowerShell 16.0.27215.12000 or later is required for item-level Everyone/EEEU report coverage. Installed: $($loadedSharePointModule.Version)"
 }
 
-$usingCertificate = -not [string]::IsNullOrWhiteSpace($CertificateThumbprint) -or -not [string]::IsNullOrWhiteSpace($CertificatePath)
+Write-CollectionStep NOTE 'signing in to SharePoint administration'
+$script:usingCertificate = -not [string]::IsNullOrWhiteSpace($CertificateThumbprint) -or -not [string]::IsNullOrWhiteSpace($CertificatePath)
+$usingCertificate = $script:usingCertificate
 if ($usingCertificate) {
     [Console]::Error.WriteLine('AUTH_REUSED:SharePoint:Using application certificate authentication')
     if ($CertificateThumbprint) {
@@ -130,12 +158,13 @@ $tenantProperties = @(
     'ShowEveryoneExceptExternalUsersClaim','OrphanedPersonalSitesRetentionPeriod',
     'OneDriveStorageQuota','EnableAutoExpirationVersionTrim','MajorVersionLimit',
     'ExpireVersionsAfterDays','SelfServiceSiteCreationDisabled','IsLoopEnabled','IsFluidEnabled',
-    'IsWhiteboardEnabled','IsCollabMeetingNotesFluidEnabled'
+    'IsWhiteboardEnabled','IsCollabMeetingNotesFluidEnabled','EnableRestrictedAccessControl'
 )
 $siteProperties = @(
     'Url','Title','Template','Owner','SharingCapability','DefaultSharingLinkType',
     'DefaultLinkPermission','AnonymousLinkExpirationInDays','ExternalUserExpirationInDays',
-    'ConditionalAccessPolicy','LimitedAccessFileType','SensitivityLabel'
+    'ConditionalAccessPolicy','LimitedAccessFileType','SensitivityLabel',
+    'RestrictContentOrgWideSearch','RestrictedAccessControl'
 )
 
 $payload = [ordered]@{
@@ -150,6 +179,8 @@ $payload = [ordered]@{
     collection_status = [ordered]@{}
 }
 
+Write-CollectionStep TOTAL 6
+Write-CollectionStep STEP 'tenant sharing settings'
 try {
     $tenant = Get-SPOTenant
     $payload.tenant.available = $true
@@ -160,6 +191,7 @@ try {
     $payload.collection_status['sharepoint_tenant_settings'] = New-SourceState -Available $false -Reason $_.Exception.Message
 }
 
+Write-CollectionStep STEP 'site sharing settings (all sites)'
 try {
     $siteItems = @(Get-SPOSite -Limit All -Detailed | ForEach-Object { Convert-ObjectToMap -InputObject $_ -Properties $siteProperties })
     $payload.sites.available = $true
@@ -171,6 +203,28 @@ try {
     $payload.collection_status['sharepoint_site_settings'] = New-SourceState -Available $false -Reason $_.Exception.Message
 }
 
+Write-CollectionStep STEP 'Copilot content controls'
+# Copilot content controls. Cmdlets and properties vary by module version, so
+# each is read only when present; absence is reported, never treated as off.
+$copilotControls = [ordered]@{ available = $false; restricted_search_mode = ''; restricted_search_allowed_sites = $null; reason = '' }
+try {
+    if (Get-Command Get-SPOTenantRestrictedSearchMode -ErrorAction SilentlyContinue) {
+        $searchMode = Get-SPOTenantRestrictedSearchMode -ErrorAction Stop
+        $modeValue = if ($searchMode.PSObject.Properties['Mode']) { $searchMode.Mode } else { $searchMode }
+        $copilotControls.restricted_search_mode = [string]$modeValue
+        $copilotControls.available = $true
+        if (Get-Command Get-SPOTenantRestrictedSearchAllowedList -ErrorAction SilentlyContinue) {
+            $copilotControls.restricted_search_allowed_sites = @(Get-SPOTenantRestrictedSearchAllowedList -ErrorAction Stop | Where-Object { $_ }).Count
+        }
+    } else {
+        $copilotControls.reason = 'Get-SPOTenantRestrictedSearchMode is not available in the installed SharePoint Online module.'
+    }
+} catch {
+    $copilotControls.reason = $_.Exception.Message
+}
+$payload['copilot_content_controls'] = $copilotControls
+
+Write-CollectionStep STEP 'Data access governance reports'
 $dagQueries = @(
     @{ entity='PermissionedUsers'; workload='SharePoint'; type='Snapshot' },
     @{ entity='PermissionedUsers'; workload='OneDriveForBusiness'; type='Snapshot' },
@@ -188,7 +242,10 @@ $dagQueries = @(
 )
 $dagRows = @()
 $dagErrors = @()
+$dagIndex = 0
 foreach ($query in $dagQueries) {
+    $dagIndex++
+    Write-CollectionStep NOTE "Data access governance reports ($dagIndex of $($dagQueries.Count))"
     try {
         $queryParameters = @{ ReportEntity = $query.entity }
         if ($query.workload) { $queryParameters['Workload'] = $query.workload }
@@ -210,6 +267,7 @@ foreach ($query in $dagQueries) {
     }
 }
 
+Write-CollectionStep STEP 'recent-activity report status'
 # Recent-activity reports require tenant-approved audit data collection. Read the
 # state only; this assessment never starts or stops collection.
 $activityEntities = @(
@@ -259,6 +317,7 @@ $payload.collection_status['sharepoint_dag_reports'] = [ordered]@{
     reason = $payload.dag_reports.reason
 }
 
+Write-CollectionStep STEP 'downloading completed reports'
 # Reuse completed Microsoft reports without starting a new scan. Downloads remain in the
 # tool's ignored cache and are passed into the existing SAM report parser by main.py.
 if ($DownloadPath -and $dagRows.Count -gt 0) {
@@ -307,6 +366,7 @@ if ($DownloadPath -and $dagRows.Count -gt 0) {
     }
 }
 
+Write-CollectionStep END
 $payload['available'] = $payload.tenant.available -or $payload.sites.available -or $payload.dag_reports.available
 # SharePoint modules may write banners/warnings to stdout. Explicit framing keeps
 # those messages separate from the single authoritative evidence document.

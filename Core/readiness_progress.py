@@ -2,6 +2,12 @@
 
 Milestones describe verified readiness, not whether people already use Copilot.
 No usage percentage, source count or unsupported approval advances a milestone.
+
+Methodology 3.0 judges the pilot on the tenant-wide baseline: a control that
+covers all users covers any pilot group, so reaching "Ready for pilot" needs no
+pilot roster. Blocking conditions must be fixed (or carry a documented pilot
+treatment); checks the evidence could not answer are conditions to confirm.
+Recording the pilot group and plan is required before broader adoption.
 """
 
 from __future__ import annotations
@@ -40,15 +46,15 @@ def build_rollout_progress(result, review=None):
     plan = review.get("pilot_plan") or {}
     scope_ok = bool(scope.get("current"))
     plan_ok = bool(scope_ok and plan.get("current") and parse_date(plan["reviewed_at"]) >= parse_date(scope["reviewed_at"]))
-    scope_requirement = _requirement("pilot.scope", "Define the pilot users and content scope", "met" if scope_ok else "open",
+    scope_requirement = _requirement("broader.pilot_scope", "Record the pilot group that ran", "met" if scope_ok else "open",
         "A dated review identifies the pilot population: " + str(scope.get("description", "")) if scope_ok else
-        "Identify the pilot users, approved content and devices in a dated review with an accountable owner and supporting evidence.",
+        "After the pilot runs, record who took part (a group name and head count is enough) so its outcomes can be compared with the larger rollout.",
         owner_role="Business sponsor and Microsoft 365 administrator")
-    plan_requirement = _requirement("pilot.plan", "Review the pilot use cases, baseline and success measures", "met" if plan_ok else "open",
+    plan_requirement = _requirement("broader.pilot_plan", "Review the pilot use cases, baseline and success measures", "met" if plan_ok else "open",
         "A current reviewed plan records an owner, approved data, baseline, success measures and stop or expansion criteria." if plan_ok else
-        "Have the sponsor review the pilot charter, including its users, approved data, baseline, success measures and stop or expansion criteria.",
+        "Have the sponsor review the pilot use cases, baseline, success measures and stop or expansion criteria.",
         control_id="ADOPTION.BASELINE", owner_role="Business sponsor and adoption lead")
-    pilot_requirements = [scope_requirement, plan_requirement]
+    pilot_requirements = []
     if review.get("status") == "invalid":
         pilot_requirements.append(_requirement("review.validation", "Correct the supplied readiness review", "open",
             "The supplied review is incomplete or inconsistent. Have the assessment owner correct its scope, dates and required evidence before relying on it.", owner_role="Assessment owner"))
@@ -59,8 +65,9 @@ def build_rollout_progress(result, review=None):
         if not action or not scope_ok or not row.get("current") or row.get("scope_id") != scope.get("id"):
             continue
         if (action.get("ActionType") != "Remediation" or action.get("EvidenceStatus") != "supported"
-                or str(action.get("Status", "")).lower() == "critical"
-                or action.get("ReadinessStage") not in {"Before broad rollout", "Pilot condition", "Planned improvement"}):
+                or str(action.get("Status", "")).lower() == "critical"):
+            # Any supported, non-critical remediation can carry a documented
+            # pilot treatment; it stays open for broader adoption.
             continue
         observed = parse_date(action.get("ObservationDate"))
         if not observed or parse_date(row.get("reviewed_at")) < observed:
@@ -69,6 +76,11 @@ def build_rollout_progress(result, review=None):
         if not previous or row["reviewed_at"] > previous["reviewed_at"]:
             conditions[row["action_id"]] = row
 
+    def blocks(row):
+        return row.get("PilotImpact") == "Blocks pilot" or (
+            "PilotImpact" not in row and row.get("ActionType") == "Remediation"
+            and (row.get("Priority") == "High" or str(row.get("Status", "")).lower() == "critical"))
+
     covered_actions = set()
     for control in controls:
         related = [by_id[identifier] for identifier in control.get("recommendation_ids", []) if identifier in by_id]
@@ -76,18 +88,21 @@ def build_rollout_progress(result, review=None):
         covered_actions.update(row["RecommendationId"] for row in related)
         identifiers = [row["RecommendationId"] for row in related]
         unknown = [row for row in related if row.get("ActionType") in {"Evidence", "Confirmation"}]
-        untreated = [row for row in related if row.get("ActionType") == "Remediation" and row["RecommendationId"] not in conditions]
-        if unknown or control["status"] == "Not established":
-            status = "open"
-            reason = ("Confirm the earlier finding with current evidence for the affected population; a general control review does not resolve it."
+        blocking = [row for row in related if blocks(row) and row["RecommendationId"] not in conditions]
+        remediation = [row for row in related if row.get("ActionType") == "Remediation"]
+        if blocking or control["status"] == "Action required" and not related:
+            status, reason = "issue", "Fix the observed condition before the pilot, or document an eligible pilot treatment for its specific action."
+        elif remediation:
+            status, reason = "condition", ("The issue does not block a pilot. Fix it before broad rollout."
+                                           if not any(row["RecommendationId"] in conditions for row in remediation) else
+                                           "A current review documents how the pilot is protected; fix the issue before broad rollout.")
+        elif unknown or control["status"] == "Not established":
+            status = "condition"
+            reason = ("Confirm the earlier finding with current evidence before the pilot starts."
                       if any(row.get("ActionType") == "Confirmation" for row in unknown) else
-                      "Supply current evidence showing the result of this check for the intended users and content.")
-        elif untreated or control["status"] == "Action required" and not related:
-            status, reason = "issue", "Address the observed condition before the pilot, or document an eligible bounded pilot treatment for its specific action."
-        elif related:
-            status, reason = "condition", "The issue remains open for broader adoption. A current review documents how the specific pilot will be protected."
+                      "The collected evidence could not answer this check. Confirm the tenant-wide setting before the pilot starts.")
         else:
-            status, reason = "met", "The required check has a current supported result for the assessed scope."
+            status, reason = "met", "The required check has a current supported result tenant-wide."
         pilot_requirements.append(_requirement("pilot." + control["control_id"], control["title"], status, reason,
                                               action_ids=identifiers, control_id=control["control_id"]))
     for action in actions:
@@ -95,12 +110,20 @@ def build_rollout_progress(result, review=None):
         if identifier in covered_actions:
             continue
         treated = identifier in conditions
-        status = "condition" if treated else "issue" if action.get("ActionType") == "Remediation" else "open"
+        status = "condition" if treated or not blocks(action) else "issue"
         reason = "A specific pilot treatment is documented; the action remains open for broader adoption." if treated else (
             "Resolve the observed issue or document an eligible specific pilot treatment." if status == "issue" else
-            "Confirm or complete this action; a general control pass cannot close it.")
+            "Complete this action before the pilot starts or before broad rollout, as the action plan shows.")
         pilot_requirements.append(_requirement("pilot.action." + identifier, action.get("ActionTitle") or action.get("Feature", identifier), status, reason,
             action_ids=[identifier], owner_role=action.get("OwnerRole")))
+    gates = [control for control in controls if control.get("security_gate")]
+    answered = [control for control in gates if control["status"] != "Not established"]
+    enough = not gates or len(answered) * 2 >= len(gates)
+    pilot_requirements.insert(0, _requirement(
+        "pilot.evidence", "Answer at least half of the required checks", "met" if enough else "open",
+        f"{len(answered)} of {len(gates)} required checks were answered from the collected evidence." if enough else
+        f"Only {len(answered)} of {len(gates)} required checks were answered. Collect the missing sources before deciding.",
+        owner_role="Assessment owner"))
     pilot_ready = _all_met(pilot_requirements, allow_conditions=True)
 
     expanded = review.get("expansion_scope") or {}
@@ -127,6 +150,7 @@ def build_rollout_progress(result, review=None):
     broader_requirements = [
         _requirement("broader.pilot", "Meet the controlled-pilot requirements", "met" if pilot_ready else "open",
                      "The pilot requirements are established." if pilot_ready else "Complete the pilot requirements first."),
+        scope_requirement, plan_requirement,
         _requirement("broader.outcomes", "Review pilot outcomes and risk results with the sponsor", "met" if outcomes_ok else "open",
                      "A dated sponsor review confirms the agreed success measures and risk results." if outcomes_ok else
                      "Record a dated review of a completed pilot period, measured outcomes and risk results against the reviewed plan. Usage alone is insufficient.",
@@ -158,14 +182,13 @@ def build_rollout_progress(result, review=None):
     broader_ready = _all_met(broader_requirements)
     has_evidence = any(control["status"] != "Not established" for control in controls) or any(
         row.get("availability") == "available" and row.get("value") is not None for row in result.get("evidence", []))
-    current = "broader" if broader_ready else "pilot" if pilot_ready else "preparing" if has_evidence or scope_ok else "started"
+    current = "broader" if broader_ready else "pilot" if pilot_ready and has_evidence else "preparing" if has_evidence or scope_ok else "started"
     labels = dict(STAGES)
     requirements_by_stage = {
         "started": [_requirement("started.evidence", "Begin the assessment with evidence or a reviewed scope", "met" if has_evidence or scope_ok else "open",
                                  "An initial evidence base or reviewed scope is available." if has_evidence or scope_ok else
                                  "Supply initial evidence or a dated pilot scope to begin the assessment.")],
-        "preparing": [scope_requirement, plan_requirement,
-                      _requirement("preparing.evidence", "Review the initial control evidence", "met" if has_evidence else "open",
+        "preparing": [_requirement("preparing.evidence", "Review the initial control evidence", "met" if has_evidence else "open",
                                    "The report contains control evidence to review." if has_evidence else "Collect or supply dated evidence for the required controls.")],
         "pilot": pilot_requirements, "broader": broader_requirements,
     }
@@ -181,7 +204,8 @@ def build_rollout_progress(result, review=None):
                    "unconfirmed_controls": sum(row["status"] == "Not established" for row in controls),
                    "observed_issues": sum(row["status"] == "Action required" for row in controls),
                    "open_actions": len(result.get("actions", [])),
-                   "pilot_blockers": sum(row["status"] in {"open", "issue"} for row in pilot_requirements)},
+                   "pilot_blockers": sum(row["status"] in {"open", "issue"} for row in pilot_requirements),
+                   "pilot_conditions": sum(row["status"] == "condition" for row in pilot_requirements)},
         "next_requirements": [row for row in next_requirements if row["status"] in {"open", "issue"}],
         "pilot_conditions": list(conditions.values()),
         "qualification": "These milestones describe verified Microsoft 365 Copilot rollout readiness. Existing license assignment or usage does not establish authorization or readiness for a larger rollout.",

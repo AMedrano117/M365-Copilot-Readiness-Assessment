@@ -4,6 +4,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import runpy
 import tempfile
 import unittest
@@ -128,9 +129,15 @@ class OfflineReportTests(unittest.TestCase):
                  contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as exit_context:
                 runpy.run_path(str(ROOT / 'main.py'), run_name='__main__')
             self.assertEqual(exit_context.exception.code, 0)
-            return next((Path(directory) / 'Reports').glob('*.html'))
+            self.assertTrue(list((Path(directory) / 'Reports').glob('*_summary.html')), 'The pilot summary must be written.')
+            return next(path for path in (Path(directory) / 'Reports').glob('*.html') if not path.stem.endswith('_summary'))
         finally:
             os.chdir(old_cwd)
+
+    def assertNotEstablished(self, text, message):
+        # The headline states the verdict; replayed or partial evidence must not reach a pilot verdict.
+        headline = re.search(r'<h1>(.*?)</h1>', text).group(1)
+        self.assertIn(headline, {'Not enough evidence to decide yet', 'Not ready for a pilot yet'}, message)
 
     def test_cli_replay_builds_reports_without_auth_network_or_powershell(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -140,7 +147,7 @@ class OfflineReportTests(unittest.TestCase):
             text = html.read_text(encoding='utf-8')
             self.assertIn('saved control finding', text.lower())
             self.assertIn('40 days old', text)
-            self.assertTrue('Readiness unconfirmed' in text, 'Stale replay must not establish readiness.')
+            self.assertNotEstablished(text, 'Stale replay must not establish readiness.')
             self.assertTrue(list((Path(directory) / 'Reports').glob('*.xlsx')))
             self.assertNotIn('must-not-open', text)
 
@@ -213,8 +220,8 @@ class OfflineReportTests(unittest.TestCase):
             }])
             html = self.run_cli(['--mode', 'offline', '--sam-report', str(report)], directory)
             text = html.read_text(encoding='utf-8')
-            self.assertIn('Confirm sign-in policy coverage for the pilot', text)
-            self.assertTrue('Readiness unconfirmed' in text, 'Portal exports alone must not establish readiness.')
+            self.assertIn('Require MFA and block legacy sign-in for all users', text)
+            self.assertNotEstablished(text, 'Portal exports alone must not establish readiness.')
             self.assertNotIn('must-not-open', text)
 
     def test_readiness_cli_import_is_separate_from_copilot_usage(self):
@@ -267,7 +274,7 @@ class OfflineReportTests(unittest.TestCase):
             self.assertTrue('historical mfa finding' in body.lower(), 'Prior findings should appear with imported reports.')
             self.assertTrue('2026-09-09T18:30:00+00:00' in body, 'Prior generation date must be retained.')
             self.assertTrue('Content ownership and lifecycle' in body)
-            self.assertTrue('Readiness unconfirmed' in body)
+            self.assertNotEstablished(body, 'Prior findings and exports alone must not establish readiness.')
             self.assertTrue('purview-cache.json' in body, 'The Purview source must be identified.')
             combined = load_workbook(next((Path(directory) / 'Reports').glob('*.xlsx')), read_only=True)
             try:

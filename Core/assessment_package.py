@@ -34,6 +34,16 @@ _METHODOLOGY_MIGRATIONS = {
         'are evaluated with the 2.1.0 control matching and reviewed pilot criteria; '
         'readiness conclusions can change. Original evidence dates and files are preserved.'
     ),
+    ('2.0.0', '3.0.0'): (
+        'The raw collection schema is unchanged. Collected facts are evaluated with the 3.0.0 tenant-wide '
+        'baseline: controls are judged on tenant-wide configuration and no pilot roster is required. '
+        'Readiness conclusions can change. Original evidence dates and files are preserved.'
+    ),
+    ('2.1.0', '3.0.0'): (
+        'The raw collection schema is unchanged. Collected facts are evaluated with the 3.0.0 tenant-wide '
+        'baseline: controls are judged on tenant-wide configuration and no pilot roster is required. '
+        'Readiness conclusions can change. Original evidence dates and files are preserved.'
+    ),
 }
 
 
@@ -394,7 +404,7 @@ def record_package_run(folder, *, mode, tenant_id, collected_at, evaluation_date
     run_id = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '_' + uuid4().hex[:8]
     delivered = []
     if isinstance(outputs, dict):
-        for key in ('html_path', 'excel_path', 'csv_path', 'snapshot_path'):
+        for key in ('summary_html_path', 'html_path', 'excel_path', 'csv_path', 'snapshot_path'):
             value = outputs.get(key)
             if not isinstance(value, (str, Path)) or not Path(value).is_file():
                 continue

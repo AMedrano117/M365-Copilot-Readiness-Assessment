@@ -40,9 +40,9 @@ async def get_recommendation(sku_name, status="Success", client=None, purview_cl
     deployment_recs = []
     if status == "Success" and source_is_complete(purview_client, "org_config", getattr(purview_client, "org_config", None)):
         org_config = purview_client.org_config
-        is_enabled = org_config.get('CustomerLockboxEnabled', False)
+        is_enabled = org_config.get('customer_lockbox_enabled', org_config.get('CustomerLockboxEnabled', org_config.get('CustomerLockBoxEnabled')))
         
-        if is_enabled:
+        if is_enabled is True:
             deployment_recs.append(new_recommendation(
                 service="Purview",
                 feature=f"{feature_name} - Configuration",
@@ -52,7 +52,7 @@ async def get_recommendation(sku_name, status="Success", client=None, purview_cl
                 link_url="https://learn.microsoft.com/purview/customer-lockbox-requests",
                 status="Success"
             ))
-        else:
+        elif is_enabled is False:
             deployment_recs.append(new_recommendation(
                 service="Purview",
                 feature=f"{feature_name} - Configuration",
@@ -64,6 +64,14 @@ async def get_recommendation(sku_name, status="Success", client=None, purview_cl
                 priority="Low",
                 status="Insight",
                 disposition="Opportunity"
+            ))
+        else:
+            deployment_recs.append(new_recommendation(
+                service="Purview", feature=f"{feature_name} - Configuration",
+                observation="The organization configuration did not return an unambiguous Customer Lockbox Boolean setting; its enabled state is unverified",
+                finding_key="purview.customer_lockbox.state",
+                recommendation="Confirm the Customer Lockbox setting in a dated organization-configuration export or the admin center before deciding whether to change it.",
+                status="Not Assessed", disposition="Coverage"
             ))
     
     if deployment_recs:

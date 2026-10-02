@@ -45,7 +45,15 @@ The identity section includes [MFA method strength and defaults](docs/MFA_METHOD
 
 ## Authentication model
 
-Graph, Defender, and selected REST collectors use the configured application certificate or client secret. The runtime uses a small `azure-identity` and `httpx` Graph client; the generated Microsoft Graph SDK is not required.
+The assessment runs on **application permissions first** and can run end to end with a client secret and no signed-in administrator:
+
+- Graph, Defender, and selected REST collectors use the configured application certificate or client secret. The runtime uses a small `azure-identity` and `httpx` Graph client; the generated Microsoft Graph SDK is not required.
+- SharePoint tenant sharing settings, sensitivity label definitions and the report privacy setting are read through Microsoft Graph application permissions.
+- Purview and Exchange configuration (DLP, retention, label policies, audit) is read through PowerShell with an application access token from the same credential. Standard setup requests `Exchange.ManageAsApp` and assigns Global Reader by default, granting broad tenant read access. `-WorkloadRbac SecurityReader`, `None` and `RoleGroups` remain explicit alternatives; see [workload roles](docs/PERMISSIONS.md#workload-roles-for-app-only-purview-and-exchange).
+- SharePoint administration (per-site settings, Data Access Governance reports) needs a certificate (`-EnableSharePointAppOnly`) or a SharePoint administrator sign-in.
+- A delegated sign-in is optional enrichment for data Microsoft exposes only to signed-in administrators, such as Copilot limited mode.
+
+Preflight prints an evidence collection plan showing the path each dataset will use and how to unlock more, and every source in the report records which identity collected it. Use `--interactive-auth skip --delegated off` to prove a run needs no sign-in. See [How each dataset is collected](docs/PERMISSIONS.md#how-each-dataset-is-collected).
 
 Customers seeking reduced application access can choose **Restricted**. It retains stable identity, device, security, usage and external-connection reads, while skipping Graph site/group/consent-grant inventories and all SharePoint/Purview administrative PowerShell. Supported exports and saved evidence can supply additional coverage; skipped sources remain explicitly unassessed. See the [permissions guide](docs/PERMISSIONS.md) for the permission matrix and remaining gaps.
 
@@ -59,19 +67,28 @@ python main.py --mode offline --collection-input "<collection-input>" --reports-
 
 Create `exports` first or omit `--reports-dir` until exports are available. Restricted setup creates a dedicated `M365 Copilot Readiness Assessment Tool - Restricted` application and writes `.env.restricted`. Live profile selection is the explicit `--permission-profile` value, then `PERMISSION_PROFILE` in the selected environment, then `standard`. The saved collection preserves its profile during replay; older collections show an unrecorded profile. Restricted rejects unattended setup, preview packs and legacy administrative collection.
 
-SharePoint administrative PowerShell cannot use a client secret. SharePoint and supported Purview cmdlets prefer application certificate authentication and otherwise announce and request a delegated browser sign-in. Standard SharePoint administrative collection needs the actual admin-center URL. Open the customer's Microsoft 365 admin center, choose **Admin centers > SharePoint**, and copy the HTTPS origin, such as `https://<actual-prefix>-admin.sharepoint.com`, without a page path or query. The tool does not infer this hostname from the tenant's initial `.onmicrosoft.com` domain. See [URL configuration](docs/prereq.md#sharepoint-admin-url).
+SharePoint administrative PowerShell cannot use a client secret; without a certificate it announces and requests a SharePoint administrator browser sign-in, while tenant sharing settings still come from Microsoft Graph. Purview uses an application token, then a certificate, then a browser sign-in. Standard SharePoint administrative collection needs the actual admin-center URL. Open the customer's Microsoft 365 admin center, choose **Admin centers > SharePoint**, and copy the HTTPS origin, such as `https://<actual-prefix>-admin.sharepoint.com`, without a page path or query. The tool does not infer this hostname from the tenant's initial `.onmicrosoft.com` domain. See [URL configuration](docs/prereq.md#sharepoint-admin-url).
 
 Run the idempotent setup and connection preflight, replacing the URL placeholder with the verified origin:
 
 ```powershell
-.\setup-service-principal.ps1 -Mode Standard -SharePointAdminUrl "https://<actual-prefix>-admin.sharepoint.com"
-python main.py --check-connections
-python main.py
+.\setup-service-principal.ps1 -Mode Standard -EnvironmentFile .\contoso.env `
+  -SharePointAdminUrl "https://<actual-prefix>-admin.sharepoint.com"
+python main.py --env-file .\contoso.env --check-connections
+python main.py --env-file .\contoso.env
 ```
+
+Keep one environment file per customer. Setup writes `EXPECTED_TENANT_DOMAIN`, and every live run confirms the signed-in tenant against it before reading evidence; there is no built-in default tenant.
+
+The Standard permission profile defaults to Global Reader in both Standard and Unattended modes; setup requests delegated `RoleManagement.ReadWrite.Directory` to assign it. Restricted defaults to no workload role and rejects role assignments. `-WorkloadRbac None` skips assignment but does not remove existing roles or guarantee a Purview browser fallback after an application connection succeeds.
+
+Each build writes a one-page **pilot readiness summary** (`*_summary.html`) next to the full report: a plain verdict (not ready yet, ready with conditions, or ready), what to fix before the pilot, what to confirm, what is already in place and how to choose the pilot group. Required checks are judged on tenant-wide configuration (methodology 3.0), so the verdict never depends on naming the pilot users.
+
+The report also includes a **Getting started** section: a 30/60/90-day roadmap that links the security gates in the action plan with adoption steps (acceptable use, training, champions, success measures) and an owner checklist for external AI services. It is guidance only and never changes the readiness decision.
 
 An explicitly selected `--env-file` must exist and be readable. Before authentication, the console shows the effective tenant, application, profile, authentication method and configured SharePoint URL without credential values. Setup verifies reused secrets, records their key ID/expiry, and saves new credentials before consent or workload configuration. See [setup recovery and rotation](docs/prereq.md).
 
-These commands retain the existing Standard default. Existing Standard apps need new administrator consent for `Directory.Read.All` and `SecurityAlert.Read.All` when those grants are absent. Neither profile requests `UserAuthenticationMethod.Read.All`; the MFA registration report uses `AuditLog.Read.All`. Setup's delegated administrator scopes are separate from runtime application grants. `--services` limits collection without revoking consent, and removing manifest entries does not revoke earlier grants. Restricted setup and preflight stop on excess requested or granted application permissions; see [cleanup guidance](docs/PERMISSIONS.md#existing-applications-and-credentials).
+These commands retain the existing Standard default. Existing Standard apps need new administrator consent for `SharePointTenantSettings.Read.All`, `ReportSettings.Read.All`, `InformationProtectionPolicy.Read.All`, `Exchange.ManageAsApp`, `Directory.Read.All` and `SecurityAlert.Read.All` when those grants are absent; Restricted apps need the first two. Neither profile requests `UserAuthenticationMethod.Read.All`; the MFA registration report uses `AuditLog.Read.All`. Setup's delegated administrator scopes are separate from runtime application grants. `--services` limits collection without revoking consent, and removing manifest entries does not revoke earlier grants. Restricted setup and preflight stop on excess requested or granted application permissions; see [cleanup guidance](docs/PERMISSIONS.md#existing-applications-and-credentials).
 
 Use [RUN.md](docs/RUN.md) as the canonical operator runbook: prepare, collect and save, add exports, rebuild and review. [prereq.md](docs/prereq.md) covers connected access and setup; [the portal guide](docs/PORTAL_REPORTS_AND_OFFLINE.md) covers report requests and validated export schemas.
 

@@ -45,8 +45,10 @@ def reconcile_overlapping_evidence(recommendations):
     entra_risk_was_read = any(
         str(row.get('Service', '') or '') == 'Entra'
         and (
-            'risky users detected in the tenant' in str(row.get('Observation', '') or '').lower()
-            or 'no risky users detected' in str(row.get('Observation', '') or '').lower()
+            (row.get('FindingKey') == 'entra.identity_risk.users' and row.get('EvidenceComplete') is True)
+            or (row.get('EvidenceComplete') is not False and (
+                'risky users detected in the tenant' in str(row.get('Observation', '') or '').lower()
+                or 'no risky users detected' in str(row.get('Observation', '') or '').lower()))
         )
         for row in records
     )
@@ -143,6 +145,18 @@ def process_and_print_all_information(m365_result, entra_info,
     (m365_info, m365_recommendations) = m365_result
     m365_info = dict(m365_info) if isinstance(m365_info, dict) else {}
     m365_recommendations = list(m365_recommendations or [])
+    # SharePoint findings are rebuilt from the saved payload so replays apply
+    # the current rules (for example numeric enum values from SharePoint
+    # PowerShell). They are deterministic from that payload. Only findings the
+    # collection originally produced from it are replaced; supplied evidence
+    # without them is left as it is.
+    sharepoint_payload = getattr(m365_info.get('_client'), 'sharepoint_governance', None)
+    if (isinstance(sharepoint_payload, dict) and sharepoint_payload
+            and any(str(row.get('FindingKey') or '').startswith('sharepoint.') for row in m365_recommendations)):
+        from .sharepoint_governance import build_sharepoint_recommendations
+        m365_recommendations = [row for row in m365_recommendations
+                                if not str(row.get('FindingKey') or '').startswith('sharepoint.')]
+        m365_recommendations.extend(build_sharepoint_recommendations(sharepoint_payload))
     m365_result = (m365_info, m365_recommendations)
     evidence_bundle = None
     from datetime import datetime, timezone
@@ -241,6 +255,11 @@ def process_and_print_all_information(m365_result, entra_info,
         lifecycle_max_age_days=(collection_context or {}).get('assessment_settings', {}).get('lifecycle_report_max_age_days'),
         lifecycle_report_dates=(collection_context or {}).get('assessment_settings', {}).get('lifecycle_report_dates'),
     )
+    # Exported Data access governance reports answer the report families the
+    # SharePoint collector could not read itself.
+    from .sharepoint_governance import reconcile_dag_coverage
+    m365_recommendations = reconcile_dag_coverage(
+        m365_recommendations, ((data_exposure_info.get('sources') or {}).get('sam') or {}).get('reports'))
     if data_exposure_info.get('operator_messages'):
         from .console_reporting import detail
         for message in data_exposure_info['operator_messages']:
@@ -257,6 +276,17 @@ def process_and_print_all_information(m365_result, entra_info,
     defender_info = dict(defender_info)
     defender_info['recommendations'] = qualify_saved_recommendations(defender_info.get('recommendations', []), 'Defender', defender_info.get('_client'))
     defender_info['recommendations'] += assess_defender_configuration(defender_info.get('_client'), (collection_context or {}).get('collected_at'))
+    # Methodology 3.0: judge each required control on tenant-wide configuration,
+    # so the pilot decision never depends on a supplied pilot roster.
+    from .tenant_baseline import assess_tenant_baseline
+    _m365_baseline_client = m365_info.get('_client') if isinstance(m365_info, dict) else None
+    _collected_at = (collection_context or {}).get('collected_at') or ''
+    baseline_rows = assess_tenant_baseline(
+        m365_client=_m365_baseline_client, entra_client=entra_info.get('_client'),
+        purview_client=purview_info.get('_client'), collected_at=_collected_at)
+    entra_info['recommendations'] += [row for row in baseline_rows if row['Service'] == 'Entra']
+    purview_info['recommendations'] += [row for row in baseline_rows if row['Service'] == 'Purview']
+    m365_recommendations = list(m365_recommendations) + [row for row in baseline_rows if row['Service'] == 'M365']
     all_recommendations = collect_all_recommendations(
         m365_recommendations, entra_info, purview_info, 
         defender_info, power_platform_info, copilot_studio_info,
@@ -275,6 +305,7 @@ def process_and_print_all_information(m365_result, entra_info,
             power_platform_info,
             copilot_studio_info,
             data_exposure_info,
+            collection_context=collection_context,
         )
         evidence_bundle['prior_report'] = prior_report or {}
         evidence_bundle['portal_review'] = portal_review_data
@@ -356,7 +387,7 @@ def process_and_print_all_information(m365_result, entra_info,
                 }
         for result in connection_results or []:
             source_statuses[f"connection_{result.get('collector_id', 'unknown')}"] = {
-                'availability_status': 'available' if result.get('status') == 'Ready' else
+                'availability_status': 'available' if result.get('status') in {'Ready', 'Ready with gaps'} else
                     'not_requested' if result.get('status') == 'Optional source not selected' else
                     'deferred' if result.get('status') in {'Sign-in required', 'Interactive sign-in required', 'Browser sign-in will follow'} else 'unavailable',
                 'records_collected': '',
@@ -366,7 +397,12 @@ def process_and_print_all_information(m365_result, entra_info,
                 'maturity': result.get('maturity', ''),
                 'evidence_purpose': result.get('evidence_purpose', ''),
             }
+        # Record which identity and auth path produced each dataset. Older
+        # collections without a saved plan show the identity as unrecorded.
+        from .auth_plan import annotate_source_statuses
+        annotate_source_statuses(source_statuses, (collection_context or {}).get('auth_plan') or {})
         evidence_bundle['source_statuses'] = source_statuses
+        evidence_bundle['auth_plan'] = (collection_context or {}).get('auth_plan') or {}
         evidence_bundle['import_receipt'] = [
             {'Source': report.get('source_file'), 'Status': report.get('status'),
              'Original Date': report.get('report_date'), 'Scope': report.get('workload'),
@@ -399,6 +435,8 @@ def process_and_print_all_information(m365_result, entra_info,
         evidence_bundle['assessment_result'] = assessment_result
         from .copilot_admin_review import build_admin_review
         evidence_bundle['copilot_admin_review'] = build_admin_review(m365_client, purview_client, collection_context)
+        from .investigation_details import prepare_investigation_details
+        prepare_investigation_details(evidence_bundle, assessment_result)
         all_recommendations = assessment_result['recommendations']
         evidence_bundle['recommendations'] = all_recommendations
         control_results = assessment_result.get('control_results', control_results)
@@ -494,7 +532,8 @@ def process_and_print_all_information(m365_result, entra_info,
             evidence_bundle=evidence_bundle,
         )
         if open_html_report and html_path:
-            opened = open_html_report_file(html_path)
+            # The one-page summary is the entry point; it links to the full report.
+            opened = open_html_report_file(evidence_bundle.get('summary_html_path') or html_path)
             if opened:
                 print("HTML report opened in your default browser.")
     else:
@@ -505,6 +544,7 @@ def process_and_print_all_information(m365_result, entra_info,
         )
     
     return {'html_path': html_path if all_recommendations else None,
+            'summary_html_path': (evidence_bundle or {}).get('summary_html_path') if all_recommendations else None,
             'excel_path': excel_path if all_recommendations else None,
             'csv_path': csv_path if all_recommendations else None,
             'evidence_bundle': evidence_bundle}

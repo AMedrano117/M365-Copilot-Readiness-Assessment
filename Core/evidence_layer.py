@@ -3,7 +3,7 @@ Engineer follow-up evidence bundle builder.
 """
 
 from collections import OrderedDict, defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 import re
 
 from .friendly_names import get_friendly_plan_name, get_friendly_sku_name
@@ -35,6 +35,18 @@ SHEET_DEFINITIONS = OrderedDict([
         "appendix_title": "Appendix: Authentication Coverage",
         "default_note": "See Authentication Coverage for the aggregate registration counts returned by Microsoft Graph.",
         "preview_columns": ["Metric", "Value", "Source State"],
+    }),
+    ("legacy_signin_detail", {
+        "title": "Legacy Sign-In Detail",
+        "appendix_title": "Restricted legacy sign-in event detail",
+        "default_note": "See Legacy Sign-In Detail for the individual legacy-client events, their outcomes, and the recorded collection scope.",
+        "preview_columns": [],
+    }),
+    ("mfa_registration_detail", {
+        "title": "MFA Registration Review",
+        "appendix_title": "Restricted MFA registration follow-up",
+        "default_note": "See MFA Registration Review for the accounts explicitly reported as not registered for MFA.",
+        "preview_columns": [],
     }),
     ("authentication_methods_detail", {
         "title": "Authentication Methods",
@@ -78,6 +90,12 @@ SHEET_DEFINITIONS = OrderedDict([
         "appendix_title": "Appendix: Guest Access Detail",
         "default_note": "See Guest Access Detail for guest accounts and external collaboration settings relevant to this recommendation.",
         "preview_columns": ["Object Type", "Display Name", "User Principal Name", "Flagged Because"],
+    }),
+    ("entra_device_detail", {
+        "title": "Intune Device Review",
+        "appendix_title": "Restricted noncompliant Intune device detail",
+        "default_note": "See Intune Device Review for the returned devices explicitly marked noncompliant and their collection scope.",
+        "preview_columns": [],
     }),
     ("purview_policy_detail", {
         "title": "Purview Policy Detail",
@@ -437,6 +455,7 @@ def build_evidence_bundle(
     power_platform_info,
     copilot_studio_info,
     data_exposure_info=None,
+    collection_context=None,
 ):
     # Collapse duplicate findings before IDs are assigned, so identifiers are stable and
     # sequential across the report the reader actually sees.
@@ -470,11 +489,26 @@ def build_evidence_bundle(
                         'Source qualification': qualification}) for row in authentication[field]],
                 'summary': 'Aggregate authentication registration and preferences; source state: ' + authentication['source_state'],
                 'details': authentication['details']} if authentication['available'] else None
+    def mfa_registration_sheet():
+        if not any(_mfa_registration_finding(record) for record in recommendations):
+            return None
+        from .authentication_investigation import build_mfa_registration_investigation
+        sheet = build_mfa_registration_investigation(entra_client)
+        if sheet:
+            sheet['restricted'] = True
+        return sheet
+    def intune_device_sheet():
+        from .identity_investigation import build_intune_device_investigation, is_noncompliant_device_finding
+        if not any(is_noncompliant_device_finding(record) for record in recommendations):
+            return None
+        return build_intune_device_investigation(entra_client)
     builders = [
         ("app_access_detail", lambda: _build_app_access_sheet(entra_client, defender_client)),
         ("app_consent_policy_detail", lambda: _build_app_consent_policy_sheet(entra_client)),
         ("admin_role_detail", lambda: _build_admin_role_sheet(entra_client)),
         ("authentication_detail", lambda: _build_authentication_sheet(entra_client)),
+        ("legacy_signin_detail", lambda: _build_legacy_signin_sheet(entra_client, recommendations, collection_context)),
+        ("mfa_registration_detail", mfa_registration_sheet),
         ("authentication_methods_detail", lambda: authentication_sheet('method_rows')),
         ("authentication_preferences_detail", lambda: authentication_sheet('preference_rows')),
         ("authentication_populations_detail", lambda: authentication_sheet('population_rows')),
@@ -482,6 +516,7 @@ def build_evidence_bundle(
         ("access_review_detail", lambda: _build_access_review_sheet(entra_client)),
         ("conditional_access_detail", lambda: _build_conditional_access_sheet(entra_client)),
         ("guest_access_detail", lambda: _build_guest_access_sheet(entra_client)),
+        ("entra_device_detail", intune_device_sheet),
         ("purview_policy_detail", lambda: _build_purview_policy_sheet(purview_client)),
         ("data_exposure_detail", lambda: _build_data_exposure_sheet(data_exposure_info)),
         ("sharepoint_lifecycle_detail", lambda: _build_sharepoint_lifecycle_sheet(data_exposure_info)),
@@ -500,7 +535,7 @@ def build_evidence_bundle(
 
     for key, builder in builders:
         sheet = builder()
-        if sheet and sheet.get("rows"):
+        if sheet and (sheet.get("rows") or key in {'legacy_signin_detail', 'mfa_registration_detail', 'entra_device_detail'}):
             definition = SHEET_DEFINITIONS[key]
             sheet["key"] = key
             sheet["title"] = definition["title"]
@@ -508,6 +543,14 @@ def build_evidence_bundle(
             sheet["default_note"] = definition["default_note"]
             sheet["preview_columns"] = definition["preview_columns"]
             sheets[key] = sheet
+
+    from .application_investigation import build_application_grant_investigation
+    grants = build_application_grant_investigation(entra_client, (sheets.get('app_access_detail') or {}).get('rows', []), collection_context=collection_context)
+    if grants and (grants.get('rows') or grants.get('unavailability_reason')):
+        grants.update(key='application_grant_detail', title='Application Grant Detail',
+            appendix_title='Restricted application grant records', default_note=grants['reconciliation_note'],
+            preview_columns=[], summary=grants['reconciliation_note'])
+        sheets['application_grant_detail'] = grants
 
     recommendations = _apply_explicit_evidence_fallbacks(recommendations, sheets)
     recommendations = _resolve_recommendation_evidence(recommendations, sheets)
@@ -538,7 +581,7 @@ def build_evidence_bundle(
         "preview_columns": sheet.get("preview_columns", []),
         "preview_rows": sheet.get("rows", [])[:5],
     } for key, sheet in sheets.items()
-        if key not in {"copilot_user_usage_detail", "copilot_readiness_user_detail", "sharepoint_lifecycle_detail"}]
+        if not sheet.get("restricted") and key not in {"copilot_user_usage_detail", "copilot_readiness_user_detail", "sharepoint_lifecycle_detail", "legacy_signin_detail", "mfa_registration_detail"}]
 
     return {
         "recommendations": recommendations,
@@ -565,6 +608,7 @@ def build_evidence_bundle(
         },
         "entra_license_context": _build_entra_license_context(m365_info),
         "purview_policy_summary": _build_purview_policy_summary(purview_client),
+        "purview_label_summary": _build_purview_label_summary(purview_client),
         "purview_collection_status": getattr(purview_client, "collection_status", {}) if purview_client else {},
         "verified_strengths": _build_verified_strengths(entra_client, purview_client, m365_client),
         "sharepoint_governance": _build_sharepoint_governance_summary(m365_client),
@@ -631,6 +675,52 @@ def _build_entra_license_context(m365_info):
     return {"detected_tier": detected_tier, "rows": rows, "source": "Microsoft 365 subscribed SKU service plans"}
 
 
+def dlp_location_labels(policy):
+    """Workloads a DLP policy applies to, including unified (Copilot and app) locations."""
+    locations = []
+    for label, key in (
+        ("Exchange", "ExchangeLocation"), ("SharePoint", "SharePointLocation"),
+        ("OneDrive", "OneDriveLocation"), ("Teams", "TeamsLocation"),
+        ("Devices", "EndpointDlpLocation"), ("Power BI", "PowerBILocation"),
+    ):
+        if _safe_get(policy, key) not in (None, "", [], False):
+            locations.append(label)
+    from .tenant_baseline import _unified_locations, COPILOT_DLP_LOCATION
+    for item in _unified_locations(policy):
+        location = str(item.get("Location") or "").lower()
+        label = "Microsoft 365 Copilot" if COPILOT_DLP_LOCATION in location else "AI apps and browsers" if item.get("Workload") == "Applications" else ""
+        if label and label not in locations:
+            locations.append(label)
+    return locations
+
+
+def _build_purview_label_summary(purview_client):
+    """Counts for the report's Purview overview; the workbook holds every object."""
+    if not purview_client:
+        return {}
+    from .source_evidence import source_is_complete
+    summary = {}
+    labels = getattr(purview_client, "sensitivity_labels", {}) or {}
+    if labels.get("available"):
+        summary["labels"] = labels.get("total_labels", len(_ensure_list(labels.get("labels", []))))
+    policies = getattr(purview_client, "label_policies", {}) or {}
+    if source_is_complete(purview_client, "label_policies", policies):
+        summary["active_policies"] = sum(
+            1 for policy in _ensure_list(policies.get("policies", []))
+            if _safe_get(policy, "Enabled") is not False
+            and str(_safe_get(policy, "Mode") or "").lower() not in {"pendingdeletion", "disable", "disabled"})
+    retention = getattr(purview_client, "retention_labels", {}) or {}
+    if source_is_complete(purview_client, "retention_labels", retention):
+        count = sum(1 for row in _ensure_list(retention.get("labels", [])) if _safe_get(row, "Enabled") is not False)
+        summary["retention"] = f"{count} enabled retention polic{'y' if count == 1 else 'ies'}."
+    else:
+        summary["retention"] = "Retention policies were not collected."
+    audit = getattr(purview_client, "audit_config", {}) or {}
+    if audit.get("available"):
+        summary["retention"] += " Unified audit logging is " + ("on." if audit.get("unified_audit_enabled") else "off.")
+    return summary
+
+
 def _build_purview_policy_summary(purview_client):
     """Expose safe DLP policy details for the customer-facing report."""
     if not purview_client:
@@ -689,14 +779,7 @@ def _build_purview_policy_summary(purview_client):
 
     rows = []
     for policy in _ensure_list(dlp.get("policies", [])):
-        locations = []
-        for label, key in (
-            ("Exchange", "ExchangeLocation"), ("SharePoint", "SharePointLocation"),
-            ("OneDrive", "OneDriveLocation"), ("Teams", "TeamsLocation"),
-            ("Devices", "EndpointDlpLocation"), ("Power BI", "PowerBILocation"),
-        ):
-            if _safe_get(policy, key) not in (None, "", [], False):
-                locations.append(label)
+        locations = dlp_location_labels(policy)
         policy_name = _iso_text(_safe_get(policy, "Name")) or "Unnamed policy"
         mode = _iso_text(_safe_get(policy, "Mode")) or "Not provided"
         enabled_value = _safe_get(policy, "Enabled", None)
@@ -740,8 +823,9 @@ def _build_verified_strengths(entra_client, purview_client, m365_client=None):
     sharepoint = _build_sharepoint_governance_summary(m365_client)
     settings = sharepoint.get("settings", {})
     if sharepoint.get("available"):
-        default_link = str(settings.get("DefaultSharingLinkType", "") or "").lower()
-        sharing = str(settings.get("SharingCapability", "") or "").lower()
+        from .sharepoint_governance import setting_name
+        default_link = setting_name("DefaultSharingLinkType", settings.get("DefaultSharingLinkType"))
+        sharing = setting_name("SharingCapability", settings.get("SharingCapability"))
         if default_link in {"direct", "specificpeople"} and sharing not in {"externaluserandguestsharing", "anonymousaccess"}:
             rows.append({
                 "Area": "SharePoint sharing",
@@ -749,11 +833,18 @@ def _build_verified_strengths(entra_client, purview_client, m365_client=None):
                 "Evidence": f"Default link type: {settings.get('DefaultSharingLinkType')}; SharePoint sharing level: {settings.get('SharingCapability')}.",
                 "Benefit": "This reduces accidental broad access to content that can later ground an AI response.",
                 "Key": "sharepoint-sharing-restricted",
+                # Answers the tenant-wide sharing-defaults check (methodology 3.0).
+                "ControlId": "CONTENT.SHARING",
+                "EvidenceKey": "sharepoint_governance_detail",
             })
 
     if entra_client:
         ca_summary = getattr(entra_client, "ca_summary", {}) or {}
         mfa_policies = int(ca_summary.get("require_mfa", 0) or 0)
+        if getattr(entra_client, "ca_policies", None):
+            # The tenant-wide sign-in baseline judges the raw policies, including
+            # report-only and scoped ones; a summary count is not a strength.
+            mfa_policies = 0
         if mfa_policies:
             m365_targets = int(ca_summary.get("target_m365_apps", 0) or 0)
             evidence = f"{mfa_policies} enabled Conditional Access polic{'y' if mfa_policies == 1 else 'ies'} require MFA"
@@ -826,7 +917,7 @@ def _build_verified_strengths(entra_client, purview_client, m365_client=None):
             if label_count and publishing_count:
                 rows.append({
                     "Area": "Content classification",
-                    "Strength": "Sensitivity labels are defined and publishing policies are present.",
+                    "Strength": "Sensitivity labels are defined and label publishing policies exist; who receives them is checked separately.",
                     "Evidence": f"Purview returned {label_count} sensitivity label{'s' if label_count != 1 else ''} and {publishing_count} label publishing polic{'y' if publishing_count == 1 else 'ies'}.",
                     "Benefit": "Published labels give the organization a consistent way to identify and handle sensitive content used by AI.",
                     "Key": "sensitivity-labels-published",
@@ -889,6 +980,7 @@ def _build_sharepoint_lifecycle_sheet(data_exposure_info):
     if not rows:
         return None
     summary = data_exposure_info.get("lifecycle_summary", {}) or {}
+    truncated = bool(((data_exposure_info.get('sources') or {}).get('sam') or {}).get('lifecycle_records_truncated'))
     return {
         "rows": rows,
         "summary": (
@@ -900,6 +992,8 @@ def _build_sharepoint_lifecycle_sheet(data_exposure_info):
             "Lifecycle status supports ownership and content-maintenance review; it does not establish oversharing or sensitive-data exposure.",
             "An empty owner contact does not establish that a site is ownerless. Report dates remain separate from site activity dates.",
             "Owner contacts and individual site details are retained in this workbook for authorized follow-up.",
+            (f"Retained {len(rows)} of {summary.get('site_count', len(rows))} selected site records; lifecycle detail was truncated at the import limit, so affected rows may be missing."
+             if truncated else "All selected lifecycle site records retained by the importer are included; this does not establish tenant-wide coverage."),
         ],
     }
 
@@ -973,6 +1067,8 @@ def _build_data_exposure_sheet(data_exposure_info):
     details = [
         "Only explicit fields from Microsoft Purview DSPM and SharePoint Advanced Management exports are treated as exposure evidence; usage volume alone is not a risk signal.",
         "Source Summary rows record overall freshness and volume. Source Report rows retain each file's report date, selection status and coverage. Risk Evidence rows retain the date and signal from their source export.",
+        "Each named signal has its own Count column. Signal Count combines different measures and must not be used to reproduce a specific finding. Overlapping snapshots use the maximum selected measurement for each location and signal; distinct source detail rows are not automatically additive.",
+        "Item, recipient, permission and link identifiers are preserved when supplied. Location-level count reports do not contain the individual links or permissions; investigate the named location or obtain the corresponding detailed export. Source Record is a one-based parsed-record ordinal within the source file/archive, not an Excel row number.",
     ]
     if data_exposure_info.get("evidence_truncated"):
         details.append(
@@ -990,6 +1086,15 @@ def _resolve_recommendation_evidence(recommendations, sheets):
     for recommendation in recommendations:
         record = dict(recommendation)
         evidence_keys = [key for key in _split_evidence_keys(record.get("EvidenceKey", "")) if key in sheets]
+        empty_focused = [key for key in evidence_keys if key in {'legacy_signin_detail', 'mfa_registration_detail', 'entra_device_detail'} and not sheets[key].get('rows')]
+        evidence_keys = [key for key in evidence_keys if key not in empty_focused]
+        if empty_focused and not evidence_keys:
+            detail = sheets[empty_focused[0]]
+            record['EvidenceAvailable'] = 'No'
+            record['EvidenceSheet'] = ''
+            record['EvidenceSummary'] = detail.get('unavailability_reason') or detail.get('reconciliation_note') or detail.get('summary', '')
+            resolved.append(record)
+            continue
         if evidence_keys:
             titles = []
             notes = []
@@ -1038,6 +1143,21 @@ def _apply_explicit_evidence_fallbacks(recommendations, sheets):
 
     for recommendation in recommendations:
         record = dict(recommendation)
+        from .identity_investigation import is_noncompliant_device_finding
+        if is_noncompliant_device_finding(record) and 'entra_device_detail' in available_keys:
+            record['EvidenceKey'] = 'entra_device_detail'
+            resolved.append(record)
+            continue
+        if _legacy_signin_finding(record) and 'legacy_signin_detail' in available_keys:
+            # Older saved recommendations incorrectly pointed these event counts
+            # at MFA registration or policy configuration worksheets.
+            record['EvidenceKey'] = 'legacy_signin_detail'
+            resolved.append(record)
+            continue
+        if _mfa_registration_finding(record) and 'mfa_registration_detail' in available_keys:
+            record['EvidenceKey'] = ';'.join(key for key in ('authentication_detail', 'mfa_registration_detail') if key in available_keys)
+            resolved.append(record)
+            continue
         if _split_evidence_keys(record.get("EvidenceKey", "")):
             resolved.append(record)
             continue
@@ -1390,6 +1510,60 @@ def _build_app_consent_policy_sheet(entra_client):
             "Evidence Confidence": "High" if availability == "available" else "Medium",
         })
 
+    # A catalog definition alone does not establish assignment. Match only the
+    # exact policy ID following the assignment capability prefix, preserving
+    # every retained includes/excludes condition as its own source record.
+    from .source_evidence import source_availability
+    definition_state = source_availability(entra_client, "consent_policies")
+    assignments_by_id = defaultdict(list)
+    for assignment in assigned:
+        assignments_by_id[assignment.split(".", 1)[-1].casefold()].append(assignment)
+    matched_ids, condition_count, missing_conditions = set(), 0, 0
+    definitions = _ensure_list(getattr(entra_client, "permission_grant_policies", []))
+    for definition in definitions:
+        definition_id = _iso_text(_safe_get(definition, "id"))
+        if definition_id.casefold() not in assignments_by_id:
+            continue
+        matched_ids.add(definition_id.casefold())
+        for direction in ("includes", "excludes"):
+            conditions = _safe_get(definition, direction, None)
+            if conditions is None:
+                missing_conditions += 1
+                continue
+            for condition in _ensure_list(conditions):
+                condition_row = {
+                    "RecommendationId": "",
+                    "Flagged By": "",
+                    "Setting": "Assigned permission-grant policy condition",
+                    "Value": "Include" if direction == "includes" else "Exclude",
+                    "Policy ID": definition_id,
+                    "Source State": definition_state.title(),
+                    "Evidence Confidence": "High" if definition_state == "available" else "Medium",
+                    "Condition ID": _iso_text(_safe_get(condition, "id")),
+                    "Policy Name": _iso_text(_safe_get(definition, "displayName")),
+                    "Policy Description": _iso_text(_safe_get(definition, "description")),
+                    "Assigned Policy IDs": "; ".join(assignments_by_id[definition_id.casefold()]),
+                    "Source API": "https://graph.microsoft.com/v1.0/policies/permissionGrantPolicies",
+                }
+                fields = condition.items() if isinstance(condition, dict) else vars(condition).items() if hasattr(condition, "__dict__") else []
+                for name, value in fields:
+                    # Raw names and values keep provider-specific and future
+                    # condition attributes investigable without a field list.
+                    if not str(name).startswith("_"):
+                        condition_row["Condition." + str(name)] = value
+                rows.append(condition_row)
+                condition_count += 1
+    missing_definitions = len(set(assignments_by_id) - matched_ids)
+    condition_note = (
+        f"{len(matched_ids)} assigned policy definition(s) matched by exact ID; "
+        f"{condition_count} retained include/exclude condition record(s) exported. "
+        f"Permission-grant definition collection: {definition_state}."
+    )
+    if missing_definitions:
+        condition_note += f" Definitions for {missing_definitions} assigned policy ID(s) were not retained; their conditions cannot be established from the assignments."
+    if missing_conditions:
+        condition_note += f" {missing_conditions} includes/excludes collection(s) were not retained on matched definitions; missing collections are not evidence of zero conditions."
+
     return {
         "rows": rows,
         "summary": (
@@ -1400,6 +1574,8 @@ def _build_app_consent_policy_sheet(entra_client):
         "details": [
             "The effective boundary comes from authorizationPolicy.defaultUserRolePermissions.permissionGrantPoliciesAssigned.",
             "Permission-grant policy definitions are supporting metadata and are not treated as proof that users are assigned those policies.",
+            "Assignment enables self-consent only within the applicable policy includes and excludes; it does not imply unrestricted approval, approval of every application, or effective access to Copilot content.",
+            condition_note,
         ],
     }
 
@@ -1445,6 +1621,187 @@ def _build_authentication_sheet(entra_client):
     }
 
 
+_LEGACY_SIGNIN_COUNT = re.compile(r'\b(\d[\d,]*)\s+legacy(?:\s+authentication|\s+auth)?\s+sign[- ]?ins?\b', re.IGNORECASE)
+
+
+def _mfa_registration_finding(record):
+    if str(record.get('Service') or '') != 'Entra':
+        return False
+    if record.get('FindingKey') == 'entra.authentication.mfa_registration':
+        return True
+    if str(record.get('Disposition') or '').lower() in {'assurance', 'reference', 'coverage'}:
+        return False
+    if str(record.get('Status') or '').lower() not in {'critical', 'action required', 'attention required', 'warning'}:
+        return False
+    observation = str(record.get('Observation') or '')
+    count = re.search(r'\b(\d[\d,]*)\s+of\s+(\d[\d,]*)\s+users\b', observation, re.IGNORECASE)
+    return bool(count and int(count.group(1).replace(',', '')) < int(count.group(2).replace(',', ''))
+                and re.search(r'\b(?:enrolled|registered)\s+(?:in|for)\s+MFA\b', observation, re.IGNORECASE))
+
+
+def _legacy_signin_finding(record):
+    """An observed event count is distinct from a legacy-blocking policy finding."""
+    if str(record.get('Service') or '') != 'Entra':
+        return False
+    if record.get('FindingKey') == 'entra.signins.legacy_auth':
+        return True
+    count = _LEGACY_SIGNIN_COUNT.search(str(record.get('Observation') or ''))
+    return bool(count and int(count.group(1).replace(',', '')) > 0)
+
+
+def _signin_text(value, default='Not returned'):
+    value = getattr(value, 'value', value)
+    return str(value).strip() if value is not None and str(value).strip() else default
+
+
+def _signin_utc(value):
+    if value is None or value == '':
+        return 'Not returned'
+    try:
+        stamp = value if isinstance(value, datetime) else datetime.fromisoformat(str(value).replace('Z', '+00:00'))
+        if stamp.tzinfo is None:
+            return stamp.isoformat() + ' (timezone not recorded)'
+        return stamp.astimezone(timezone.utc).isoformat().replace('+00:00', 'Z')
+    except (TypeError, ValueError):
+        return str(value) + ' (UTC not established)'
+
+
+def _build_legacy_signin_sheet(entra_client, recommendations=None, collection_context=None):
+    """Retain each matched sign-in event, including repeated users and apps."""
+    from .signin_evidence import is_legacy_signin, LEGACY_CLASSIFICATION_RULE
+    from .source_evidence import source_is_complete
+
+    state = (getattr(entra_client, 'collection_status', {}) or {}).get('signin_logs', {}) or {}
+    context = collection_context or {}
+    summary = getattr(entra_client, 'signin_summary', {}) or {}
+    source_count = summary.get('legacy_auth_attempts', summary.get('legacy_auth_sign_ins'))
+    reported_counts = []
+    for record in recommendations or []:
+        if _legacy_signin_finding(record):
+            match = _LEGACY_SIGNIN_COUNT.search(str(record.get('Observation') or ''))
+            if match:
+                reported_counts.append(int(match.group(1).replace(',', '')))
+    reported_counts = list(dict.fromkeys(reported_counts))
+    try:
+        source_count = int(source_count) if source_count is not None and not isinstance(source_count, bool) else None
+    except (TypeError, ValueError):
+        source_count = None
+    reported_count = reported_counts[0] if len(reported_counts) == 1 else source_count
+    logs = _ensure_list(getattr(entra_client, 'signin_logs', None))
+    complete = source_is_complete(entra_client, 'signin_logs')
+    source_state = str(state.get('availability_status') or ('available' if complete else 'not established'))
+    params = state.get('filters') or state.get('request_params') or {}
+    query_filter = state.get('filter') or (_safe_get(params, '$filter') if isinstance(params, dict) else str(params)) or 'Not recorded'
+    window = state.get('collection_window') or state.get('window')
+    if not window and state.get('window_start'):
+        window = str(state['window_start']) + ' to ' + str(state.get('window_end') or 'no recorded upper bound')
+    window = window or 'Original query window not recorded; event timestamps do not establish the query window'
+    source_api = state.get('source_api') or 'https://graph.microsoft.com/v1.0/auditLogs/signIns (collector endpoint; original request not recorded)'
+    collected_at = state.get('collected_at') or state.get('collection_completed_at') or getattr(entra_client, 'collected_at', None) or context.get('collected_at') or 'Not retained'
+    source_file = state.get('source_file') or getattr(entra_client, 'source_file', None) or context.get('source_file') or 'Not retained'
+    rows = []
+    for event in logs:
+        if not is_legacy_signin(event):
+            continue
+        status = _safe_get(event, 'status', {}) or {}
+        device = _safe_get(event, 'deviceDetail', {}) or {}
+        location = _safe_get(event, 'location', {}) or {}
+        error_code = _safe_get(status, 'errorCode', None)
+        outcome = 'Unknown'
+        if error_code is not None and not isinstance(error_code, bool) and re.fullmatch(r'-?\d+', str(error_code).strip()):
+            outcome = 'Success' if int(error_code) == 0 else 'Failure'
+        rows.append({
+            'RecommendationId': '', 'Flagged By': '',
+            'Sign-In ID': _signin_text(_safe_get(event, 'id', None)),
+            'User ID': _signin_text(_safe_get(event, 'userId', None)),
+            'User Principal Name': _signin_text(_safe_get(event, 'userPrincipalName', None)),
+            'User Display Name': _signin_text(_safe_get(event, 'userDisplayName', None)),
+            'Application ID': _signin_text(_safe_get(event, 'appId', None)),
+            'Application Name': _signin_text(_safe_get(event, 'appDisplayName', None)),
+            'Service Principal ID': _signin_text(_safe_get(event, 'servicePrincipalId', None)),
+            'Service Principal Name': _signin_text(_safe_get(event, 'servicePrincipalName', None) or _safe_get(event, 'servicePrincipalDisplayName', None)),
+            'Resource ID': _signin_text(_safe_get(event, 'resourceId', None)),
+            'Resource Name': _signin_text(_safe_get(event, 'resourceDisplayName', None)),
+            'Client App / Protocol': _signin_text(_safe_get(event, 'clientAppUsed', None)),
+            'Authentication Protocol': _signin_text(_safe_get(event, 'authenticationProtocol', None)),
+            'User Agent': _signin_text(_safe_get(event, 'userAgent', None)),
+            'Created UTC': _signin_utc(_safe_get(event, 'createdDateTime', None)),
+            'IP Address': _signin_text(_safe_get(event, 'ipAddress', None)),
+            'Location City': _signin_text(_safe_get(location, 'city', None)),
+            'Location State': _signin_text(_safe_get(location, 'state', None)),
+            'Location Country / Region': _signin_text(_safe_get(location, 'countryOrRegion', None)),
+            'Device ID': _signin_text(_safe_get(device, 'deviceId', None)),
+            'Device Name': _signin_text(_safe_get(device, 'displayName', None)),
+            'Device OS': _signin_text(_safe_get(device, 'operatingSystem', None)),
+            'Device Browser': _signin_text(_safe_get(device, 'browser', None)),
+            'Error Code': error_code if error_code is not None else 'Not returned',
+            'Outcome': outcome,
+            'Failure Reason': _signin_text(_safe_get(status, 'failureReason', None)),
+            'Status Additional Details': _signin_text(_safe_get(status, 'additionalDetails', None)),
+            'Conditional Access Status': _signin_text(_safe_get(event, 'conditionalAccessStatus', None)),
+            'Is Interactive': _bool_text(_safe_get(event, 'isInteractive', None)) or 'Unknown',
+            'Correlation ID': _signin_text(_safe_get(event, 'correlationId', None)),
+            'Source API': source_api, 'Source File': source_file,
+            'Collected At': collected_at, 'Collection Window': window,
+            'Source Filter': query_filter, 'Source State': source_state,
+            'Pages Collected': state.get('pages_collected', 'Not recorded'),
+            'Truncated': state.get('truncated', 'Not recorded'),
+        })
+    count = len(rows)
+    if not rows and not any(_legacy_signin_finding(record) for record in recommendations or []):
+        return None
+    if len(reported_counts) > 1:
+        reconciliation = f'Conflicting reported legacy sign-in counts {reported_counts}; {count} matching event rows retained.'
+    elif reported_count is None:
+        reconciliation = f'{count} matching event rows retained; an original summarized legacy sign-in count was not recorded.'
+    elif reported_count == count:
+        reconciliation = f'Matched: {reported_count} reported legacy sign-in events and {count} detailed event rows. Events are not deduplicated by user or application.'
+    else:
+        reconciliation = f'Count mismatch: {reported_count} reported legacy sign-in events but {count} matching detailed event rows; the reported count cannot be reproduced from the retained events.'
+    if source_count is not None and reported_count is not None and source_count != reported_count:
+        reconciliation += f' The saved collector summary separately reports {source_count} legacy events.'
+    if not complete:
+        reconciliation += ' Completeness of the original query is not established; retained rows describe only the available source population.'
+    unavailable = ''
+    if not rows:
+        if entra_client is None:
+            unavailable = 'Sign-in event details are unavailable because no Entra collection client was supplied.'
+        elif not hasattr(entra_client, 'signin_logs') or getattr(entra_client, 'signin_logs', None) is None:
+            unavailable = 'The saved collection did not retain signin_logs event records; a summary count cannot identify the individual sign-ins.'
+        elif state.get('reason') or state.get('error'):
+            unavailable = 'No matching sign-in event details are available. Source collection reason: ' + str(state.get('reason') or state.get('error'))
+        elif reported_count:
+            unavailable = f'The finding reports {reported_count} legacy sign-in events, but none of the {len(logs)} retained signin_logs records match the collector predicate; the underlying events needed to reproduce that count are unavailable.'
+        elif not complete:
+            unavailable = 'No matching sign-in events were retained, and the source query completeness was not recorded; absence of legacy authentication cannot be established.'
+    details = [
+        'Selection: ' + LEGACY_CLASSIFICATION_RULE,
+        f'Scope: {len(logs)} retained sign-in records examined; {count} matching events exported, one row per event without user/application deduplication.',
+        'Original query scope: ' + str(state.get('scope') or 'Not retained; no tenant-wide coverage claim is made') + '.',
+        reconciliation,
+        'Collection window: ' + str(window) + '. Source filter: ' + str(query_filter) + '.',
+        'Outcome uses status.errorCode: 0 is Success, nonzero is Failure, and a missing or unreadable code is Unknown. A legacy-client match does not prove successful access or that MFA or Conditional Access was bypassed.',
+        'Pagination: ' + str(state.get('pagination') or 'Original pagination behavior was not recorded') +
+            f". Pages collected: {state.get('pages_collected', 'Not recorded')}; truncated: {state.get('truncated', 'Not recorded')}.",
+        'Permissions: ' + str(state.get('permissions') or 'Effective permissions were not recorded; missing Conditional Access details cannot establish that no policy applied') + '.',
+        'Licensing: ' + str(state.get('licensing') or 'The original source licensing and entitlement checks were not recorded') + '.',
+        'Retention: ' + str(state.get('retention') or 'Source retention was not recorded; only retained source events are available') + '.',
+    ]
+    if state.get('reason'):
+        details.append('Collection qualification: ' + str(state['reason']))
+    if state.get('limitations'):
+        details.append('Source limitations: ' + str(state['limitations']))
+    if unavailable:
+        details.append(unavailable)
+    return {'rows': rows, 'summary': f'{count} legacy-client sign-in event records retained. ' + reconciliation,
+            'restricted': True, 'preview_columns': [], 'details': details,
+            'reported_count': reported_count, 'matched_count': count,
+            'reconciliation_note': reconciliation, 'unavailability_reason': unavailable,
+            'source_record_count': len(logs), 'source_state': source_state,
+            'selection_rule': LEGACY_CLASSIFICATION_RULE, 'collection_window': window,
+            'scope': state.get('scope') or 'Retained sign-in records only; original query scope not retained'}
+
+
 def _build_identity_risk_sheet(entra_client):
     if not entra_client:
         return None
@@ -1465,6 +1822,7 @@ def _build_identity_risk_sheet(entra_client):
             "Display Name": _iso_text(_safe_get(user, "userDisplayName")) or "Identity available by object ID",
             "User Principal Name": _iso_text(_safe_get(user, "userPrincipalName")),
             "Object ID": _iso_text(_safe_get(user, "id")),
+            "User ID": _iso_text(_safe_get(user, "id")),
             "Risk Level": level or "Unknown", "Risk State": state or "Unknown",
             "Risk Detail": _iso_text(_safe_get(user, "riskDetail")),
             "Last Updated": _iso_text(_safe_get(user, "riskLastUpdatedDateTime")),
@@ -1478,6 +1836,11 @@ def _build_identity_risk_sheet(entra_client):
             "Display Name": _iso_text(_safe_get(detection, "userDisplayName")) or "Identity available by object ID",
             "User Principal Name": _iso_text(_safe_get(detection, "userPrincipalName")),
             "Object ID": _iso_text(_safe_get(detection, "id")),
+            "User ID": _iso_text(_safe_get(detection, "userId")),
+            "IP Address": _iso_text(_safe_get(detection, "ipAddress")),
+            "Activity Date": _iso_text(_safe_get(detection, "activityDateTime")),
+            "Detected Date": _iso_text(_safe_get(detection, "detectedDateTime")),
+            "Correlation ID": _iso_text(_safe_get(detection, "correlationId")),
             "Risk Level": level or "Unknown", "Risk State": state or "Unknown",
             "Risk Detail": _iso_text(_safe_get(detection, "riskEventType")),
             "Last Updated": _iso_text(_safe_get(detection, "lastUpdatedDateTime")) or _iso_text(_safe_get(detection, "detectedDateTime")),
@@ -1541,6 +1904,7 @@ def _build_admin_role_sheet(entra_client):
             "Principal Type": principal_type or "Unknown",
             "Role Name": role_name or "Unresolved role definition",
             "Assignment Type": assignment_type,
+            "Assignment ID": _iso_text(_safe_get(assignment, "id")),
             "Principal ID": _iso_text(_safe_get(assignment, "principalId")),
             "Role Definition ID": role_definition_id,
             "Role Template ID": _iso_text(_safe_get(role_definition, "templateId")),
@@ -1622,10 +1986,13 @@ def _build_access_review_sheet(entra_client):
     for review in access_reviews:
         scope = _safe_get(review, "scope")
         query = _iso_text(_safe_get(scope, "query")) if scope else ""
-        settings = _safe_get(review, "settings")
-        recurrence_type = _iso_text(_safe_get(settings, "recurrenceType")) if settings else ""
+        settings = _safe_get(review, "settings", None)
+        recurrence = _safe_get(settings, "recurrence") if settings else None
+        pattern = _safe_get(recurrence, "pattern") if recurrence else None
+        recurrence_range = _safe_get(recurrence, "range") if recurrence else None
+        recurrence_type = _iso_text(_safe_get(pattern, "type")) if pattern else ""
 
-        review_type = "Group Membership"
+        review_type = "Scope not classified"
         lowered_query = query.lower()
         if "role" in lowered_query:
             review_type = "Role Assignment"
@@ -1633,17 +2000,29 @@ def _build_access_review_sheet(entra_client):
             review_type = "Guest Access"
         elif "principal" in lowered_query or "application" in lowered_query:
             review_type = "Application Assignment"
+        elif "group" in lowered_query:
+            review_type = "Group Membership"
 
         rows.append({
             "RecommendationId": "",
             "Flagged By": "",
             "Review Name": _iso_text(_safe_get(review, "displayName")) or _iso_text(_safe_get(review, "id")),
+            "Review ID": _iso_text(_safe_get(review, "id")),
             "Status": _iso_text(_safe_get(review, "status")),
             "Review Type": review_type,
-            "Is Recurring": _bool_text(bool(recurrence_type)),
+            "Is Recurring": _bool_text(bool(pattern)) if settings is not None else "Unknown",
             "Recurrence Type": recurrence_type,
+            "Recurrence Interval": _iso_text(_safe_get(pattern, "interval")),
+            "Recurrence Range": _iso_text(_safe_get(recurrence_range, "type")),
+            "Recurrence Start Date": _iso_text(_safe_get(recurrence_range, "startDate")),
+            "Recurrence End Date": _iso_text(_safe_get(recurrence_range, "endDate")),
+            "Recurrence Occurrences": _iso_text(_safe_get(recurrence_range, "numberOfOccurrences")),
             "Created Date": _iso_text(_safe_get(review, "createdDateTime")),
+            "Modified Date": _iso_text(_safe_get(review, "lastModifiedDateTime")),
             "Scope Query": query,
+            "Scope Query Root": _iso_text(_safe_get(scope, "queryRoot")),
+            "Scope Query Type": _iso_text(_safe_get(scope, "queryType")),
+            "Source API": "https://graph.microsoft.com/v1.0/identityGovernance/accessReviews/definitions",
             "Reason Flagged": "Access review object included in current Entra governance posture",
         })
 
@@ -1656,7 +2035,7 @@ def _build_access_review_sheet(entra_client):
             f"including {review_summary.get('active_reviews', 0)} active review(s)."
         ),
         "details": [
-            "The review cataloged access review definitions, their scope, and whether the campaigns are recurring or one-time.",
+            "Recurrence is taken from settings.recurrence.pattern, matching the collection summary. Missing settings are unknown rather than a confirmed one-time schedule.",
             "This appendix lets the follow-up engineer see which governance objects already exist before adjusting review coverage.",
         ],
     }
@@ -1672,19 +2051,21 @@ def _build_conditional_access_sheet(entra_client):
     for policy in policies:
         grant_controls = _safe_get(policy, "grantControls")
         built_in_controls = _stringify_list(_safe_get(grant_controls, "builtInControls")) if grant_controls else []
+        authentication_strength = _safe_get(grant_controls, "authenticationStrength") if grant_controls else None
         conditions = _safe_get(policy, "conditions")
         applications = _safe_get(conditions, "applications") if conditions else None
+        users = _safe_get(conditions, "users") if conditions else None
         include_applications = _stringify_list(_safe_get(applications, "includeApplications")) if applications else []
         client_app_types = _stringify_list(_safe_get(conditions, "clientAppTypes")) if conditions else []
         user_risk_levels = _stringify_list(_safe_get(conditions, "userRiskLevels")) if conditions else []
         sign_in_risk_levels = _stringify_list(_safe_get(conditions, "signInRiskLevels")) if conditions else []
 
-        requires_mfa = any(control.lower() == "mfa" for control in built_in_controls)
+        requires_mfa = any(control.lower() == "mfa" for control in built_in_controls) or bool(authentication_strength)
         requires_compliance = any(control.lower() == "compliantdevice" for control in built_in_controls)
         targets_all_apps = any(value.lower() == "all" for value in include_applications)
-        targets_m365 = "00000003-0000-0ff1-ce00-000000000000" in include_applications or targets_all_apps
+        targets_m365 = bool({"office365", "00000003-0000-0ff1-ce00-000000000000"} & {value.lower() for value in include_applications}) or targets_all_apps
         lowered_client_apps = [value.lower() for value in client_app_types]
-        blocks_legacy = bool(client_app_types) and "exchangeactivesync" not in lowered_client_apps and "other" not in lowered_client_apps
+        blocks_legacy = any(control.lower() == "block" for control in built_in_controls) and bool({"exchangeactivesync", "other"} & set(lowered_client_apps))
 
         reasons = []
         state = _iso_text(_safe_get(policy, "state"))
@@ -1702,10 +2083,23 @@ def _build_conditional_access_sheet(entra_client):
         rows.append({
             "RecommendationId": "",
             "Flagged By": "",
+            "Object Type": "Conditional Access Policy",
             "Policy Name": _iso_text(_safe_get(policy, "displayName")) or _iso_text(_safe_get(policy, "id")),
+            "Policy ID": _iso_text(_safe_get(policy, "id")),
             "State": state,
             "Include Applications": "; ".join(include_applications),
+            "Exclude Applications": "; ".join(_stringify_list(_safe_get(applications, "excludeApplications"))),
+            "Include Users": "; ".join(_stringify_list(_safe_get(users, "includeUsers"))),
+            "Include Groups": "; ".join(_stringify_list(_safe_get(users, "includeGroups"))),
+            "Include Roles": "; ".join(_stringify_list(_safe_get(users, "includeRoles"))),
+            "Exclude Users": "; ".join(_stringify_list(_safe_get(users, "excludeUsers"))),
+            "Exclude Groups": "; ".join(_stringify_list(_safe_get(users, "excludeGroups"))),
+            "Exclude Roles": "; ".join(_stringify_list(_safe_get(users, "excludeRoles"))),
+            "Modified Date": _iso_text(_safe_get(policy, "modifiedDateTime")),
             "Grant Controls": "; ".join(built_in_controls),
+            "Grant Operator": _iso_text(_safe_get(grant_controls, "operator")),
+            "Authentication Strength ID": _iso_text(_safe_get(authentication_strength, "id")),
+            "Authentication Strength Name": _iso_text(_safe_get(authentication_strength, "displayName")),
             "Client App Types": "; ".join(client_app_types),
             "User Risk Levels": "; ".join(user_risk_levels),
             "Sign-In Risk Levels": "; ".join(sign_in_risk_levels),
@@ -1715,20 +2109,37 @@ def _build_conditional_access_sheet(entra_client):
             "Requires Compliant Device": _bool_text(requires_compliance),
             "Blocks Legacy Auth": _bool_text(blocks_legacy),
             "Reason Flagged": "; ".join(reasons),
+            "Security Defaults Enabled": "",
+            "Source API": "https://graph.microsoft.com/v1.0/identity/conditionalAccess/policies",
         })
 
     rows.sort(key=lambda row: (str(row.get("Policy Name", "")).lower(), str(row.get("State", "")).lower()))
-    ca_summary = getattr(entra_client, "ca_summary", {}) or {}
+    policy_count = len(rows)
+    mfa_count = sum(row["Requires MFA"] == "Yes" for row in rows)
+    enabled_count = sum(str(row["State"]).lower() == "enabled" for row in rows)
+    defaults = getattr(entra_client, "security_defaults", {}) or {}
+    if defaults:
+        enabled = defaults.get("is_enabled", defaults.get("isEnabled"))
+        defaults_row = dict.fromkeys(rows[0], "") if rows else {}
+        defaults_row.update({"RecommendationId": "", "Flagged By": "", "Object Type": "Security Defaults",
+            "Policy Name": "Security Defaults", "Policy ID": "identitySecurityDefaultsEnforcementPolicy",
+            "State": "Enabled" if enabled is True else "Disabled" if enabled is False else "Unknown",
+            "Security Defaults Enabled": _bool_text(enabled) if isinstance(enabled, bool) else "Unknown",
+            "Reason Flagged": "Collected tenant setting for the sign-in baseline; not an affected policy",
+            "Source API": "https://graph.microsoft.com/v1.0/policies/identitySecurityDefaultsEnforcementPolicy"})
+        rows.append(defaults_row)
 
     return {
         "rows": rows,
         "summary": (
-            f"Review covered {_count_phrase(ca_summary.get('total', 0), 'Conditional Access policy', 'Conditional Access policies')}, "
-            f"including {_count_phrase(ca_summary.get('enabled', 0), 'enabled policy', 'enabled policies')} and "
-            f"{_count_phrase(ca_summary.get('require_mfa', 0), 'policy', 'policies')} requiring MFA."
+            f"Review covered {_count_phrase(policy_count, 'Conditional Access policy', 'Conditional Access policies')}, "
+            f"including {_count_phrase(enabled_count, 'enabled policy', 'enabled policies')} and "
+            f"{_count_phrase(mfa_count, 'policy', 'policies')} with an MFA or authentication-strength grant control."
         ),
         "details": [
             "Each row captures the policy state, targeting, and grant controls that were available from the tenant review.",
+            "MFA classification includes an authentication-strength grant; legacy block classification requires a block grant targeting Exchange ActiveSync or other clients. These classifications do not establish effective access for every user or app.",
+            "The Security Defaults row is separate configuration context. Policy counts exclude it; missing values remain unknown. Full policy scope and exclusions support absence conclusions; only finding-specific policies are investigation items.",
             "These details help the follow-up engineer verify whether the observed coverage gaps are isolated to a few policies or reflect a broader Conditional Access pattern.",
         ],
     }
@@ -1764,13 +2175,20 @@ def _build_guest_access_sheet(entra_client):
             "Flagged By": "",
             "Object Type": "Guest User",
             "Display Name": _iso_text(_safe_get(guest, "displayName")) or _iso_text(_safe_get(guest, "id")),
+            "User Object ID": _iso_text(_safe_get(guest, "id")),
             "User Principal Name": _iso_text(_safe_get(guest, "userPrincipalName")),
             "Created Date": _iso_text(_safe_get(guest, "createdDateTime")),
             "Licensed": _bool_text(is_licensed),
+            "Assigned License SKU IDs": "; ".join(_stringify_list([_iso_text(_safe_get(item, "skuId")) for item in assigned_licenses])),
+            "Disabled Service Plan IDs": "; ".join(_stringify_list([str(plan) for item in assigned_licenses for plan in _ensure_list(_safe_get(item, "disabledPlans"))])),
+            "Account Enabled": _bool_text(_safe_get(guest, "accountEnabled")) if isinstance(_safe_get(guest, "accountEnabled"), bool) else "Unknown",
+            "External User State": _iso_text(_safe_get(guest, "externalUserState")),
+            "External State Changed UTC": _iso_text(_safe_get(guest, "externalUserStateChangeDateTime")),
             "Guest Invite Restriction": invite_setting,
             "Cross-Tenant Configured": _bool_text(cross_tenant_configured),
             "Partner Policy Count": partner_count,
             "Flagged Because": "; ".join(reasons),
+            "Source API": "https://graph.microsoft.com/v1.0/users?$filter=userType%20eq%20'Guest'",
         })
 
     if invite_setting or cross_tenant_configured or partner_count:
@@ -1789,13 +2207,20 @@ def _build_guest_access_sheet(entra_client):
             "Flagged By": "",
             "Object Type": "Tenant Policy",
             "Display Name": "External Collaboration Settings",
+            "User Object ID": "",
             "User Principal Name": "",
             "Created Date": "",
             "Licensed": "",
+            "Assigned License SKU IDs": "",
+            "Disabled Service Plan IDs": "",
+            "Account Enabled": "",
+            "External User State": "",
+            "External State Changed UTC": "",
             "Guest Invite Restriction": invite_setting,
             "Cross-Tenant Configured": _bool_text(cross_tenant_configured),
             "Partner Policy Count": partner_count,
             "Flagged Because": "; ".join(policy_reasons),
+            "Source API": "https://graph.microsoft.com/v1.0/policies/authorizationPolicy; https://graph.microsoft.com/v1.0/policies/crossTenantAccessPolicy",
         })
 
     return {
@@ -1807,6 +2232,7 @@ def _build_guest_access_sheet(entra_client):
         "details": [
             "This appendix combines tenant-level external collaboration settings with individual guest objects already visible in the reviewed source content.",
             "The engineer workbook highlights where guest licensing, invitation settings, or cross-tenant governance may warrant follow-up.",
+            "Guest IDs and assigned SKU IDs are retained where collected. Account and external-user state are unknown when the source projection omitted those fields; a license assignment alone does not prove Copilot entitlement or inappropriate access.",
         ],
     }
 
@@ -1814,10 +2240,16 @@ def _build_guest_access_sheet(entra_client):
 def _build_purview_policy_sheet(purview_client):
     if not purview_client:
         return None
-
+    from .workload_investigation import readable_value, source_fields
     rows = []
 
-    def add_objects(object_type, collection, name_keys=None, enabled_key="Enabled", mode_key="Mode"):
+    def fields(item, names):
+        return '\n'.join(f'{name}: {readable_value(_safe_get(item, name, None))}'
+                         for name in names if _safe_get(item, name, None) is not None)
+
+    location_fields = ('ExchangeLocation', 'SharePointLocation', 'OneDriveLocation', 'TeamsLocation',
+                       'EndpointDlpLocation', 'PowerBILocation', 'ModernGroupLocation', 'AdaptiveScopeLocation', 'Locations')
+    def add_objects(object_type, collection, source, command, name_keys=None, enabled_key="Enabled", mode_key="Mode"):
         for item in _ensure_list(collection):
             name = ""
             for key in _ensure_list(name_keys or ["Name", "DisplayName", "CaseName"]):
@@ -1828,48 +2260,74 @@ def _build_purview_policy_sheet(purview_client):
             mode_value = _safe_get(item, mode_key)
             additional_context = _iso_text(_safe_get(item, "Status")) or _iso_text(_safe_get(item, "Comment"))
             if object_type == "DLP Policy":
-                protected_locations = []
-                for label, location_key in (
-                    ("Exchange", "ExchangeLocation"),
-                    ("SharePoint", "SharePointLocation"),
-                    ("OneDrive", "OneDriveLocation"),
-                ):
-                    if _safe_get(item, location_key) not in (None, "", [], False):
-                        protected_locations.append(label)
-                additional_context = "Locations: " + (", ".join(protected_locations) or "Not provided")
-            rows.append({
+                additional_context = "Locations: " + (", ".join(dlp_location_labels(item)) or "Not provided")
+            row = {
                 "RecommendationId": "",
                 "Flagged By": "",
                 "Object Type": object_type,
                 "Name": name or _iso_text(_safe_get(item, "id")),
+                "Object ID": _iso_text(_safe_get(item, "Identity")) or _iso_text(_safe_get(item, "Guid")) or _iso_text(_safe_get(item, "id")),
                 "Enabled": _bool_text(enabled_value),
                 "Mode": _iso_text(mode_value),
                 "Additional Context": additional_context,
-            })
+                'Created UTC': _signin_utc(_safe_get(item, 'WhenCreatedUTC') or _safe_get(item, 'WhenCreated') or _safe_get(item, 'createdDateTime')),
+                'Modified UTC': _signin_utc(_safe_get(item, 'WhenChangedUTC') or _safe_get(item, 'WhenChanged') or _safe_get(item, 'lastModifiedDateTime')),
+                'Included Locations': fields(item, location_fields) or 'Not returned',
+                'Excluded Locations': fields(item, tuple(name + 'Exception' for name in location_fields)) or 'Not returned',
+                'Workload': readable_value(_safe_get(item, 'Workload', None)),
+                'Enforcement Planes': readable_value(_safe_get(item, 'EnforcementPlanes', None)),
+                'Policy RBAC Scopes': readable_value(_safe_get(item, 'PolicyRBACScopes', None)),
+                'Published Labels': readable_value(_safe_get(item, 'Labels', None)) or 'Not returned',
+                'Settings': readable_value(_safe_get(item, 'Settings', None)) or 'Not returned',
+                **source_fields(purview_client, source, command),
+            }
+            rows.append(row)
 
-    dlp_summary = _build_purview_policy_summary(purview_client)
-    add_objects("DLP Policy", getattr(purview_client, "dlp_policies", {}).get("policies", []))
-    for rule in dlp_summary.get("rule_rows", []):
+    add_objects("DLP Policy", getattr(purview_client, "dlp_policies", {}).get("policies", []), 'dlp_policies', 'Get-DlpCompliancePolicy')
+    safe_rule_rows = {(row['Policy'], row['Rule']): row for row in _build_purview_policy_summary(purview_client).get('rule_rows', [])}
+    for rule in _ensure_list((getattr(purview_client, 'dlp_rules', {}) or {}).get('rules', [])):
+        disabled = _safe_get(rule, 'Disabled', None)
+        enabled = 'No' if disabled is True or str(disabled).lower() in {'true', 'yes', 'disabled'} else 'Yes' if disabled is False or str(disabled).lower() in {'false', 'no'} else 'Unknown'
+        name = _iso_text(_safe_get(rule, 'DisplayName')) or _iso_text(_safe_get(rule, 'Name')) or 'Unnamed rule'
+        parent = _iso_text(_safe_get(rule, 'ParentPolicyName')) or _iso_text(_safe_get(rule, 'Policy')) or 'Policy not returned'
+        safe_rule = safe_rule_rows.get((parent, name), {})
         rows.append({
             "RecommendationId": "",
             "Flagged By": "",
             "Object Type": "DLP Rule",
-            "Name": rule.get("Rule", "Unnamed rule"),
-            "Enabled": rule.get("Enabled", "Unknown"),
-            "Mode": rule.get("Severity", "Not provided"),
-            "Additional Context": (
-                f"Policy: {rule.get('Policy', 'Not returned')}; "
-                f"Conditions: {rule.get('Conditions', 'Not returned')}; "
-                f"Actions: {rule.get('Actions', 'Not returned')}"
-            ),
+            'Name': name,
+            'Object ID': _iso_text(_safe_get(rule, 'Identity')) or _iso_text(_safe_get(rule, 'Guid')) or _iso_text(_safe_get(rule, 'id')),
+            'Parent Policy': _iso_text(_safe_get(rule, 'ParentPolicyName')) or _iso_text(_safe_get(rule, 'Policy')) or 'Not returned',
+            'Parent Policy ID': _iso_text(_safe_get(rule, 'ParentPolicyId')) or 'Not returned',
+            'Enabled': enabled, 'Mode': _iso_text(_safe_get(rule, 'Mode')),
+            'Severity': _iso_text(_safe_get(rule, 'ReportSeverityLevel')),
+            'Priority': _safe_get(rule, 'Priority', 'Not returned'),
+            'Conditions': fields(rule, ('ContentContainsSensitiveInformation', 'ContentIsShared', 'AccessScope', 'AdvancedRule',
+                                        'ContentContainsSensitivityLabel', 'ExceptIfContentContainsSensitiveInformation',
+                                        'ExceptIfContentIsShared', 'ExceptIfAccessScope', 'ExceptIfContentContainsSensitivityLabel')) or 'Not returned',
+            'Actions': fields(rule, ('BlockAccess', 'NotifyUser', 'NotifyAllowOverride', 'GenerateAlert', 'GenerateIncidentReport',
+                                     'EndpointDlpRestrictions', 'RestrictAccess', 'RestrictWebGrounding', 'EncryptRMSTemplate', 'Quarantine',
+                                     'StopPolicyProcessing', 'BlockAccessScope')) or 'Not returned',
+            'Created UTC': _signin_utc(_safe_get(rule, 'WhenCreatedUTC') or _safe_get(rule, 'WhenCreated')),
+            'Modified UTC': _signin_utc(_safe_get(rule, 'WhenChangedUTC') or _safe_get(rule, 'WhenChanged')),
+            'Workload': readable_value(_safe_get(rule, 'Workload', None)),
+            'Additional Context': f"Policy: {parent}; Conditions: {safe_rule.get('Conditions', 'Not returned')}; Actions: {safe_rule.get('Actions', 'Not returned')}",
+            'Comment': _iso_text(_safe_get(rule, 'Comment')),
+            **source_fields(purview_client, 'dlp_rules', 'Get-DlpComplianceRule'),
         })
-    add_objects("Communication Compliance Policy", purview_client.comm_compliance.get("policies", []))
-    add_objects("Information Barrier Policy", purview_client.information_barriers.get("policies", []))
-    add_objects("Sensitivity Label", purview_client.sensitivity_labels.get("labels", []), name_keys=["DisplayName", "Name"])
-    add_objects("Label Policy", purview_client.label_policies.get("policies", []))
-    add_objects("Retention Label", purview_client.retention_labels.get("labels", []), name_keys=["DisplayName", "Name"])
-    add_objects("Insider Risk Policy", purview_client.insider_risk.get("policies", []))
-    add_objects("eDiscovery Case", purview_client.ediscovery_cases.get("cases", []), name_keys=["Name", "CaseName"], enabled_key="Status", mode_key="CaseType")
+    for kind, attr, nested, command in (
+        ('Communication Compliance Policy', 'comm_compliance', 'policies', 'Get-SupervisoryReviewPolicyV2'),
+        ('Information Barrier Policy', 'information_barriers', 'policies', 'Get-InformationBarrierPolicy'),
+        ('Sensitivity Label', 'sensitivity_labels', 'labels', 'Get-Label'),
+        ('Label Policy', 'label_policies', 'policies', 'Get-LabelPolicy'),
+        ('Retention Label', 'retention_labels', 'labels', 'Get-ComplianceTag'),
+        ('Insider Risk Policy', 'insider_risk', 'policies', 'Get-InsiderRiskPolicy'),
+        ('eDiscovery Case', 'ediscovery_cases', 'cases', 'Get-ComplianceCase'),
+    ):
+        source = {'comm_compliance': 'communication_compliance', 'insider_risk': 'insider_risk_policies'}.get(attr, attr)
+        add_objects(kind, (getattr(purview_client, attr, {}) or {}).get(nested, []), source, command,
+                    enabled_key='Status' if kind == 'eDiscovery Case' else 'Enabled',
+                    mode_key='CaseType' if kind == 'eDiscovery Case' else 'Mode')
 
     rows.sort(key=lambda row: (str(row.get("Object Type", "")).lower(), str(row.get("Name", "")).lower()))
 
@@ -1879,6 +2337,8 @@ def _build_purview_policy_sheet(purview_client):
         "details": [
             "The workbook consolidates labels, policy objects, and case records already available from the tenant review into one engineer follow-up tab.",
             "This lets the follow-up engineer validate whether the recommendation came from missing objects, disabled objects, or incomplete coverage across policy types.",
+            "Rule identifiers, parent policy, retained condition/action values and exact location scopes are included. Not returned means the saved source omitted that field; no rule behavior or scope is inferred from its name.",
+            "Source commands identify the collector dataset. Original command arguments, permissions, licensing, pagination and retention are not established unless retained in collection metadata; this inventory does not include policy-match events.",
         ],
     }
 
@@ -1887,6 +2347,7 @@ def _build_defender_incident_sheet(defender_client):
     if not defender_client:
         return None
 
+    from .workload_investigation import readable_value, source_fields
     rows = []
     seen_ids = set()
 
@@ -1897,7 +2358,7 @@ def _build_defender_incident_sheet(defender_client):
         for incident in incidents:
             incident_id = _iso_text(_safe_get(incident, "id"))
             dedupe_key = (source_name, incident_id)
-            if dedupe_key in seen_ids:
+            if incident_id and dedupe_key in seen_ids:
                 continue
             seen_ids.add(dedupe_key)
             rows.append({
@@ -1908,8 +2369,17 @@ def _build_defender_incident_sheet(defender_client):
                 "Title": _iso_text(_safe_get(incident, "title")) or _iso_text(_safe_get(incident, "displayName")),
                 "Severity": _iso_text(_safe_get(incident, "severity")),
                 "Status": _iso_text(_safe_get(incident, "status")),
-                "Created Date": _iso_text(_safe_get(incident, "createdDateTime")),
+                "Created Date": _iso_text(_safe_get(incident, "createdDateTime")) or _iso_text(_safe_get(incident, 'createdTime')),
+                'Last Updated': _iso_text(_safe_get(incident, 'lastUpdateDateTime')) or _iso_text(_safe_get(incident, 'lastUpdateTime')),
                 "Assigned To": _iso_text(_safe_get(incident, "assignedTo")),
+                "Incident URL": _iso_text(_safe_get(incident, "incidentWebUrl")),
+                'Classification': _iso_text(_safe_get(incident, 'classification')),
+                'Determination': _iso_text(_safe_get(incident, 'determination')),
+                'Description': _iso_text(_safe_get(incident, 'description')),
+                'Alert IDs': readable_value([_safe_get(alert, 'id') or _safe_get(alert, 'alertId')
+                                             for alert in _ensure_list(_safe_get(incident, 'alerts', []))]),
+                **source_fields(defender_client, 'incidents' if source_name == 'Graph Security' else 'defender_incidents',
+                                '/v1.0/security/incidents' if source_name == 'Graph Security' else 'Defender incident API; original endpoint not retained'),
             })
 
     incident_summary = getattr(defender_client, "incident_summary", {}) or {}
@@ -1927,6 +2397,7 @@ def _build_defender_incident_sheet(defender_client):
         "details": [
             "Incident detail combines the Graph Security and Defender API incident views when they were available from the reviewed tenant.",
             "The engineer workbook shows the exact incidents that supported higher-severity security posture observations.",
+            "Each retained source incident remains identifiable. Alert IDs are included only when returned inside the incident; omitted affected entities must be reviewed through the incident URL. Original query filters, permissions, licensing and retention are not inferred from the rows.",
         ],
     }
 
@@ -1935,6 +2406,7 @@ def _build_defender_device_sheet(defender_client):
     if not defender_client:
         return None
 
+    from .workload_investigation import source_fields
     devices = _ensure_list(getattr(defender_client, "defender_devices", []))
     rows = []
 
@@ -1953,13 +2425,20 @@ def _build_defender_device_sheet(defender_client):
             "RecommendationId": "",
             "Flagged By": "",
             "Device Name": _iso_text(_safe_get(device, "computerDnsName")) or _iso_text(_safe_get(device, "deviceName")) or _iso_text(_safe_get(device, "id")),
+            "Device ID": _iso_text(_safe_get(device, "id")),
             "Risk Score": risk_score,
             "Exposure Level": exposure_level,
             "Health Status": _iso_text(_safe_get(device, "healthStatus")),
             "OS Platform": _iso_text(_safe_get(device, "osPlatform")),
             "Onboarding Status": _iso_text(_safe_get(device, "onboardingStatus")),
             "Last Seen": _iso_text(_safe_get(device, "lastSeen")),
+            'First Seen': _iso_text(_safe_get(device, 'firstSeen')),
+            'Entra Device ID': _iso_text(_safe_get(device, 'aadDeviceId')),
+            'Machine Group': _iso_text(_safe_get(device, 'rbacGroupName')),
+            'Last IP Address': _iso_text(_safe_get(device, 'lastIpAddress')),
+            'Last External IP Address': _iso_text(_safe_get(device, 'lastExternalIpAddress')),
             "Reason Flagged": "; ".join(reasons),
+            **source_fields(defender_client, 'machines', '/api/machines'),
         })
 
     device_summary = getattr(defender_client, "device_summary", {}) or {}
@@ -1983,9 +2462,45 @@ def _build_defender_device_sheet(defender_client):
 def _build_power_platform_sheet(pp_client):
     if not pp_client:
         return None
-
+    from .workload_investigation import readable_value, source_fields
     rows = []
     inventory_evidence = getattr(pp_client, "power_platform_inventory", {}) or {}
+
+    def resource_fields(resource, source):
+        properties = _safe_get(resource, 'properties', {}) or {}
+        original = _safe_get(resource, 'inventory', {}) or {}
+        original_properties = _safe_get(original, 'properties', {}) or {}
+        def value(*names):
+            return next((_safe_get(obj, name) for name in names for obj in (properties, resource, original_properties, original)
+                         if _safe_get(obj, name, None) not in (None, '')), '')
+        owner = value('ownerId', 'owner', 'createdBy')
+        owner_id = _safe_get(owner, 'id') or _safe_get(owner, 'objectId') if isinstance(owner, dict) else owner
+        environment = value('environmentId') or _safe_get(value('environment'), 'name')
+        return {
+            'Resource ID': _iso_text(_safe_get(resource, 'id')),
+            'Resource Name': _iso_text(_safe_get(resource, 'name')),
+            'Environment ID': _iso_text(environment),
+            'Owner ID': readable_value(owner_id),
+            'Owner': readable_value(owner),
+            'Created UTC': _signin_utc(value('createdTime', 'createdAt', 'createdDateTime', 'createdon')),
+            'Modified UTC': _signin_utc(value('lastModifiedTime', 'modifiedTime', 'modifiedAt', 'lastModifiedDateTime', 'modifiedon')),
+            'Connectors': readable_value(value('connectors', 'connectionReferences', 'powerPlatformConnectors')),
+            **source_fields(pp_client, source, inventory_evidence.get('source') or 'Power Platform ' + source + '; original request not retained'),
+        }
+
+    def blocked_connectors(groups):
+        values = []
+        if isinstance(groups, dict):
+            for name, group in groups.items():
+                if str(name).lower() == 'blocked':
+                    values.append(group)
+                elif isinstance(group, dict) and str(group.get('classification', '')).lower() == 'blocked':
+                    values.append(group.get('connectors') or group.get('connectorIds') or [])
+        elif isinstance(groups, list):
+            for group in groups:
+                if isinstance(group, dict) and str(group.get('classification', '')).lower() == 'blocked':
+                    values.append(group.get('connectors') or group.get('connectorIds') or [])
+        return readable_value(values)
     rows.append({
         "RecommendationId": "",
         "Flagged By": "",
@@ -2006,8 +2521,9 @@ def _build_power_platform_sheet(pp_client):
             "Detail Type": "Environment",
             "Name": _iso_text(_safe_get(properties, "displayName")) or _iso_text(_safe_get(environment, "name")),
             "Subtype": _iso_text(_safe_get(properties, "environmentType")) or _iso_text(_safe_get(properties, "environmentSku")),
-            "State": _iso_text(_safe_get(management, "id")),
+            "State": _iso_text(_safe_get(management, "id")) or _iso_text(_safe_get(properties, 'state')),
             "Additional Context": _iso_text(_safe_get(environment, "location")),
+            **resource_fields(environment, 'environments'),
         })
 
     for flow in _ensure_list(getattr(pp_client, "flows", [])):
@@ -2020,6 +2536,7 @@ def _build_power_platform_sheet(pp_client):
             "Subtype": _iso_text(_safe_get(properties, "flowType")),
             "State": _iso_text(_safe_get(properties, "state")),
             "Additional Context": _iso_text(_safe_get(flow, "id")),
+            **resource_fields(flow, 'flows'),
         })
 
     for app in _ensure_list(getattr(pp_client, "apps", [])):
@@ -2032,6 +2549,7 @@ def _build_power_platform_sheet(pp_client):
             "Subtype": _iso_text(_safe_get(properties, "appType")),
             "State": _iso_text(_safe_get(properties, "state")),
             "Additional Context": _iso_text(_safe_get(app, "id")),
+            **resource_fields(app, 'apps'),
         })
 
     for agent in _ensure_list(getattr(pp_client, "agents", [])):
@@ -2044,6 +2562,7 @@ def _build_power_platform_sheet(pp_client):
             "Subtype": _iso_text(_safe_get(agent, "type")) or "Copilot Studio agent",
             "State": _iso_text(_safe_get(properties, "state")),
             "Additional Context": "Environment: {}".format(_iso_text(_safe_get(properties, "environmentId"))),
+            **resource_fields(agent, 'agents'),
         })
 
     for policy in _ensure_list(getattr(pp_client, "dlp_policies", [])):
@@ -2056,6 +2575,11 @@ def _build_power_platform_sheet(pp_client):
             "Subtype": _iso_text(_safe_get(properties, "scope")),
             "State": _iso_text(_safe_get(properties, "state")),
             "Additional Context": _iso_text(_safe_get(policy, "id")),
+            'Scope': readable_value(_safe_get(properties, 'scope')),
+            'Environment Scope': readable_value(_safe_get(properties, 'environments')),
+            'Connector Groups': readable_value(_safe_get(properties, 'connectorGroups')),
+            'Blocked Connectors': blocked_connectors(_safe_get(properties, 'connectorGroups')),
+            **resource_fields(policy, 'dlp_policies'),
         })
 
     for solution in _ensure_list(getattr(pp_client, "solutions", [])):
@@ -2067,6 +2591,7 @@ def _build_power_platform_sheet(pp_client):
             "Subtype": "Managed" if _safe_get(solution, "ismanaged", False) else "Unmanaged",
             "State": "",
             "Additional Context": _iso_text(_safe_get(solution, "version")),
+            **resource_fields(solution, 'solutions'),
         })
 
     capacity_summary = getattr(pp_client, "capacity_summary", {}) or {}
@@ -2087,6 +2612,8 @@ def _build_power_platform_sheet(pp_client):
         "details": [
             "This detail sheet consolidates the deployment objects already returned by the Power Platform enrichment path.",
             "The workbook helps the follow-up engineer see whether the recommendation stems from environment sprawl, governance gaps, or workload inventory shape.",
+            "Resource, environment and owner identifiers and retained timestamps are preserved. Missing fields are not inferred from a display name. Unified inventory does not contain DLP policy behavior, capacity detail, bot analytics or individual runtime failures; those sources require a separate authorized review.",
+            "Connector Groups preserve the returned classification and IDs. A blocked-connector investigation requires an explicit Blocked classification; ambiguous legacy group codes are not treated as proof of a restriction.",
         ],
     }
 
@@ -2143,7 +2670,7 @@ def _build_sharepoint_governance_sheet(m365_client):
                 continue
             rows.append({
                 "RecommendationId": "", "Flagged By": "", "Detail Type": "Tenant setting",
-                "Setting or report": labels[key], "Value or status": value,
+                "Setting or report": labels[key], "Setting Key": key, "Value or status": value,
                 "Why it matters": (
                     "Used to evaluate content access and sharing paths for AI-grounded data."
                     if key in security_keys else "Operational lifecycle context; not scored as an AI security control by itself."

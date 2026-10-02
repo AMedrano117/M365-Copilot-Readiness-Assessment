@@ -1,6 +1,7 @@
 import asyncio
 from .get_power_platform_client import get_power_platform_client
-from azure.core.exceptions import HttpResponseError, ClientAuthenticationError
+from azure.core.exceptions import ClientAuthenticationError
+from .access_errors import ACCESS_ERRORS, status_code_of
 from .get_recommendation import get_recommendation, recommendation_graph_gap, recommendation_graph_probes_allowed
 import sys
 from .spinner import get_timestamp, _stdout_lock
@@ -206,15 +207,17 @@ async def get_power_platform_info(client, services_and_licenses=None, pp_client=
         result['recommendations'] = recommendations
         return result
             
-    except (HttpResponseError, ClientAuthenticationError) as e:
+    except (*ACCESS_ERRORS, ClientAuthenticationError) as e:
         # Only close if we created it
         if pp_client_created and pp_client:
             await pp_client.aclose()
         
-        status_code = getattr(e.response, 'status_code', None) if hasattr(e, 'response') else None
+        status_code = status_code_of(e) or None
         
         if status_code == 403:
-            reason = 'Power Platform is licensed but API access denied. Requires Power Platform admin role.'
+            reason = ('Power Platform is licensed but API access was denied. Application access needs the '
+                      'Power Platform Reader role at tenant scope; the legacy delegated collector needs a '
+                      'Power Platform administrator sign-in.')
         elif status_code == 401:
             reason = 'Power Platform is licensed but authentication failed.'
         else:

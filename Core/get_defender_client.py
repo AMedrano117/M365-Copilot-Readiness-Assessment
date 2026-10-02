@@ -179,6 +179,8 @@ async def get_defender_client(tenant_id, graph_client):
         for name, (path, params) in graph_requests.items()
     }
     tasks["machines"] = _collect_mde_machines()
+    from . import collection_progress
+    tasks = collection_progress.track('defender', tasks)
     results = await asyncio.gather(*tasks.values(), return_exceptions=True)
     collected = {}
     for name, result in zip(tasks, results):

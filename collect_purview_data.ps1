@@ -4,7 +4,7 @@
 
 param(
     [switch]$DataOnly,  # If set, outputs JSON only (for Python subprocess invocation)
-    [ValidateSet("Auto", "Fresh", "Force", "Prompt")]
+    [ValidateSet("Auto", "Fresh", "Force", "Prompt", "Skip")]
     [string]$AuthMode = "Auto",
     [string]$TenantId = "",
     [string]$ClientId = "",
@@ -13,13 +13,36 @@ param(
     [string]$CertificatePassword = "",
     [string]$CertificateThumbprint = "",
     [switch]$IncludeSpecialized,
-    [switch]$ConnectionOnly
+    [switch]$ConnectionOnly,
+    # Read secrets (certificate password, workload access tokens) as one JSON
+    # line from stdin so they never appear in the process command line.
+    [switch]$SecretsFromStdin
 )
+
+$ExchangeAccessToken = ''
+$ComplianceAccessToken = ''
+if ($SecretsFromStdin) {
+    $secretLine = [Console]::In.ReadLine()
+    if ($secretLine) {
+        $secretPayload = $secretLine | ConvertFrom-Json
+        if ($secretPayload.certificate_password) { $CertificatePassword = [string]$secretPayload.certificate_password }
+        if ($secretPayload.exchange_access_token) { $ExchangeAccessToken = [string]$secretPayload.exchange_access_token }
+        if ($secretPayload.compliance_access_token) { $ComplianceAccessToken = [string]$secretPayload.compliance_access_token }
+    }
+    Remove-Variable -Name secretLine, secretPayload -ErrorAction SilentlyContinue
+}
 
 # Check required PowerShell modules
 . "$PSScriptRoot\Check-PSModules.ps1"
 if (-not (Test-RequiredModules -ScriptType "Purview" -Quiet:$DataOnly)) {
     exit 1
+}
+
+# Live progress for the Python orchestrator, on stderr in DataOnly runs:
+# PROGRESS:TOTAL:<n>, PROGRESS:STEP:<dataset starting>, PROGRESS:NOTE:<text>, PROGRESS:END.
+function Write-CollectionStep {
+    param([string]$Kind, [string]$Value = '')
+    if ($DataOnly) { [Console]::Error.WriteLine("PROGRESS:${Kind}:$Value") }
 }
 
 # Helper function to write output only in interactive mode
@@ -44,8 +67,14 @@ function New-CollectionFailure {
     $technicalError = [string]$ErrorRecord.Exception.Message
     $category = "collection_error"
     $reason = "Microsoft Purview did not return this data source."
+    $applicationSession = $script:ippsAuthentication -in @('application_token', 'application_certificate')
 
-    if ($technicalError -match '(?i)access.*denied|unauthori[sz]ed|forbidden|permission|not authorized') {
+    if ($technicalError -match '(?i)access.*denied|unauthori[sz]ed|forbidden|permission|not authorized|is not recognized as (?:the |a )?name of a cmdlet' -and $applicationSession -and $technicalError -notmatch '(?i)licen[cs]e') {
+        # In an application session a missing cmdlet usually means the app has
+        # no workload role exposing it, not that the feature is unlicensed.
+        $category = "role_missing"
+        $reason = "The assessment application's workload role does not expose this cmdlet. Security Reader covers DLP, sensitivity labels and audit configuration; assign a broader read-only role such as Global Reader (setup-service-principal.ps1 -WorkloadRbac GlobalReader) or View-Only role groups (-WorkloadRbac RoleGroups), then rerun."
+    } elseif ($technicalError -match '(?i)access.*denied|unauthori[sz]ed|forbidden|permission|not authorized') {
         $category = "permission_denied"
         $reason = "The signed-in user is not authorized to read this Microsoft Purview data source."
     } elseif ($technicalError -match '(?i)not recognized|not available|could not find|cmdlet') {
@@ -167,15 +196,44 @@ try {
 
         return $state
     }
-    
-    # Check if already connected to avoid duplicate prompts
+
+    Write-CollectionStep NOTE 'connecting to Security & Compliance and Exchange Online'
+    # Authentication tiers, applied per session (Security & Compliance and
+    # Exchange Online): 1) application access token acquired by the Python
+    # orchestrator from the existing app credential, 2) application
+    # certificate, 3) delegated browser sign-in unless AuthMode is Skip.
     $ippsConnected = $false
     $exoConnected = $false
+    $script:ippsAuthentication = ''
+    $script:exoAuthentication = ''
     $reuseExistingConnections = $true
     $forceFreshAuthentication = $AuthMode -in @("Fresh", "Force")
-    $appOnlyAuthentication = $ClientId -and $Organization -and ($CertificatePath -or $CertificateThumbprint)
+    $allowDelegated = $AuthMode -ne 'Skip'
+    $certificateConfigured = $ClientId -and $Organization -and ($CertificatePath -or $CertificateThumbprint)
 
-    if ($appOnlyAuthentication) {
+    if ($Organization -and $ComplianceAccessToken) {
+        try {
+            Connect-IPPSSession -AccessToken $ComplianceAccessToken -Organization $Organization -ErrorAction Stop -WarningAction SilentlyContinue | Out-Null
+            $ippsConnected = $true
+            $script:ippsAuthentication = 'application_token'
+        } catch {
+            [Console]::Error.WriteLine("AUTH_FALLBACK:Security & Compliance:application token:$($_.Exception.Message)")
+        }
+    }
+    if ($Organization -and $ExchangeAccessToken) {
+        try {
+            Connect-ExchangeOnline -AccessToken $ExchangeAccessToken -Organization $Organization -ShowBanner:$false -ErrorAction Stop -WarningAction SilentlyContinue | Out-Null
+            $exoConnected = $true
+            $script:exoAuthentication = 'application_token'
+        } catch {
+            [Console]::Error.WriteLine("AUTH_FALLBACK:Exchange Online:application token:$($_.Exception.Message)")
+        }
+    }
+    if ($script:ippsAuthentication -eq 'application_token' -or $script:exoAuthentication -eq 'application_token') {
+        Write-AuthStatus -Type "AUTH_REUSED" -Service "Purview application token"
+    }
+
+    if ($certificateConfigured -and (-not $ippsConnected -or -not $exoConnected)) {
         $certificateParameters = @{ AppId = $ClientId; Organization = $Organization; ErrorAction = 'Stop'; WarningAction = 'SilentlyContinue' }
         if ($CertificateThumbprint) {
             $certificateParameters['CertificateThumbprint'] = $CertificateThumbprint
@@ -185,22 +243,43 @@ try {
                 $certificateParameters['CertificatePassword'] = ConvertTo-SecureString $CertificatePassword -AsPlainText -Force
             }
         }
-        Connect-IPPSSession @certificateParameters | Out-Null
-        Connect-ExchangeOnline @certificateParameters -ShowBanner:$false | Out-Null
-        $ippsConnected = $true
-        $exoConnected = $true
-        Write-AuthStatus -Type "AUTH_REUSED" -Service "Purview application certificate"
+        try {
+            if (-not $ippsConnected) {
+                Connect-IPPSSession @certificateParameters | Out-Null
+                $ippsConnected = $true
+                $script:ippsAuthentication = 'application_certificate'
+            }
+            if (-not $exoConnected) {
+                Connect-ExchangeOnline @certificateParameters -ShowBanner:$false | Out-Null
+                $exoConnected = $true
+                $script:exoAuthentication = 'application_certificate'
+            }
+            Write-AuthStatus -Type "AUTH_REUSED" -Service "Purview application certificate"
+        } catch {
+            if (-not $allowDelegated) { throw }
+            [Console]::Error.WriteLine("AUTH_FALLBACK:Purview:application certificate:$($_.Exception.Message)")
+        }
     }
 
-    if ($forceFreshAuthentication -and -not $appOnlyAuthentication) {
+    $appOnlyAuthentication = $script:ippsAuthentication -in @('application_token', 'application_certificate')
+
+    if ((-not $ippsConnected -or -not $exoConnected) -and -not $allowDelegated) {
+        if (-not $ippsConnected -and -not $exoConnected) {
+            throw 'Application authentication was not available for Purview (no usable application token or certificate) and delegated sign-in is disabled (-AuthMode Skip).'
+        }
+    }
+
+    if ($forceFreshAuthentication -and -not $appOnlyAuthentication -and $allowDelegated) {
         Write-Progress2 "      - Auth mode: forcing a fresh Microsoft 365 sign-in" -ForegroundColor Yellow
         Disconnect-PurviewSessions
     }
 
-    if (-not $appOnlyAuthentication) {
+    if (-not $ippsConnected -and -not $exoConnected -and $allowDelegated) {
         $existingConnections = Get-ExistingPurviewConnectionState
         $ippsConnected = [bool]$existingConnections.IPPS
         $exoConnected = [bool]$existingConnections.EXO
+        if ($ippsConnected) { $script:ippsAuthentication = 'delegated_browser' }
+        if ($exoConnected) { $script:exoAuthentication = 'delegated_browser' }
     }
 
     if ($ippsConnected) {
@@ -214,30 +293,33 @@ try {
     if (($ippsConnected -or $exoConnected) -and -not $forceFreshAuthentication) {
         Write-Progress2 "      - Reusing existing authenticated Microsoft 365 session(s)" -ForegroundColor Cyan
     }
-    
+
     # Connect only if not already connected
     if ($ippsConnected -and $reuseExistingConnections) {
         Write-AuthStatus -Type "AUTH_REUSED" -Service "Security & Compliance"
     }
 
-    if (-not $ippsConnected) {
+    if (-not $ippsConnected -and $allowDelegated) {
         Write-AuthStatus -Type "AUTH_PROMPT" -Service "Security & Compliance" -Details "Purview portal and compliance cmdlets"
         Write-Progress2 "      - Connecting to Security & Compliance..." -NoNewline
         Connect-IPPSSession -DisableWAM -ErrorAction Stop -WarningAction SilentlyContinue | Out-Null
+        $ippsConnected = $true
+        $script:ippsAuthentication = 'delegated_browser'
         Write-Progress2 " OK" -ForegroundColor Green
         # Output to stderr so Python can display in real-time
         Write-AuthStatus -Type "AUTH_COMPLETE" -Service "Security & Compliance"
     }
-    
+
     if ($exoConnected -and $reuseExistingConnections) {
         Write-AuthStatus -Type "AUTH_REUSED" -Service "Exchange Online"
     }
 
-    if (-not $exoConnected) {
+    if (-not $exoConnected -and $allowDelegated) {
         # Re-check if Exchange was auto-connected by IPPSSession
         try {
             Get-OrganizationConfig -ErrorAction Stop | Out-Null
             $exoConnected = $true
+            $script:exoAuthentication = $script:ippsAuthentication
             # If auto-connected, send message immediately
             Write-AuthStatus -Type "AUTH_COMPLETE" -Service "Exchange Online"
         } catch {
@@ -245,12 +327,14 @@ try {
             Write-AuthStatus -Type "AUTH_PROMPT" -Service "Exchange Online" -Details "Exchange Online cmdlets and organization settings"
             Write-Progress2 "      - Connecting to Exchange Online..." -NoNewline
             Connect-ExchangeOnline -DisableWAM -ShowBanner:$false -ErrorAction Stop -WarningAction SilentlyContinue | Out-Null
+            $exoConnected = $true
+            $script:exoAuthentication = 'delegated_browser'
             Write-Progress2 " OK" -ForegroundColor Green
             # Output to stderr so Python can display in real-time
             Write-AuthStatus -Type "AUTH_COMPLETE" -Service "Exchange Online"
         }
     }
-    
+
     if ($ippsConnected -and $exoConnected) {
         Write-Progress2 "      OK Using existing connections" -ForegroundColor Green
     }
@@ -268,10 +352,43 @@ try {
 }
 
 if ($ConnectionOnly) {
+    # Exchange and Purview sessions import only the cmdlets the connected
+    # identity's roles allow, so report which datasets are exposed instead of
+    # failing on the first missing cmdlet.
+    $representativeCmdlets = [ordered]@{
+        'Get-DlpCompliancePolicy' = 'DLP policies'
+        'Get-DlpComplianceRule' = 'DLP rules'
+        'Get-Label' = 'sensitivity labels'
+        'Get-LabelPolicy' = 'label policies'
+        'Get-RetentionCompliancePolicy' = 'retention policies'
+        'Get-AdminAuditLogConfig' = 'audit configuration'
+        'Get-OrganizationConfig' = 'organization configuration'
+        'Get-IRMConfiguration' = 'rights management configuration'
+    }
+    $exposedDatasets = @()
+    $missingDatasets = @()
+    $probeCmdlet = ''
+    foreach ($cmdletName in $representativeCmdlets.Keys) {
+        if (Get-Command $cmdletName -ErrorAction SilentlyContinue) {
+            $exposedDatasets += $representativeCmdlets[$cmdletName]
+            if (-not $probeCmdlet) { $probeCmdlet = $cmdletName }
+        } else {
+            $missingDatasets += $representativeCmdlets[$cmdletName]
+        }
+    }
     try {
-        $null = Get-DlpCompliancePolicy -ErrorAction Stop | Select-Object -First 1
-        $null = Get-OrganizationConfig -ErrorAction Stop
-        @{ ready = $true; source = 'Security and Compliance PowerShell' } | ConvertTo-Json -Compress
+        if (-not $probeCmdlet) {
+            throw 'role_missing: the connected identity has no role that exposes the assessment cmdlets.'
+        }
+        $null = & $probeCmdlet -ErrorAction Stop -WarningAction SilentlyContinue | Select-Object -First 1
+        @{
+            ready = $true
+            source = 'Security and Compliance PowerShell'
+            authentication = $script:ippsAuthentication
+            exchange_authentication = $script:exoAuthentication
+            exposed = @($exposedDatasets)
+            missing = @($missingDatasets)
+        } | ConvertTo-Json -Compress
         Disconnect-PurviewSessions
         exit 0
     } catch {
@@ -282,14 +399,20 @@ if ($ConnectionOnly) {
 }
 
 # Step 2: Collect Purview data
+Write-CollectionStep TOTAL $(if ($IncludeSpecialized) { 12 } else { 8 })
 if (-not $DataOnly) {
     Write-Progress2 ""
     Write-Progress2 "[2/4] Collecting Purview compliance data..." -ForegroundColor Yellow
 }
 
-$purviewData = @{ collected_at = [DateTime]::UtcNow.ToString('o') }
+$purviewData = @{
+    collected_at = [DateTime]::UtcNow.ToString('o')
+    authentication = $script:ippsAuthentication
+    exchange_authentication = $script:exoAuthentication
+}
 
 # Collect DLP Policies
+Write-CollectionStep STEP 'DLP policies'
 Write-Progress2 "      - DLP Compliance Policies..." -NoNewline
 try {
     $dlpPolicies = @(Get-DlpCompliancePolicy -ErrorAction Stop | Select-Object Name, DisplayName, Identity, Guid, Mode, Enabled, Workload, Locations, EnforcementPlanes, ExchangeLocation, ExchangeLocationException, SharePointLocation, SharePointLocationException, OneDriveLocation, OneDriveLocationException, TeamsLocation, EndpointDlpLocation, PowerBILocation, PolicyRBACScopes, Comment)
@@ -303,6 +426,7 @@ try {
 }
 
 # Collect DLP Rules. Policies alone do not show what data is detected or what happens on a match.
+Write-CollectionStep STEP 'DLP rules'
 Write-Progress2 "      - DLP Compliance Rules..." -NoNewline
 try {
     $dlpRules = @(Get-DlpComplianceRule -ErrorAction Stop | Select-Object Name, DisplayName, Identity, ParentPolicyName, ParentPolicyId, Disabled, Priority, Mode, Workload, ContentContainsSensitiveInformation, ContentIsShared, AccessScope, BlockAccess, BlockAccessScope, NotifyUser, NotifyAllowOverride, GenerateAlert, GenerateIncidentReport, ReportSeverityLevel, RestrictAccess, RestrictWebGrounding, EndpointDlpRestrictions, EncryptRMSTemplate, Quarantine, AdvancedRule)
@@ -316,6 +440,7 @@ try {
 }
 
 # Collect Sensitivity Labels
+Write-CollectionStep STEP 'sensitivity labels'
 Write-Progress2 "      - Sensitivity Labels..." -NoNewline
 try {
     $labels = @(Get-Label -ErrorAction Stop | Select-Object Name, DisplayName, Tooltip, Enabled)
@@ -329,6 +454,7 @@ try {
 }
 
 # Collect Retention Policies
+Write-CollectionStep STEP 'retention policies'
 Write-Progress2 "      - Retention Compliance Policies..." -NoNewline
 try {
     $retentionPolicies = @(Get-RetentionCompliancePolicy -ErrorAction Stop | Select-Object Name, Enabled, Type)
@@ -342,9 +468,17 @@ try {
 }
 
 # Collect Label Policies
+Write-CollectionStep STEP 'label publishing policies'
 Write-Progress2 "      - Sensitivity Label Policies..." -NoNewline
 try {
-    $labelPolicies = @(Get-LabelPolicy -ErrorAction Stop -WarningAction SilentlyContinue | Select-Object Name, Enabled, Mode)
+    $labelPolicies = @(Get-LabelPolicy -ErrorAction Stop -WarningAction SilentlyContinue | Select-Object Name, Enabled, Mode,
+        # Publishing scope without personal data: whether labels reach all
+        # users, plus counts of named users/groups and excluded entries.
+        @{ Name = 'ExchangeLocation'; Expression = { if (@($_.ExchangeLocation | ForEach-Object { [string]$_ }) -contains 'All') { 'All' } else { '' } } },
+        @{ Name = 'ExchangeLocationCount'; Expression = { @($_.ExchangeLocation | Where-Object { $_ }).Count } },
+        @{ Name = 'ExchangeLocationExceptionCount'; Expression = { @($_.ExchangeLocationException | Where-Object { $_ }).Count } },
+        @{ Name = 'ModernGroupLocationCount'; Expression = { @($_.ModernGroupLocation | Where-Object { $_ }).Count } },
+        @{ Name = 'LabelCount'; Expression = { @($_.Labels | Where-Object { $_ }).Count } })
     $purviewData['label_policies'] = New-CollectionSuccess -Count $labelPolicies.Count
     $purviewData['label_policies']['policies'] = $labelPolicies
     Write-Progress2 " $($labelPolicies.Count) found" -ForegroundColor Green
@@ -359,6 +493,7 @@ try {
 # collected only when explicitly requested.
 if ($IncludeSpecialized) {
 # Collect Insider Risk Policies
+Write-CollectionStep STEP 'insider risk policies'
 Write-Progress2 "      - Insider Risk Policies..." -NoNewline
 try {
     $insiderRiskPolicies = @(Get-InsiderRiskPolicy -ErrorAction Stop | Select-Object Name, Enabled, InsiderRiskScenario)
@@ -372,6 +507,7 @@ try {
 }
 
 # Collect Communication Compliance Policies
+Write-CollectionStep STEP 'communication compliance'
 Write-Progress2 "      - Communication Compliance..." -NoNewline
 try {
     $commCompPolicies = @(Get-SupervisoryReviewPolicyV2 -ErrorAction Stop | Select-Object Name, Enabled, SamplingRate)
@@ -385,6 +521,7 @@ try {
 }
 
 # Collect Information Barriers
+Write-CollectionStep STEP 'information barriers'
 Write-Progress2 "      - Information Barriers..." -NoNewline
 try {
     $ibPolicies = @(Get-InformationBarrierPolicy -ErrorAction Stop | Select-Object Name, State, AssignedSegment)
@@ -398,6 +535,7 @@ try {
 }
 
 # Collect eDiscovery Cases
+Write-CollectionStep STEP 'eDiscovery cases'
 Write-Progress2 "      - eDiscovery Cases..." -NoNewline
 if ($appOnlyAuthentication) {
     Write-Progress2 " Not requested (app-only)" -ForegroundColor Cyan
@@ -441,6 +579,7 @@ if ($appOnlyAuthentication) {
 }
 
 # Collect Organization Configuration
+Write-CollectionStep STEP 'organization configuration'
 Write-Progress2 "      - Organization Config..." -NoNewline
 try {
     $orgConfig = Get-OrganizationConfig -ErrorAction Stop | Select-Object CustomerLockBoxEnabled, AuditDisabled, IsDehydrated
@@ -453,6 +592,7 @@ try {
 }
 
 # Collect IRM Configuration
+Write-CollectionStep STEP 'rights management configuration'
 Write-Progress2 "      - Azure RMS Configuration..." -NoNewline
 try {
     $irmConfig = Get-IRMConfiguration -ErrorAction Stop | Select-Object AzureRMSLicensingEnabled, InternalLicensingEnabled
@@ -465,6 +605,7 @@ try {
 }
 
 # Collect Audit Configuration
+Write-CollectionStep STEP 'audit configuration'
 Write-Progress2 "      - Audit Configuration..." -NoNewline
 try {
     $auditConfig = Get-AdminAuditLogConfig -ErrorAction Stop | Select-Object UnifiedAuditLogIngestionEnabled, AdminAuditLogEnabled
@@ -476,6 +617,7 @@ try {
     $purviewData['audit_config'] = New-CollectionFailure -ErrorRecord $_ -RequiredRole "Audit Reader or Compliance Administrator"
 }
 
+Write-CollectionStep END
 $sourceLabels = [ordered]@{
     dlp_policies = "DLP Policies"
     dlp_rules = "DLP Rules"
@@ -490,6 +632,26 @@ $sourceLabels = [ordered]@{
     irm_config = "Rights Management Configuration"
     audit_config = "Audit Configuration"
 }
+$credentialTypes = @{
+    application_token = 'workload_app_token'
+    application_certificate = 'workload_app_certificate'
+    delegated_browser = 'delegated_user'
+}
+$exchangeSources = @('org_config', 'irm_config', 'audit_config')
+foreach ($key in @($sourceLabels.Keys)) {
+    $state = $purviewData[$key]
+    if (-not $state) { continue }
+    $sessionAuthentication = if ($exchangeSources -contains $key) { $script:exoAuthentication } else { $script:ippsAuthentication }
+    if ($sessionAuthentication -and $credentialTypes.ContainsKey($sessionAuthentication)) {
+        $state['credential_type'] = $credentialTypes[$sessionAuthentication]
+        $state['auth_path_id'] = switch ($sessionAuthentication) {
+            'application_token' { 'purview_ps_token' }
+            'application_certificate' { 'purview_ps_certificate' }
+            default { 'purview_ps_delegated' }
+        }
+    }
+}
+
 $requiredFailures = @()
 $optionalFailures = @()
 foreach ($entry in $sourceLabels.GetEnumerator()) {
@@ -537,7 +699,7 @@ if ($DataOnly) {
     # Interactive mode: Pass data to Python via stdin
     $env:PURVIEW_DATA_SOURCE = "stdin"
     $jsonData | python main.py
-    
+
     Write-Progress2 ""
     Write-Progress2 "================================================================" -ForegroundColor Cyan
     Write-Progress2 "Assessment Complete!" -ForegroundColor Green

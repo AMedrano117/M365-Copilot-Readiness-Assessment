@@ -111,6 +111,13 @@ async def get_m365_client(
                 'source': 'Microsoft Defender for Cloud Apps discovery (preview)',
             }
             
+            self.report_settings = {
+                'available': False,
+                'reason': 'Report settings were not collected.',
+                'source': 'Microsoft Graph report settings',
+                'display_concealed_names': None,
+            }
+
             # Track missing features/permissions
             self.missing_permissions = []
     
@@ -163,6 +170,13 @@ async def get_m365_client(
             tasks['sites'] = graph_client.get_collection(
                 "/v1.0/sites", params={'$select': 'id,displayName,webUrl', '$top': '999'}
             )
+        if source_allowed('report_settings', permission_profile):
+            from .report_privacy import collect_report_settings
+            tasks['report_settings'] = collect_report_settings(graph_client)
+        if preview_collectors in {'copilot-audit', 'all'} and source_allowed('copilot_audit', permission_profile):
+            from .copilot_audit import collect_copilot_interaction_audit
+            tasks['copilot_interaction_audit'] = collect_copilot_interaction_audit(
+                graph_client, include_user_detail=include_user_usage_detail)
         from .ai_usage import collect_ai_usage
         tasks['ai_usage'] = collect_ai_usage(
             include_user_detail=include_user_usage_detail,
@@ -177,12 +191,14 @@ async def get_m365_client(
             console.detail(f'[{get_timestamp()}]   M365 data collection started.\n')
             sys.stdout.flush()
         
+        from . import collection_progress
+        tasks = collection_progress.track('m365', tasks)
         results = await asyncio.gather(*tasks.values(), return_exceptions=True)
         
         # Map results to named dictionary
         response_dict = dict(zip(tasks.keys(), results))
         for source_name, response in response_dict.items():
-            if source_name == 'ai_usage':
+            if source_name in {'ai_usage', 'report_settings', 'copilot_interaction_audit'}:
                 continue
             if isinstance(response, Exception) or response is None:
                 client.collection_status[source_name] = {
@@ -505,6 +521,20 @@ async def get_m365_client(
         else:
             client.active_users_summary = {'available': False}
         
+        audit_evidence = response_dict.get('copilot_interaction_audit')
+        if isinstance(audit_evidence, dict):
+            client.copilot_interaction_audit = audit_evidence
+            client.collection_status['copilot_interaction_audit'] = {
+                key: value for key, value in audit_evidence.items() if key != 'summary'
+            }
+
+        report_settings = response_dict.get('report_settings')
+        if isinstance(report_settings, dict):
+            client.report_settings = report_settings
+            client.collection_status['report_settings'] = {
+                key: value for key, value in report_settings.items() if key != 'display_concealed_names'
+            }
+
         ai_usage_result = response_dict.get('ai_usage')
         if not isinstance(ai_usage_result, Exception) and isinstance(ai_usage_result, dict):
             client.copilot_usage = ai_usage_result.get('copilot_usage', client.copilot_usage)
@@ -542,7 +572,11 @@ async def get_m365_client(
                     'coverage_population': direct_coverage.get('coverage_population', ''),
                     'sampled': bool(direct_coverage.get('truncated')),
                 })
-        elif isinstance(ai_usage_result, Exception):
+        concealed = (getattr(client, 'report_settings', {}) or {}).get('display_concealed_names')
+        if isinstance(concealed, bool) and isinstance(client.copilot_usage, dict):
+            # Qualifies per-user evidence only; aggregate counts are unaffected.
+            client.copilot_usage['identity_concealed'] = concealed
+        if isinstance(ai_usage_result, Exception):
             reason = 'Collection failed: {}'.format(type(ai_usage_result).__name__)
             client.copilot_usage['reason'] = reason
             client.m365_app_readiness['reason'] = reason

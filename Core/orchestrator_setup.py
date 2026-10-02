@@ -147,10 +147,12 @@ def get_local_powershell_module_availability(install_sharepoint=False):
         "$result|ConvertTo-Json -Depth 6 -Compress"
     )
     try:
+        from .orchestrator_powershell import powershell_environment
         completed = subprocess.run(
             [host, "-NoProfile", "-Command", ps_script],
             capture_output=True, text=True, encoding="utf-8", errors="replace",
             timeout=180 if install_sharepoint else 15, check=False,
+            env=powershell_environment(host),
         )
         if completed.returncode != 0 or not completed.stdout.strip():
             status["sharepoint_install_error"] = completed.stderr.strip()[:1000]
@@ -236,9 +238,15 @@ def prepare_interactive_collection_plan(
         or (os.environ.get('CERTIFICATE_PATH', '').lower().endswith(('.pfx', '.p12')))
     )
 
+    # An application token can come from the existing Graph credential (client
+    # secret or certificate). Whether Exchange.ManageAsApp is consented is
+    # checked from the token itself just before the collector starts.
+    purview_token_possible = bool(os.environ.get('CLIENT_ID')) and bool(
+        os.environ.get('CLIENT_SECRET') or os.environ.get('CERTIFICATE_PATH'))
+
     purview_reason = None
     if purview_selected:
-        if policy == 'skip' and not purview_certificate:
+        if policy == 'skip' and not purview_certificate and not purview_token_possible:
             purview_reason = 'skipped by policy'
         elif not modules.get('ExchangeOnlineManagement', False):
             purview_reason = 'ExchangeOnlineManagement module not installed'
@@ -258,6 +266,7 @@ def prepare_interactive_collection_plan(
             'will_attempt': purview_selected and purview_reason is None,
             'skip_reason': purview_reason,
             'application_auth': purview_certificate,
+            'application_token_possible': purview_token_possible,
         },
         'power_platform': {
             'selected': pp_selected,
@@ -275,7 +284,8 @@ def prepare_interactive_collection_plan(
                 None if not sharepoint_selected
                 else 'Microsoft.Online.SharePoint.PowerShell module not installed'
                 if not modules.get('Microsoft.Online.SharePoint.PowerShell', False)
-                else 'delegated authentication skipped and no SharePoint certificate configured'
+                else ('browser sign-in is off for this run (--interactive-auth skip) and no SharePoint certificate is '
+                      'configured. Tenant sharing settings still come from Microsoft Graph.')
                 if policy == 'skip' and not sharepoint_certificate
                 else None
             ),
@@ -303,8 +313,14 @@ def print_interactive_collection_summary(interactive_plan):
     purview_plan = interactive_plan['purview']
     if purview_plan['selected']:
         if purview_plan['will_attempt']:
-            method = 'application certificate' if purview_plan.get('application_auth') else 'browser sign-in'
-            lines.append(f"Purview core policy collection selected using {method}.")
+            methods = []
+            if purview_plan.get('application_token_possible'):
+                methods.append('an application token when Exchange.ManageAsApp is consented')
+            if purview_plan.get('application_auth'):
+                methods.append('the application certificate')
+            if policy != 'skip':
+                methods.append('browser sign-in as a fallback' if methods else 'browser sign-in')
+            lines.append(f"Purview core policy collection selected using {', then '.join(methods) or 'browser sign-in'}.")
         else:
             lines.append(
                 f"Purview deployment collection: skipped ({purview_plan['skip_reason']}). "

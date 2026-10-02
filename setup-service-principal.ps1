@@ -4,7 +4,8 @@
 
 .DESCRIPTION
   Standard installs the supported PowerShell modules and configures the stable
-  collector permissions. Restricted uses an isolated application and omits
+  collector permissions and the Global Reader workload role by default.
+  Restricted uses an isolated application and omits
   SharePoint/Purview administration and directory-wide grant inventory.
   Unattended additionally validates and
   attaches a certificate and adds the SharePoint/Purview app-only permission packs.
@@ -16,14 +17,49 @@
 param(
     [ValidateSet('Standard','Unattended')][string]$Mode = 'Standard',
     [ValidateSet('Standard','Restricted')][string]$PermissionProfile = 'Standard',
-    [ValidateSet('None','PowerPlatform','ShadowAI','NetworkAccess','All')]
+    [ValidateSet('None','PowerPlatform','ShadowAI','NetworkAccess','CopilotAudit','All')]
     [string]$PreviewCollectors = 'None',
     [string]$CertificatePath = '',
     [string]$CertificateThumbprint = '',
     [string]$SharePointAdminUrl = '',
     [switch]$ConfirmBroadSharePointAccess,
     [switch]$RotateCredential,
-    [switch]$PruneUnusedPermissions
+    [switch]$PruneUnusedPermissions,
+    # Target a specific customer environment file (for example .\contoso.env).
+    # When supplied, TENANT_ID and CLIENT_ID saved in that file select the tenant
+    # to sign in to and the existing application to reconcile.
+    [string]$EnvironmentFile = '',
+    # Sign in to this tenant (GUID or initial domain). Setup stops if the
+    # administrator session belongs to a different tenant.
+    [string]$TenantId = '',
+    # Reconcile the application with this application (client) ID instead of
+    # matching by display name. Setup never creates a new app when this is set.
+    [string]$ApplicationId = '',
+    # Read-only workload access for app-only Purview/Exchange collection:
+    #   GlobalReader   - assign the Global Reader directory role (Standard default)
+    #   SecurityReader - assign the narrower Security Reader directory role
+    #   RoleGroups     - create Purview/Exchange role groups from management roles
+    #   None           - request Exchange.ManageAsApp only; assign roles yourself
+    # Defaults to GlobalReader for Standard (including Unattended mode),
+    # and None for Restricted. An explicit option overrides this default.
+    [ValidateSet('None','SecurityReader','GlobalReader','RoleGroups')]
+    [string]$WorkloadRbac = '',
+    # Create or attach a certificate for app-only SharePoint administration and
+    # request Sites.FullControl.All (requires typed approval). Graph keeps using
+    # the client secret; the certificate is only used by workload PowerShell.
+    [switch]$EnableSharePointAppOnly,
+    # Do not request delegated scopes or the public-client redirect used for
+    # optional delegated enrichment (Copilot limited mode).
+    [switch]$NoDelegatedEnrichment,
+    # Update an existing application's permissions, consent and workload role
+    # without creating, rotating, validating or saving any client secret. For a
+    # customer administrator updating an app whose existing secret an assessor
+    # already holds.
+    [switch]$SkipCredential,
+    # Sign in with a device code (enter a code at https://microsoft.com/devicelogin)
+    # instead of the Windows sign-in window. Use it when PowerShell runs elevated
+    # as a different Windows account, where the sign-in window can fail.
+    [switch]$UseDeviceCode
 )
 
 $ErrorActionPreference = 'Stop'
@@ -31,6 +67,21 @@ $profileName = $PermissionProfile.ToLowerInvariant()
 if ($profileName -eq 'restricted' -and ($Mode -ne 'Standard' -or $PreviewCollectors -ne 'None')) {
     throw 'Restricted rejects Unattended mode and preview collectors. Use Standard mode with -PreviewCollectors None.'
 }
+if ($SkipCredential -and ($RotateCredential -or $CertificatePath -or $Mode -eq 'Unattended')) {
+    throw '-SkipCredential leaves the application credentials unchanged. Do not combine it with -RotateCredential, -CertificatePath or -Mode Unattended.'
+}
+if (-not $WorkloadRbac) {
+    $WorkloadRbac = if ($profileName -eq 'restricted') { 'None' } else { 'GlobalReader' }
+}
+if ($profileName -eq 'restricted' -and ($WorkloadRbac -ne 'None' -or $EnableSharePointAppOnly)) {
+    throw 'Restricted rejects -WorkloadRbac roles and -EnableSharePointAppOnly; it uses Microsoft Graph application permissions only.'
+}
+$directoryRoleTemplates = @{
+    SecurityReader = '5d6b6bb7-de71-4623-b4af-96380a352509'
+    GlobalReader = 'f2ef992c-3afb-46b9-b7cf-a126ee74c451'
+}
+$assignDirectoryRole = $directoryRoleTemplates.ContainsKey($WorkloadRbac)
+$requestDelegatedEnrichment = ($profileName -eq 'standard') -and -not $NoDelegatedEnrichment
 function ConvertTo-SharePointAdminUrl {
     param([string]$Value)
     $normalized = $Value.Trim()
@@ -51,6 +102,14 @@ $AppName = 'M365 Copilot Readiness Assessment Tool'
 if ($profileName -eq 'restricted') { $AppName += ' - Restricted' }
 $envFileName = if ($profileName -eq 'restricted') { '.env.restricted' } else { '.env' }
 $envPath = Join-Path $PSScriptRoot $envFileName
+$explicitEnvironmentFile = -not [string]::IsNullOrWhiteSpace($EnvironmentFile)
+if ($explicitEnvironmentFile) {
+    $envPath = if ([System.IO.Path]::IsPathRooted($EnvironmentFile)) { $EnvironmentFile } else { Join-Path (Get-Location).Path $EnvironmentFile }
+    $envPath = [System.IO.Path]::GetFullPath($envPath)
+    $envFileName = Split-Path -Leaf $envPath
+    $envDirectory = Split-Path -Parent $envPath
+    if (-not (Test-Path -LiteralPath $envDirectory -PathType Container)) { throw "The folder for -EnvironmentFile does not exist: $envDirectory" }
+}
 $SecretExpirationDays = 90
 
 function Write-Success { param($Message) Write-Host "[OK] $Message" -ForegroundColor Green }
@@ -77,6 +136,109 @@ function Get-ResourceAccessByName {
         ResourceAccess = $access
         PermissionNames = $PermissionNames
     }
+}
+
+function Get-DelegatedScopesByName {
+    param(
+        [Parameter(Mandatory=$true)][string]$ResourceAppId,
+        [Parameter(Mandatory=$true)][string[]]$ScopeNames
+    )
+    $resource = Get-MgServicePrincipal -Filter "appId eq '$ResourceAppId'" -Property Id,AppId,DisplayName,Oauth2PermissionScopes -ErrorAction Stop | Select-Object -First 1
+    if (-not $resource) { throw "Resource service principal $ResourceAppId was not found." }
+    $access = @()
+    foreach ($name in $ScopeNames) {
+        $scope = @($resource.Oauth2PermissionScopes | Where-Object { $_.Value -eq $name }) | Select-Object -First 1
+        if (-not $scope) {
+            Write-Warn "Delegated permission '$name' was not found on $($resource.DisplayName); delegated enrichment for it is skipped."
+            continue
+        }
+        $access += @{ Id = $scope.Id; Type = 'Scope' }
+    }
+    return @{
+        ResourceAppId = $ResourceAppId
+        ResourceObjectId = $resource.Id
+        ResourceAccess = $access
+        PermissionNames = $ScopeNames
+        Delegated = $true
+    }
+}
+
+function Get-GraphErrorText {
+    # Invoke-MgGraphRequest reports only the HTTP status; the Graph error code
+    # and message identify the actual cause.
+    param([System.Management.Automation.ErrorRecord]$ErrorRecord)
+    $text = [string]$ErrorRecord.Exception.Message
+    $details = [string]$ErrorRecord.ErrorDetails.Message
+    if ($details) {
+        try {
+            $parsed = $details | ConvertFrom-Json -ErrorAction Stop
+            if ($parsed.error) { $text += " [$($parsed.error.code)] $($parsed.error.message)" }
+        } catch { $text += ' ' + $details.Substring(0, [Math]::Min(300, $details.Length)) }
+    }
+    return $text
+}
+
+function Set-ApplicationDirectoryRole {
+    param([string]$ServicePrincipalObjectId, [string]$RoleTemplateId, [string]$RoleName)
+    $step = 'checking existing assignments'
+    try {
+        $filter = [uri]::EscapeDataString("principalId eq '$ServicePrincipalObjectId' and roleDefinitionId eq '$RoleTemplateId'")
+        $existing = $null
+        try {
+            $existing = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignments?`$filter=$filter" -ErrorAction Stop
+        } catch {
+            # The pre-check is an optimization; the assignment request decides.
+            Write-Info "Could not list existing role assignments ($(Get-GraphErrorText $_)); requesting the assignment directly."
+        }
+        if ($existing -and @($existing.value).Count -gt 0) {
+            Write-Success "The application already holds the $RoleName directory role."
+            return $true
+        }
+        $step = 'creating the assignment'
+        $body = @{ principalId = $ServicePrincipalObjectId; roleDefinitionId = $RoleTemplateId; directoryScopeId = '/' } | ConvertTo-Json
+        for ($attempt = 1; $attempt -le 3; $attempt++) {
+            try {
+                Invoke-MgGraphRequest -Method POST -Uri 'https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignments' -Body $body -ContentType 'application/json' -ErrorAction Stop | Out-Null
+                break
+            } catch {
+                # A principal or role not yet visible to the role service returns
+                # Not Found for a short time; retry before reporting it.
+                if ($attempt -lt 3 -and [string]$_.Exception.Message -match 'NotFound|Not Found|404') {
+                    Write-Info "Role service did not find the application yet; retrying in 15 seconds (attempt $attempt of 3)."
+                    Start-Sleep -Seconds 15
+                    continue
+                }
+                throw
+            }
+        }
+        Write-Success "Assigned the $RoleName directory role to the application for read-only Purview and Exchange access."
+        Write-Warn "$RoleName also lets the application read directory data through Microsoft Graph beyond its consented permissions. Remove the role after the engagement (cleanup-service-principal.ps1 -IncludeWorkloadRbac)."
+        return $true
+    } catch {
+        Write-Warn "The $RoleName directory role could not be assigned while $step`: $(Get-GraphErrorText $_)"
+        Write-Warn "Assign it manually: Microsoft Entra admin center > Roles & admins > $RoleName > Add assignments > select the assessment application (service principal object ID $ServicePrincipalObjectId) > Active, permanent. Privileged Role Administrator or Global Administrator is required."
+        return $false
+    }
+}
+
+function Get-MissingDelegatedConsent {
+    param([string]$ServicePrincipalObjectId, [object[]]$Desired)
+    $delegated = @($Desired | Where-Object { $_.Delegated })
+    if (-not $delegated) { return @() }
+    try {
+        $filter = [uri]::EscapeDataString("clientId eq '$ServicePrincipalObjectId' and consentType eq 'AllPrincipals'")
+        $grants = @((Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/v1.0/oauth2PermissionGrants?`$filter=$filter" -ErrorAction Stop).value)
+    } catch {
+        return @($delegated | ForEach-Object { $_.PermissionNames } | ForEach-Object { "$_ (delegated; consent state unreadable)" })
+    }
+    $missing = @()
+    foreach ($resource in $delegated) {
+        $scopes = @($grants | Where-Object { [string]$_.resourceId -eq [string]$resource.ResourceObjectId } | ForEach-Object { ([string]$_.scope).Split(' ') })
+        foreach ($name in $resource.PermissionNames) {
+            if ($scopes -notcontains $name) { $missing += "$name (delegated)" }
+        }
+    }
+    return @($missing)
 }
 
 function Merge-ResourceAccess {
@@ -442,7 +604,9 @@ function Test-RegisteredCertificate {
 function Get-MissingApplicationConsent {
     param([object[]]$Assignments, [object[]]$Desired)
     $missing = @()
-    foreach ($resource in $Desired) {
+    # Delegated scopes are granted as oauth2PermissionGrants, not app roles;
+    # Get-MissingDelegatedConsent checks them separately.
+    foreach ($resource in @($Desired | Where-Object { -not $_.Delegated })) {
         foreach ($permission in @($resource.ResourceAccess)) {
             if (-not @($Assignments | Where-Object {
                 [string]$_.ResourceId -eq [string]$resource.ResourceObjectId -and
@@ -552,12 +716,33 @@ Import-Module Microsoft.Graph.Authentication -Force
 Import-Module Microsoft.Graph.Applications -Force
 Import-Module Microsoft.Graph.Identity.DirectoryManagement -Force
 
+$targetTenant = $TenantId.Trim()
+$targetApplicationId = $ApplicationId.Trim()
+if ($explicitEnvironmentFile) {
+    # An explicitly selected customer file identifies the tenant and application
+    # to reconcile, so a consultant cannot sign in to one customer and silently
+    # overwrite another customer's saved configuration.
+    if (-not $targetTenant) { $targetTenant = Get-DotEnvValue -Path $envPath -Name 'TENANT_ID' }
+    if (-not $targetApplicationId) { $targetApplicationId = Get-DotEnvValue -Path $envPath -Name 'CLIENT_ID' }
+}
+
 Write-Info 'Connecting to Microsoft Graph for application administration...'
-Connect-MgGraph -Scopes @(
-    'Application.ReadWrite.All','Organization.Read.All'
-) -ContextScope Process -NoWelcome
+$graphScopes = @('Application.ReadWrite.All','Organization.Read.All')
+if ($assignDirectoryRole) { $graphScopes += 'RoleManagement.ReadWrite.Directory' }
+$connectParameters = @{ Scopes = $graphScopes; ContextScope = 'Process'; NoWelcome = $true }
+if ($targetTenant) { $connectParameters['TenantId'] = $targetTenant }
+if ($UseDeviceCode) { $connectParameters['UseDeviceCode'] = $true }
+Connect-MgGraph @connectParameters
 $context = Get-MgContext
 if (-not $context -or -not $context.TenantId) { throw 'Microsoft Graph authentication did not return a tenant.' }
+$targetTenantGuid = [guid]::Empty
+if ($targetTenant -and [guid]::TryParse($targetTenant, [ref]$targetTenantGuid) -and ([string]$context.TenantId -ne $targetTenantGuid.ToString())) {
+    throw "The administrator session belongs to tenant $($context.TenantId), not the requested tenant $targetTenant. Setup stopped before any change."
+}
+$savedTenant = Get-DotEnvValue -Path $envPath -Name 'TENANT_ID'
+if ($savedTenant -and $savedTenant -ne [string]$context.TenantId) {
+    Write-Warn "$envFileName currently belongs to tenant $savedTenant, but you signed in to tenant $($context.TenantId). Its saved credentials will not be reused. Use -EnvironmentFile to keep one file per customer."
+}
 
 $configuredSharePointAdminUrl = ''
 if ($profileName -eq 'standard') {
@@ -575,9 +760,24 @@ if ($profileName -eq 'standard') {
     }
 }
 
-$existingApps = @(Get-MgApplication -Filter "displayName eq '$AppName'" -Property Id,AppId,DisplayName,RequiredResourceAccess,PasswordCredentials,KeyCredentials)
-$app = Get-UniqueApplicationMatch -Applications $existingApps -DisplayName $AppName
-$savedCredential = Get-SavedCredentialState -Path $envPath -TenantId $context.TenantId -Application $app -SkipSecretValidation:$RotateCredential
+if ($targetApplicationId -and $savedTenant -and $savedTenant -ne [string]$context.TenantId -and -not $ApplicationId) {
+    # The saved CLIENT_ID belongs to another tenant; fall back to name matching.
+    $targetApplicationId = ''
+}
+if ($targetApplicationId) {
+    if ($targetApplicationId -notmatch '^[0-9A-Za-z-]{1,64}$') { throw 'ApplicationId must be an application (client) ID.' }
+    $existingApps = @(Get-MgApplication -Filter "appId eq '$targetApplicationId'" -Property Id,AppId,DisplayName,RequiredResourceAccess,PasswordCredentials,KeyCredentials)
+    $app = Get-UniqueApplicationMatch -Applications $existingApps -DisplayName $targetApplicationId
+    if (-not $app) { throw "Application $targetApplicationId was not found in tenant $($context.TenantId). Setup does not create a replacement for an explicitly selected application." }
+    $AppName = [string]$app.DisplayName
+} else {
+    $existingApps = @(Get-MgApplication -Filter "displayName eq '$AppName'" -Property Id,AppId,DisplayName,RequiredResourceAccess,PasswordCredentials,KeyCredentials)
+    $app = Get-UniqueApplicationMatch -Applications $existingApps -DisplayName $AppName
+}
+if ($SkipCredential -and -not $app) {
+    throw '-SkipCredential updates an existing application only. Supply -ApplicationId <client ID> (or an -EnvironmentFile containing CLIENT_ID) for the application that already exists in this tenant.'
+}
+$savedCredential = Get-SavedCredentialState -Path $envPath -TenantId $context.TenantId -Application $app -SkipSecretValidation:($RotateCredential -or $SkipCredential)
 $graphCertificatePath = if ($CertificatePath) { (Resolve-Path -LiteralPath $CertificatePath).Path } else { $savedCredential.CertificatePath }
 $graphCertificatePassword = if ($CertificatePath) { '' } else { $savedCredential.CertificatePassword }
 $certificateApplication = $app
@@ -586,7 +786,7 @@ if (($graphCertificatePath -or $certificate) -and $app) {
     # single application, rather than the preceding filtered collection lookup.
     $certificateApplication = Get-MgApplication -ApplicationId $app.Id -Property Id,AppId,KeyCredentials
 }
-Assert-GraphCredentialConfiguration -Certificate $certificate -GraphCertificatePath $graphCertificatePath -GraphCertificatePassword $graphCertificatePassword -Application $certificateApplication -HasUsableSecret $savedCredential.HasUsableSecret -Rotate:$RotateCredential
+Assert-GraphCredentialConfiguration -Certificate $certificate -GraphCertificatePath $graphCertificatePath -GraphCertificatePassword $graphCertificatePassword -Application $certificateApplication -HasUsableSecret ($savedCredential.HasUsableSecret -or $SkipCredential) -Rotate:$RotateCredential
 
 # Stable permission identifiers used by endpoint contract tests and setup audits.
 # Runtime resolution still uses permission names so the manifest is readable.
@@ -601,10 +801,13 @@ $registryDocument = Get-Content -LiteralPath $registryPath -Raw | ConvertFrom-Js
 $collectorRegistry = $registryDocument.collectors
 $profile = $registryDocument.permission_profiles.$profileName
 if (-not $profile) { throw "Permission profile $PermissionProfile was not found in the collector registry." }
+$enabledOptIns = @()
+if ($EnableSharePointAppOnly) { $enabledOptIns += 'SharePointAppOnly' }
 $enabledCollectors = @($collectorRegistry | Where-Object {
     ($profile.excluded_collectors -notcontains $_.id) -and (
     $_.default_setup -or
     ($Mode -eq 'Unattended' -and $_.setup_when -eq 'Unattended') -or
+    ($_.setup_opt_in -and $enabledOptIns -contains $_.setup_opt_in) -or
     ($_.preview_pack -and ($PreviewCollectors -eq 'All' -or $_.preview_pack -eq $PreviewCollectors)))
 })
 $resourceIds = @{}
@@ -632,12 +835,33 @@ foreach ($resourceName in @($permissionsByResource.Keys | Sort-Object)) {
         $desired += Get-ResourceAccessByName -ResourceAppId $resourceIds[$resourceName] -PermissionNames $permissionNames
     }
 }
+if ($requestDelegatedEnrichment) {
+    $delegatedByResource = @{}
+    foreach ($collector in $enabledCollectors) {
+        if (-not $collector.delegated_permission_resources) { continue }
+        foreach ($property in @($collector.delegated_permission_resources.PSObject.Properties)) {
+            if (-not $resourceIds.ContainsKey($property.Name)) { continue }
+            if (-not $delegatedByResource.ContainsKey($property.Name)) { $delegatedByResource[$property.Name] = @() }
+            $delegatedByResource[$property.Name] += @($property.Value)
+        }
+    }
+    foreach ($resourceName in @($delegatedByResource.Keys | Sort-Object)) {
+        $scopeNames = @($delegatedByResource[$resourceName] | Sort-Object -Unique)
+        if ($scopeNames.Count -gt 0) {
+            $delegatedAccess = Get-DelegatedScopesByName -ResourceAppId $resourceIds[$resourceName] -ScopeNames $scopeNames
+            if (@($delegatedAccess.ResourceAccess).Count -gt 0) {
+                $desired += $delegatedAccess
+            }
+        }
+    }
+}
 
-if ($Mode -eq 'Unattended') {
-    Write-Warn 'Unattended mode adds SharePoint Sites.FullControl.All because SharePoint administrative PowerShell does not support client-secret authentication.'
+if ($Mode -eq 'Unattended' -or $EnableSharePointAppOnly) {
+    Write-Warn 'SharePoint app-only administration adds Sites.FullControl.All because SharePoint administrative PowerShell does not support client-secret authentication or a narrower application permission.'
+    Write-Warn 'Without it, the assessment still reads tenant sharing settings through Microsoft Graph (SharePointTenantSettings.Read.All); per-site settings and Data Access Governance reports then need an administrator sign-in.'
     if (-not $ConfirmBroadSharePointAccess) {
         $answer = Read-Host 'Type YES to approve Sites.FullControl.All for this app; the assessment collector uses it only for read operations'
-        if ($answer -cne 'YES') { throw 'SharePoint app-only permission was not approved. Rerun Standard mode for delegated browser authentication.' }
+        if ($answer -cne 'YES') { throw 'SharePoint app-only permission was not approved. Rerun without -EnableSharePointAppOnly to keep the Microsoft Graph baseline and browser sign-in.' }
     }
 }
 
@@ -667,8 +891,32 @@ if ($PruneUnusedPermissions) {
 }
 $requiredResourceAccess = Merge-ResourceAccess -Existing $app.RequiredResourceAccess -Desired $desired -Prune:$PruneUnusedPermissions
 Update-MgApplication -ApplicationId $app.Id -RequiredResourceAccess $requiredResourceAccess
+if ($requestDelegatedEnrichment -and @($desired | Where-Object { $_.Delegated }).Count -gt 0) {
+    # Interactive browser sign-in (authorization code with PKCE) needs a
+    # "Mobile and desktop" redirect. Public client flows stay disabled.
+    try {
+        $clientSettings = Get-MgApplication -ApplicationId $app.Id -Property Id,PublicClient
+        $redirects = @($clientSettings.PublicClient.RedirectUris)
+        if ($redirects -notcontains 'http://localhost') {
+            Update-MgApplication -ApplicationId $app.Id -PublicClient @{ RedirectUris = @($redirects + 'http://localhost' | Where-Object { $_ }) }
+            Write-Success 'Added the http://localhost public-client redirect used for optional delegated sign-in.'
+        }
+    } catch {
+        Write-Warn "The public-client redirect for delegated sign-in could not be verified: $($_.Exception.Message)"
+    }
+}
 Write-Success "Reconciled permissions for $($enabledCollectors.Count) selected collectors from collector-registry.json."
 
+if ($EnableSharePointAppOnly -and -not $certificate) {
+    # Exchange/Purview certificate authentication requires a CSP (not CNG) key;
+    # SharePoint accepts either. The private key stays non-exportable in the
+    # current user's store; nothing is written to disk.
+    $certificate = New-SelfSignedCertificate -Subject "CN=$AppName workload access" -CertStoreLocation 'Cert:\CurrentUser\My' `
+        -KeySpec KeyExchange -KeyExportPolicy NonExportable -KeyLength 2048 `
+        -Provider 'Microsoft Enhanced RSA and AES Cryptographic Provider' -NotAfter (Get-Date).AddMonths(12)
+    $CertificateThumbprint = $certificate.Thumbprint
+    Write-Success "Created certificate $CertificateThumbprint in Cert:\CurrentUser\My for SharePoint and Purview PowerShell (valid 12 months)."
+}
 if ($certificate) {
     $thumbprint = $certificate.Thumbprint
     $existingKeyCredentials = if ($certificateApplication) { @($certificateApplication.KeyCredentials) } else { @($app.KeyCredentials) }
@@ -700,14 +948,20 @@ $environmentValues['TENANT_ID'] = $context.TenantId
 $environmentValues['CLIENT_ID'] = $app.AppId
 $environmentValues['PERMISSION_PROFILE'] = $profileName
 if ($profileName -eq 'standard') { $environmentValues['SHAREPOINT_ADMIN_URL'] = $configuredSharePointAdminUrl }
-$environmentValues['CLIENT_SECRET'] = if ($savedCredential.HasUsableSecret) { $savedCredential.Secret } else { '' }
-$environmentValues['CLIENT_SECRET_KEY_ID'] = $savedCredential.SecretKeyId
-$environmentValues['CLIENT_SECRET_EXPIRES_AT'] = $savedCredential.SecretExpiresAt
+if (-not $SkipCredential) {
+    $environmentValues['CLIENT_SECRET'] = if ($savedCredential.HasUsableSecret) { $savedCredential.Secret } else { '' }
+    $environmentValues['CLIENT_SECRET_KEY_ID'] = $savedCredential.SecretKeyId
+    $environmentValues['CLIENT_SECRET_EXPIRES_AT'] = $savedCredential.SecretExpiresAt
+}
 if ($CertificatePath) {
     $environmentValues['CERTIFICATE_PATH'] = $graphCertificatePath
     $environmentValues['CERTIFICATE_PASSWORD'] = ''
 }
-if ($initialDomain) { $environmentValues['PURVIEW_ORGANIZATION'] = $initialDomain }
+if ($initialDomain) {
+    $environmentValues['PURVIEW_ORGANIZATION'] = $initialDomain
+    # Live runs stop if the signed-in tenant does not own this domain.
+    $environmentValues['EXPECTED_TENANT_DOMAIN'] = $initialDomain
+}
 if ($CertificateThumbprint) {
     $environmentValues['SHAREPOINT_CERTIFICATE_THUMBPRINT'] = $CertificateThumbprint
     $environmentValues['PURVIEW_CERTIFICATE_THUMBPRINT'] = $CertificateThumbprint
@@ -726,7 +980,7 @@ foreach ($ignorePattern in @('.env', '.env.restricted', '.env.*.recovery.*', 'Re
 # .env.restricted.recovery.<id>. Both stay excluded even in a new checkout.
 if ($gitignore -notmatch '(?m)^\.env\.recovery\.\*$') { Add-Content -LiteralPath $gitignorePath -Value "`n.env.recovery.*" }
 $stagingPath = New-CredentialStagingFile -EnvironmentPath $envPath
-if ($RotateCredential -or (-not $graphCertificatePath -and -not $savedCredential.HasUsableSecret)) {
+if (-not $SkipCredential -and ($RotateCredential -or (-not $graphCertificatePath -and -not $savedCredential.HasUsableSecret))) {
     $end = (Get-Date).ToUniversalTime().AddDays($SecretExpirationDays)
     try {
         $secret = Add-MgApplicationPassword -ApplicationId $app.Id -PasswordCredential @{
@@ -747,7 +1001,9 @@ if ($RotateCredential -or (-not $graphCertificatePath -and -not $savedCredential
 } else {
     $snapshot = ConvertTo-DotEnvSnapshot -Lines $environmentLines -Values $environmentValues
     Save-CredentialEnvironment -Path $envPath -StagingPath $stagingPath -Contents $snapshot
-    if ($savedCredential.HasUsableSecret) {
+    if ($SkipCredential) {
+        Write-Success 'No client secret was created, rotated or read (-SkipCredential). The assessor keeps using the application''s existing credential.'
+    } elseif ($savedCredential.HasUsableSecret) {
         Write-Success "Verified and kept the existing $envFileName client secret for the matching tenant/application; no credential was rotated."
     } else { Write-Success 'Certificate authentication is configured; no client secret was created.' }
 }
@@ -758,7 +1014,8 @@ $missingConsent = Get-MissingApplicationConsent -Assignments $assignments -Desir
 if ($missingConsent.Count -gt 0) {
     Write-Info "Opening tenant admin consent for $($missingConsent.Count) missing application permission(s)..."
     $adminConsentUrl = "https://login.microsoftonline.com/$($context.TenantId)/adminconsent?client_id=$($app.AppId)"
-    Start-Process $adminConsentUrl
+    Write-Info "If no browser opens, sign in and go to: $adminConsentUrl"
+    try { Start-Process $adminConsentUrl } catch { Write-Warn 'Could not open a browser; open the link above manually.' }
     $null = Read-Host 'Accept the requested permissions in the browser, then press ENTER'
     Start-Sleep -Seconds 2
     $assignments = @(Get-MgServicePrincipalAppRoleAssignment -ServicePrincipalId $servicePrincipal.Id -All)
@@ -770,13 +1027,24 @@ if ($missingConsent.Count -gt 0) {
     Write-Fail "$($missingConsent.Count) requested application permission(s) are still missing tenant-wide consent."
     Write-Warn 'Rerun setup after consent propagation or inspect Enterprise applications > Permissions.'
 } else { Write-Success 'Verified every requested application role on the service principal.' }
+$missingDelegated = @(Get-MissingDelegatedConsent -ServicePrincipalObjectId $servicePrincipal.Id -Desired $desired)
+if ($missingDelegated.Count -gt 0) {
+    Write-Warn "Optional delegated enrichment is not consented yet: $($missingDelegated -join ', '). Application-permission collection is unaffected; a signed-in administrator can consent at first use."
+}
 $excessAfterConsent = @(Get-ExcessApplicationAccess -Requested $requiredResourceAccess -Assignments $assignments -Desired $desired)
 if ($profileName -eq 'restricted' -and $excessAfterConsent.Count -gt 0) {
     throw 'Restricted setup detected excess application grants after consent. Review Enterprise applications > Permissions and remove excess grants manually; setup did not revoke any access.'
 }
 
-$purviewRoleConfigurationComplete = $true
-if ($Mode -eq 'Unattended' -and $missingConsent.Count -eq 0) {
+$purviewRoleConfigurationComplete = ($WorkloadRbac -eq 'None')
+if ($assignDirectoryRole -and $missingConsent.Count -eq 0) {
+    $purviewRoleConfigurationComplete = Set-ApplicationDirectoryRole -ServicePrincipalObjectId $servicePrincipal.Id `
+        -RoleTemplateId $directoryRoleTemplates[$WorkloadRbac] -RoleName $(if ($WorkloadRbac -eq 'GlobalReader') { 'Global Reader' } else { 'Security Reader' })
+}
+if ($WorkloadRbac -eq 'None' -and $profileName -eq 'standard') {
+    Write-Info 'Workload role assignment was skipped (-WorkloadRbac None). Purview and Exchange app-only reads need an existing workload role. Rerun with -WorkloadRbac GlobalReader (Standard default) or assign suitable read access yourself. Browser fallback does not repair a connected application session that lacks cmdlet access.'
+}
+if ($WorkloadRbac -eq 'RoleGroups' -and $missingConsent.Count -eq 0) {
     Write-Warn 'Configuring workload roles that expose assessment read cmdlets. Complete roles can grant write capabilities; review their role entries before customer use.'
     $purviewRoleConfigurationComplete = Set-ApplicationWorkloadRoleGroup `
         -Connection Purview `
@@ -823,18 +1091,25 @@ if ($profileName -eq 'standard') {
     }
 }
 if ($missingConsent.Count -gt 0) { Write-Host '  Consent: incomplete' -ForegroundColor Yellow } else { Write-Host '  Consent: verified' -ForegroundColor Green }
-if ($Mode -eq 'Unattended') {
+Write-Host "  Workload access: $WorkloadRbac"
+if ($WorkloadRbac -ne 'None') {
     if ($purviewRoleConfigurationComplete) { Write-Host '  Purview application roles: configured' -ForegroundColor Green }
     else { Write-Host '  Purview application roles: incomplete' -ForegroundColor Yellow }
 }
-if ($profileName -eq 'restricted') {
-    Write-Host "`nNext: python main.py --env-file .env.restricted --permission-profile restricted --check-connections"
+if ($EnableSharePointAppOnly -or $Mode -eq 'Unattended') {
+    Write-Host "  SharePoint app-only certificate: $CertificateThumbprint"
+}
+if ($SkipCredential) {
+    Write-Host '  Credentials: unchanged (-SkipCredential)'
+    Write-Host "`nNext: the assessor runs python main.py --env-file <their environment file for this tenant> --check-connections"
+} elseif ($profileName -eq 'restricted') {
+    Write-Host "`nNext: python main.py --env-file `"$envPath`" --permission-profile restricted --check-connections"
 } else {
-    Write-Host "`nNext: python main.py --check-connections"
+    Write-Host "`nNext: python main.py --env-file `"$envPath`" --check-connections"
 }
 Write-Host "`nAfter the engagement, follow docs/CLEANUP.md to archive evidence and retire dedicated assessment access."
 $cleanupPreview = ".\cleanup-service-principal.ps1 -PermissionProfile $PermissionProfile -TenantId $($context.TenantId) -ClientId $($app.AppId)"
-if ($Mode -eq 'Unattended') { $cleanupPreview += " -IncludeWorkloadRbac -ServicePrincipalObjectId $($servicePrincipal.Id)" }
+if ($WorkloadRbac -ne 'None') { $cleanupPreview += " -IncludeWorkloadRbac -ServicePrincipalObjectId $($servicePrincipal.Id)" }
 Write-Host "  Cleanup preview (no deletions): $cleanupPreview"
 Disconnect-MgGraph | Out-Null
 if ($missingConsent.Count -gt 0 -or -not $purviewRoleConfigurationComplete) { exit 2 }

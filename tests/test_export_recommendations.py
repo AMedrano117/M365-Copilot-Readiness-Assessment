@@ -7,6 +7,7 @@ from pathlib import Path
 from html import escape
 from datetime import date
 import re
+from urllib.parse import unquote
 
 
 from openpyxl import load_workbook
@@ -133,9 +134,105 @@ class ExportRecommendationsTests(unittest.TestCase):
         self.assertTrue(all(row["Responsible Role"] and row["Rollout Stage"] and row["Completion Evidence"] for row in actions))
         self.assertTrue(all(row["Target Date"] is None for row in actions))
         evidence_column = rows[0].index("Evidence") + 1
-        self.assertTrue(all(workbook["Action Plan"].cell(i, evidence_column).hyperlink for i in range(2, len(rows)+1)))
+        self.assertTrue(all(workbook["Action Plan"].cell(i, evidence_column).value for i in range(2, len(rows)+1)))
+        self.assertFalse(any(workbook["Action Plan"].cell(i, evidence_column).value == 'Evidence Index' for i in range(2, len(rows)+1)))
         headers = [cell.value for cell in workbook["App Access Detail"][1]]
         self.assertIn("RecommendationId", headers)
+
+    def test_investigation_links_select_only_flagged_objects_and_keep_registers_readable(self):
+        recommendations = self._sample_recommendations()
+        recommendations[0].update(
+            EvidenceKey="app_access_detail", EvidenceBasis="Tenant evidence",
+            ObservationDate="2026-09-14", EvidenceComplete=True,
+            EvidenceScope="Returned enterprise applications and delegated grants",
+            Observation="One application has high-privilege delegated permissions.",
+        )
+        bundle = self._sample_evidence_bundle()
+        records = bundle['sheets']['app_access_detail']['rows']
+        records[0]['Enterprise Application Object ID'] = 'flagged-app-object'
+        records.append({**records[0], 'App Display Name': 'Healthy application',
+                        'Enterprise Application Object ID': 'healthy-app-object', 'Flagged Because': ''})
+        path = export_to_excel(recommendations, filename='focused.xlsx', evidence_bundle=bundle)
+        workbook = load_workbook(path)
+        self.addCleanup(workbook.close)
+        rows = list(workbook['Investigation Items'].values)
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(len(rows[0]), 12)
+        self.assertIn('flagged-app-object', rows[1])
+        self.assertNotIn('healthy-app-object', rows[1])
+        for title, column_name in (('Action Plan', 'Investigation Details'),
+                                   ('Evidence Index', 'Workbook Tab'), ('Recommendations', 'Evidence Sheet')):
+            sheet = workbook[title]
+            headers = {cell.value: cell.column for cell in sheet[1]}
+            number = next(i for i in range(2, sheet.max_row + 1)
+                          if sheet.cell(i, headers['RecommendationId']).value == 'DEF-001')
+            cell = sheet.cell(number, headers[column_name])
+            self.assertEqual(cell.hyperlink.target, "#'Investigation Items'!A2:L2")
+            if title == 'Action Plan':
+                self.assertEqual(cell.value, '1 item to review')
+                self.assertIsNotNone(cell.comment)
+                self.assertIn('distinct applications', cell.comment.text)
+                self.assertIn('grant instances', cell.comment.text)
+                self.assertLessEqual(len(headers), 15)
+                self.assertEqual(sheet.cell(number, headers['Evidence']).hyperlink.target, "#'Investigation Items'!A2:L2")
+            self.assertNotIn('Evidence IDs', headers)
+            self.assertNotIn('Evidence Reconciliation', headers)
+        self.assertNotIn('Evidence Reconciliation', workbook.sheetnames)
+        html_path = export_to_html(recommendations, filename='focused.html', evidence_bundle=bundle, excel_path=path)
+        html = Path(html_path).read_text(encoding='utf-8')
+        self.assertIn('Investigation Items', html)
+        action_plan = html.split('id="action-plan"', 1)[1].split('</section>', 1)[0]
+        investigation_link = re.search(r'href="([^"]+)"[^>]*>1 item to review in workbook</a>', action_plan)
+        self.assertIsNotNone(investigation_link)
+        self.assertEqual(unquote(investigation_link.group(1)), "focused.xlsx#'Investigation Items'!A2:L2")
+        self.assertNotIn('flagged-app-object', html)
+        self.assertNotIn('healthy-app-object', html)
+        self.assertNotIn('Risky App', action_plan)
+        without_workbook = export_to_html(recommendations, filename='focused_without_workbook.html', evidence_bundle=bundle)
+        self.assertNotIn('item to review in workbook</a>', Path(without_workbook).read_text(encoding='utf-8'))
+        self.assertFalse(list(Path('Reports').glob('*_evidence')))
+
+    def test_missing_items_have_visible_status_and_explanation_without_an_invented_worklist(self):
+        bundle = self._sample_evidence_bundle()
+        bundle['sheets']['app_access_detail']['rows'][0]['Flagged Because'] = ''
+        recommendations = self._sample_recommendations()
+        recommendations[0]['EvidenceKey'] = 'app_access_detail'
+        path = export_to_excel(recommendations, filename='no_specific_items.xlsx', evidence_bundle=bundle)
+        workbook = load_workbook(path)
+        self.addCleanup(workbook.close)
+        self.assertNotIn('Investigation Items', workbook.sheetnames)
+        headers = {cell.value: cell.column for cell in workbook['Action Plan'][1]}
+        for row in range(2, workbook['Action Plan'].max_row + 1):
+            self.assertTrue(workbook['Action Plan'].cell(row, headers['Investigation Details']).value)
+            self.assertTrue(workbook['Action Plan'].cell(row, headers['Qualification']).value)
+            self.assertTrue(workbook['Action Plan'].cell(row, headers['Evidence']).value)
+            self.assertNotEqual(workbook['Action Plan'].cell(row, headers['Evidence']).value, 'Evidence Index')
+            if workbook['Action Plan'].cell(row, headers['RecommendationId']).value == 'DEF-001':
+                comment = workbook['Action Plan'].cell(row, headers['Investigation Details']).comment
+                self.assertIsNotNone(comment)
+                self.assertIn('No specific affected items', comment.text)
+
+    def test_oversized_optional_text_keeps_excel_and_detail_identifiers_are_preserved(self):
+        recommendations = self._sample_recommendations()
+        recommendations[0]['Observation'] = 'Long optional finding text. ' * 1800
+        recommendations[0]['EvidenceKey'] = 'app_access_detail'
+        bundle = self._sample_evidence_bundle()
+        identifier = 'identifier-' + 'x' * 40000
+        bundle['sheets']['app_access_detail']['rows'][0]['Enterprise Application Object ID'] = identifier
+        path = export_to_excel(recommendations, filename='long_fields.xlsx', evidence_bundle=bundle)
+        self.assertTrue(Path(path).is_file())
+        workbook = load_workbook(path)
+        self.addCleanup(workbook.close)
+        headers = {cell.value: cell.column for cell in workbook['Recommendations'][1]}
+        observation = workbook['Recommendations'].cell(2, headers['Observation']).value
+        self.assertIn('[Truncated for Excel:', observation)
+        self.assertLessEqual(len(observation.encode('utf-16-le')) // 2, 32767)
+        for title, field in (('App Access Detail', 'Enterprise Application Object ID'),
+                             ('Investigation Items', 'Identifier / URL')):
+            rows = list(workbook[title].values)
+            detail = dict(zip(rows[0], rows[1]))
+            self.assertEqual(detail[field] + detail[field + ' (continued 2)'], identifier)
+            self.assertIn('Full values continue', detail['Excel Export Note'])
 
     def test_export_to_html_renders_engineer_appendix_and_follow_up_reference(self):
         recommendations = self._sample_recommendations()
@@ -154,7 +251,7 @@ class ExportRecommendationsTests(unittest.TestCase):
         self.assertIn('<details class="appendix-panel" id="engineer-appendix">', html)
         self.assertIn('href="tenant_report.xlsx"', html)
         appendix = html.split('id="engineer-appendix"', 1)[1]
-        self.assertIn("App Access Detail", appendix)
+        self.assertIn("Detail mapping missing", appendix)
         self.assertIn("DEF-001", appendix)
         self.assertIn("Review the flagged apps and security signals before rollout.", html)
         for anchor in re.findall(r'href="#(evidence-[^"]+)"', html):
@@ -326,7 +423,8 @@ class ExportRecommendationsTests(unittest.TestCase):
 
         result = evidence_bundle["assessment_result"]
         executive = html.split('id="executive"', 1)[1].split("</section>", 1)[0]
-        self.assertIn(escape(result["decision"]), executive)
+        from Core.pilot_summary import VERDICTS
+        self.assertIn(escape(VERDICTS[result["decision"]][0]), executive)
         self.assertIn("First actions", executive)
         self.assertIn("14 apps with high-level access were identified", html)
         self.assertNotIn("Built offline", executive)
@@ -409,6 +507,82 @@ class ExportRecommendationsTests(unittest.TestCase):
             print_recommendations_summary(recommendations, tenant_name="Contoso", evidence_bundle=bundle)
         self.assertIn(f"Verified strengths: {expected}", output.getvalue())
         self.assertIn(f'<div class="value">{expected}</div><div class="stat-label">Verified strengths</div>', html)
+
+    def test_zero_count_configuration_context_has_an_exact_html_link(self):
+        recommendations = self._sample_recommendations()[:1]
+        recommendations[0].update(Service='Entra', Feature='Conditional Access scope review',
+                                  EvidenceKey='conditional_access_detail', EvidenceBasis='Tenant evidence',
+                                  Observation='Confirm whether the retained configuration covers the intended scope.',
+                                  Recommendation='Confirm the policy scope with the identity owner.')
+        bundle = self._sample_evidence_bundle()
+        bundle['sheets'] = {'conditional_access_detail': {'title': 'Conditional Access Detail', 'rows': [
+            {'Policy ID': 'private-policy-id', 'Policy Name': 'Private policy', 'State': 'enabled'},
+        ]}}
+        workbook_path = export_to_excel(recommendations, filename='context.xlsx', evidence_bundle=bundle)
+        result_row = next(row for row in bundle['assessment_result']['recommendations'] if row['RecommendationId'] == 'DEF-001')
+        self.assertEqual(result_row['InvestigationCount'], 0)
+        self.assertTrue(result_row['InvestigationRange'])
+        html = Path(export_to_html(recommendations, filename='context.html', evidence_bundle=bundle,
+                                  excel_path=workbook_path)).read_text(encoding='utf-8')
+        self.assertIn('context.xlsx#' + result_row['InvestigationRange'], unquote(html))
+        self.assertIn(result_row['InvestigationSummary'] + ' in workbook</a>', html)
+        self.assertNotIn('private-policy-id', html)
+        self.assertNotIn('Private policy', html)
+
+    def test_opportunity_next_step_links_declared_records_without_html_identity_or_source_filter(self):
+        rec = {**self._sample_recommendations()[0], 'Service': 'Fictional Observatory', 'DomainId': 'applications', 'Feature': 'Optional resource pilot',
+               'Disposition': 'Opportunity', 'Status': 'Success', 'EvidenceBasis': 'Tenant evidence',
+               'Observation': 'Two retained resources are available to assess for an optional pilot.',
+               'Recommendation': 'Review optional pilot resources with their accountable owner.',
+               'InvestigationEvidence': {'kind': 'records', 'sheet_name': 'Optional Resources',
+                   'records': [{'id': 'private-resource-id', 'name': 'Private resource', 'state': 'Stopped'}],
+                   'source': {'file': 'private-source-file.json', 'filter': 'ownerId=private-filter-identity',
+                              'scope': 'Supplied resource records', 'complete': True, 'retention': '30 days'},
+                   'reconciliation': {'operation': 'count', 'expected': 1}}}
+        bundle = self._sample_evidence_bundle()
+        bundle['sheets'] = {}
+        workbook_path = export_to_excel([rec], filename='opportunity.xlsx', evidence_bundle=bundle)
+        workbook = load_workbook(workbook_path)
+        self.addCleanup(workbook.close)
+        self.assertIn('Optional Resources', workbook.sheetnames)
+        self.assertNotIn('DEF-001', {row['RecommendationId'] for row in bundle['assessment_result']['actions']})
+        for title in ('Evidence Index', 'Recommendations'):
+            sheet = workbook[title]
+            headers = {cell.value: cell.column for cell in sheet[1]}
+            row = next(i for i in range(2, sheet.max_row + 1) if sheet.cell(i, headers['RecommendationId']).value == 'DEF-001')
+            self.assertEqual(sheet.cell(row, headers['Investigation Status']).value, 'Records available')
+            self.assertEqual(sheet.cell(row, headers['Supporting Records']).value, 1)
+            self.assertTrue(sheet.cell(row, headers['Supporting Records']).hyperlink)
+        coverage_values = str(list(workbook['Collection Coverage'].values))
+        self.assertIn('Optional Resources', coverage_values)
+        self.assertIn('Retention: 30 days', coverage_values)
+        html = Path(export_to_html([rec], filename='opportunity.html', evidence_bundle=bundle,
+                                  excel_path=workbook_path)).read_text(encoding='utf-8')
+        self.assertIn('Review optional pilot resources with their accountable owner.', html)
+        self.assertIn('1 item to review in workbook</a>', html)
+        for private_value in ('private-resource-id', 'Private resource', 'private-source-file.json', 'private-filter-identity'):
+            self.assertNotIn(private_value, html)
+
+    def test_investigation_item_source_link_opens_the_application_grant_records(self):
+        recommendations = self._sample_recommendations()
+        recommendations[0]['EvidenceKey'] = 'app_access_detail'
+        bundle = self._sample_evidence_bundle()
+        bundle['sheets']['app_access_detail']['rows'][0]['Enterprise Application Object ID'] = 'app-object'
+        bundle['sheets']['application_grant_detail'] = {
+            'title': 'Application Grant Detail', 'restricted': True,
+            'rows': [{'RecommendationId': '', 'Client Service Principal ID': 'app-object', 'Grant ID': 'grant-one', 'Scope': 'Mail.Read'},
+                     {'RecommendationId': '', 'Client Service Principal ID': 'app-object', 'Grant ID': 'grant-two', 'Scope': 'Files.Read.All'}],
+            'app_ranges': {'app-object': "'Application Grant Detail'!A2:D3"},
+            'details': ['Each row is a retained grant; multiple grants can identify one application.'],
+        }
+        workbook_path = export_to_excel(recommendations, filename='grant-links.xlsx', evidence_bundle=bundle)
+        workbook = load_workbook(workbook_path)
+        self.addCleanup(workbook.close)
+        sheet = workbook['Investigation Items']
+        headers = {cell.value: cell.column for cell in sheet[1]}
+        source = sheet.cell(2, headers['Source Detail'])
+        self.assertEqual(source.value, "'Application Grant Detail'!A2:D3")
+        self.assertEqual(source.hyperlink.target, "#'Application Grant Detail'!A2:D3")
 
 
 if __name__ == "__main__":

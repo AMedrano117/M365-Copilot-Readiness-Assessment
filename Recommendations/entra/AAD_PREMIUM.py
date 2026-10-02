@@ -193,11 +193,13 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
                     service="Entra",
                     feature=feature_name,
                     observation=f"{legacy_auth_count} legacy authentication {'sign-in' if legacy_auth_count == 1 else 'sign-ins'} detected in the returned sign-in records. Review the protocols and the controls that apply to those requests.",
-                    recommendation="Block legacy authentication protocols (IMAP, POP3, SMTP AUTH) using Conditional Access. Legacy auth bypasses MFA and cannot be protected by Conditional Access policies, creating a backdoor for attackers to access Copilot. Migrate apps to modern authentication (OAuth 2.0) and block legacy protocols tenant-wide.",
+                    recommendation="Review the linked sign-in records to identify the accounts, applications, clients and IP addresses involved. Distinguish successful requests from failed or blocked attempts using the error code and Conditional Access result. Confirm business dependencies, migrate required clients to modern authentication, and test a policy to block legacy authentication before enforcement.",
                     link_text="Block Legacy Authentication",
                     link_url="https://learn.microsoft.com/entra/identity/conditional-access/block-legacy-authentication",
                     priority="High",
-                    status="Action Required"
+                    status="Action Required",
+                    finding_key="entra.signins.legacy_auth",
+                    evidence_key="legacy_signin_detail"
                 ))
             else:
                 # Success: No legacy auth

@@ -2,7 +2,7 @@ import asyncio
 from .get_recommendation import get_recommendation
 from .service_categorization import determine_service_type, resolve_plan_statuses
 from .spinner import get_timestamp, _stdout_lock
-from azure.core.exceptions import HttpResponseError
+from .access_errors import ACCESS_ERRORS, describe_access_failure
 
 async def fetch_entra_data(client):
     """Fetch raw Entra data from Graph API"""
@@ -85,15 +85,13 @@ async def get_entra_info(client, services_and_licenses=None, entra_client=None):
             org, subscribed_skus, directory_roles = await fetch_entra_data(client)
         
         entra_info = process_entra_data(org, subscribed_skus, directory_roles)
-    except HttpResponseError as e:
+    except ACCESS_ERRORS as e:
+        _category, message = describe_access_failure("Entra information", e)
         with _stdout_lock:
-            if e.status_code == 403:
-                print(f"[{get_timestamp()}] [WARNING]  Entra information: Insufficient permissions (requires admin role)")
-            else:
-                print(f"[{get_timestamp()}] [WARNING]  Entra information: HTTP {e.status_code}")
+            print(f"[{get_timestamp()}] [WARNING]  {message}")
         return {
             'available': False,
-            'reason': f'Insufficient permissions (HTTP {e.status_code})',
+            'reason': message,
             'recommendations': []
         }
     

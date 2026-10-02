@@ -44,6 +44,12 @@ def discover_pdfs(directories):
     return list(found.values())
 
 
+def _windows_powershell_environment(executable):
+    # Avoid importing collector modules in offline-only code paths.
+    from .orchestrator_powershell import powershell_environment
+    return powershell_environment(executable)
+
+
 def _ocr_image(path):
     """Use Windows' installed OCR locally; no admin cmdlets or network requests."""
     if os.name != 'nt':
@@ -57,7 +63,7 @@ def _ocr_image(path):
             [executable, '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
              '-File', str(worker), '-ImagePath', str(Path(path).resolve())],
             capture_output=True, text=True, encoding='utf-8-sig', errors='replace', timeout=35,
-            creationflags=subprocess.CREATE_NO_WINDOW,
+            creationflags=subprocess.CREATE_NO_WINDOW, env=_windows_powershell_environment(executable),
         )
         if result.returncode:
             return '', 'Local OCR could not read this page. Review its preview; check installed Windows OCR languages.'

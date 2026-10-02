@@ -146,8 +146,11 @@ class _Endpoint:
 class GraphRestClient:
     """Authenticated async REST client with throttling retry and pagination."""
 
-    def __init__(self, credential, timeout=60.0, max_retries=4):
+    def __init__(self, credential, timeout=60.0, max_retries=4, scopes=None):
         self.credential = credential
+        # Application clients use the .default scope; a delegated client passes
+        # the specific delegated scopes it needs.
+        self.scopes = tuple(scopes) if scopes else (GRAPH_SCOPE,)
         self.max_retries = max_retries
         self._http = httpx.AsyncClient(
             base_url=GRAPH_BASE_URL,
@@ -160,7 +163,9 @@ class GraphRestClient:
         return _Endpoint(self, [_snake_to_camel(name)])
 
     async def _authorization_header(self):
-        token = await asyncio.to_thread(self.credential.get_token, GRAPH_SCOPE)
+        # Read from the instance dict: unknown attributes resolve to Graph endpoints.
+        scopes = self.__dict__.get("scopes") or (GRAPH_SCOPE,)
+        token = await asyncio.to_thread(self.credential.get_token, *scopes)
         return {"Authorization": f"Bearer {token.token}"}
 
     async def request(self, method, path, *, params=None, headers=None, content=None, json=None):
@@ -283,6 +288,26 @@ def get_shared_credential():
 
 def get_power_platform_credential():
     return get_shared_credential()
+
+
+async def get_access_token(scope, credential=None):
+    """Acquire an application token without blocking the event loop.
+
+    azure-identity caches tokens per scope, so repeated calls are cheap.
+    """
+    credential = credential or get_shared_credential()
+    token = await asyncio.to_thread(credential.get_token, scope)
+    return token.token
+
+
+def credential_kind():
+    """Return 'certificate' or 'client_secret' for the configured Graph credential."""
+    _ensure_env_loaded()
+    if os.getenv("CERTIFICATE_PATH"):
+        return "certificate"
+    if os.getenv("CLIENT_SECRET"):
+        return "client_secret"
+    return ""
 
 
 async def get_api_client(service_name):

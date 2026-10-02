@@ -67,12 +67,21 @@ async def audit_restricted_access(client, client_id, graph_roles=()):
                     raise ValueError(f'Cannot inspect consented API resource {resource_id}.')
                 by_object_id[resource_id] = resource
             inspect_permission(by_object_id[resource_id], assignment['appRoleId'], 'Consented')
+        # A directory role (for example Security Reader or Global Reader) lets
+        # an application read directory data beyond its consented permissions,
+        # so the Restricted profile permits none.
+        directory_roles = await complete_collection('/v1.0/roleManagement/directory/roleAssignments', {
+            '$filter': f"principalId eq '{principal_id}'",
+        })
+        for role in directory_roles:
+            excess.add(f"Directory role assignment: {role.get('roleDefinitionId') or role.get('id')} "
+                       f"(scope {role.get('directoryScopeId') or '/'})")
         if excess:
             return {
                 'verified': False, 'excess_permissions': sorted(excess),
                 'reason': 'Restricted profile has excess application access: ' + '; '.join(sorted(excess))
-                    + '. Review and revoke excess consent manually, or use a dedicated restricted application. '
-                      'Editing the requested-permission manifest alone does not revoke consent.',
+                    + '. Review and revoke excess consent and directory role assignments manually, or use a dedicated '
+                      'restricted application. Editing the requested-permission manifest alone does not revoke consent.',
             }
         return {'verified': True, 'excess_permissions': [],
                 'reason': 'Requested and consented application API permissions match the restricted profile.'}

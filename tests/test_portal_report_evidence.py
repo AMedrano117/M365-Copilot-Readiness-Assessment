@@ -195,9 +195,10 @@ class PortalReportEvidenceTests(unittest.TestCase):
         self.assertIn("IDENTITY.AUTH", missing)
         self.assertIn("DATA.DLP", missing)
         self.assertIn("THREAT.INCIDENTS", missing)
-        self.assertIn("Confirm sign-in policy coverage for the pilot", html)
+        self.assertIn("Require MFA and block legacy sign-in for all users", html)
         self.assertIn("Confirm data loss prevention coverage and enforcement", html)
-        self.assertIn("The supplied evidence does not establish this check", html)
+        self.assertIn("Conditional Access policies and security defaults were not collected.", html)
+        self.assertNotIn("intended pilot population", html)
 
     def test_invalid_readiness_export_shows_validation_without_zero_counts(self):
         readiness = self.readiness()

@@ -6,6 +6,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from Core.orchestrator_powershell import powershell_environment
+
 
 ROOT = Path(__file__).resolve().parents[1]
 POWERSHELL = shutil.which("powershell") or shutil.which("pwsh")
@@ -48,7 +50,7 @@ if ($null -ne $paths) { $options.Path = @($paths) }
         (self.root / "harness.ps1").write_text(harness, encoding="utf-8")
         result = subprocess.run(
             [POWERSHELL, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(self.root / "harness.ps1")],
-            cwd=cwd or self.root, capture_output=True, text=True, timeout=30,
+            cwd=cwd or self.root, capture_output=True, text=True, timeout=30, env=powershell_environment(POWERSHELL),
         )
         self.assertNotIn("synthetic-never-log", result.stdout + result.stderr)
         return result
@@ -195,7 +197,7 @@ $item = [pscustomobject]@{ FullName='synthetic-placeholder'; Attributes=[IO.File
         (self.root / "reparse-probe.ps1").write_text(harness, encoding="utf-8")
         return subprocess.run(
             [POWERSHELL, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(self.root / "reparse-probe.ps1")],
-            cwd=self.root, capture_output=True, text=True, timeout=30,
+            cwd=self.root, capture_output=True, text=True, timeout=30, env=powershell_environment(POWERSHELL),
         )
 
     def test_cloud_placeholders_are_allowed_but_other_reparse_types_are_not(self):
