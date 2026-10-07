@@ -74,6 +74,14 @@ def run_offline_report(args):
                 evidence.pop(field, None)
     refresh_saved_freshness(results, args.evaluation_date)
     context = collection_context(payload, args.collection_input, args.evaluation_date)
+    if not context.get('identity'):
+        from .assessment_identity import new_identity, incomplete_identity
+        from .cross_provider_assessment import METHODOLOGY_VERSION
+        try:
+            context['identity'] = new_identity(expected_tenant_id, methodology_version=METHODOLOGY_VERSION,
+                                                evaluated_at=context['evaluation_date'])
+        except ValueError:
+            context['identity'] = incomplete_identity()
     migration = context.get('methodology_migration')
     if migration:
         from .console_reporting import print_paragraph
@@ -153,7 +161,8 @@ def run_offline_report(args):
         recipe = save_rebuild_recipe(receipt['folder'], args,
                                      settings,
                                      tenant_id=expected_tenant_id, tenant_name=tenant_name,
-                                     methodology_migration=migration)
+                                     methodology_migration=migration,
+                                     identity=((result.get('evidence_bundle') or {}).get('assessment_result') or {}).get('identity'))
         if recovered_raw_collection:
             receipt['collection_input'] = str(Path(receipt['folder']) / 'rebuild.json')
     record_package_run(

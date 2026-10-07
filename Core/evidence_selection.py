@@ -285,6 +285,7 @@ def build_evidence_selection(result, bundle, *, tenant_name=None, generated_at=N
         registry.link(records)
         for occurrence, record in enumerate(records):
             original_id = record['record_id']
+            record['compatibility_record_id'] = original_id
             record['source_record_id'] = (None if re.fullmatch(r'(?:ROW-|record-)[a-f0-9]{24}', str(original_id))
                                           else original_id)
             record['record_id'] = _id('DET-', tenant_id, identifier, occurrence,

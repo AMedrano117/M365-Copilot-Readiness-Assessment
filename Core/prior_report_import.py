@@ -191,6 +191,8 @@ def _read_snapshot(path, include_user_details):
         raise ValueError("This JSON is a Purview cache containing only a service subset; use --purview-cache for this file and --prior-report for a saved assessment workbook or snapshot.")
     if "recommendations" not in payload:
         raise ValueError("Prior assessment snapshot requires a recommendations array; a service cache is not a complete assessment.")
+    from .assessment_serialization import read_assessment_result
+    payload = read_assessment_result(path)
     recommendations = _recommendations(payload["recommendations"])
     manifest = payload.get("run_manifest", {})
     if not isinstance(manifest, dict):
@@ -227,6 +229,7 @@ def _read_snapshot(path, include_user_details):
                        for row in sheets.get("Run Manifest", {}).get("rows", [])}
     result = {
         "source_kind": "assessment_snapshot", "recommendations": recommendations,
+        "identity": payload['identity'], "identity_validation": payload['identity_validation'],
         "collection_coverage": coverage, "control_results": controls,
         "sheets": sheets, "withheld_sheets": withheld,
         "warnings": [] if supplied_sheets else [

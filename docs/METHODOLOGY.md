@@ -26,6 +26,11 @@ The recorded evaluation date controls freshness. A later evaluation date can leg
 the decision; equivalent supported evidence, settings, methodology and evaluation date should
 produce equivalent results in live and offline modes.
 
+The additive [persistent identity layer](PERSISTENT_IDENTITY.md) records engagement,
+execution, semantic boundaries and typed compatibility aliases. Its diagnostics
+do not alter readiness, evidence precedence or closure rules. Reassessment
+classification, baseline selection and delta states remain deferred.
+
 Authentication registration and preference are descriptive evidence, separate from enforced
 authentication strength or methods used at sign-in. The [MFA method breakdown](MFA_METHODS.md)
 classifies registered credentials, preserves unknown fields and distinguishes user defaults

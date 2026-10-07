@@ -96,6 +96,9 @@ def _apply_recipe(payload, folder, recipe):
     payload.setdefault('assessment_settings', {}).update({
         key: value for key, value in recipe.get('assessment_settings', {}).items() if key in SETTING_KEYS})
     payload['rebuild_recipe'] = recipe
+    if recipe.get('identity'):
+        from copy import deepcopy
+        payload['identity'] = deepcopy(recipe['identity'])
     if recipe.get('methodology_migration') and not payload.get('methodology_migration'):
         payload['methodology_migration'] = dict(recipe['methodology_migration'])
         payload['original_methodology_version'] = recipe['original_methodology_version']
@@ -294,6 +297,7 @@ def load_rebuild_recipe(path, recipe):
         'tenant_id': recipe.get('tenant_id'), 'tenant_name': recipe.get('tenant_name'),
         'customer_name': recipe.get('customer_name'),
         'collected_at': '', 'has_tenant_collection': False,
+        'identity': recipe.get('identity'),
         'evaluation_date': evaluation_day(recipe.get('evaluation_date')),
         'assessment_settings': {key: value for key, value in recipe.get('assessment_settings', {}).items() if key in SETTING_KEYS},
         'package_directory': str(folder), 'rebuild_recipe': recipe,
@@ -334,7 +338,7 @@ def restore_arguments(args, payload):
 
 
 def save_rebuild_recipe(folder, args, settings=None, *, tenant_id=None, tenant_name=None,
-                        methodology_migration=None, customer_name=None):
+                        methodology_migration=None, customer_name=None, identity=None):
     """Retain a successful offline build's additions without saving a collection."""
     if not folder:
         return None
@@ -361,6 +365,9 @@ def save_rebuild_recipe(folder, args, settings=None, *, tenant_id=None, tenant_n
               'collection': 'collection.json' if (folder / 'collection.json').is_file() else None,
               'assessment_settings': {key: value for key, value in (settings or {}).items() if key in SETTING_KEYS},
               'inputs': {}, 'files': [], 'diagnostics': manifest['diagnostics']}
+    if identity:
+        from .assessment_identity import execution_metadata
+        recipe['identity'] = execution_metadata(identity)
     if methodology_migration:
         recipe['original_methodology_version'] = methodology_migration['from']
         methodology_metadata(recipe, 'Rebuild recipe')

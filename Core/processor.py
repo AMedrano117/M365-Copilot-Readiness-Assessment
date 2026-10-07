@@ -446,6 +446,8 @@ def process_and_print_all_information(m365_result, entra_info,
             evaluation_date=evaluation_date,tenant_id=expected_tenant_id))
         assessment_result = build_assessment_result(all_recommendations, evidence_bundle,
             evaluation_date=evaluation_date, expected_tenant_id=expected_tenant_id)
+        from .assessment_references import require_valid_assessment
+        assessment_result['identity_validation'] = require_valid_assessment(assessment_result)
         evidence_bundle['assessment_result'] = assessment_result
         from .copilot_admin_review import build_admin_review
         evidence_bundle['copilot_admin_review'] = build_admin_review(m365_client, purview_client, collection_context)

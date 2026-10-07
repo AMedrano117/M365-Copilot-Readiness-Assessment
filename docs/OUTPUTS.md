@@ -14,6 +14,11 @@ linked HTML evidence pages. Keep companion files together so local links resolve
 `--snapshot-json PATH` now serializes the existing shared assessment result directly.
 It includes recommendations, actions, domains, controls, evidence qualifications and
 counts. It does not migrate to the future schema in `assessment-templates/`.
+Snapshots also retain the additive `identity` registers and structured
+`identity_validation` diagnostics. Blocking semantic errors prevent publication;
+unresolved legacy references remain visible non-blocking diagnostics. See
+[Persistent identity](PERSISTENT_IDENTITY.md) for execution persistence, typed
+aliases, legacy snapshot loading and replay behavior.
 The snapshot is not a replayable collection: retain the portable assessment folder,
 its collection or rebuild recipe, supplemental inputs and integrity metadata for replay.
 
