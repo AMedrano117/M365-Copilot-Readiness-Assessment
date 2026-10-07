@@ -41,9 +41,9 @@ async def get_recommendation(sku_name, status="Success", client=None, purview_cl
         org_config = purview_client.org_config
         
         if org_config.get('available'):
-            lockbox_enabled = org_config.get('customer_lockbox_enabled', False)
+            lockbox_enabled = org_config.get('customer_lockbox_enabled', org_config.get('CustomerLockboxEnabled', org_config.get('CustomerLockBoxEnabled')))
             
-            if lockbox_enabled:
+            if lockbox_enabled is True:
                 deployment_rec = new_recommendation(
                     service="Purview",
                     feature=f"{feature_name} - Configuration",
@@ -55,7 +55,7 @@ async def get_recommendation(sku_name, status="Success", client=None, purview_cl
                     status="Success"
                 )
                 deployment_recs.append(deployment_rec)
-            else:
+            elif lockbox_enabled is False:
                 deployment_rec = new_recommendation(
                     service="Purview",
                     feature=f"{feature_name} - Configuration",
@@ -69,6 +69,14 @@ async def get_recommendation(sku_name, status="Success", client=None, purview_cl
                     disposition="Opportunity"
                 )
                 deployment_recs.append(deployment_rec)
+            else:
+                deployment_recs.append(new_recommendation(
+                    service="Purview", feature=f"{feature_name} - Configuration",
+                    observation="The organization configuration did not return an unambiguous Customer Lockbox Boolean setting; its enabled state is unverified",
+                    finding_key="purview.customer_lockbox.state",
+                    recommendation="Confirm the Customer Lockbox setting in a dated organization-configuration export or the admin center before deciding whether to change it.",
+                    status="Not Assessed", disposition="Coverage"
+                ))
     
     if deployment_recs:
         return [license_rec] + deployment_recs

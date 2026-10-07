@@ -7,6 +7,8 @@ import subprocess
 import tempfile
 import unittest
 
+from Core.orchestrator_powershell import powershell_environment
+
 
 ROOT = Path(__file__).resolve().parents[1]
 POWERSHELL = shutil.which("powershell") or shutil.which("pwsh")
@@ -142,6 +144,23 @@ function Get-ConnectionInformation {
 }
 function Disconnect-ExchangeOnline { param($ConnectionId,$Confirm,$ErrorAction) $global:cleanupCalls.Add("Disconnect:$global:cleanupWorkload") }
 function Read-Host { throw 'No interactive prompts are allowed in offline mocks.' }
+$global:cleanupRoleRemoved = $false
+function Invoke-MgGraphRequest {
+    param($Method,$Uri,$ErrorAction)
+    if ($Method -eq 'GET' -and $Uri -like '*roleManagement/directory/roleAssignments*') {
+        $global:cleanupCalls.Add('ReadDirectoryRoles')
+        if ($Scenario -eq 'directory_role' -and -not $global:cleanupRoleRemoved) {
+            return @{ value = @(@{ id = 'role-assignment-1'; principalId = $global:cleanupSpId; roleDefinitionId = '5d6b6bb7-de71-4623-b4af-96380a352509'; directoryScopeId = '/' }) }
+        }
+        return @{ value = @() }
+    }
+    if ($Method -eq 'DELETE') {
+        $global:cleanupCalls.Add('RemoveDirectoryRole:' + ($Uri -split '/')[-1])
+        $global:cleanupRoleRemoved = $true
+        return
+    }
+    throw "Unexpected Graph request $Method $Uri"
+}
 $message = ''
 try {
     $arguments = @{TenantId=$global:cleanupTenant;ClientId=$global:cleanupClient;PermissionProfile=$Profile;Apply=$Apply;WhatIf=$Simulate;RemoveEnvironmentFile=$DeleteEnv;IncludeWorkloadRbac=$Workload;Confirm=$false}
@@ -177,7 +196,7 @@ class CleanupServicePrincipalTests(unittest.TestCase):
             for flag, enabled in (("-Apply", apply), ("-Simulate", what_if), ("-DeleteEnv", delete_env), ("-Workload", workload), ("-SavedSp", saved_sp)):
                 if enabled:
                     arguments.append(flag)
-            completed = subprocess.run(arguments, capture_output=True, text=True, timeout=45)
+            completed = subprocess.run(arguments, capture_output=True, text=True, timeout=45, env=powershell_environment(POWERSHELL))
             self.assertEqual(0, completed.returncode, completed.stdout + completed.stderr)
             result = json.loads((temporary / "result.json").read_text(encoding="utf-8-sig"))
             result["output"] = completed.stdout + completed.stderr
@@ -255,6 +274,17 @@ class CleanupServicePrincipalTests(unittest.TestCase):
                 self.assertTrue(result["environment_exists"])
                 if scenario == "sp_failure":
                     self.assertNotIn(f"RemoveGraphApplication:{APP}", result["calls"])
+
+    def test_directory_role_is_previewed_and_removed_before_principal(self):
+        preview = self.run_cleanup("directory_role", workload=True, profile="Standard")
+        self.assertEqual("", preview["error"])
+        self.assertIn("RoleManagement.Read.Directory", preview["scopes"])
+        self.assert_no_removals(preview)
+        applied = self.run_cleanup("directory_role", apply=True, workload=True, profile="Standard")
+        self.assertEqual("", applied["error"])
+        self.assertIn("RoleManagement.ReadWrite.Directory", applied["scopes"])
+        removals = [call for call in applied["calls"] if call.startswith("Remove")]
+        self.assertLess(removals.index("RemoveDirectoryRole:role-assignment-1"), removals.index(f"RemoveGraphPrincipal:{SP}"))
 
     def test_workload_plans_both_precede_any_mutation(self):
         result = self.run_cleanup(apply=True, workload=True, profile="Standard", delete_env=True)

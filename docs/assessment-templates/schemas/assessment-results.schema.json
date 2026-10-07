@@ -1,0 +1,335 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/schemas/assessment-results.schema.json",
+  "title": "AI Readiness Assessment Results",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "assessment",
+    "domains",
+    "findings",
+    "evidenceGaps",
+    "recommendations",
+    "evidenceIndex"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "string"
+    },
+    "assessment": {
+      "type": "object",
+      "required": [
+        "assessmentId",
+        "customerName",
+        "assessmentDate",
+        "evidenceThrough",
+        "readinessClassification",
+        "decision"
+      ],
+      "properties": {
+        "assessmentId": {
+          "type": "string"
+        },
+        "customerName": {
+          "type": "string"
+        },
+        "assessmentDate": {
+          "type": "string",
+          "format": "date"
+        },
+        "evidenceThrough": {
+          "type": "string",
+          "format": "date"
+        },
+        "readinessClassification": {
+          "enum": [
+            "Ready",
+            "Ready with prerequisites",
+            "Not ready for pilot",
+            "Not verified"
+          ]
+        },
+        "decision": {
+          "type": "string"
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "domains": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "domainId",
+          "name",
+          "status",
+          "confidence",
+          "summary"
+        ],
+        "properties": {
+          "domainId": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "Ready",
+              "Ready with prerequisites",
+              "Not ready",
+              "Not verified"
+            ]
+          },
+          "confidence": {
+            "enum": [
+              "High",
+              "Medium",
+              "Low"
+            ]
+          },
+          "summary": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/finding"
+      }
+    },
+    "evidenceGaps": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/evidenceGap"
+      }
+    },
+    "recommendations": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/recommendation"
+      }
+    },
+    "evidenceIndex": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/evidence"
+      }
+    }
+  },
+  "$defs": {
+    "finding": {
+      "type": "object",
+      "required": [
+        "findingId",
+        "domainId",
+        "title",
+        "classification",
+        "observedFact",
+        "interpretation",
+        "businessImpact",
+        "severity",
+        "confidence",
+        "recommendationIds",
+        "evidenceIds"
+      ],
+      "properties": {
+        "findingId": {
+          "type": "string"
+        },
+        "domainId": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "classification": {
+          "enum": [
+            "Strength",
+            "Confirmed gap",
+            "Conditional",
+            "Investigation required",
+            "Improvement"
+          ]
+        },
+        "observedFact": {
+          "type": "string"
+        },
+        "interpretation": {
+          "type": "string"
+        },
+        "businessImpact": {
+          "type": "string"
+        },
+        "severity": {
+          "enum": [
+            "Critical",
+            "High",
+            "Medium",
+            "Low",
+            "Informational"
+          ]
+        },
+        "confidence": {
+          "enum": [
+            "High",
+            "Medium",
+            "Low"
+          ]
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "recommendationIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "evidenceIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "evidenceGap": {
+      "type": "object",
+      "required": [
+        "gapId",
+        "domainId",
+        "missingEvidence",
+        "decisionImpact",
+        "validationMethod"
+      ],
+      "properties": {
+        "gapId": {
+          "type": "string"
+        },
+        "domainId": {
+          "type": "string"
+        },
+        "missingEvidence": {
+          "type": "string"
+        },
+        "decisionImpact": {
+          "type": "string"
+        },
+        "validationMethod": {
+          "type": "string"
+        }
+      }
+    },
+    "recommendation": {
+      "type": "object",
+      "required": [
+        "recommendationId",
+        "title",
+        "action",
+        "outcome",
+        "closureEvidence",
+        "horizon",
+        "findingIds"
+      ],
+      "properties": {
+        "recommendationId": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "action": {
+          "type": "string"
+        },
+        "outcome": {
+          "type": "string"
+        },
+        "closureEvidence": {
+          "type": "string"
+        },
+        "horizon": {
+          "enum": [
+            "Immediate",
+            "Near term",
+            "Strategic"
+          ]
+        },
+        "effort": {
+          "enum": [
+            "Low",
+            "Medium",
+            "High",
+            "Unknown"
+          ]
+        },
+        "owner": {
+          "type": "string"
+        },
+        "findingIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "required": [
+        "evidenceId",
+        "source",
+        "collectionStatus",
+        "collectedAt"
+      ],
+      "properties": {
+        "evidenceId": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "reference": {
+          "type": "string"
+        },
+        "collectionStatus": {
+          "enum": [
+            "Success",
+            "Partial",
+            "Failed",
+            "Unavailable",
+            "Not requested"
+          ]
+        },
+        "collectedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "recordCount": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

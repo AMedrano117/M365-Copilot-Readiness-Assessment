@@ -26,13 +26,12 @@ def is_verbose():
     return _verbose
 
 
-def _use_color():
+def enable_virtual_terminal():
+    """True when the console interprets ANSI sequences (colors and cursor movement)."""
     global _windows_vt
-    if _color_mode != 'auto':
-        return _color_mode == 'always'
-    if 'NO_COLOR' in os.environ or os.environ.get('TERM') == 'dumb' or not getattr(sys.stdout, 'isatty', lambda: False)():
-        return False
-    if os.name == 'nt' and _windows_vt is None:
+    if os.name != 'nt':
+        return True
+    if _windows_vt is None:
         try:
             import ctypes
             from ctypes import wintypes
@@ -46,7 +45,15 @@ def _use_color():
             _windows_vt = bool(kernel.GetConsoleMode(handle, ctypes.byref(mode)) and kernel.SetConsoleMode(handle, mode.value | 0x0004))
         except (AttributeError, OSError):
             _windows_vt = False
-    return os.name != 'nt' or bool(_windows_vt)
+    return bool(_windows_vt)
+
+
+def _use_color():
+    if _color_mode != 'auto':
+        return _color_mode == 'always'
+    if 'NO_COLOR' in os.environ or os.environ.get('TERM') == 'dumb' or not getattr(sys.stdout, 'isatty', lambda: False)():
+        return False
+    return enable_virtual_terminal()
 
 
 def style(message, tone='info'):
@@ -116,8 +123,8 @@ def print_paragraph(message, *, indent='', tone=None):
         print(style(line, tone) if tone else line, flush=True)
 
 
-def print_source_gaps(source_statuses):
-    """Report failed/partial reads separately from optional sources and preflight."""
+def print_source_gaps(source_statuses, *, mode='live', collected_at=None):
+    """Distinguish current collection failures from retained offline source results."""
     gaps = []
     for name, state in (source_statuses or {}).items():
         if name.startswith('connection_') or not isinstance(state, dict):
@@ -135,7 +142,25 @@ def print_source_gaps(source_statuses):
         if status in {'unavailable', 'failed', 'error', 'partial', 'partial_success', 'permission_denied'} or state.get('truncated'):
             gaps.append((name, status, state.get('reason') or state.get('error') or 'The source did not return a complete usable result.'))
     if gaps:
-        section(f'Source collection gaps: {len(gaps)}', 'warning')
+        offline = str(mode).lower() == 'offline'
+        section(f'{"Saved collection gaps" if offline else "Source collection gaps"}: {len(gaps)}',
+                'info' if offline else 'warning')
+        if offline:
+            dated = f' from {collected_at}' if collected_at else ''
+            print_paragraph(f'These are saved source results{dated}. This offline rebuild made no tenant requests '
+                            'and did not check current permissions or licensing.', tone='muted')
+        # Datasets that failed for the same reason (for example every Purview
+        # PowerShell dataset) are listed together so the cause is read once.
+        grouped = {}
         for name, status, reason in gaps:
-            print_paragraph(f'{name}: {status}. {reason}', indent='  ', tone='warning')
-        detail('Rebuilding uses the saved source states; it does not retry these reads.')
+            grouped.setdefault((status, reason), []).append(name)
+        for (status, reason), names in grouped.items():
+            message = f'{", ".join(names)}: {status}'
+            if offline and not is_verbose():
+                message += ' in saved evidence.'
+            else:
+                message += f'. {reason}'
+            print_paragraph(message, indent='  ', tone='muted' if offline else 'warning')
+        if offline and not is_verbose():
+            print_paragraph('The saved gaps still limit evidence coverage. Use --verbose to show the original service responses.',
+                            tone='muted')

@@ -70,6 +70,7 @@ def new_recommendation(
     ai_applicability="",
     evidence_basis="",
     confidence="",
+    investigation=None,
 ):
     """
     Create a new recommendation object
@@ -94,6 +95,9 @@ def new_recommendation(
         evidence_key: Optional evidence bucket identifier for engineer follow-up drill-down.
             Multiple workbook tabs may be supplied as a semicolon-delimited string.
         evidence_summary: Optional short note explaining the follow-up detail available
+        investigation: Optional service-independent evidence declaration. Supply records,
+            source context and reconciliation, or an explicit unavailable, absence or
+            planning reason; see Core.investigation_contract and docs/METHODOLOGY.md.
     
     Returns:
         dict: Recommendation object
@@ -116,7 +120,7 @@ def new_recommendation(
     source_status = status
     status = _reconcile_status_with_priority(status, priority, recommendation)
 
-    return {
+    record = {
         "Service": service,
         "Feature": feature,
         "Status": status,
@@ -140,3 +144,6 @@ def new_recommendation(
         "Confidence": confidence or "",
         "ReadinessStage": "",
     }
+    if investigation is not None:
+        record['InvestigationEvidence'] = investigation
+    return record

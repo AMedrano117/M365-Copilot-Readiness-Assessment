@@ -1,6 +1,7 @@
 """Manually reviewed portal visuals remain portable context, never scored evidence."""
 
 import contextlib
+import copy
 import hashlib
 import io
 import json
@@ -130,7 +131,7 @@ class PortalReviewTests(unittest.TestCase):
     def test_processor_visual_context_does_not_change_decision_and_workbook_is_safe(self):
         from Core.processor import process_and_print_all_information
         from Core.export_recommendations import export_to_excel
-        from openpyxl import load_workbook
+        from tests.workbook_test_helpers import load_workbook_pair as load_workbook
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             path, _ = reviewed_fixture(root / 'review')
@@ -147,15 +148,54 @@ class PortalReviewTests(unittest.TestCase):
             workbook_path = export_to_excel(bundle['recommendations'], filename=str(root / 'review.xlsx'), evidence_bundle=bundle)
             workbook = load_workbook(workbook_path, read_only=True, data_only=False)
             try:
-                rows = list(workbook['Portal Review'].values)
+                rows = list(workbook.technical['Portal Review'].values)
                 self.assertIn('SHA-256', rows[0])
                 summary_column = rows[0].index('Summary')
                 self.assertEqual(rows[1][summary_column], '=A1+A2')
-                self.assertEqual(workbook['Portal Review'].cell(2, summary_column + 1).data_type, 's')
+                self.assertEqual(workbook.technical['Portal Review'].cell(2, summary_column + 1).data_type, 's')
                 self.assertNotIn('base64,', str(rows))
-                self.assertIn('Rollout Progress', workbook.sheetnames)
+                self.assertIn('Rollout Progress', workbook.technical.sheetnames)
             finally:
                 workbook.close()
+
+    def test_all_admin_pages_render_once_even_when_their_topics_are_absent_from_assessment_domains(self):
+        from Core.assessment_result import build_assessment_result
+        from Core.customer_report import render_customer_report
+        with tempfile.TemporaryDirectory() as directory:
+            path, manifest = reviewed_fixture(directory)
+            template = manifest['captures'][0]
+            manifest['captures'] = []
+            topics = [('Health', 'licensing'), ('Overview', 'adoption'),
+                      ('Security', 'data_protection'), ('Usage', 'adoption')]
+            for title, domain in topics:
+                capture = copy.deepcopy(template)
+                capture.update(id='admin-' + title.lower(), title='Copilot Admin Page - ' + title,
+                               domain_id=domain, review_method='automated',
+                               extracted_pages=[{'page': 1, 'method': 'PDF text',
+                                                 'text': title + ' source detail <untrusted>'}])
+                manifest['captures'].append(capture)
+            path.write_text(json.dumps(manifest), encoding='utf-8')
+            review = load_portal_review(path, TENANT, '2026-09-15')
+            bundle = {'portal_review': review, 'collection_context': {'mode': 'offline', 'collected_at': '2026-09-14'}}
+            result = build_assessment_result([], bundle, expected_tenant_id=TENANT, evaluation_date='2026-09-15')
+            before = copy.deepcopy(result)
+            domain_ids = {domain['id'] for domain in result['assessment_domains']}
+            self.assertNotIn('adoption', domain_ids)
+            self.assertNotIn('licensing', domain_ids)
+            self.assertNotIn('data_protection', domain_ids)
+            html = render_customer_report(result, bundle, 'Invented customer')
+            self.assertIn('href="#admin-pages">Admin pages</a>', html)
+            self.assertIn('id="admin-pages"><h2>Imported admin-center pages</h2>', html)
+            self.assertIn('4 captures supplied for this assessment', html)
+            for title, _ in topics:
+                anchor = 'portal-admin-' + title.lower()
+                self.assertEqual(html.count('id="' + anchor + '"'), 1)
+                self.assertIn('href="#' + anchor + '"', html)
+                self.assertIn('Copilot Admin Page - ' + title, html)
+                self.assertIn(title + ' source detail &lt;untrusted&gt;', html)
+            self.assertEqual(html.count('Download original PDF</a>'), 4)
+            self.assertEqual(html.count('<img src="data:image/png;base64,'), 4)
+            self.assertEqual(result, before)
 
     def test_portal_only_offline_build_packages_review_and_its_tenant(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -172,7 +212,7 @@ class PortalReviewTests(unittest.TestCase):
                      patch('subprocess.Popen', side_effect=AssertionError('Offline process launch')):
                     args = self.parse('--mode', 'offline', '--portal-review', manifest)
                     self.assertEqual(run_offline_report(args), 0)
-                recipe = next((root / 'output' / 'assessments').glob('*/rebuild.json'))
+                recipe = next((root / 'Reports').glob('*/*/rebuild.json'))
                 payload = load_collection(recipe)
                 self.assertEqual(payload['tenant_id'], TENANT)
                 self.assertEqual(len(payload['package']['files']), 3)

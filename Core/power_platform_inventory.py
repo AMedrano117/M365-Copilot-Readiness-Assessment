@@ -1,5 +1,6 @@
 """Optional tenant-wide Power Platform inventory sources."""
 
+import asyncio
 import csv
 from datetime import datetime, timezone
 from pathlib import Path
@@ -211,7 +212,7 @@ async def collect_power_platform_inventory_preview(tenant_id):
     evidence = _base_evidence("Power Platform inventory API (preview)")
     evidence["preview"] = True
     try:
-        token = credential.get_token("https://api.powerplatform.com/.default")
+        token = await asyncio.to_thread(credential.get_token, "https://api.powerplatform.com/.default")
     except Exception as exc:
         client = PowerPlatformInventoryData()
         evidence["reason"] = "Power Platform API token unavailable: {}".format(type(exc).__name__)

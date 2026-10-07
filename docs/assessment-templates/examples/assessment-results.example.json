@@ -1,0 +1,82 @@
+{
+  "schemaVersion": "1.0.0",
+  "assessment": {
+    "assessmentId": "SAMPLE-2026-001",
+    "customerName": "Example Organization",
+    "assessmentDate": "2026-10-07",
+    "evidenceThrough": "2026-10-06",
+    "readinessClassification": "Ready with prerequisites",
+    "decision": "Complete the decision-blocking actions and reassess before starting the controlled pilot.",
+    "limitations": [
+      "Synthetic example only; no customer evidence is represented."
+    ]
+  },
+  "domains": [
+    {
+      "domainId": "IP",
+      "name": "Information protection",
+      "status": "Ready with prerequisites",
+      "confidence": "Medium",
+      "summary": "Classification and policy coverage require validation before pilot authorization."
+    }
+  ],
+  "findings": [
+    {
+      "findingId": "IP-001",
+      "domainId": "IP",
+      "title": "Information classification coverage requires validation",
+      "classification": "Investigation required",
+      "observedFact": "The sample collection did not include a complete publishing and coverage result.",
+      "interpretation": "The assessment cannot confirm that the intended pilot population receives the expected labels.",
+      "businessImpact": "Pilot users may not have consistent guidance or controls for handling sensitive information.",
+      "severity": "High",
+      "confidence": "High",
+      "limitations": [
+        "Synthetic example."
+      ],
+      "recommendationIds": [
+        "REC-001"
+      ],
+      "evidenceIds": [
+        "EV-001"
+      ]
+    }
+  ],
+  "evidenceGaps": [
+    {
+      "gapId": "GAP-001",
+      "domainId": "IP",
+      "missingEvidence": "Complete label publishing and scoped-user coverage.",
+      "decisionImpact": "Prevents confirmation of the information-protection pilot gate.",
+      "validationMethod": "Collect policy publishing configuration and validate assignment against the proposed pilot users."
+    }
+  ],
+  "recommendations": [
+    {
+      "recommendationId": "REC-001",
+      "title": "Validate classification coverage",
+      "action": "Review label publishing configuration and test expected behavior with the proposed pilot group.",
+      "outcome": "The pilot group has verified access to the intended labels and guidance.",
+      "closureEvidence": "Exported policy assignments and completed pilot-user validation results.",
+      "horizon": "Immediate",
+      "effort": "Medium",
+      "owner": "TBD",
+      "findingIds": [
+        "IP-001"
+      ]
+    }
+  ],
+  "evidenceIndex": [
+    {
+      "evidenceId": "EV-001",
+      "source": "Synthetic collector output",
+      "reference": "sample://information-protection",
+      "collectionStatus": "Partial",
+      "collectedAt": "2026-10-06T12:00:00Z",
+      "recordCount": null,
+      "limitations": [
+        "Synthetic example; not customer data."
+      ]
+    }
+  ]
+}

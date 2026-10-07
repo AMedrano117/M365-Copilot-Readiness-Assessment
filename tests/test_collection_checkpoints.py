@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, patch
 
 from Core.collection_checkpoint import CollectionCheckpoint, SERVICE_PIPELINES, run_checkpointed_pipelines
 from Core.offline_collection import collection_context, empty_service_results, load_collection
+from Core.export_paths import BUILDS_FOLDER, SUMMARY_STEM
 
 
 TENANT = '11111111-1111-1111-1111-111111111111'
@@ -100,9 +101,11 @@ class CollectionCheckpointTests(unittest.IsolatedAsyncioTestCase):
         with patch('Core.assessment_package.package_inputs', wraps=package_inputs) as package:
             path = await run_checkpointed_pipelines(pipelines, checkpoint)
         self.assertEqual(package.call_count, 1)
-        self.assertEqual(len(list(Path('output/collections').glob('*.json'))), 1)
-        self.assertEqual(len(list(Path('output/collections').glob('*_package*'))), 1)
         saved = load_collection(path)
+        package_directory = Path(saved['package_directory'])
+        self.assertEqual(Path(path).resolve(), (package_directory / 'collection.json').resolve())
+        self.assertEqual(len(list(Path('Reports/Synthetic tenant').glob('*/collection.json'))), 1)
+        self.assertFalse(Path('output/collections').exists())
         self.assertEqual(saved['collection_progress']['status'], 'completed')
         self.assertTrue(all(state['status'] in {'completed', 'not_selected'}
                             for state in saved['collection_progress']['services'].values()))
@@ -135,7 +138,7 @@ class CollectionCheckpointTests(unittest.IsolatedAsyncioTestCase):
                 checkpoint.record('m365', [{'licenses': []}, []])
         self.assertEqual(Path(checkpoint.path).read_bytes(), original)
         self.assertEqual(load_collection(checkpoint.path)['collection_progress']['services']['m365']['status'], 'pending')
-        self.assertFalse(list(Path('output/collections').rglob('*.tmp')))
+        self.assertFalse(list(Path('Reports').rglob('*.tmp')))
 
     async def test_restricted_and_unselected_services_are_exclusions_not_interruption_gaps(self):
         checkpoint = self.checkpoint(selected=('m365', 'purview'), profile='restricted')
@@ -165,11 +168,13 @@ class CollectionCheckpointTests(unittest.IsolatedAsyncioTestCase):
             args = parse_arguments(None, [])
         self.assertEqual(run_offline_report(args), 0)
         self.assertEqual(canonical.read_bytes(), original)
-        html = next(Path('Reports').glob('*.html')).read_text(encoding='utf-8')
+        html_path = next(path for path in (moved / BUILDS_FOLDER).rglob('*.html')
+                         if path.parent.parent.name == BUILDS_FOLDER and path.stem != SUMMARY_STEM)
+        html = html_path.read_text(encoding='utf-8')
         self.assertIn('Collection did not finish', html)
         self.assertIn('not assessed', html.lower())
         self.assertNotIn('No active incidents were returned by the completed', html)
-        workbook = openpyxl.load_workbook(next(Path('Reports').glob('*.xlsx')), read_only=True)
+        workbook = openpyxl.load_workbook(html_path.with_suffix('.xlsx'), read_only=True)
         try:
             cells = '\n'.join(str(cell) for sheet in workbook for row in sheet.values for cell in row if cell is not None)
             self.assertIn('Unfinished service pipelines', cells)
@@ -190,8 +195,8 @@ class CollectionCheckpointTests(unittest.IsolatedAsyncioTestCase):
         saved = load_collection(checkpoint.path)
         packaged = Path(saved['resolved_inputs']['sam_report'][0])
         self.assertEqual(packaged.read_bytes(), export.read_bytes())
-        self.assertIn('collected_', saved['service_results']['m365_result'][0]['_client'].sharepoint_governance['exported_files'][0]['path'])
-        self.assertEqual(len(list(Path('output/collections').glob('*_package*'))), 1)
+        self.assertIn('Collected/1/', saved['service_results']['m365_result'][0]['_client'].sharepoint_governance['exported_files'][0]['path'])
+        self.assertEqual(len(list(Path('Reports/Synthetic tenant').glob('*/collection.json'))), 1)
 
 
 if __name__ == '__main__':

@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -18,6 +19,7 @@ from Core.collector_registry import (
     selected_collector_ids,
     source_allowed,
 )
+from Core.orchestrator_powershell import powershell_environment
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -25,7 +27,7 @@ POWERSHELL = shutil.which("powershell") or shutil.which("pwsh")
 
 
 HARNESS = r"""
-param([string]$Scenario, [string]$Profile = 'Restricted', [string]$SetupMode = 'Standard', [string]$Preview = 'None', [string]$SharePointUrl = '')
+param([string]$Scenario, [string]$Profile = 'Restricted', [string]$SetupMode = 'Standard', [string]$Preview = 'None', [string]$SharePointUrl = '', [string]$Extra = '')
 $ErrorActionPreference = 'Stop'
 $global:mockSetupCalls = [System.Collections.Generic.List[string]]::new()
 $global:mockSetupPermissions = @()
@@ -40,12 +42,45 @@ $global:mockSetupResources = @{}
 foreach ($entry in $registry.resource_app_ids.PSObject.Properties) {
     $resourceName = $entry.Name
     $names = @($registry.collectors | ForEach-Object { $_.permission_resources.$resourceName } | Sort-Object -Unique)
+    $scopeNames = @($registry.collectors | ForEach-Object { if ($_.delegated_permission_resources) { $_.delegated_permission_resources.$resourceName } } | Where-Object { $_ } | Sort-Object -Unique)
     $global:mockSetupResources[$entry.Value] = [pscustomobject]@{
         Id = "object-$resourceName"; AppId = $entry.Value; DisplayName = $resourceName
         AppRoles = @($names | ForEach-Object { [pscustomobject]@{ Id = "role-$_"; Value = $_; AllowedMemberTypes = @('Application') } })
+        Oauth2PermissionScopes = @($scopeNames | ForEach-Object { [pscustomobject]@{ Id = "scope-$_"; Value = $_ } })
     }
 }
+$global:mockGraphRequests = [System.Collections.Generic.List[object]]::new()
+$global:mockPublicClient = $null
+function Invoke-MgGraphRequest {
+    param($Method, $Uri, $Body, $ContentType, $ErrorAction)
+    $global:mockGraphRequests.Add(@{ method = [string]$Method; uri = [string]$Uri; body = [string]$Body })
+    if ($Scenario -eq 'role_assignment_denied' -and $Method -eq 'POST') { throw 'Mock: Authorization_RequestDenied' }
+    if ($Scenario -in @('role_not_found', 'role_not_found_once') -and $Method -eq 'POST') {
+        $global:mockRolePosts = [int]$global:mockRolePosts + 1
+        if ($Scenario -eq 'role_not_found' -or $global:mockRolePosts -eq 1) {
+            $record = [System.Management.Automation.ErrorRecord]::new([Exception]::new('Response status code does not indicate success: NotFound (Not Found).'), 'Mock', 'ObjectNotFound', $null)
+            $record.ErrorDetails = [System.Management.Automation.ErrorDetails]::new('{"error":{"code":"Request_ResourceNotFound","message":"Resource sp-object does not exist."}}')
+            throw $record
+        }
+    }
+    return @{ value = @() }
+}
+function Start-Sleep { param($Seconds) $global:mockSetupCalls.Add("Sleep:$Seconds") }
+function New-SelfSignedCertificate {
+    param($Subject, $CertStoreLocation, $KeySpec, $KeyExportPolicy, $KeyLength, $Provider, $NotAfter)
+    $global:mockSetupCalls.Add("NewCertificate:${KeySpec}:${KeyExportPolicy}:${Provider}")
+    $created = [pscustomobject]@{HasPrivateKey=$true;Thumbprint='created-thumb';NotBefore=(Get-Date).AddMinutes(-5);NotAfter=(Get-Date).AddMonths(12);RawData=[byte[]](4,5,6)}
+    return $created
+}
 function Import-Module { param($Name, [switch]$Force) $global:mockSetupCalls.Add("Import:$Name") }
+function Connect-IPPSSession { param([switch]$DisableWAM, $ErrorAction, $WarningAction) $global:mockSetupCalls.Add('ConnectPurview') }
+function Connect-ExchangeOnline { param([switch]$DisableWAM, $ShowBanner, $ErrorAction, $WarningAction) $global:mockSetupCalls.Add('ConnectExchange') }
+function Disconnect-ExchangeOnline { param([switch]$Confirm, $ErrorAction) $global:mockSetupCalls.Add('DisconnectExchange') }
+function Get-ServicePrincipal { param($Identity, $ErrorAction) [pscustomobject]@{Identity='workload-sp'} }
+function Get-ManagementRole { param($Cmdlet, $ErrorAction) [pscustomobject]@{Name='Mock View-Only Role'} }
+function Get-RoleGroup { param($Identity, $ErrorAction) [pscustomobject]@{Name=$Identity;Roles=@('Mock View-Only Role')} }
+function Get-RoleGroupMember { param($Identity, $ResultSize, $ErrorAction) }
+function Add-RoleGroupMember { param($Identity, $Member, $ErrorAction) $global:mockSetupCalls.Add("AddRoleGroupMember:${Identity}:${Member}") }
 function Get-Content {
     [CmdletBinding()]
     param([string]$LiteralPath, [string]$Encoding, [switch]$Raw)
@@ -65,7 +100,7 @@ function Get-ChildItem {
     }
     throw 'Unexpected filesystem enumeration in offline setup test.'
 }
-function Connect-MgGraph { param($Scopes, $ContextScope, [switch]$NoWelcome) $global:mockSetupConnectedScopes = $Scopes; $global:mockSetupCalls.Add('Connect') }
+function Connect-MgGraph { param($Scopes, $ContextScope, [switch]$NoWelcome, $TenantId, [switch]$UseDeviceCode) $global:mockSetupConnectedScopes = $Scopes; $global:mockSetupCalls.Add('Connect'); if ($TenantId) { $global:mockSetupCalls.Add("ConnectTenant:$TenantId") }; if ($UseDeviceCode) { $global:mockSetupCalls.Add('ConnectDeviceCode') } }
 function Disconnect-MgGraph { $global:mockSetupCalls.Add('Disconnect') }
 function Get-MgContext { [pscustomobject]@{TenantId = 'tenant-current'} }
 function Invoke-RestMethod {
@@ -116,9 +151,11 @@ function New-MgApplication {
     return [pscustomobject]@{Id='app-object';AppId='app-current';DisplayName=$DisplayName;RequiredResourceAccess=@();PasswordCredentials=@();KeyCredentials=@()}
 }
 function Update-MgApplication {
-    param($ApplicationId, $RequiredResourceAccess, $KeyCredentials)
+    param($ApplicationId, $RequiredResourceAccess, $KeyCredentials, $PublicClient)
     $global:mockSetupCalls.Add('UpdateApplication')
     if ($RequiredResourceAccess) { $global:mockSetupPermissions = @($RequiredResourceAccess) }
+    if ($KeyCredentials) { $global:mockSetupCalls.Add('AttachCertificate') }
+    if ($PublicClient) { $global:mockPublicClient = @($PublicClient.RedirectUris) }
 }
 function Get-MgServicePrincipal {
     param($Filter, $Property, $ErrorAction)
@@ -133,7 +170,7 @@ function New-MgServicePrincipal { param($AppId) $global:mockSetupCalls.Add('NewP
 function Get-MgServicePrincipalAppRoleAssignment {
     param($ServicePrincipalId, [switch]$All)
     $global:mockSetupCalls.Add('ReadAssignments')
-    if ($Scenario -eq 'consent_interrupted') { return }
+    if ($Scenario -in @('consent_interrupted', 'consent_ungranted')) { return }
     if ($Scenario -eq 'excess_consented') {
         return [pscustomobject]@{ResourceId='object-sharepoint';AppRoleId='role-Sites.FullControl.All'}
     }
@@ -157,10 +194,18 @@ function Get-MgOrganization { param($Property) [pscustomobject]@{VerifiedDomains
 function Start-Process {
     $global:mockSetupCalls.Add('ConsentBrowser')
     $global:mockEnvironmentAtConsent = (Get-Content -LiteralPath (Join-Path $PSScriptRoot '.env.restricted') -Raw).ToString()
-    throw 'Mock interrupted consent; a real process must not be started by this offline setup test.'
+    # No browser opens here; setup prints the consent link and continues to its prompt.
+    throw 'Mock: no browser is available in this offline setup test.'
 }
-function Read-Host { throw 'Unexpected interactive prompt in offline setup test.' }
+function Read-Host {
+    # The operator stops at the consent prompt; any earlier prompt is unexpected.
+    if ($Scenario -eq 'consent_ungranted' -and $global:mockSetupCalls.Contains('ConsentBrowser')) { return '' }
+    if ($global:mockSetupCalls.Contains('ConsentBrowser')) { throw 'Mock interrupted consent at the confirmation prompt.' }
+    throw 'Unexpected interactive prompt in offline setup test.'
+}
 $message = ''
+# Relative paths (for example -EnvironmentFile .env) resolve inside the temporary test folder.
+Set-Location -LiteralPath $PSScriptRoot
 try {
     $extraArguments = @{}
     if ($Scenario -eq 'utf8_bom_console') {
@@ -170,13 +215,21 @@ try {
     if ($PSBoundParameters.ContainsKey('SharePointUrl')) { $extraArguments.SharePointAdminUrl = $SharePointUrl }
     if ($Scenario -like 'thumbprint*') { $extraArguments.CertificateThumbprint = 'mock-thumb' }
     if ($Scenario -in @('thumbprint_rotate','rotate','consent_interrupted','replace_failure','write_failure','env_reread_failure')) { $extraArguments.RotateCredential = $true }
-    & (Join-Path $PSScriptRoot 'setup-service-principal.ps1') -PermissionProfile $Profile -Mode $SetupMode -PreviewCollectors $Preview @extraArguments
+    if ($Extra) {
+        foreach ($property in ($Extra | ConvertFrom-Json).PSObject.Properties) { $extraArguments[$property.Name] = $property.Value }
+    }
+    if ($Scenario -eq 'no_parameters') {
+        & (Join-Path $PSScriptRoot 'setup-service-principal.ps1')
+    } else {
+        & (Join-Path $PSScriptRoot 'setup-service-principal.ps1') -PermissionProfile $Profile -Mode $SetupMode -PreviewCollectors $Preview @extraArguments
+    }
 } catch { $message = $_.Exception.Message + ' [' + $_.InvocationInfo.ScriptLineNumber + ': ' + $_.InvocationInfo.Line.Trim() + ']' }
 if ($global:mockLockedEnvironment) { $global:mockLockedEnvironment.Dispose() }
 @{
     error=$message; calls=@($global:mockSetupCalls); scopes=@($global:mockSetupConnectedScopes)
     filter=$global:mockSetupApplicationFilter; permissions=@($global:mockSetupPermissions)
-    consent_environment=$global:mockEnvironmentAtConsent
+    consent_environment=$global:mockEnvironmentAtConsent; graph_requests=@($global:mockGraphRequests)
+    public_client=@($global:mockPublicClient | Where-Object { $_ })
 } | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $PSScriptRoot 'result.json') -Encoding UTF8
 """
 
@@ -187,12 +240,17 @@ class PermissionRegistryTests(unittest.TestCase):
         self.assertEqual({RESOURCE_APP_IDS["graph"], RESOURCE_APP_IDS["defender"]}, set(resources))
         graph = resources[RESOURCE_APP_IDS["graph"]]
         self.assertTrue({"AuditLog.Read.All", "SecurityAlert.Read.All", "User.Read.All", "Application.Read.All"} <= graph)
-        self.assertFalse({"Sites.Read.All", "Group.Read.All", "Directory.Read.All", "UserAuthenticationMethod.Read.All"} & graph)
+        # Narrow tenant-setting reads replace part of the excluded SharePoint administration.
+        self.assertTrue({"SharePointTenantSettings.Read.All", "ReportSettings.Read.All"} <= graph)
+        self.assertFalse({"Sites.Read.All", "Group.Read.All", "Directory.Read.All", "UserAuthenticationMethod.Read.All",
+                          "InformationProtectionPolicy.Read.All", "AuditLogsQuery.Read.All"} & graph)
         self.assertEqual({"Machine.Read.All"}, resources[RESOURCE_APP_IDS["defender"]])
-        for name in ("sites", "groups", "oauth_grants", "purview", "sharepoint_governance", "power_platform", "legacy_power_platform"):
+        for name in ("sites", "groups", "oauth_grants", "purview", "purview_labels_graph", "copilot_admin_settings",
+                     "copilot_audit", "sharepoint_governance", "power_platform", "legacy_power_platform"):
             self.assertFalse(source_allowed(name, "restricted"), name)
         selected = selected_collector_ids({"run_m365": True, "run_entra": True, "run_defender": True, "run_purview": True}, "all", True, "restricted")
-        self.assertEqual(["graph_core", "m365_usage", "external_connections", "entra_controls", "entra_risk", "graph_security", "defender_endpoint"], selected)
+        self.assertEqual(["graph_core", "m365_usage", "report_settings", "external_connections", "sharepoint_tenant_settings",
+                          "entra_controls", "entra_risk", "graph_security", "defender_endpoint"], selected)
 
     def test_standard_permission_corrections_and_invalid_profiles(self):
         self.assertIn("Directory.Read.All", collector_permissions("entra_controls"))
@@ -205,7 +263,7 @@ class PermissionRegistryTests(unittest.TestCase):
 
 @unittest.skipUnless(POWERSHELL, "PowerShell is required for offline setup mocks")
 class OfflineSetupProfileTests(unittest.TestCase):
-    def run_setup(self, scenario="normal", profile="Restricted", mode="Standard", preview="None", tenant="tenant-current", client="app-current", certificate_options=None, sharepoint_url=None, saved_sharepoint_url=None):
+    def run_setup(self, scenario="normal", profile="Restricted", mode="Standard", preview="None", tenant="tenant-current", client="app-current", certificate_options=None, sharepoint_url=None, saved_sharepoint_url=None, extra=None, standard_env=None):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             for filename in ("setup-service-principal.ps1", "collector-registry.json"):
@@ -265,6 +323,8 @@ class OfflineSetupProfileTests(unittest.TestCase):
                 }
                 (root / "certificate-test.json").write_text(json.dumps(certificate_test), encoding="utf-8")
             (root / ".env.restricted").write_text(restricted_env, encoding="utf-8")
+            if standard_env is not None:
+                (root / ".env").write_text(standard_env, encoding="utf-8")
             if profile == "Standard" and saved_sharepoint_url is not None:
                 (root / ".env").write_text(
                     f"TENANT_ID={tenant}\nCLIENT_ID={client}\nCLIENT_SECRET=saved-mock-secret\n"
@@ -273,11 +333,13 @@ class OfflineSetupProfileTests(unittest.TestCase):
             arguments = [POWERSHELL, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(root / "harness.ps1"), "-Scenario", scenario, "-Profile", profile, "-SetupMode", mode, "-Preview", preview]
             if sharepoint_url is not None:
                 arguments.extend(["-SharePointUrl", sharepoint_url])
+            if extra:
+                arguments.extend(["-Extra", json.dumps(extra)])
             (root / "temporary-recovery").mkdir()
             result = subprocess.run(
                 arguments,
                 capture_output=True, text=True, timeout=30,
-                env={**os.environ, "VIRTUAL_ENV": str(ROOT / ".venv"), "TEMP": str(root / "temporary-recovery"), "TMP": str(root / "temporary-recovery"), "TMPDIR": str(root / "temporary-recovery")},
+                env=powershell_environment(POWERSHELL, {**os.environ, "VIRTUAL_ENV": sys.prefix, "TEMP": str(root / "temporary-recovery"), "TMP": str(root / "temporary-recovery"), "TMPDIR": str(root / "temporary-recovery")}),
             )
             self.assertEqual(0, result.returncode, result.stdout + result.stderr)
             self.assertTrue((root / "result.json").exists(), result.stdout + result.stderr)
@@ -294,6 +356,8 @@ class OfflineSetupProfileTests(unittest.TestCase):
         result = self.run_setup()
         self.assertEqual("", result["error"])
         self.assertEqual(["Application.ReadWrite.All", "Organization.Read.All"], result["scopes"])
+        self.assertEqual([], result["graph_requests"])
+        self.assertIn("Workload access: None", result["output"])
         self.assertIn("M365 Copilot Readiness Assessment Tool - Restricted", result["filter"])
         actual = {entry["ResourceAppId"]: {permission["Id"].removeprefix("role-") for permission in entry["ResourceAccess"]} for entry in result["permissions"]}
         self.assertEqual(profile_permission_resources("restricted"), actual)
@@ -311,8 +375,23 @@ class OfflineSetupProfileTests(unittest.TestCase):
             if collector.get("default_setup"):
                 for resource in collector.get("permission_resources", {}):
                     expected.setdefault(RESOURCE_APP_IDS[resource], set()).update(collector_permissions(collector_id, resource=resource))
-        actual = {entry["ResourceAppId"]: {permission["Id"].removeprefix("role-") for permission in entry["ResourceAccess"]} for entry in result["permissions"]}
+        actual = {}
+        delegated = {}
+        for entry in result["permissions"]:
+            for permission in entry["ResourceAccess"]:
+                target = actual if permission["Type"] == "Role" else delegated
+                target.setdefault(entry["ResourceAppId"], set()).add(permission["Id"].removeprefix("role-").removeprefix("scope-"))
         self.assertEqual(expected, actual)
+        self.assertIn('DirectoryRecommendations.Read.All', actual[RESOURCE_APP_IDS['graph']])
+        self.assertIn('Entra recommendations permission: DirectoryRecommendations.Read.All', result['output'])
+        self.assertIn('Default supplemental collectors: Entra recommendations, Shadow AI discovery, Copilot audit', result['output'])
+        self.assertIn('Additional preview packs: None', result['output'])
+        expected_delegated = {}
+        for collector_id, collector in COLLECTOR_REGISTRY.items():
+            if collector.get("default_setup"):
+                for resource, scopes in collector.get("delegated_permission_resources", {}).items():
+                    expected_delegated.setdefault(RESOURCE_APP_IDS[resource], set()).update(scopes)
+        self.assertEqual(expected_delegated, delegated)
         self.assertIn("Modules:Purview", result["calls"])
         self.assertIn("PERMISSION_PROFILE=standard", result["standard_env"])
 
@@ -587,6 +666,214 @@ class OfflineSetupProfileTests(unittest.TestCase):
         self.assertNotIn("ConsentBrowser", result["calls"])
         self.assertIn("TENANT_ID=different-tenant\n", result["restricted_env"])
         self.assertEqual({}, result["recovery_files"])
+
+
+@unittest.skipUnless(POWERSHELL, "PowerShell is required for offline setup mocks")
+class WorkloadAccessSetupTests(unittest.TestCase):
+    """Setup options for app-only workload access and delegated enrichment."""
+
+    run_setup = OfflineSetupProfileTests.run_setup
+
+    STANDARD_ENV = "TENANT_ID=tenant-current\nCLIENT_ID=app-current\nCLIENT_SECRET=saved-mock-secret\n"
+
+    def test_security_reader_is_assigned_with_role_scope(self):
+        result = self.run_setup(profile="Standard", extra={"WorkloadRbac": "SecurityReader"}, standard_env=self.STANDARD_ENV)
+        self.assertEqual("", result["error"])
+        self.assertIn("RoleManagement.ReadWrite.Directory", result["scopes"])
+        posts = [request for request in result["graph_requests"] if request["method"] == "POST"]
+        self.assertEqual(1, len(posts))
+        self.assertIn("roleManagement/directory/roleAssignments", posts[0]["uri"])
+        body = json.loads(posts[0]["body"])
+        self.assertEqual({"principalId": "sp-object", "roleDefinitionId": "5d6b6bb7-de71-4623-b4af-96380a352509", "directoryScopeId": "/"}, body)
+        self.assertIn("Workload access: SecurityReader", result["output"])
+        # Exchange.ManageAsApp is requested by default so an application token can reach Purview.
+        eop = [entry for entry in result["permissions"] if entry["ResourceAppId"] == RESOURCE_APP_IDS["eop"]]
+        exchange = [entry for entry in result["permissions"] if entry["ResourceAppId"] == RESOURCE_APP_IDS["exchange"]]
+        self.assertTrue(eop and exchange)
+
+    def test_skip_credential_updates_existing_app_without_any_secret(self):
+        # A customer administrator updates the app; the assessor keeps the secret they already hold.
+        result = self.run_setup(profile="Standard", extra={
+            "SkipCredential": True, "ApplicationId": "app-current", "TenantId": "tenant-current",
+            "WorkloadRbac": "SecurityReader", "NoDelegatedEnrichment": True})
+        self.assertEqual("", result["error"])
+        self.assertNotIn("Password", result["calls"])
+        self.assertIn("UpdateApplication", result["calls"])
+        self.assertIn("appId eq 'app-current'", result["filter"])
+        self.assertNotIn("CLIENT_SECRET=", result["standard_env"])
+        self.assertIn("CLIENT_ID=app-current", result["standard_env"])
+        self.assertIn("No client secret was created, rotated or read (-SkipCredential)", result["output"])
+        self.assertIn("Credentials: unchanged (-SkipCredential)", result["output"])
+        posts = [request for request in result["graph_requests"] if request["method"] == "POST"]
+        self.assertTrue(any("roleManagement/directory/roleAssignments" in request["uri"] for request in posts))
+
+    def test_skip_credential_keeps_a_saved_secret_untouched(self):
+        result = self.run_setup(profile="Standard", standard_env=self.STANDARD_ENV, extra={"SkipCredential": True})
+        self.assertEqual("", result["error"])
+        self.assertNotIn("Password", result["calls"])
+        self.assertIn("CLIENT_SECRET=saved-mock-secret", result["standard_env"])
+
+    def test_skip_credential_refuses_new_apps_and_credential_options(self):
+        result = self.run_setup("new_app", profile="Standard", extra={"SkipCredential": True})
+        self.assertIn("-SkipCredential updates an existing application only", result["error"])
+        self.assertNotIn("NewApplication", result["calls"])
+        result = self.run_setup(profile="Standard", extra={"SkipCredential": True, "RotateCredential": True})
+        self.assertIn("-SkipCredential leaves the application credentials unchanged", result["error"])
+        self.assertEqual([], result["calls"])
+
+    def test_no_parameter_setup_assigns_global_reader_with_role_scope(self):
+        result = self.run_setup("no_parameters", standard_env=self.STANDARD_ENV)
+        self.assertEqual("", result["error"])
+        self.assertIn("RoleManagement.ReadWrite.Directory", result["scopes"])
+        posts = [request for request in result["graph_requests"] if request["method"] == "POST"]
+        self.assertEqual(1, len(posts))
+        self.assertIn("roleManagement/directory/roleAssignments", posts[0]["uri"])
+        self.assertEqual({"principalId": "sp-object", "roleDefinitionId": "f2ef992c-3afb-46b9-b7cf-a126ee74c451", "directoryScopeId": "/"}, json.loads(posts[0]["body"]))
+        self.assertIn("Workload access: GlobalReader", result["output"])
+        self.assertNotIn("ConnectPurview", result["calls"])
+        self.assertNotIn("ConnectExchange", result["calls"])
+
+    def test_unattended_setup_defaults_to_global_reader(self):
+        result = self.run_setup("thumbprint_saved", profile="Standard", mode="Unattended",
+                                standard_env=self.STANDARD_ENV, extra={"ConfirmBroadSharePointAccess": True})
+        self.assertEqual("", result["error"])
+        self.assertIn("RoleManagement.ReadWrite.Directory", result["scopes"])
+        posts = [request for request in result["graph_requests"] if request["method"] == "POST"]
+        self.assertEqual(1, len(posts))
+        self.assertEqual("f2ef992c-3afb-46b9-b7cf-a126ee74c451", json.loads(posts[0]["body"])["roleDefinitionId"])
+        self.assertIn("Workload access: GlobalReader", result["output"])
+        self.assertNotIn("ConnectPurview", result["calls"])
+        self.assertNotIn("ConnectExchange", result["calls"])
+
+    def test_missing_consent_does_not_report_default_global_reader_as_configured(self):
+        result = self.run_setup("consent_ungranted", profile="Standard", standard_env=self.STANDARD_ENV)
+        self.assertEqual("", result["error"])
+        self.assertIn("ConsentBrowser", result["calls"])
+        self.assertFalse([request for request in result["graph_requests"] if "roleManagement/" in request["uri"] or request["method"] == "POST"])
+        self.assertIn("Workload access: GlobalReader", result["output"])
+        self.assertIn("Consent: incomplete", result["output"])
+        self.assertIn("Purview application roles: incomplete", result["output"])
+        self.assertNotIn("Purview application roles: configured", result["output"])
+
+    def test_explicit_global_reader_is_preserved(self):
+        result = self.run_setup(profile="Standard", standard_env=self.STANDARD_ENV, extra={"WorkloadRbac": "GlobalReader"})
+        self.assertEqual("", result["error"])
+        self.assertIn("RoleManagement.ReadWrite.Directory", result["scopes"])
+        posts = [request for request in result["graph_requests"] if request["method"] == "POST"]
+        self.assertEqual(1, len(posts))
+        self.assertEqual("f2ef992c-3afb-46b9-b7cf-a126ee74c451", json.loads(posts[0]["body"])["roleDefinitionId"])
+        self.assertIn("Workload access: GlobalReader", result["output"])
+
+    def test_explicit_none_requests_no_directory_role(self):
+        result = self.run_setup(profile="Standard", standard_env=self.STANDARD_ENV, extra={"WorkloadRbac": "None"})
+        self.assertEqual("", result["error"])
+        self.assertNotIn("RoleManagement.ReadWrite.Directory", result["scopes"])
+        self.assertFalse([request for request in result["graph_requests"] if "roleManagement/" in request["uri"] or request["method"] == "POST"])
+        self.assertIn("Workload access: None", result["output"])
+        self.assertIn("-WorkloadRbac GlobalReader", result["output"])
+        self.assertNotIn("ConnectPurview", result["calls"])
+        self.assertNotIn("ConnectExchange", result["calls"])
+
+    def test_explicit_role_groups_configures_workload_memberships_without_directory_role(self):
+        result = self.run_setup(profile="Standard", standard_env=self.STANDARD_ENV, extra={"WorkloadRbac": "RoleGroups"})
+        self.assertEqual("", result["error"])
+        self.assertNotIn("RoleManagement.ReadWrite.Directory", result["scopes"])
+        self.assertFalse([request for request in result["graph_requests"] if "roleManagement/" in request["uri"] or request["method"] == "POST"])
+        self.assertIn("ConnectPurview", result["calls"])
+        self.assertIn("ConnectExchange", result["calls"])
+        self.assertIn("AddRoleGroupMember:AI Readiness Purview Read-Only:workload-sp", result["calls"])
+        self.assertIn("AddRoleGroupMember:AI Readiness Exchange Read-Only:workload-sp", result["calls"])
+        self.assertIn("Workload access: RoleGroups", result["output"])
+        self.assertIn("Purview application roles: configured", result["output"])
+
+    def test_role_assignment_retries_not_found_then_succeeds(self):
+        result = self.run_setup("role_not_found_once", profile="Standard", extra={"WorkloadRbac": "SecurityReader"}, standard_env=self.STANDARD_ENV)
+        self.assertEqual("", result["error"])
+        self.assertIn("Sleep:15", result["calls"])
+        self.assertIn("Assigned the Security Reader directory role", result["output"])
+
+    def test_role_not_found_reports_graph_detail_and_manual_steps(self):
+        result = self.run_setup("role_not_found", profile="Standard", extra={"WorkloadRbac": "SecurityReader"}, standard_env=self.STANDARD_ENV)
+        self.assertEqual("", result["error"])
+        output = " ".join(result["output"].split())
+        self.assertIn("could not be assigned while creating the assignment", output)
+        self.assertIn("[Request_ResourceNotFound] Resource sp-object does not exist.", output)
+        self.assertIn("Roles & admins > Security Reader > Add assignments", output)
+        self.assertIn("service principal object ID sp-object", output)
+        self.assertEqual(2, result["calls"].count("Sleep:15"))
+
+    def test_device_code_sign_in_and_printed_consent_link(self):
+        result = self.run_setup(profile="Standard", standard_env=self.STANDARD_ENV, extra={"UseDeviceCode": True})
+        self.assertEqual("", result["error"])
+        self.assertIn("ConnectDeviceCode", result["calls"])
+
+    def test_failed_role_assignment_is_reported_not_fatal(self):
+        result = self.run_setup("role_assignment_denied", profile="Standard", extra={"WorkloadRbac": "GlobalReader"}, standard_env=self.STANDARD_ENV)
+        self.assertEqual("", result["error"])
+        self.assertIn("could not be assigned", result["output"])
+        self.assertIn("Purview application roles: incomplete", result["output"])
+
+    def test_restricted_rejects_roles_and_sharepoint_app_only_before_changes(self):
+        for extra in ({"WorkloadRbac": "SecurityReader"}, {"WorkloadRbac": "GlobalReader"},
+                      {"WorkloadRbac": "RoleGroups"}, {"EnableSharePointAppOnly": True}):
+            with self.subTest(extra=extra):
+                result = self.run_setup(extra=extra)
+                self.assertIn("Restricted rejects -WorkloadRbac", result["error"])
+                self.assertEqual([], result["calls"])
+
+    def test_sharepoint_app_only_creates_csp_certificate_after_approval(self):
+        result = self.run_setup(profile="Standard", standard_env=self.STANDARD_ENV,
+                                extra={"EnableSharePointAppOnly": True, "ConfirmBroadSharePointAccess": True})
+        self.assertEqual("", result["error"])
+        self.assertIn("NewCertificate:KeyExchange:NonExportable:Microsoft Enhanced RSA and AES Cryptographic Provider", result["calls"])
+        self.assertIn("AttachCertificate", result["calls"])
+        sharepoint = [entry for entry in result["permissions"] if entry["ResourceAppId"] == RESOURCE_APP_IDS["sharepoint"]]
+        self.assertEqual(["role-Sites.FullControl.All"], [access["Id"] for entry in sharepoint for access in entry["ResourceAccess"]])
+        self.assertIn("SHAREPOINT_CERTIFICATE_THUMBPRINT=created-thumb\n", result["standard_env"])
+        self.assertIn("PURVIEW_CERTIFICATE_THUMBPRINT=created-thumb\n", result["standard_env"])
+        # Graph keeps using the client secret; the certificate is not a Graph credential.
+        self.assertNotIn("CERTIFICATE_PATH=", result["standard_env"].replace("_CERTIFICATE_PATH", ""))
+        self.assertIn("CLIENT_SECRET=saved-mock-secret\n", result["standard_env"])
+
+    def test_sharepoint_app_only_requires_typed_approval(self):
+        result = self.run_setup(profile="Standard", standard_env=self.STANDARD_ENV, extra={"EnableSharePointAppOnly": True})
+        self.assertIn("Unexpected interactive prompt", result["error"])
+        self.assertNotIn("UpdateApplication", result["calls"])
+        self.assertFalse([call for call in result["calls"] if call.startswith("NewCertificate")])
+
+    def test_standard_requests_delegated_scope_and_public_client_redirect(self):
+        result = self.run_setup(profile="Standard", standard_env=self.STANDARD_ENV)
+        self.assertEqual("", result["error"])
+        graph = [entry for entry in result["permissions"] if entry["ResourceAppId"] == RESOURCE_APP_IDS["graph"]]
+        scopes = [access for entry in graph for access in entry["ResourceAccess"] if access["Type"] == "Scope"]
+        self.assertEqual(["scope-CopilotSettings-LimitedMode.Read"], [access["Id"] for access in scopes])
+        self.assertIn("http://localhost", result["public_client"])
+        self.assertIn("Optional delegated enrichment is not consented yet", result["output"])
+
+    def test_no_delegated_enrichment_and_restricted_request_no_scopes(self):
+        for profile, extra, env in (("Standard", {"NoDelegatedEnrichment": True}, self.STANDARD_ENV), ("Restricted", None, None)):
+            with self.subTest(profile=profile):
+                result = self.run_setup(profile=profile, extra=extra, standard_env=env)
+                self.assertEqual("", result["error"])
+                scopes = [access for entry in result["permissions"] for access in entry["ResourceAccess"] if access["Type"] == "Scope"]
+                self.assertEqual([], scopes)
+                self.assertEqual([], result["public_client"])
+
+    def test_environment_file_targets_saved_tenant_and_application(self):
+        result = self.run_setup(profile="Standard", standard_env=self.STANDARD_ENV,
+                                extra={"EnvironmentFile": ".env"})
+        self.assertEqual("", result["error"])
+        self.assertIn("ConnectTenant:tenant-current", result["calls"])
+        self.assertEqual("appId eq 'app-current'", result["filter"])
+        self.assertNotIn("NewApplication", result["calls"])
+        self.assertIn("EXPECTED_TENANT_DOMAIN=test.onmicrosoft.com\n", result["standard_env"])
+
+    def test_explicit_tenant_mismatch_stops_before_changes(self):
+        result = self.run_setup(profile="Standard", standard_env=self.STANDARD_ENV,
+                                extra={"TenantId": "11111111-1111-1111-1111-111111111111"})
+        self.assertIn("ConnectTenant:11111111-1111-1111-1111-111111111111", result["calls"])
+        self.assertIn("not the requested tenant", result["error"])
+        self.assertNotIn("UpdateApplication", result["calls"])
 
 
 if __name__ == "__main__":

@@ -165,7 +165,7 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
                 recommendations.append(new_recommendation(
                     service="Entra",
                     feature=feature_name,
-                    observation=f"{mfa_enabled} of {total_users} users ({mfa_percentage:.1f}%) enrolled in MFA, approaching secure coverage for Copilot access",
+                    observation=f"{mfa_enabled} of {total_users} users ({mfa_percentage:.1f}%) enrolled in MFA, registered for MFA; enforcement and observed sign-in behavior require separate confirmation",
                     recommendation=f"Continue rolling out MFA to remaining {total_users - mfa_enabled} users. Use Conditional Access to require MFA for all Copilot and Microsoft 365 access. Target 100% MFA coverage to fully protect AI services from compromised credentials.",
                     link_text="MFA Deployment Guide",
                     link_url="https://learn.microsoft.com/entra/identity/authentication/howto-mfa-getstarted",
@@ -177,7 +177,7 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
                 recommendations.append(new_recommendation(
                     service="Entra",
                     feature=feature_name,
-                    observation=f"{mfa_enabled} of {total_users} users ({mfa_percentage:.1f}%) enrolled in MFA, strongly protecting Copilot access",
+                    observation=f"{mfa_enabled} of {total_users} users ({mfa_percentage:.1f}%) enrolled in MFA, registered for MFA; registration alone does not establish enforced or observed protection",
                     recommendation="",
                     link_text="MFA Best Practices",
                     link_url="https://learn.microsoft.com/entra/identity/authentication/concept-mfa-howitworks",
@@ -191,19 +191,21 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
                 # Action Required: Legacy auth detected
                 recommendations.append(new_recommendation(
                     service="Entra",
-                    feature=feature_name,
+                    feature="Legacy authentication sign-ins",
                     observation=f"{legacy_auth_count} legacy authentication {'sign-in' if legacy_auth_count == 1 else 'sign-ins'} detected in the returned sign-in records. Review the protocols and the controls that apply to those requests.",
-                    recommendation="Block legacy authentication protocols (IMAP, POP3, SMTP AUTH) using Conditional Access. Legacy auth bypasses MFA and cannot be protected by Conditional Access policies, creating a backdoor for attackers to access Copilot. Migrate apps to modern authentication (OAuth 2.0) and block legacy protocols tenant-wide.",
+                    recommendation="Review the linked sign-in records to identify the accounts, applications, clients and IP addresses involved. Distinguish successful requests from failed or blocked attempts using the error code and Conditional Access result. Confirm business dependencies, migrate required clients to modern authentication, and test a policy to block legacy authentication before enforcement.",
                     link_text="Block Legacy Authentication",
                     link_url="https://learn.microsoft.com/entra/identity/conditional-access/block-legacy-authentication",
                     priority="High",
-                    status="Action Required"
+                    status="Action Required",
+                    finding_key="entra.signins.legacy_auth",
+                    evidence_key="legacy_signin_detail"
                 ))
             else:
                 # Success: No legacy auth
                 recommendations.append(new_recommendation(
                     service="Entra",
-                    feature=feature_name,
+                    feature="Legacy authentication sign-ins",
                     observation="No legacy authentication sign-ins were found in the returned sign-in records. This sample does not establish that all access uses modern authentication or that every security control is effective.",
                     recommendation="",
                     link_text="Modern Authentication Overview",

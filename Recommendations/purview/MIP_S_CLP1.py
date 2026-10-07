@@ -1,69 +1,33 @@
-from Core.source_evidence import source_is_complete
 """
 Information Protection for Office 365 - Standard - Copilot & Agent Adoption Recommendation
+
+Label evidence comes only from collected Purview data: Purview PowerShell
+(complete label definitions and publishing policies) or the Microsoft Graph
+beta label baseline (definitions only, preview quality). This module makes no
+Graph calls of its own.
 """
 from Core.new_recommendation import new_recommendation
 from Core.friendly_names import get_friendly_sku_name
+from Core.source_evidence import source_is_complete
 
-async def get_deployment_status(client):
-    """
-    Check information protection label deployment and configuration.
-    Returns dict with label details.
-    """
-    try:
-        # Get sensitivity labels from Information Protection
-        labels_response = await client.information_protection.policy.labels.get()
-        
-        if not labels_response or not labels_response.value:
-            return {
-                'available': False,
-                'total_labels': 0,
-                'published_labels': 0
-            }
-        
-        total_labels = len(labels_response.value)
-        published_labels = sum(1 for label in labels_response.value if hasattr(label, 'is_enabled') and label.is_enabled)
-        
-        # Get label names for reporting
-        label_names = [label.name for label in labels_response.value if hasattr(label, 'name') and label.name][:5]  # First 5
-        
-        return {
-            'available': True,
-            'total_labels': total_labels,
-            'published_labels': published_labels,
-            'label_names': label_names
-        }
-        
-    except Exception as e:
-        error_msg = str(e).lower()
-        if '401' in error_msg or 'unauthorized' in error_msg:
-            return {
-                'available': False,
-                'error': 'insufficient_permissions',
-                'message': 'InformationProtectionPolicy.Read permission required'
-            }
-        elif '403' in error_msg or 'forbidden' in error_msg:
-            return {
-                'available': False,
-                'error': 'access_denied',
-                'message': 'Admin consent required for InformationProtectionPolicy.Read'
-            }
-        return {
-            'available': False,
-            'error': 'unknown',
-            'message': f'Unable to check label deployment: {str(e)}'
-        }
+
+def _label_names(labels, limit):
+    names = [label.get('DisplayName') or label.get('Name') or 'Unnamed' for label in labels if isinstance(label, dict)]
+    text = ', '.join(names[:limit])
+    if len(names) > limit:
+        text += f" (+{len(names) - limit} more)"
+    return text
+
 
 async def get_recommendation(sku_name, status="Success", client=None, purview_client=None):
     """
     Information Protection Standard provides basic sensitivity labels
     that guide Copilot's handling of classified content.
-    Returns 2+ recommendations: license status + label deployment status.
+    Returns the license status and, when evidence exists, label deployment status.
     """
     feature_name = "Information Protection for Office 365 - Standard"
     friendly_sku = get_friendly_sku_name(sku_name)
-    
-    # First recommendation: License status
+
     if status == "Success":
         license_rec = new_recommendation(
             service="Purview",
@@ -85,133 +49,72 @@ async def get_recommendation(sku_name, status="Success", client=None, purview_cl
             priority="Medium",
             status=status
         )
-    
-    # Collect deployment recommendations
-    deployment_recs = []
-    
-    # Prioritize PowerShell data (more accurate than Graph API)
-    if status == "Success" and source_is_complete(purview_client, "sensitivity_labels", getattr(purview_client, "sensitivity_labels", None)):
-        labels_data = purview_client.sensitivity_labels
-        label_policies_data = purview_client.label_policies if hasattr(purview_client, 'label_policies') else {'available': False}
-        
-        if labels_data.get('available'):
-            total_labels = labels_data.get('total_labels', 0)
-            labels = labels_data.get('labels', [])
-            
-            # Check label policies
-            total_policies = label_policies_data.get('total_policies', 0) if label_policies_data.get('available') else 0
-            
-            if total_labels >= 4:
-                # Good label deployment
-                label_names = ', '.join([l.get('DisplayName', l.get('Name', 'Unnamed')) for l in labels[:4]])
-                if len(labels) > 4:
-                    label_names += f" (+{len(labels)-4} more)"
-                
-                deployment_rec = new_recommendation(
-                    service="Purview",
-                    feature=f"{feature_name} - Label Deployment",
-                    observation=f"{total_labels} sensitivity labels configured ({total_policies} policies): {label_names}",
-                    finding_key="purview.sensitivity_labels.deployed",
-                    recommendation=f"Verify labels cover Copilot scenarios: 1) Test: label document 'Confidential' > ask Copilot to summarize > attempt external sharing (should block/warn), 2) Set default label policy ('General' or 'Internal Only') for all users, 3) Enable mandatory labeling for sensitive locations (Finance, HR, Legal OneDrive/SharePoint), 4) Train users: Copilot respects label restrictions when sharing AI-generated content. Currently {total_policies} label policies deployed.",
-                    link_text="Sensitivity Label Best Practices",
-                    link_url="https://learn.microsoft.com/purview/information-protection-deployment",
-                    priority="Low",
-                    status="Success"
-                )
-                deployment_recs.append(deployment_rec)
-            elif total_labels >= 1:
-                # Minimal labels
-                label_names = ', '.join([l.get('DisplayName', l.get('Name', 'Unnamed')) for l in labels])
-                deployment_rec = new_recommendation(
-                    service="Purview",
-                    feature=f"{feature_name} - Label Deployment",
-                    observation=f"Only {total_labels} sensitivity label(s) configured: {label_names} - insufficient granularity for Copilot protection",
-                    recommendation=f"Expand from {total_labels} to minimum 4 labels: 'Public' (external), 'General' (default internal), 'Confidential' (sensitive), 'Highly Confidential' (regulated). Without granular labels, users cannot properly classify content for Copilot - everything is treated equally. Deploy comprehensive taxonomy in Purview > Information protection > Labels.",
-                    link_text="Create Sensitivity Labels",
-                    link_url="https://learn.microsoft.com/purview/create-sensitivity-labels",
-                    priority="High",
-                    status="Success"
-                )
-                deployment_recs.append(deployment_rec)
-            else:
-                # No labels
-                deployment_rec = new_recommendation(
-                    service="Purview",
-                    feature=f"{feature_name} - Label Deployment",
-                    observation="Information Protection license active but ZERO sensitivity labels configured - no content classification",
-                    finding_key="purview.sensitivity_labels.deployed",
-                    recommendation="Deploy sensitivity labels IMMEDIATELY before Copilot rollout. Create 4 baseline labels: 1) Public (marketing, public docs), 2) General (default for all internal content), 3) Confidential (customer data, contracts, roadmaps), 4) Highly Confidential (financials, M&A, HR). Without labels, Copilot has no protection boundaries - all content treated equally. Configure in Purview > Information protection > Labels, publish to all users.",
-                    link_text="Create Sensitivity Labels",
-                    link_url="https://learn.microsoft.com/purview/create-sensitivity-labels",
-                    priority="High",
-                    status="Success"
-                )
-                deployment_recs.append(deployment_rec)
-    
-    # Fallback to Graph API if PowerShell data unavailable
-    elif status == "Success" and client:
-        deployment = await get_deployment_status(client)
-        
-        if deployment.get('available'):
-            total_labels = deployment.get('total_labels', 0)
-            published_labels = deployment.get('published_labels', 0)
-            label_names = deployment.get('label_names', [])
-            
-            if published_labels >= 4:
-                # Good label deployment (standard baseline is 4+ labels)
-                label_list = ', '.join(label_names) if label_names else 'multiple labels'
-                deployment_rec = new_recommendation(
-                    service="Purview",
-                    feature=f"{feature_name} - Label Deployment",
-                    observation=f"{published_labels} sensitivity labels published ({label_list}), providing comprehensive classification framework for Copilot content protection",
-                    recommendation="",
-                    link_text="Sensitivity Label Best Practices",
-                    link_url="https://learn.microsoft.com/purview/information-protection-deployment",
-                    status="Success"
-                )
-            elif published_labels >= 1:
-                # Minimal labels deployed
-                label_list = ', '.join(label_names) if label_names else f"{published_labels} label(s)"
-                deployment_rec = new_recommendation(
-                    service="Purview",
-                    feature=f"{feature_name} - Label Deployment",
-                    observation=f"Only {published_labels} sensitivity label(s) published ({label_list}), providing minimal classification granularity",
-                    recommendation=f"Expand sensitivity label taxonomy from {published_labels} to at least 4 labels to properly classify content for Copilot. Recommended baseline: 'Public' (shareable externally), 'General/Internal' (default for internal docs), 'Confidential' (sensitive business data), and 'Highly Confidential' (executive/financial/HR content). Copilot respects these labels when summarizing and sharing content - without granular labels, users can't properly protect sensitive information that Copilot processes. Deploy labels to all users, set 'General' as default, and train teams on when to apply 'Confidential' vs 'Highly Confidential' markings.",
-                    link_text="Sensitivity Label Best Practices",
-                    link_url="https://learn.microsoft.com/purview/information-protection-deployment",
-                    priority="Medium",
-                    status="Success"
-                )
-            else:
-                # No labels published
-                deployment_rec = new_recommendation(
-                    service="Purview",
-                    feature=f"{feature_name} - Label Deployment",
-                    observation=f"Information Protection license active but NO sensitivity labels published - zero content classification deployed",
-                    recommendation=f"Immediately create and publish sensitivity labels before deploying Copilot at scale. Without labels, Copilot processes all content equally with no protection boundaries. Start with 4 baseline labels: 'Public' (marketing materials, public docs), 'General' (default internal content), 'Confidential' (customer data, contracts, product roadmaps), 'Highly Confidential' (financials, M&A, HR records). Publish labels to all users via Microsoft Purview compliance portal. Train users that Copilot can only share/summarize content according to label restrictions - unlabeled content is treated as 'General' by default. This is CRITICAL before Copilot rollout to prevent data leakage.",
-                    link_text="Create Sensitivity Labels",
-                    link_url="https://learn.microsoft.com/purview/create-sensitivity-labels",
-                    priority="High",
-                    status="Success"
-                )
-        else:
-            # Cannot verify label deployment
-            error_msg = deployment.get('message', 'Unable to verify label deployment')
-            deployment_rec = new_recommendation(
-                service="Purview",
-                feature=f"{feature_name} - Label Deployment",
-                observation=f"Sensitivity label deployment status could not be verified ({error_msg})",
-                recommendation="Verify sensitivity label deployment manually in Microsoft Purview compliance portal > Information Protection > Labels. Ensure you have published at least 4 labels: Public, General/Internal, Confidential, and Highly Confidential. Check label policies are assigned to all users. Before Copilot deployment, audit that critical documents are properly labeled to control how Copilot summarizes and shares content across your organization.",
-                link_text="Manage Sensitivity Labels",
-                link_url="https://learn.microsoft.com/purview/create-sensitivity-labels",
-                priority="Medium",
-                status="Success"
-            )
-        
-        return [license_rec, deployment_rec]
-    
-    # Return all recommendations
-    if deployment_recs:
-        return [license_rec] + deployment_recs
-    
-    # If license not active or no data, return only license recommendation
+
+    if status != "Success" or purview_client is None:
+        return [license_rec]
+
+    labels_data = getattr(purview_client, 'sensitivity_labels', None) or {}
+    if not source_is_complete(purview_client, "sensitivity_labels", labels_data):
+        # Unavailable, partial, or preview-quality (Graph beta) label evidence.
+        # The shared saved-evidence check rewrites this row with the returned
+        # count and the specific steps that unlock complete evidence.
+        return [license_rec, new_recommendation(
+            service="Purview",
+            feature=f"{feature_name} - Label Deployment",
+            observation="Sensitivity label deployment could not be verified from complete Purview evidence.",
+            recommendation="Verify label definitions and publishing policies in the Microsoft Purview portal, or enable Purview PowerShell collection and rerun.",
+            link_text="Manage Sensitivity Labels",
+            link_url="https://learn.microsoft.com/purview/create-sensitivity-labels",
+            priority="Medium",
+            status="Not Assessed",
+            disposition="Coverage",
+            finding_key="purview.sensitivity_labels.deployed",
+        )]
+
+    labels = labels_data.get('labels', []) or []
+    total_labels = labels_data.get('total_labels', len(labels))
+    policies_data = getattr(purview_client, 'label_policies', None) or {}
+    policies_known = source_is_complete(purview_client, "label_policies", policies_data)
+    total_policies = policies_data.get('total_policies', 0) if policies_known else None
+    policy_note = (f" ({total_policies} label policies)" if total_policies is not None
+                   else " (label publishing policies were not collected)")
+
+    if total_labels >= 4:
+        observation = f"{total_labels} sensitivity labels configured{policy_note}: {_label_names(labels, 4)}"
+        policy_clause = f"Currently {total_policies} label policies are configured." if total_policies is not None else \
+            "Label publishing policies were not collected; confirm them in the Purview portal."
+        deployment_rec = new_recommendation(
+            service="Purview",
+            feature=f"{feature_name} - Label Deployment",
+            observation=observation,
+            finding_key="purview.sensitivity_labels.deployed",
+            recommendation=f"Verify labels cover Copilot scenarios: 1) Test: label document 'Confidential' > ask Copilot to summarize > attempt external sharing (should block/warn), 2) Set default label policy ('General' or 'Internal Only') for all users, 3) Enable mandatory labeling for sensitive locations (Finance, HR, Legal OneDrive/SharePoint), 4) Train users: Copilot respects label restrictions when sharing AI-generated content. {policy_clause}",
+            link_text="Sensitivity Label Best Practices",
+            link_url="https://learn.microsoft.com/purview/information-protection-deployment",
+            priority="Low",
+            status="Success"
+        )
+    elif total_labels >= 1:
+        deployment_rec = new_recommendation(
+            service="Purview",
+            feature=f"{feature_name} - Label Deployment",
+            observation=f"Only {total_labels} sensitivity label(s) configured{policy_note}: {_label_names(labels, 10)} - insufficient granularity for Copilot protection",
+            recommendation=f"Expand from {total_labels} to minimum 4 labels: 'Public' (external), 'General' (default internal), 'Confidential' (sensitive), 'Highly Confidential' (regulated). Without granular labels, users cannot properly classify content for Copilot - everything is treated equally. Deploy comprehensive taxonomy in Purview > Information protection > Labels.",
+            link_text="Create Sensitivity Labels",
+            link_url="https://learn.microsoft.com/purview/create-sensitivity-labels",
+            priority="High",
+            status="Success"
+        )
+    else:
+        deployment_rec = new_recommendation(
+            service="Purview",
+            feature=f"{feature_name} - Label Deployment",
+            observation="Information Protection license active but ZERO sensitivity labels configured - no content classification",
+            finding_key="purview.sensitivity_labels.deployed",
+            recommendation="Deploy sensitivity labels IMMEDIATELY before Copilot rollout. Create 4 baseline labels: 1) Public (marketing, public docs), 2) General (default for all internal content), 3) Confidential (customer data, contracts, roadmaps), 4) Highly Confidential (financials, M&A, HR). Without labels, Copilot has no protection boundaries - all content treated equally. Configure in Purview > Information protection > Labels, publish to all users.",
+            link_text="Create Sensitivity Labels",
+            link_url="https://learn.microsoft.com/purview/create-sensitivity-labels",
+            priority="High",
+            status="Success"
+        )
+    return [license_rec, deployment_rec]

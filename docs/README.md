@@ -32,3 +32,8 @@ Start with the [operator runbook](RUN.md) for the complete assessment workflow. 
 The [documentation archive](archive/README.md) preserves completed redesign plans and validation records. It is historical context; use the guides above for current operation.
 
 For security reporting, see [SECURITY.md](../SECURITY.md).
+## Current assessment contract
+
+See [Assessment evidence and outputs](ASSESSMENT_EVIDENCE.md) for methodology 4.0.0, evidence schema 1.1.0, automatic Standard sources, tenant-wide operational reviews and all nine domains.
+
+Supported deliverables and shared-result snapshots: [Supported outputs](OUTPUTS.md).

@@ -85,7 +85,7 @@ def _report_date(value):
         return ""
 
 
-def load_copilot_readiness_export(path, include_user_details=False):
+def load_copilot_readiness_export(path, include_user_details=True):
     """Read an unmodified readiness CSV without network access or tenant assumptions.
 
     ``metrics`` maps each FLAG_COLUMNS key to true/false/unknown row counts.

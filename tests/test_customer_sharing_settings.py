@@ -3,7 +3,7 @@
 import copy
 import unittest
 
-from Core.customer_report import _settings, _sharing_setting_value
+from Core.customer_report import _settings, _sharing_changes, _sharing_review, _sharing_setting_value
 
 
 class CustomerSharingSettingsTests(unittest.TestCase):
@@ -62,8 +62,39 @@ class CustomerSharingSettingsTests(unittest.TestCase):
 
     def test_expiry_zero_and_one_are_days_not_false_and_true(self):
         for value, expected in ((0, 'No expiry requirement (0 days)'), (1, '1 day'),
-                                ('0', 'No expiry requirement (0 days)'), ('730', '730 days')):
+                                ('0', 'No expiry requirement (0 days)'), ('730', '730 days'),
+                                (-1, 'No expiry requirement (not set)'), ('-1', 'No expiry requirement (not set)')):
             self.assertEqual(_sharing_setting_value('RequireAnonymousLinksExpireInDays', value), expected)
+
+    def test_permissive_settings_are_flagged_with_the_recommended_value(self):
+        bundle = {'sharepoint_governance': {'settings': {
+            'SharingCapability': 2, 'OneDriveSharingCapability': 1, 'DefaultSharingLinkType': 3,
+            'RequireAnonymousLinksExpireInDays': -1, 'FileAnonymousLinkType': 2, 'FolderAnonymousLinkType': 1,
+            'PreventExternalUsersFromResharing': True, 'LegacyAuthProtocolsEnabled': False,
+        }}}
+        states = {row['label']: (row['recommended'], row['state']) for row in _sharing_review(bundle)}
+        self.assertEqual(states['SharePoint external sharing'], ('New and existing guests (no Anyone links), or stricter', 'change'))
+        self.assertEqual(states['OneDrive external sharing'][1], 'ok')
+        self.assertEqual(states['Default sharing link'], ('Specific people', 'change'))
+        self.assertEqual(states['Anyone link expiry'], ('30 days or fewer', 'change'))
+        self.assertEqual(states['Anyone link permission (files)'], ('View only', 'change'))
+        self.assertEqual(states['Anyone link permission (folders)'][1], 'ok')
+        self.assertEqual(states['Prevent guests from sharing again'][1], 'ok')
+        self.assertEqual(states['Legacy authentication protocols'][1], 'ok')
+        rows = _sharing_review(bundle)
+        self.assertEqual([row['state'] for row in rows], sorted((row['state'] for row in rows), key=['change', 'review', 'ok'].index))
+        rendered = _settings(bundle)
+        self.assertIn('4 settings should be changed', rendered)
+        self.assertIn('<tr class="setting-row" data-state="change"><td>Default sharing link</td><td>Anyone link</td>', rendered)
+        changes = _sharing_changes(bundle)
+        self.assertIn('Settings to change (4)', changes)
+        self.assertNotIn('OneDrive external sharing', changes)
+
+    def test_organization_default_needs_review_and_expiry_is_moot_without_anyone_links(self):
+        states = {row['label']: row['state'] for row in _sharing_review({'sharepoint_governance': {'settings': {
+            'SharingCapability': 1, 'DefaultSharingLinkType': 2, 'RequireAnonymousLinksExpireInDays': 0}}})}
+        self.assertEqual(states, {'SharePoint external sharing': 'ok', 'Default sharing link': 'review', 'Anyone link expiry': 'ok'})
+        self.assertEqual(_sharing_changes({'sharepoint_governance': {'settings': {'SharingCapability': 1, 'DefaultSharingLinkType': 1}}}), '')
 
     def test_missing_and_unknown_values_are_explicit_without_crashing_or_inventing_labels(self):
         self.assertEqual(_settings({}), '')
@@ -72,7 +103,7 @@ class CustomerSharingSettingsTests(unittest.TestCase):
         for key, value in (
             ('SharingCapability', True), ('SharingCapability', False), ('SharingCapability', 99),
             ('DefaultSharingLinkType', 'Unexpected'), ('LegacyAuthProtocolsEnabled', 2),
-            ('RequireAnonymousLinksExpireInDays', True), ('RequireAnonymousLinksExpireInDays', -1),
+            ('RequireAnonymousLinksExpireInDays', True), ('RequireAnonymousLinksExpireInDays', -2),
             ('RequireAnonymousLinksExpireInDays', 731), ('DefaultSharingLinkType', {}),
         ):
             with self.subTest(key=key, value=value):

@@ -34,7 +34,23 @@ _METHODOLOGY_MIGRATIONS = {
         'are evaluated with the 2.1.0 control matching and reviewed pilot criteria; '
         'readiness conclusions can change. Original evidence dates and files are preserved.'
     ),
+    ('2.0.0', '3.0.0'): (
+        'The raw collection schema is unchanged. Collected facts are evaluated with the 3.0.0 tenant-wide '
+        'baseline: controls are judged on tenant-wide configuration and no pilot roster is required. '
+        'Readiness conclusions can change. Original evidence dates and files are preserved.'
+    ),
+    ('2.1.0', '3.0.0'): (
+        'The raw collection schema is unchanged. Collected facts are evaluated with the 3.0.0 tenant-wide '
+        'baseline: controls are judged on tenant-wide configuration and no pilot roster is required. '
+        'Readiness conclusions can change. Original evidence dates and files are preserved.'
+    ),
 }
+
+for _previous in ('2.0.0', '2.1.0', '3.0.0'):
+    _METHODOLOGY_MIGRATIONS[(_previous, '4.0.0')] = (
+        'Saved raw evidence is evaluated using the nine-domain catalog and tenant-wide baseline. '
+        'Configuration and operational confirmation are assessed separately; newly required evidence '
+        'that was not retained remains unknown. Original files and evidence dates are preserved.')
 
 
 def methodology_metadata(payload, artifact):
@@ -76,6 +92,7 @@ def _apply_recipe(payload, folder, recipe):
         for role, references in recipe.get('inputs', {}).items() if role in INPUT_KEYS
     }
     payload['evaluation_date'] = evaluation_day(recipe.get('evaluation_date'))
+    payload['customer_name'] = recipe.get('customer_name') or payload.get('customer_name')
     payload.setdefault('assessment_settings', {}).update({
         key: value for key, value in recipe.get('assessment_settings', {}).items() if key in SETTING_KEYS})
     payload['rebuild_recipe'] = recipe
@@ -153,7 +170,7 @@ def package_inputs(folder, supplemental_inputs):
             if identity in copied:
                 reference = copied[identity]
             else:
-                reference = (Path('inputs') / f'{len(copied) + 1:03d}_{role}' / source.name).as_posix()
+                reference = (Path('inputs') / str(len(copied) + 1) / source.name).as_posix()
                 target = folder / reference
                 if not source.exists():
                     raise ValueError(f'Cannot package missing {role} input: {source.name}')
@@ -275,6 +292,7 @@ def load_rebuild_recipe(path, recipe):
         'methodology_version': recipe['methodology_version'],
         'original_methodology_version': recipe['original_methodology_version'],
         'tenant_id': recipe.get('tenant_id'), 'tenant_name': recipe.get('tenant_name'),
+        'customer_name': recipe.get('customer_name'),
         'collected_at': '', 'has_tenant_collection': False,
         'evaluation_date': evaluation_day(recipe.get('evaluation_date')),
         'assessment_settings': {key: value for key, value in recipe.get('assessment_settings', {}).items() if key in SETTING_KEYS},
@@ -287,11 +305,10 @@ def load_rebuild_recipe(path, recipe):
     return methodology_metadata(payload, 'Rebuild recipe')
 
 
-def new_offline_package(tenant_name):
-    slug = re.sub(r'[^A-Za-z0-9._-]+', '_', str(tenant_name or 'portal_review')).strip('._-').lower()[:40] or 'portal_review'
-    name = slug + '_' + datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '_' + uuid4().hex[:8]
-    folder = Path('output') / 'assessments' / name
-    folder.mkdir(parents=True, exist_ok=True)
+def new_offline_package(tenant_name, customer_name=None, tenant_id=None):
+    from .export_paths import new_assessment_directory
+    folder = new_assessment_directory(
+        customer_name=customer_name, tenant_name=tenant_name, tenant_id=tenant_id)
     return str(folder.resolve())
 
 
@@ -299,6 +316,8 @@ def restore_arguments(args, payload):
     """Restore assessment settings; command-line additions remain explicit."""
     from copy import copy
     restored = copy(args)
+    if not getattr(restored, 'customer_name', None):
+        restored.customer_name = (payload or {}).get('customer_name')
     for role, paths in (payload or {}).get('resolved_inputs', {}).items():
         current = getattr(restored, role, None)
         if role in LIST_INPUTS:
@@ -310,18 +329,18 @@ def restore_arguments(args, payload):
         restored.report_format = settings['report_format']
     restored.evaluation_date = evaluation_day(
         getattr(args, 'evaluation_date', None) or (payload or {}).get('evaluation_date'))
-    # User-level workbook detail always requires consent for this rendering.
+    # User-level evidence is included by default; the existing CLI option is an alias.
     return restored
 
 
 def save_rebuild_recipe(folder, args, settings=None, *, tenant_id=None, tenant_name=None,
-                        methodology_migration=None):
+                        methodology_migration=None, customer_name=None):
     """Retain a successful offline build's additions without saving a collection."""
     if not folder:
         return None
     folder = Path(folder).resolve()
-    run_id = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '_' + uuid4().hex[:8]
-    run_folder = folder / 'rebuilds' / run_id
+    from .export_paths import new_numbered_directory
+    run_folder = new_numbered_directory(folder / 'Rebuilds')
     external = {}
     effective = {}
     for role in sorted(INPUT_KEYS):
@@ -338,6 +357,7 @@ def save_rebuild_recipe(folder, args, settings=None, *, tenant_id=None, tenant_n
     recipe = {'format': REBUILD_FORMAT, 'version': PACKAGE_VERSION, 'evaluation_date': args.evaluation_date,
               'methodology_version': METHODOLOGY_VERSION,
               'tenant_id': tenant_id, 'tenant_name': tenant_name,
+              'customer_name': customer_name or getattr(args, 'customer_name', None),
               'collection': 'collection.json' if (folder / 'collection.json').is_file() else None,
               'assessment_settings': {key: value for key, value in (settings or {}).items() if key in SETTING_KEYS},
               'inputs': {}, 'files': [], 'diagnostics': manifest['diagnostics']}
@@ -377,8 +397,17 @@ def render_with_failure_receipt(processor, *, receipt, **arguments):
     try:
         return processor(**arguments)
     except Exception as exc:
-        record_package_run(**receipt, status='failed', error=str(exc))
+        record_package_run(**receipt, outputs={'report_directory': arguments.get('output_dir')},
+                           status='failed', error=str(exc))
         raise
+
+
+def _retain_snapshot(source, report_directory):
+    """Retain a shared-result snapshot without changing its contents."""
+    destination = report_directory / source.name
+    if destination.exists():
+        destination = report_directory / (source.stem + '-snapshot-' + uuid4().hex[:8] + source.suffix)
+    shutil.copy2(source, destination)
 
 
 def record_package_run(folder, *, mode, tenant_id, collected_at, evaluation_date,
@@ -393,15 +422,65 @@ def record_package_run(folder, *, mode, tenant_id, collected_at, evaluation_date
     folder = Path(folder)
     run_id = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '_' + uuid4().hex[:8]
     delivered = []
-    if isinstance(outputs, dict):
-        for key in ('html_path', 'excel_path', 'csv_path', 'snapshot_path'):
-            value = outputs.get(key)
+    report_directory = outputs.get('report_directory') if isinstance(outputs, dict) else None
+    retained_directory = None
+    from .export_paths import BUILDS_FOLDER, new_deliverables_directory
+    if isinstance(report_directory, (str, Path)):
+        candidate = Path(report_directory).resolve()
+        deliverables_roots = [(folder / name).resolve() for name in (BUILDS_FOLDER, 'deliverables')]
+        if candidate.is_dir() and any(candidate != root and candidate.is_relative_to(root)
+                                      for root in deliverables_roots):
+            retained_directory = candidate
+            run_id = candidate.name
+            # The processor already rendered into the portable package. Retain an
+            # explicitly requested external snapshot, then list each artifact once.
+            snapshot = outputs.get('snapshot_path')
+            if isinstance(snapshot, (str, Path)) and Path(snapshot).is_file():
+                source = Path(snapshot).resolve()
+                if not source.is_relative_to(candidate):
+                    _retain_snapshot(source, candidate)
+            delivered = [source.relative_to(folder.resolve()).as_posix()
+                         for source in sorted(candidate.rglob('*'))
+                         if source.is_file() and source.resolve().is_relative_to(candidate)]
+    if isinstance(outputs, dict) and retained_directory is None:
+        copied_directory = None
+        def copied_destination(relative):
+            nonlocal copied_directory, run_id
+            if copied_directory is None:
+                copied_directory = new_deliverables_directory(folder)
+                run_id = copied_directory.name
+            return copied_directory / relative
+        copied_sources = set()
+        output_bundle = outputs.get('evidence_bundle')
+        # Companion evidence pages sit beside the copied HTML for relative links.
+        for key, bundle_key in (('html_evidence_folder_path', 'html_evidence_folder_path'),):
+            companion = outputs.get(key) or (output_bundle.get(bundle_key) if isinstance(output_bundle, dict) else None)
+            if not isinstance(companion, (str, Path)) or not Path(companion).is_dir():
+                continue
+            source_folder = Path(companion).resolve()
+            destination_folder = copied_destination(source_folder.name)
+            for source in sorted(source_folder.rglob('*')):
+                if not source.is_file() or not source.resolve().is_relative_to(source_folder):
+                    continue
+                destination = destination_folder / source.relative_to(source_folder)
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, destination)
+                copied_sources.add(source.resolve())
+                delivered.append(destination.relative_to(folder).as_posix())
+        output_paths = dict(outputs)
+        if not output_paths.get('technical_excel_path') and isinstance(output_bundle, dict):
+            output_paths['technical_excel_path'] = output_bundle.get('technical_excel_path')
+        for key in ('summary_html_path', 'html_path', 'excel_path', 'technical_excel_path', 'csv_path', 'snapshot_path'):
+            value = output_paths.get(key)
             if not isinstance(value, (str, Path)) or not Path(value).is_file():
                 continue
             source = Path(value)
-            destination = folder / 'deliverables' / run_id / source.name
+            if source.resolve() in copied_sources:
+                continue
+            destination = copied_destination(source.name)
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, destination)
+            copied_sources.add(source.resolve())
             delivered.append(destination.relative_to(folder).as_posix())
     receipt = {'run_id': run_id, 'mode': mode, 'tenant_id': tenant_id,
                'collected_at': collected_at, 'evaluation_date': evaluation_date,
@@ -465,7 +544,7 @@ def record_package_run(folder, *, mode, tenant_id, collected_at, evaluation_date
     if isinstance(remaining, (list, dict)):
         detail(f'Remaining evidence checks: {len(remaining)}. See the report for responsible roles and completion evidence.')
     if delivered:
-        detail_path('Packaged deliverables', folder / 'deliverables' / run_id)
+        detail_path('Packaged deliverables', retained_directory or copied_directory)
     candidates = ([Path(collection_input)] if collection_input else []) + [folder / 'collection.json', folder / 'rebuild.json']
     print_collection_handoff(next((path for path in candidates if path.is_file()), None))
     return delivered

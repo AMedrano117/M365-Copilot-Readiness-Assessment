@@ -187,7 +187,7 @@ class ReportLaneTests(unittest.TestCase):
         result = build_assessment_result(records, {})
         self.assertEqual(body.count('<article class="action"'), result['counts']['actions'])
         self.assertEqual(len(result['opportunities']), 1)
-        self.assertIn('Verified strengths', body)
+        self.assertIn('Supported observations', body)
         self.assertNotIn("Verified controls &amp; available capabilities", body)
         self.assertIn('Remaining evidence and decisions', body)
         self.assertNotIn("Optional inventory was not supplied", body)

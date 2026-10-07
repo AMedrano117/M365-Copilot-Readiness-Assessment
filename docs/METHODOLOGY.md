@@ -35,7 +35,7 @@ registration alone cannot support a phishing-resistant assurance.
 
 ## Shared evidence contract and reconciliation
 
-Evidence schema `1.0.0` and reconciliation version `1.0.0` describe normalized facts independently
+Evidence schema `1.1.0` and reconciliation version `1.0.0` describe normalized facts independently
 of collection or rendering. Each fact retains tenant, domain/control/metric identity, definition,
 population/scope, affected objects, value/unit, numerator/denominator, reporting window/basis,
 original date, source type/file/schema/hash, completeness/truncation, freshness, selection state
@@ -49,7 +49,7 @@ Measured zero is retained only when supported by available evidence.
 Reconciliation follows these rules:
 
 1. Compare sources only when tenant, metric definition, scope/population, affected objects,
-   unit, reporting basis and window match. Unknown tenant/scope stays specific to its source.
+   unit, reporting basis, evidence level and window match. Unknown tenant/scope stays specific to its source.
 2. Prefer complete evidence over a newer incomplete comparable snapshot. Within suitable
    comparable sources, use the latest dated observation.
 3. Keep different values for the same date, or dates that cannot be ordered, as conflicts with
@@ -79,9 +79,10 @@ inputs and hashes, assessment settings, evaluation date, deliverables and operat
 Package validation rejects changed/missing declared files and source references that escape the
 folder. Successful offline additions are preserved in a separate rebuild recipe, leaving the
 original collection unchanged. Version 2 collections and rebuild recipes require the recorded
-methodology to match the running tool, with one explicit compatibility transition: **2.0.0 → 2.1.0**.
-The raw schema, collected facts and base findings remain usable; current control matching and
-reviewed pilot criteria are applied, so deployment conclusions can change. The migration preserves
+methodology to match the running tool, with explicit compatibility transitions: **2.0.0 → 2.1.0**
+and **2.0.0, 2.1.0 or 3.0.0 → 4.0.0**. The raw schema, collected facts and base findings remain usable;
+the current control matching and the 4.0.0 tenant-wide configuration and operational baseline are applied, so deployment
+conclusions can change. The migration preserves
 original files, source hashes and evidence dates, and records the source/effective methodology and
 reason in report context, the workbook's Collection Coverage sheet and the operator receipt. Offline builds display
 a warning; no new tenant collection is required. Other mismatches still require the matching tool
@@ -112,27 +113,52 @@ shows a concrete gap.
 
 ## Deployment decision
 
-Assessment methodology `2.1.0` uses the shared result to choose the deployment recommendation
-and rollout milestone. The underlying risk recommendation is evaluated in this order:
+Assessment methodology `4.0.0` judges every required control on **tenant-wide configuration and required operational confirmation**.
+A pilot group is chosen from the tenant's own users, so a control enforced for all users covers
+any pilot group; the assessment never needs the pilot roster. Tenant-wide baseline checks
+(`Core/tenant_baseline.py`) read the collected configuration and record an explicit result for
+each control they can evaluate:
 
-1. A supported critical remediation action produces **Not ready for pilot**.
-2. An unresolved required evidence question or confirmation action produces **Readiness unconfirmed**.
-3. Supported high-priority remediation produces **Pilot only — remediation required**.
-4. Supported medium-priority remediation produces **Controlled pilot with conditions**.
-5. Covered required checks without critical/high/medium remediation support **Ready for a controlled pilot**
-   only when the reviewed pilot scope and plan are established.
+- **Sign-in configuration** is supported when an enforced Conditional Access policy requires MFA for all users and
+  cloud apps and legacy authentication is blocked for all users, or security defaults are on.
+  Assignments, exclusions, conditions, grant alternatives and authentication strengths must establish scope. Suitable sign-in results or a dated tenant-wide test review must also establish operation; registration alone cannot.
+- **DLP configuration** is supported when an enforced policy applies to all users or locations for Exchange,
+  SharePoint, OneDrive, Teams or Microsoft 365 Copilot. The absence of a Copilot-location policy is
+  assessed against planned requirements. Configuration must be accompanied by a dated review of tested protection behavior; simulation alone cannot establish enforcement.
+- **Label publishing** passes when an active publishing policy covers all users; policies limited
+  to groups are listed to confirm.
+- **Retention**, **Copilot connectors** and **Copilot licenses** are judged from the collected
+  policies, connector inventory and subscription capacity.
+
+The shared result then chooses the deployment recommendation in this order:
+
+1. Supported critical or high-priority remediation, a conflicting dated review, or a critical
+   earlier finding produces **Not ready for pilot**. Each such action is marked **Blocks pilot**.
+2. When fewer than half of the required checks could be answered from the evidence, the result is
+   **Readiness unconfirmed**; too little was collected to decide.
+3. Otherwise, remaining medium or low remediation (**Fix before broad rollout**) and checks the
+   evidence could not answer (**Confirm before pilot**) produce **Controlled pilot with conditions**.
+   An unanswered check is never counted as a failure.
+4. With no open required actions, the result is **Ready for a controlled pilot**.
+
+A documented pilot treatment in a readiness review can turn a supported high-priority remediation
+into a pilot condition; it stays open for broader adoption. Critical conditions cannot be treated.
 
 The rollout stages are **Just started**, **Preparing for pilot**, **Ready for pilot** and
 **Ready for broader adoption**. Each stage lists its exact requirements and open action IDs.
-Initial assessment evidence or a current reviewed scope establishes Preparing for pilot. Pilot
-readiness requires a current reviewed scope and plan, all required checks established, and any
-eligible pilot conditions recorded. Missing requirements keep the recommendation **Readiness
-unconfirmed**, except that a supported critical issue retains **Not ready for pilot**.
+Initial assessment evidence establishes Preparing for pilot. Ready for pilot matches the
+recommendation above: no blocking condition and at least half of the required checks answered.
 
-Broader adoption additionally requires reviewed pilot outcomes, a defined larger population,
-current reviews of every required control for that population, dated expansion approval and no
-open required actions. Both the stage and deployment recommendation then become **Ready for
-broader adoption**. Existing paid licenses or active usage never advance these milestones alone.
+Broader adoption additionally requires the pilot group that ran (a group name and head count is
+enough) and its reviewed plan, reviewed pilot outcomes, a defined larger population, current
+reviews of every required control for that population, dated expansion approval and no open
+required actions. Both the stage and deployment recommendation then become **Ready for broader
+adoption**. Existing paid licenses or active usage never advance these milestones alone.
+
+Every run writes a one-page **pilot readiness summary** (`*_summary.html`) beside the full report:
+the verdict, what to fix before the pilot, what to confirm, what to fix before broad rollout, what
+is already in place and guidance for choosing the pilot group. It is rendered from the same result
+and adds no scoring.
 
 The existing assessment profile accepts dated owner attestations in `readiness_review`. A valid
 current pass can answer a specific missing-evidence question but cannot erase an observed failure
@@ -178,30 +204,30 @@ The primary report prioritizes controls with a plausible causal relationship to 
 - Licensing and prerequisites: availability only; never a substitute for configuration evidence.
 
 The current core register contains 19 questions: 18 foundation control checks and a pilot-plan
-question. The reviewed plan is also an explicit pilot-readiness milestone requirement.
+question. The pilot plan is a planning step and is required only before broader adoption.
 
 | Domain | Questions |
 |---|---|
 | Identity and access | Sign-in policies; MFA registration; privileged and administrative roles |
 | Content access and ownership | Tenant sharing defaults; broad permissions; owners and inactive-site decisions |
-| Data protection | Label definitions; label publication; DLP coverage/enforcement; audit coverage; content retention requirements; access to sensitive pilot content |
+| Data protection | Label definitions; label publication; DLP coverage/enforcement; audit coverage; content retention requirements; access to sensitive content |
 | Applications and connectors | App consent/grants; connected sources and access boundaries |
-| Endpoints and threat protection | Pilot device/browser baseline; relevant active incidents |
-| Copilot licensing and prerequisites | License assignment; application prerequisites for the pilot population |
-| Pilot suitability and adoption | Reviewed pilot population, use cases, baseline and success measures; required to establish pilot readiness separately from foundation security checks |
+| Endpoints and threat protection | Device/browser baseline; active security incidents |
+| Copilot licensing and prerequisites | Copilot licenses available; Microsoft 365 Apps prerequisites |
+| Pilot suitability and adoption | Pilot use cases, baseline and success measures; a planning question that does not change the pilot decision |
 
 When explicitly supplied canonical facts determine a control result, they require `control_result`
 set to `pass` or `fail`, plus dated, complete tenant/scope metadata. An arbitrary count does not
 pass a control. Sign-in policies cannot establish MFA registration, and label definitions cannot
 establish publication. A lifecycle or DSPM artifact in a shared evidence tab cannot establish
-business-content permissions. Activity counts cannot establish an agreed pilot plan: pilot
-population and success measures need an explicit review. Explicitly scoped agents and external
+business-content permissions. Activity counts cannot establish an agreed pilot plan: use cases
+and success measures need an explicit review. Explicitly scoped agents and external
 AI add their own questions; the core register above stays unchanged.
 
 Missing required evidence creates a specific question for the responsible role. Source coverage
 means the question has assessable evidence; it does not certify policy effectiveness for every
-possible user or scenario. The operator still confirms the intended pilot population and business
-requirements. Supported dated raw control evidence uses a 35-day freshness window; aggregate
+possible user or scenario. The operator still confirms the business requirements; the pilot
+group can be chosen after the assessment. Supported dated raw control evidence uses a 35-day freshness window; aggregate
 usage uses seven days. Report-specific thresholds below retain their separate purposes.
 
 ## Conditions that are not universal failures
@@ -236,6 +262,14 @@ provider, validate:
 
 Provider controls change frequently. Validate them against the current contract and primary
 provider documentation rather than relying on product-name assumptions.
+
+## Evidence provenance and access paths
+
+Every dataset records how it was collected: the application credential (client secret or certificate), a workload application token or certificate, a signed-in administrator, or an imported file. Application permissions are always tried first; delegated sign-in only adds data Microsoft does not expose to applications, or fills a gap when no application path is configured. Provenance never changes an evidence ID or a control result. Partial-coverage sources, such as SharePoint tenant settings read through Microsoft Graph, keep the questions they cannot answer open. Preview-quality sources, such as sensitivity labels read through the Microsoft Graph beta API, are reported with their counts but cannot pass or fail a control. Collections saved before provenance existed show the identity as not recorded.
+
+## Getting-started guidance
+
+The report's **Getting started** section and the workbook's **Adoption Guidance** tab turn the assessment into a 30/60/90-day sequence: security gates and pre-pilot actions first, the controlled pilot with training and feedback next, then measurement, expansion decisions and governance of agents and external AI services. The guidance is advisory. It reads the result but never adds, removes or changes recommendations, actions, control results or the deployment decision. Adoption checklist items and the external-AI checklist carry the status "Owner review" and cannot pass a control. The content is versioned data in `Core/adoption_guidance_content.py`.
 
 ## Adoption, engagement, and optional extensibility
 
@@ -272,7 +306,9 @@ extensibility evidence cannot raise or lower the security and governance readine
 - One tenant condition should produce one action, even when several licenses expose it.
 - Status and priority must agree.
 - Recommendations must identify the observed condition, affected scope, next action, and evidence.
-- Exact objects belong in the engineer workbook; the HTML report should remain decision-oriented.
+- Exact objects belong in the engineer workbook and the linked technical evidence pages; the customer HTML report remains decision-oriented and aggregate-only.
+- Record counts and affected-entity counts are separate measures with stated units. Evidence is labelled as observed events, entity records, configuration, supporting context or aggregate-only, with its availability (complete, partial, unavailable, not retained, absent, historical or planning).
+- Legacy-authentication evidence uses the retained sign-in events matched by the existing client-type rule. Outcomes come from `status.errorCode` and `conditionalAccessStatus`: Succeeded (0, Conditional Access not failed), Blocked (Conditional Access failure or AADSTS 53000–53003; 50053 sign-in protection), Failed (other codes) or Unknown. The client type does not establish the exact protocol or a successful bypass. Microsoft-listed legacy client types that the rule does not match (for example MAPI over HTTP) are reported as a limitation, not added to the finding.
 - Marketing language, invented percentages, and unsupported causal claims are not acceptable
   evidence.
 - A control should be scored only when its applicability is known or clearly stated as conditional.
@@ -280,7 +316,7 @@ extensibility evidence cannot raise or lower the security and governance readine
   applicability is a remaining decision, not a pass. Optional capabilities cannot make the whole
   foundation assessment incomplete solely because they are unused.
 - Do not combine overlapping users, sites, files, links or permissions into one exposure total.
-- User-level Copilot evidence is opt-in for each workbook build and absent from HTML. Original
+- User-level Copilot evidence is included by default in each workbook build and absent from HTML. Original
   packaged inputs may still contain that detail and require restricted handling.
 
 ## Data exposure and oversharing assessment
@@ -316,3 +352,98 @@ changed contents. The source's own report date takes precedence; filenames and f
 are never date evidence. Unknown and future source dates remain qualified, and operator
 confirmations later than the evaluation date are rejected. Lifecycle freshness does not
 establish item permissions or replace the separate SAM/DSPM coverage requirements.
+
+## Investigation callouts
+
+Every recommended next step receives an investigation status on each report run, including
+opportunities and coverage work outside the primary Action Plan. It must have an exact supporting
+worksheet range or a visible explanation of the evidence gap, absence or planning decision.
+New services use the same evidence declaration and do not require another export selector.
+
+Recommendation producers pass `investigation=` to `new_recommendation()`, which preserves it as
+`InvestigationEvidence`. The shared implementation is `Core/investigation_contract.py`. Producers
+should declare evidence where they calculate the finding, using the exact selected records:
+
+```python
+investigation={
+    "kind": "records",
+    "sheet_name": "Device Investigation",
+    "records": selected_records,
+    "record_id_field": "id",
+    "entity_field": "deviceName",
+    "timestamp_field": "lastSyncDateTime",
+    "status_field": "complianceState",
+    "source": {
+        "api": source_api,
+        "collected_at": collected_at,
+        "window": collection_window,
+        "filter": selection_rule,
+        "scope": returned_population,
+        "pages": collected_pages,
+        "complete": source_complete,
+        "truncated": source_truncated,
+        "limitations": known_limitations,
+    },
+    "reconciliation": {"operation": "count", "expected": finding_count},
+}
+```
+
+Records are plain field/value objects containing the identifiers, relevant entities, timestamps,
+status and source-specific attributes needed to reproduce or investigate the result. The exporter
+preserves every supplied field and adds recommendation and evidence IDs. `source` identifies the
+API or file and documents scope, filters, collection window, pagination, completeness, truncation,
+permissions, licensing, retention and other limitations when known. Producers must explicitly say
+when these facts were not retained or were not verified; an offline rebuild must not invent them.
+Reconciliation supports `count`, `distinct` and `sum`; the latter two also require `field`. Its
+expected value must use the same population and unit as the finding. Mismatches remain visible.
+
+Use `kind: "configuration"` with retained configuration records when those records support the
+action. If no affected-record list exists, declare `kind: "unavailable"`, `"absence"` or
+`"planning"` with a precise `reason` and available source context. A missing permission, failed
+request, unretained source records, observed absence of a control and a business planning decision
+are different explanations. No declaration or an invalid declaration produces a visible
+`Detail mapping missing` status; it does not silently imply that detail was checked or unavailable.
+Legacy adapters support older saved recommendations while producers adopt this universal contract.
+
+Actions with identifiable affected objects link to their exact rows in a dedicated evidence
+worksheet or the Excel workbook's `Investigation Items` tab. Each worklist row includes the item name and identifier, the reason for review,
+relevant status and attributes, available activity dates, the source detail location, and where
+to investigate next. The Action Plan shows a short item count; the customer HTML report keeps
+object and user details in the workbook.
+
+This worklist selects objects that match the action's review condition, such as unresolved
+incidents, high-risk devices, flagged applications, or specific sharing settings. It does not
+duplicate all inventory or turn an aggregate metric or missing control into an affected object.
+If the collected detail cannot identify specific items, the action retains its investigation
+status, precise limitation and instructions to confirm the control or scope. Historical callouts
+do not acquire current objects. Recommendations, the Evidence Index and the Action Plan use exact
+supporting ranges rather than a generic worksheet name when records are available.
+
+Comments on the Action Plan's investigation cells explain count qualifications or why no item
+list is available. Item counts describe the selected rows, not necessarily the finding's original
+unit: an application may have several permission grants, and one site row may summarize several sharing
+links. The original detail and qualifications remain available. Dates, permissions, licensing,
+report scope and collection limitations still apply; the worklist does not collect new evidence
+or establish that a previously observed item is still affected.
+
+Legacy-authentication callouts link directly to `Legacy Sign-In Detail`: one row per matching
+sign-in event, including repeated requests by the same account or application. The worksheet
+preserves the event and correlation IDs, user, application and resource, UTC timestamp, client,
+IP address, device fields, error and Conditional Access results, and collection context. The
+same client-name classifier drives the summarized count and detail selection. Success, failure
+and an unknown outcome remain distinct; the client classification alone does not prove that
+access succeeded or bypassed a control. See Microsoft's [legacy-authentication investigation
+guidance](https://learn.microsoft.com/entra/identity/conditional-access/policy-block-legacy-authentication).
+
+The sign-in query requests records since seven days before collection and follows pagination.
+Its saved request, page counts, limits and truncation status describe the actual scope. Older
+collections without request metadata retain that uncertainty rather than acquiring an inferred
+exact start date. API event-type scope, permissions, licensing and retention can limit what was
+returned. Rebuilding from a saved collection does not retrieve expired or omitted events. A
+count without retained records produces a visible explanation instead of an empty drill-down.
+
+Actionable MFA-registration callouts link to `MFA Registration Review`, listing only returned
+users explicitly reported as not registered. Unknown and conflicting records are not treated as
+unregistered; members, guests and administrators retain their source classifications so the
+customer can confirm scope and exceptions. These security investigation details stay in the
+workbook. The HTML report shows counts, qualifications and direct workbook links.

@@ -6,6 +6,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from Core.orchestrator_powershell import powershell_environment
+
 
 ROOT = Path(__file__).resolve().parents[1]
 POWERSHELL = shutil.which("powershell") or shutil.which("pwsh")
@@ -48,7 +50,7 @@ if ($null -ne $paths) { $options.Path = @($paths) }
         (self.root / "harness.ps1").write_text(harness, encoding="utf-8")
         result = subprocess.run(
             [POWERSHELL, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(self.root / "harness.ps1")],
-            cwd=cwd or self.root, capture_output=True, text=True, timeout=30,
+            cwd=cwd or self.root, capture_output=True, text=True, timeout=30, env=powershell_environment(POWERSHELL),
         )
         self.assertNotIn("synthetic-never-log", result.stdout + result.stderr)
         return result
@@ -126,6 +128,8 @@ if ($null -ne $paths) { $options.Path = @($paths) }
             "Reports/tenant-a.html",
             ".cache/purview/tenant-a.json",
             ".cache/sharepoint_dag/tenant-a/export.csv",
+            ".cache/portal-reviews/pdf-review/portal-review.json",
+            ".cache/collector_diagnostics.log",
         )
         artifacts = []
         for name in names:
@@ -143,7 +147,7 @@ if ($null -ne $paths) { $options.Path = @($paths) }
         self.assertEqual(0, result.returncode, result.stderr)
         for artifact in artifacts:
             self.assertFalse(artifact.exists(), artifact)
-        for location in ("output/collections", "output/assessments", "output/portal-reviews", "Reports", ".cache/purview", ".cache/sharepoint_dag"):
+        for location in ("output/collections", "output/assessments", "output/portal-reviews", "Reports", ".cache/purview", ".cache/sharepoint_dag", ".cache/portal-reviews"):
             self.assertTrue((self.root / location).is_dir(), location)
         self.assertTrue(self.keep.exists())
         self.assertTrue(self.selected.exists())
@@ -154,7 +158,7 @@ if ($null -ne $paths) { $options.Path = @($paths) }
         artifacts = self.make_default_artifacts()
         result = self.run_cleanup(what_if=True)
         self.assertEqual(0, result.returncode, result.stderr)
-        self.assertEqual(7, result.stdout.count("[SELECTED]"))
+        self.assertEqual(len(artifacts), result.stdout.count("[SELECTED]"))
         self.assertEqual(1, result.stdout.count("What if:"))
         for artifact in artifacts:
             self.assertTrue(artifact.exists(), artifact)
@@ -164,7 +168,7 @@ if ($null -ne $paths) { $options.Path = @($paths) }
         # No -Confirm override: the noninteractive host cannot approve deletion.
         result = self.run_cleanup(confirm=None)
         self.assertNotEqual(0, result.returncode)
-        self.assertEqual(7, result.stdout.count("[SELECTED]"))
+        self.assertEqual(len(artifacts), result.stdout.count("[SELECTED]"))
         self.assertNotIn("[REMOVED]", result.stdout)
         for artifact in artifacts:
             self.assertTrue(artifact.exists(), artifact)
@@ -186,6 +190,49 @@ if ($null -ne $paths) { $options.Path = @($paths) }
         self.assertTrue(self.selected.exists())
         self.assertTrue(self.keep.exists())
 
+    def test_customer_assessment_tree_is_selected_once_and_roots_are_retained(self):
+        customer = self.root / "Reports" / "Example Customer"
+        report = customer / "assessment" / "deliverables" / "build" / "summary.html"
+        report.parent.mkdir(parents=True)
+        report.write_text("synthetic report", encoding="utf-8")
+        result = self.run_cleanup(what_if=True)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(1, result.stdout.count("[SELECTED]"))
+        self.assertTrue(report.exists())
+        result = self.run_cleanup()
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertFalse(customer.exists())
+        self.assertTrue((self.root / "Reports").is_dir())
+
+    def test_diagnostics_directory_is_refused_before_any_default_removal(self):
+        diagnostic = self.root / ".cache" / "collector_diagnostics.log"
+        diagnostic.mkdir(parents=True)
+        report = self.root / "Reports" / "customer" / "assessment" / "collection.json"
+        report.parent.mkdir(parents=True)
+        report.write_text("retain on validation failure", encoding="utf-8")
+        result = self.run_cleanup()
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("Expected a collector diagnostics file", result.stderr)
+        self.assertTrue(report.exists())
+        self.assertTrue(diagnostic.exists())
+
+    def test_diagnostics_junction_is_refused_before_any_default_removal(self):
+        report = self.root / "Reports" / "customer" / "collection.json"
+        report.parent.mkdir(parents=True)
+        report.write_text("retain on validation failure", encoding="utf-8")
+        outside = self.root.parent / "outside-diagnostics"
+        outside.mkdir()
+        retained = outside / "keep.log"
+        retained.write_text("preserve", encoding="utf-8")
+        diagnostic = self.root / ".cache" / "collector_diagnostics.log"
+        diagnostic.parent.mkdir()
+        self.make_junction(diagnostic, outside)
+        result = self.run_cleanup()
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("reparse point", result.stderr)
+        self.assertTrue(report.exists())
+        self.assertTrue(retained.exists())
+
     def run_reparse_probe(self, body):
         harness = """
 $ErrorActionPreference = 'Stop'
@@ -195,7 +242,7 @@ $item = [pscustomobject]@{ FullName='synthetic-placeholder'; Attributes=[IO.File
         (self.root / "reparse-probe.ps1").write_text(harness, encoding="utf-8")
         return subprocess.run(
             [POWERSHELL, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(self.root / "reparse-probe.ps1")],
-            cwd=self.root, capture_output=True, text=True, timeout=30,
+            cwd=self.root, capture_output=True, text=True, timeout=30, env=powershell_environment(POWERSHELL),
         )
 
     def test_cloud_placeholders_are_allowed_but_other_reparse_types_are_not(self):

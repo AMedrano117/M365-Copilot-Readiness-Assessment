@@ -6,6 +6,7 @@ from uuid import UUID
 from datetime import datetime
 from azure.identity._exceptions import CredentialUnavailableError
 from azure.core.exceptions import ClientAuthenticationError, HttpResponseError
+from .get_graph_client import GraphRequestError
 from .processor import process_and_print_all_information
 from .spinner import get_timestamp
 from .orchestrator_validation import validate_and_prepare_services
@@ -21,12 +22,17 @@ from .orchestrator_pipelines import create_pipelines
 from . import console_reporting as console
 from .offline_collection import CollectionPackagingError
 from .sharepoint_configuration import SHAREPOINT_ADMIN_URL_REQUIRED, is_valid_sharepoint_admin_url
+from .tenant_identity import TenantMismatchError, confirm_tenant_identity
 
 # Service-specific imports are now lazy-loaded based on SERVICES parameter
 
 
 async def resolve_tenant_name(client, tenant_id):
     """Best-effort tenant display name lookup for report labeling."""
+    from .tenant_identity import read_organization
+    organization = await read_organization(client)
+    if organization.get('displayName'):
+        return organization['displayName']
     try:
         org = await client.organization.get()
         if org and getattr(org, 'value', None):
@@ -59,6 +65,11 @@ async def resolve_purview_organization(client):
     configured = os.environ.get('PURVIEW_ORGANIZATION', '').strip()
     if configured:
         return configured
+    from .tenant_identity import initial_domain, read_organization
+    domain = initial_domain(await read_organization(client))
+    if domain:
+        os.environ['PURVIEW_ORGANIZATION'] = domain
+        return domain
     try:
         org = await client.organization.get()
         if org and getattr(org, 'value', None):
@@ -112,7 +123,8 @@ async def resolve_workload_configuration(client, interactive_plan, explicit_url=
     if permission_profile == 'restricted':
         return ''
     purview = interactive_plan.get('purview', {})
-    if purview.get('selected') and purview.get('will_attempt') and purview.get('application_auth'):
+    if purview.get('selected') and purview.get('will_attempt') and (
+            purview.get('application_auth') or purview.get('application_token_possible')):
         await resolve_purview_organization(client)
     sharepoint = interactive_plan.get('sharepoint', {})
     if sharepoint.get('selected') and sharepoint.get('will_attempt'):
@@ -130,10 +142,12 @@ async def collect_sharepoint_with_retry(admin_url, tenant_id, interactive_auth='
     )
     if payload.get('available') or interactive_auth == 'skip' or not sys.stdin.isatty():
         return payload
-    retry_url = (prompt or input)(
-        'SharePoint collection is unavailable. Enter the verified admin URL to retry once '
-        '(the same URL is allowed), or press ENTER to continue: '
-    ).strip()
+    from . import collection_progress
+    with collection_progress.paused():
+        retry_url = (prompt or input)(
+            'SharePoint collection is unavailable. Enter the verified admin URL to retry once '
+            '(the same URL is allowed), or press ENTER to continue: '
+        ).strip()
     if retry_url:
         if is_valid_sharepoint_admin_url(retry_url):
             return await collect_sharepoint_governance_via_powershell(
@@ -150,10 +164,10 @@ async def orchestrate(
     report_format='excel',
     sam_report_paths=None,
     dspm_report_paths=None,
-    include_user_usage_detail=False,
+    include_user_usage_detail=True,
     copilot_dashboard_export=None,
     power_platform_inventory=None,
-    preview_collectors='none',
+    preview_collectors='auto',
     sharepoint_admin_url=None,
     legacy_power_platform_collector=False,
     check_connections=False,
@@ -169,6 +183,12 @@ async def orchestrate(
     lifecycle_report_dates=None,
     portal_review=None,
     permission_profile=None,
+    confirm_tenant=None,
+    delegated='auto',
+    interactive_tenant_confirmation=False,
+    show_progress=True,
+    customer_name=None,
+    extra_exports=None,
 ):
     """Orchestrate gathering of service information and service plans.
     
@@ -214,6 +234,13 @@ async def orchestrate(
         service_config = validate_and_prepare_services(services)
         if service_config is None:
             return 1
+        from .auth_plan import print_auth_plan
+        from .delegated_auth import delegated_state as _delegated_state
+        auth_plan = {}
+
+        def current_delegated_state():
+            return _delegated_state(os.environ.get('TENANT_ID', tenant_id), os.environ.get('CLIENT_ID', ''),
+                                    delegated, interactive_auth, permission_profile)
         
         # Extract service flags for easy access
         run_all = service_config['run_all']
@@ -236,12 +263,17 @@ async def orchestrate(
             client, services_and_licenses, has_license_data = await setup_graph_and_licenses(
                 tenant_id, True, collect_licenses=False
             )
+            await confirm_tenant_identity(client, tenant_id, expected_domain=confirm_tenant,
+                                          interactive=interactive_tenant_confirmation)
             restricted_preflight = await run_connection_checks(
                 client, service_config, interactive_plan, probe_endpoints=check_connections,
                 tenant_id=tenant_id, permission_profile=permission_profile,
+                interactive_auth=interactive_auth, delegated=delegated, auth_plan_out=auth_plan,
+                delegated_state=current_delegated_state(),
             )
             print_connection_results(restricted_preflight, detailed=check_connections)
             if check_connections:
+                print_auth_plan(auth_plan, detailed=True)
                 return connection_exit_code(restricted_preflight)
             if any(item.get('access_audit_failed') for item in restricted_preflight):
                 console.status('Restricted access verification failed. Review the named grants before collecting tenant evidence.', tone='error')
@@ -256,6 +288,8 @@ async def orchestrate(
                 permission_profile=permission_profile,
             )
             client, _, _ = await setup_graph_and_licenses(tenant_id, True)
+            await confirm_tenant_identity(client, tenant_id, expected_domain=confirm_tenant,
+                                          interactive=interactive_tenant_confirmation)
             resolved_sharepoint_admin_url = await resolve_workload_configuration(
                 client, interactive_plan,
                 explicit_url=sharepoint_admin_url,
@@ -277,8 +311,12 @@ async def orchestrate(
                 interactive_auth=interactive_auth,
                 tenant_id=tenant_id,
                 permission_profile=permission_profile,
+                delegated=delegated,
+                delegated_state=current_delegated_state(),
+                auth_plan_out=auth_plan,
             )
             print_connection_results(results, detailed=True)
+            print_auth_plan(auth_plan, detailed=True)
             return connection_exit_code(results)
         
         # Load modules and analyze service plans
@@ -310,6 +348,8 @@ async def orchestrate(
         # Initialize Graph client and licenses
         if restricted_preflight is None:
             client, services_and_licenses, has_license_data = await setup_graph_and_licenses(tenant_id, show_graph_messages)
+            await confirm_tenant_identity(client, tenant_id, expected_domain=confirm_tenant,
+                                          interactive=interactive_tenant_confirmation)
         else:
             has_license_data = await load_license_context(client, services_and_licenses)
         tenant_id = await resolve_assessment_tenant_id(client, tenant_id)
@@ -332,9 +372,13 @@ async def orchestrate(
             probe_endpoints=False,
             tenant_id=tenant_id,
             permission_profile=permission_profile,
+            delegated=delegated,
+            delegated_state=current_delegated_state(),
+            auth_plan_out=auth_plan,
         )
         if restricted_preflight is None:
             print_connection_results(connection_results, detailed=False)
+        print_auth_plan(auth_plan, detailed=False)
         if any(item.get('access_audit_failed') for item in connection_results):
             console.status('Restricted access verification failed. Review the named grants before collecting tenant evidence.', tone='error')
             return 2
@@ -357,8 +401,10 @@ async def orchestrate(
         checkpoint = CollectionCheckpoint(
             save_collection_path, service_config=service_config,
             tenant_id=tenant_id, tenant_name=tenant_name,
+            customer_name=customer_name,
             enabled_collectors=enabled_collectors, connection_results=connection_results,
             evaluation_date=evaluation_date,
+            auth_plan=auth_plan,
             assessment_settings={
                 **lifecycle_options,
                 'report_format': report_format, 'data_exposure_enabled': run_m365 or run_purview,
@@ -384,7 +430,32 @@ async def orchestrate(
                 availability_status='not_requested',
                 reason='Restricted permission profile: SharePoint administrative collection is not requested; supply supported exports or saved evidence.',
             )
+        # Application-permission baseline for tenant sharing settings. It needs
+        # neither a certificate nor the SharePoint admin URL, so it also runs in
+        # the Restricted profile and when administrative sign-in is skipped.
+        sharepoint_graph = None
+        from .collector_registry import source_allowed
+        if run_m365 and source_allowed('sharepoint_tenant_settings', permission_profile):
+            from .sharepoint_graph_settings import collect_sharepoint_tenant_settings_graph
+            sharepoint_graph = await collect_sharepoint_tenant_settings_graph(client)
+            if sharepoint_graph.get('available'):
+                console.detail('SharePoint tenant sharing settings read through Microsoft Graph (partial coverage).')
+            else:
+                console.status('SharePoint tenant settings (Microsoft Graph): ' + (sharepoint_graph.get('reason') or 'unavailable'), tone='warning')
         sharepoint_plan = interactive_plan.get('sharepoint', {})
+        # Live progress bars (interactive terminals only): one per collector
+        # that will run, plus an overall bar. Stopped after collection and in
+        # the finally block below on every exit path.
+        from . import collection_progress
+        collection_progress.reset()
+        if sharepoint_plan.get('will_attempt'):
+            collection_progress.register('sharepoint', 'SharePoint')
+        for progress_key, progress_label, progress_enabled in (
+                ('m365', 'M365', run_m365), ('entra', 'Entra', run_entra), ('defender', 'Defender', run_defender),
+                ('purview', 'Purview', run_purview and permission_profile != 'restricted')):
+            if progress_enabled:
+                collection_progress.register(progress_key, progress_label)
+        collection_progress.start(enabled=show_progress)
         if sharepoint_plan.get('will_attempt'):
             try:
                 sharepoint_data = await collect_sharepoint_with_retry(
@@ -399,7 +470,10 @@ async def orchestrate(
                 raise
         elif sharepoint_plan.get('selected'):
             sharepoint_data['reason'] = sharepoint_plan.get('skip_reason') or sharepoint_data['reason']
-            console.status('SharePoint: skipped. ' + sharepoint_data['reason'], tone='warning')
+            console.status('SharePoint administration: skipped; ' + sharepoint_data['reason'], tone='warning')
+        if sharepoint_graph is not None:
+            from .sharepoint_governance import merge_sharepoint_payloads
+            sharepoint_data = merge_sharepoint_payloads(sharepoint_graph, sharepoint_data)
         exported_sam_paths = [
             item.get('path') for item in (sharepoint_data.get('exported_files', []) or [])
             if isinstance(item, dict) and item.get('path')
@@ -412,6 +486,35 @@ async def orchestrate(
             except (ValueError, OSError) as exc:
                 raise CollectionPackagingError(checkpoint.path, exc) from exc
         checkpoint.record_sharepoint(sharepoint_data)
+
+        # Optional delegated enrichment for data Microsoft exposes only to
+        # signed-in administrators. It runs once, before the parallel
+        # pipelines, so a browser prompt never interleaves with collection.
+        delegated_evidence = {}
+        limited_mode_plan = (auth_plan.get('datasets') or {}).get('copilot_limited_mode') or {}
+        if run_m365 and limited_mode_plan.get('selected_path') == 'graph_delegated':
+            from .delegated_auth import acquire_delegated_session
+            from .copilot_settings import collect_copilot_limited_mode, not_collected
+            session, delegated_reason = await acquire_delegated_session(
+                os.environ.get('TENANT_ID', tenant_id), os.environ.get('CLIENT_ID', ''),
+                mode=delegated, interactive_auth=interactive_auth, permission_profile=permission_profile)
+            if session is not None:
+                auth_plan.setdefault('identities', []).append({'id': 'delegated', 'type': 'user', **session.identity})
+                delegated_evidence['copilot_limited_mode'] = await collect_copilot_limited_mode(session)
+                account = session.identity.get('upn') or 'the signed-in administrator'
+                console.status(('Delegated sign-in: reused the saved sign-in for ' if getattr(session, 'reused', False)
+                                else 'Delegated sign-in: signed in as ') + account
+                               + '; Copilot limited mode ' + ('collected.' if delegated_evidence['copilot_limited_mode'].get('available')
+                                                              else 'unavailable.')
+                               + (' Remove .cache/delegated to sign in as someone else.' if getattr(session, 'reused', False) else ''))
+            else:
+                delegated_evidence['copilot_limited_mode'] = not_collected(delegated_reason)
+                if delegated == 'required':
+                    console.status('Delegated sign-in is required (--delegated required) but did not complete: ' + delegated_reason, tone='error')
+                    checkpoint.finish('failed')
+                    return 2
+                console.detail('Delegated enrichment skipped: ' + delegated_reason)
+            checkpoint.save()
         
         # Create service pipelines with shared context
         pipelines = create_pipelines(
@@ -428,12 +531,14 @@ async def orchestrate(
             sharepoint_data=sharepoint_data,
             legacy_power_platform_collector=legacy_power_platform_collector,
             permission_profile=permission_profile,
+            delegated_evidence=delegated_evidence,
         )
         
         # Run service pipelines in parallel. Defender can gather its own data while
         # Purview runs, but waits for the Purview result before calculating the
         # cross-service Copilot data-governance recommendation.
         saved = await run_checkpointed_pipelines(pipelines, checkpoint)
+        collection_progress.stop()
         
         from .console_reporting import detail, status, print_collection_handoff
         detail(f"[{get_timestamp()}] Collection tasks finished.")
@@ -460,12 +565,16 @@ async def orchestrate(
             diagnostics=payload['package'].get('diagnostics', []),
             collection_input=saved,
         )
+        from .export_paths import new_deliverables_directory
         output = render_with_failure_receipt(
             process_and_print_all_information, receipt=receipt,
             **results,
             tenant_name=tenant_name,
+            customer_name=customer_name,
+            output_dir=new_deliverables_directory(receipt['folder']),
             open_html_report=open_html_report,
             report_format=report_format,
+            extra_exports=extra_exports,
             sam_report_paths=packaged_inputs.get('sam_report', []),
             dspm_report_paths=packaged_inputs.get('dspm_report', []),
             data_exposure_enabled=(run_m365 or run_purview),
@@ -504,12 +613,16 @@ async def orchestrate(
         console.status(f"Authentication failed: {str(e)}", 'error')
         print("\nPlease check your credentials and permissions.")
         return 2
-    except HttpResponseError as e:
+    except (HttpResponseError, GraphRequestError) as e:
         console.section('PERMISSION ERROR', 'error')
         console.status(f"HTTP {e.status_code}: {e.message}", 'error')
         if e.status_code == 403:
             print("\nThe selected resource rejected the application token. Run --check-connections to distinguish permission, role, licensing, and provisioning states.")
         return 2 if e.status_code in {401, 403} else 1
+    except TenantMismatchError as e:
+        console.section('TENANT CONFIRMATION', 'error')
+        console.status(str(e), 'error')
+        return 2
     except CollectionPackagingError as e:
         console.section('PACKAGING ERROR', 'error')
         console.status(str(e), 'error')
@@ -525,3 +638,7 @@ async def orchestrate(
         console.status(f"An unexpected error occurred: {str(e)}", 'error')
         console.detail(f"Error type: {type(e).__name__}")
         return 1
+    finally:
+        # Restore normal console output on every exit path, including Ctrl+C.
+        from . import collection_progress
+        collection_progress.stop()

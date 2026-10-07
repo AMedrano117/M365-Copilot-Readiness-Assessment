@@ -26,18 +26,24 @@ def _collection_outcome(area, collected_client, *, source=''):
         and str(state.get('availability_status') or state.get('status') or '').lower() not in ignored
     }
     suffix = f' ({source})' if source else ''
+    from . import collection_progress
+    progress_key = area.lower().replace(' ', '_')
     with _stdout_lock:
         if active:
             complete = sum(source_is_complete(collected_client, key, state) for key, state in active.items())
+            usable = any(state.get('available') is True for state in active.values())
+            collection_progress.finish(progress_key, done=complete, total=len(active),
+                                       state='done' if complete == len(active) else 'partial' if complete or usable else 'failed')
             if complete == len(active):
                 console.status(f'{area}: collection complete{suffix}; {complete}/{len(active)} datasets read.', tone='success')
             else:
-                usable = any(state.get('available') is True for state in active.values())
                 outcome = 'partial collection' if complete or usable else 'collection unavailable'
                 console.status(f'{area}: {outcome}{suffix}; {complete}/{len(active)} datasets completely read. See source coverage.', tone='warning')
         elif collected_client is None or getattr(collected_client, 'available', None) is False:
+            collection_progress.finish(progress_key, state='failed')
             console.status(f'{area}: collection unavailable{suffix}; see source coverage.', tone='warning')
         else:
+            collection_progress.finish(progress_key, state='done')
             console.status(f'{area}: collection finished{suffix}; dataset completeness was not recorded.')
 
 
@@ -48,13 +54,14 @@ def create_pipelines(
     service_config,
     interactive_auth='auto',
     interactive_plan=None,
-    include_user_usage_detail=False,
+    include_user_usage_detail=True,
     copilot_dashboard_export=None,
     power_platform_inventory=None,
-    preview_collectors='none',
+    preview_collectors='auto',
     sharepoint_data=None,
     legacy_power_platform_collector=False,
     permission_profile='standard',
+    delegated_evidence=None,
 ):
     """Create all service pipeline functions with shared context.
     
@@ -128,7 +135,8 @@ def create_pipelines(
         """M365: Gather client data, then process"""
         if not run_m365:
             return ([], [])
-        
+
+        m365_client = None
         try:
             console.status('M365: collecting users, licensing and Copilot usage...' if permission_profile == 'restricted'
                            else 'M365: collecting users, sites, licensing and Copilot usage...')
@@ -144,6 +152,14 @@ def create_pipelines(
             m365_client.sharepoint_governance = sharepoint_data or {
                 'available': False, 'reason': 'SharePoint governance collection was not requested.'
             }
+            # Delegated-only enrichment collected before the pipelines started.
+            limited_mode = (delegated_evidence or {}).get('copilot_limited_mode')
+            if isinstance(limited_mode, dict):
+                m365_client.copilot_limited_mode = limited_mode
+                m365_client.collection_status['copilot_limited_mode'] = {
+                    key: value for key, value in limited_mode.items()
+                    if key not in {'is_enabled_for_group', 'group_id'}
+                }
             
             # Processing phase
             import sys
@@ -156,6 +172,14 @@ def create_pipelines(
             license_info, recommendations = await get_m365_info(client, services_and_licenses, m365_client)
             from .sharepoint_governance import build_sharepoint_recommendations
             recommendations.extend(build_sharepoint_recommendations(m365_client.sharepoint_governance))
+            from .report_privacy import build_report_privacy_recommendations
+            report_settings = getattr(m365_client, 'report_settings', {}) or {}
+            recommendations.extend(build_report_privacy_recommendations(report_settings))
+            from .copilot_audit import build_copilot_audit_recommendations
+            recommendations.extend(build_copilot_audit_recommendations(getattr(m365_client, 'copilot_interaction_audit', None)))
+            if include_user_usage_detail and report_settings.get('display_concealed_names') is True:
+                console.status('Usage reports conceal user names in this tenant; per-user Copilot detail will show '
+                               'pseudonymous identifiers. Aggregate counts are unaffected.', tone='warning')
 
             with _stdout_lock:
                 console.detail(f'[{get_timestamp()}]   M365 Data Processing finished.\n')
@@ -175,6 +199,17 @@ def create_pipelines(
             console.status(f"M365 pipeline failed: {e}", tone='error')
             if console.is_verbose():
                 traceback.print_exc()
+            if m365_client is not None:
+                # Keep evidence that was already collected; per-source status
+                # records remain authoritative for what is missing.
+                try:
+                    from .sharepoint_governance import build_sharepoint_recommendations
+                    recommendations = build_sharepoint_recommendations(
+                        getattr(m365_client, 'sharepoint_governance', None) or sharepoint_data or {})
+                except Exception:
+                    recommendations = []
+                return ({'licenses': [], '_client': m365_client,
+                         'pipeline_error': str(e)[:300]}, recommendations)
             return ([], [])
     
     async def entra_pipeline():
@@ -228,6 +263,17 @@ def create_pipelines(
         
         try:
             console.status('Purview: loading policy and compliance evidence...')
+            # Application-permission baseline: label definitions through
+            # Microsoft Graph work with a client secret and need no PowerShell.
+            graph_labels = None
+            from .collector_registry import source_allowed as _source_allowed
+            if _source_allowed('purview_labels_graph', permission_profile):
+                from .purview_graph_labels import collect_sensitivity_labels_graph
+                graph_labels = await collect_sensitivity_labels_graph(client)
+                if graph_labels.get('available'):
+                    console.detail(f"Sensitivity labels read through Microsoft Graph (beta): {graph_labels.get('count', 0)} definition(s).")
+                else:
+                    console.detail('Sensitivity labels (Microsoft Graph): ' + (graph_labels.get('reason') or 'unavailable'))
             # Check if Purview data is available from stdin
             purview_data_source = os.environ.get('PURVIEW_DATA_SOURCE')
             allow_purview_collection = interactive_plan['purview'].get('will_attempt', True)
@@ -251,17 +297,34 @@ def create_pipelines(
             else:
                 use_deployment_enrichment = False
              
+            from .get_purview_client import get_purview_client, load_purview_data_from_stdin
+            from .purview_graph_labels import merge_purview_payloads
+            from .orchestrator_powershell import LAST_PURVIEW_FAILURE
+            graph_labels_available = bool(graph_labels and graph_labels.get('available'))
             if use_deployment_enrichment:
-                from .get_purview_client import get_purview_client
-                purview_client = await get_purview_client(client)
+                powershell_payload = load_purview_data_from_stdin() if graph_labels_available else None
+                if powershell_payload:
+                    # PowerShell evidence plus the Graph label cross-check.
+                    purview_client = await get_purview_client(
+                        client, payload=merge_purview_payloads(powershell_payload, graph_labels))
+                else:
+                    purview_client = await get_purview_client(client)
             else:
-                purview_client = None
+                # Graph-only baseline: labels from Graph, every PowerShell
+                # dataset recorded as unavailable with its unlock steps.
+                merged_payload = merge_purview_payloads(
+                    None, graph_labels,
+                    powershell_reason=(LAST_PURVIEW_FAILURE.get('reason', '') if attempted_collection
+                                       else interactive_plan['purview'].get('skip_reason') or ''),
+                )
+                purview_client = await get_purview_client(client, payload=merged_payload) if merged_payload else None
+            if not use_deployment_enrichment:
                 if not attempted_collection:
                     with _stdout_lock:
                         import sys
                         reason = interactive_plan['purview'].get('skip_reason') or 'optional authentication was not selected'
-                        console.status(f'Purview: skipped; {reason}. Configuration remains not assessed.', tone='warning')
-                        console.detail(f'[{get_timestamp()}]   ℹ️  Purview deployment enrichment skipped; Purview configuration will be reported as not assessed\n')
+                        console.status(f'Purview PowerShell: skipped; {reason}. DLP, retention, label policies and audit configuration remain not assessed.', tone='warning')
+                        console.detail(f'[{get_timestamp()}]   ℹ️  Purview PowerShell skipped; datasets it provides will be reported as not assessed\n')
                         sys.stdout.flush()
             
             if purview_data_source == 'stdin':
@@ -273,7 +336,8 @@ def create_pipelines(
             if purview_client is None:
                 if attempted_collection or use_deployment_enrichment:
                     _collection_outcome('Purview', None)
-                return {'available': False, 'recommendations': []}
+                return {'available': False, 'recommendations': [],
+                        'reason': LAST_PURVIEW_FAILURE.get('reason', '') if attempted_collection else ''}
             
             # Processing phase
             with _stdout_lock:
@@ -361,6 +425,8 @@ def create_pipelines(
 
             if allow_pp_collection:
                 console.status('Power Platform: collecting environment and app inventory...')
+                from . import collection_progress
+                collection_progress.begin('power_platform', 'Power Platform')
                 # Data already collected in pre-flight (or not available)
                 # Just gather and process
                 with _stdout_lock:
@@ -431,6 +497,8 @@ def create_pipelines(
 
             if allow_pp_collection:
                 console.status('Copilot Studio: collecting agent inventory...')
+                from . import collection_progress
+                collection_progress.begin('copilot_studio', 'Copilot Studio')
                 with _stdout_lock:
                     console.detail(f'[{get_timestamp()}]   Copilot Studio Gathering started.\n')
                     sys.stdout.flush()

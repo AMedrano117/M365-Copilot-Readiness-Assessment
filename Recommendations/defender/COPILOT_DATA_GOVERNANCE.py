@@ -37,17 +37,21 @@ def get_recommendation(purview_client=None, defender_client=None, defender_insig
             reasons.append(f"{label}: {detail}")
 
     if unavailable:
-        return new_recommendation(
+        # Engineer-register summary only. Each affected required check already
+        # carries its own gap and unlock step, so this row is not a second action.
+        row = new_recommendation(
             service="Defender", feature="Microsoft 365 data governance evidence",
             status=NOT_ASSESSED_STATUS,
             observation=f"Core Purview collection was incomplete for: {', '.join(unavailable)}.",
-            recommendation="Review the Purview collection coverage table for the source-specific reason and read role, then rerun with: python main.py --interactive-auth fresh. " + " ".join(reasons),
+            recommendation="Review the Purview collection coverage table for the source-specific reason and read role, then rerun. " + " ".join(reasons),
             priority="High", link_text="Microsoft Purview permissions",
             link_url="https://learn.microsoft.com/purview/purview-permissions",
-            category=CATEGORY_SCAN_COVERAGE, disposition="Coverage",
+            category=CATEGORY_SCAN_COVERAGE, disposition="Reference",
             evidence_key="purview_policy_detail",
-            evidence_basis="Not verified", confidence="Unknown",
+            evidence_basis="Collection context", confidence="Unknown",
         )
+        row["DomainId"] = "data_protection"
+        return row
 
     dlp = getattr(purview_client, "dlp_policies", {}) or {}
     rules = getattr(purview_client, "dlp_rules", {}) or {}

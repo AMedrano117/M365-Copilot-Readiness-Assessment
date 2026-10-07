@@ -11,13 +11,13 @@ still needs evidence. No percentage or usage threshold advances readiness automa
 | Stage | Required evidence |
 |---|---|
 | Just started | Initial state before collected evidence or a current reviewed scope is available. |
-| Preparing for pilot | Assessment evidence or a current reviewed scope is available; one or more pilot requirements remain open. |
-| Ready for pilot | Current reviewed pilot scope and plan, all applicable pilot controls established, and remaining eligible pilot conditions documented. Unresolved historical findings and missing required evidence still block this stage. |
-| Ready for broader adoption | Pilot requirements met, successful reviewed pilot outcomes, a distinct larger population with current control reviews, current expansion approval, and no remaining required remediation or confirmation actions. |
+| Preparing for pilot | Assessment evidence is available; a blocking condition remains or too few required checks were answered. |
+| Ready for pilot | No blocking condition in the tenant-wide baseline (or a documented pilot treatment for it) and at least half of the required checks answered. Unanswered checks and non-blocking remediation remain as pilot conditions. No pilot roster or reviewed scope is needed. |
+| Ready for broader adoption | Pilot requirements met, the pilot group that ran and its reviewed plan recorded, successful reviewed pilot outcomes, a distinct larger population with current control reviews, current expansion approval, and no remaining required remediation or confirmation actions. |
 
 The report lists exact requirements and related action IDs. Its counts distinguish established
 controls, observed issues and unanswered controls; `pilot_blockers` counts open or failed pilot
-requirements, including the scope and plan. These counts measure different things and are not
+requirements and `pilot_conditions` counts the conditions to confirm or fix. These counts measure different things and are not
 a readiness score. A completed report can still contain unanswered readiness questions.
 
 ## Add reviews through the existing assessment profile
@@ -39,15 +39,21 @@ live collection. Rebuilding does not change original evidence dates. Review resu
 the shared evidence and control results, the report's milestone requirements and the workbook's
 review records. A review is an operator attestation, identified separately from collected facts.
 
-### Required scope and optional reviewed plan
+### Scope and reviewed plan
+
+A readiness review is optional. Methodology 4.0 decides pilot readiness from tenant-wide evidence,
+so no pilot roster is required for **Ready for pilot**. Required operational confirmation must come from suitable retained records or current dated tenant-wide test reviews. Use a review to answer
+checks the tool cannot read, to document a pilot treatment, or to record the pilot group, plan and
+outcomes before broader adoption. A scope can describe the whole tenant (for example "All users")
+or the pilot group by name and head count; individual users are never required.
 
 `readiness_review` requires `version: "1.0"`, the assessed tenant's GUID in `tenant_id`, and
-`pilot_scope`. A different tenant is rejected. The scope must include:
+`tenant_scope` or the compatible optional `pilot_scope`. Only tenant_scope reviews establish tenant-wide foundation results. Pilot scope remains optional context for treatments and expansion. A different tenant is rejected. The scope must include:
 
 ```json
 {
-  "id": "pilot",
-  "description": "The named users, approved content and devices included in this pilot",
+  "id": "tenant",
+  "description": "All users and the declared active-device and content populations",
   "population_count": 10,
   "reviewed_at": "2026-09-14",
   "reviewer_role": "Business sponsor and Microsoft 365 administrator",
@@ -55,11 +61,11 @@ review records. A review is an operator attestation, identified separately from 
 }
 ```
 
-`population_count` is optional for pilot readiness and required to establish that a later
-expansion population is larger. IDs and descriptions must identify the actual assessed scope;
+`population_count` is optional and required only to establish that a later expansion
+population is larger. IDs and descriptions must identify the actual assessed scope;
 the tool does not verify group membership or the accuracy of the attestation itself.
 
-To establish the plan requirement, add `pilot_plan` with `reviewed_at`, `reviewer_role`,
+To record the plan (required before broader adoption), add `pilot_plan` with `reviewed_at`, `reviewer_role`,
 `evidence_reference` and `baseline`. It also needs `business_owner`, `use_cases`, `approved_data`,
 `success_measures` and `stop_expand_criteria`, each nonempty text or a list of nonempty text.
 These five fields can be derived from existing profile `use_cases`:
@@ -113,11 +119,11 @@ independently authenticated by this tool.
 | DATA.EXPOSURE | Effective access to sensitive pilot content |
 | APPS.CONSENT | Application consent and granted permissions |
 | APPS.CONNECTIONS | Connected sources and access boundaries |
-| ENDPOINT.POSTURE | Pilot device and browser protection baseline |
-| THREAT.INCIDENTS | Relevant active incidents |
-| LICENSE.ASSIGNMENT | Copilot and prerequisite license assignment for the named population |
-| LICENSE.APPS | Application prerequisites for pilot users |
-| ADOPTION.BASELINE | Pilot plan; the structured `pilot_plan` is also required for the milestone |
+| ENDPOINT.POSTURE | Device and browser protection baseline |
+| THREAT.INCIDENTS | Active security incidents |
+| LICENSE.ASSIGNMENT | Copilot licenses available |
+| LICENSE.APPS | Microsoft 365 Apps prerequisites |
+| ADOPTION.BASELINE | Pilot use cases, baseline and success measures; the structured `pilot_plan` is required before broader adoption |
 
 When agents or external AI are explicitly scoped, the catalog also accepts `AGENTS.BOUNDARIES`
 and `EXTERNAL.SERVICES` as optional-domain reviews. They do not establish provider certification.
@@ -184,3 +190,5 @@ actual dated scoped review can separately record that attestation through `readi
 
 See [the methodology](METHODOLOGY.md#deployment-decision) for how these milestones relate to the
 deployment recommendation and [RUN.md](RUN.md) for collection and rebuild commands.
+
+See [Assessment evidence and outputs](ASSESSMENT_EVIDENCE.md) for catalog check reviews, evidence levels, structured assessment context and approved exceptions.

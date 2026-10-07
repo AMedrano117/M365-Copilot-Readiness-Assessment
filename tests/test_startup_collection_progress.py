@@ -39,7 +39,7 @@ class StartupCollectionProgressTests(unittest.IsolatedAsyncioTestCase):
 
         def stop_before_live_work(*, offline):
             self.assertFalse(offline)
-            self.assertIn('M365 COPILOT READINESS', output.visible)
+            self.assertIn('AI READINESS AND M365 HARDENING', output.visible)
             self.assertIn('Mode: live', output.visible)
             raise SystemExit(73)
 
@@ -150,7 +150,7 @@ class StartupCollectionProgressTests(unittest.IsolatedAsyncioTestCase):
             pipelines = create_pipelines(None, None, 'invented', selected, interactive_plan={'purview': {'will_attempt': False, 'skip_reason': 'browser authentication disabled'}})
             result = await pipelines['purview']()
         self.assertFalse(result['available'])
-        self.assertIn('Purview: skipped; browser authentication disabled.', output.visible)
+        self.assertIn('Purview PowerShell: skipped; browser authentication disabled.', output.visible)
         self.assertNotIn('collection complete', output.visible)
 
 

@@ -87,7 +87,7 @@ class PdfImportTests(unittest.TestCase):
 
         from Core.processor import process_and_print_all_information
         from Core.export_recommendations import export_to_excel
-        from openpyxl import load_workbook
+        from tests.workbook_test_helpers import load_workbook_pair as load_workbook
         with patch('Core.processor.export_tabular_reports', return_value=(None, None)), \
                 patch('Core.processor.export_to_html', return_value='example.html'), \
                 patch('Core.processor.print_recommendations_summary'):
@@ -99,7 +99,7 @@ class PdfImportTests(unittest.TestCase):
         filename = export_to_excel(bundle['recommendations'], filename=str(self.root / 'safe.xlsx'), evidence_bundle=bundle)
         workbook = load_workbook(filename, read_only=True, data_only=False)
         try:
-            rows = list(workbook['PDF Extracted Text'])
+            rows = list(workbook.technical['PDF Extracted Text'])
             index = [cell.value for cell in rows[0]].index('Extracted text')
             self.assertEqual(rows[1][index].value, text)
             self.assertEqual(rows[1][index].data_type, 's')
@@ -160,11 +160,11 @@ class PdfImportTests(unittest.TestCase):
             args = self.parse('--mode', 'offline', '--collection-input', raw, '--reports-dir', source.parent)
             self.assertEqual(run_offline_report(args), 0)
             original_result = render.call_args.kwargs['evidence_bundle']['assessment_result']
-            package = next((self.root / 'output' / 'assessments').glob('*/rebuild.json')).parent
+            package = next((self.root / 'Reports').rglob('rebuild.json')).parent
             moved = self.root / 'copied'
             shutil.copytree(package, moved)
             source.parent.rename(self.root / 'unavailable-reports')
-            Path('output/portal-reviews').rename('output/unavailable-reviews')
+            Path('.cache/portal-reviews').rename('.cache/unavailable-reviews')
             loaded = load_collection(moved / 'rebuild.json')
             self.assertEqual(loaded['tenant_id'], TENANT)
             self.assertEqual(Path(loaded['package_directory']), moved)

@@ -296,7 +296,7 @@ class UnreadDataIsNotReportedAsCleanTests(unittest.TestCase):
         self.assertIn("could not be read", result["Observation"])
         self.assertNotIn("no devices", result["Observation"].lower())
 
-    def test_empty_but_read_defender_device_inventory_is_an_action(self):
+    def test_empty_but_read_defender_device_inventory_leaves_population_unknown(self):
         from Recommendations.defender.DEFENDER_ENDPOINT_ONBOARDING import get_recommendation
 
         class FakeClient:
@@ -306,8 +306,8 @@ class UnreadDataIsNotReportedAsCleanTests(unittest.TestCase):
             device_summary = {"total": 0}
 
         result = asyncio.run(get_recommendation(None, defender_client=FakeClient()))
-        self.assertEqual(result["Disposition"], "Action")
-        self.assertIn("no devices are reporting", result["Observation"].lower())
+        self.assertEqual(result["Disposition"], "Coverage")
+        self.assertIn("no retained device rows", result["Observation"].lower())
 
     def test_unread_intune_inventory_is_coverage_not_byod_assertion(self):
         from Recommendations.entra.INTUNE_A import get_recommendation

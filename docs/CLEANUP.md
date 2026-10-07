@@ -10,7 +10,7 @@ If setup reported a credential recovery file, restore and verify the normal envi
 
 ## 1. Retain and verify the final evidence
 
-Copy the complete assessment folder, including original inputs, `collection.json` or `rebuild.json`, `rebuilds/`, deliverables and the operator log, to the customer's approved storage. Verify that copy before selecting local artifacts for removal:
+Copy the complete assessment folder, including original inputs, `collection.json` or `rebuild.json`, `Rebuilds/`, deliverables and the operator log, to the customer's approved storage. Verify that copy before selecting local artifacts for removal:
 
 ```powershell
 python main.py --mode offline --collection-input "<retained-package>\collection.json"
@@ -58,9 +58,9 @@ Install-Module -Name ExchangeOnlineManagement -MinimumVersion 3.7.2 -Scope Curre
 
 Cleanup does not require the complete Microsoft Graph module bundle or the SharePoint management module. Follow the customer's approved module-installation process where PowerShell Gallery installation is restricted.
 
-### Standard Unattended workload assignments
+### Standard workload roles
 
-For an app configured by Standard Unattended setup, include `-IncludeWorkloadRbac` in preview, `-Apply -WhatIf`, and apply.
+For an app assigned Global Reader by default Standard setup, or explicitly configured with Security Reader or role groups, include `-IncludeWorkloadRbac` in preview, `-Apply -WhatIf`, and apply. This applies to both Standard and Unattended modes. The Graph sign-in then also requests `RoleManagement.Read.Directory` for preview or `RoleManagement.ReadWrite.Directory` for apply, so the administrator needs Privileged Role Administrator.
 
 Run workload cleanup in a fresh PowerShell session. The script closes its verified connections, but Exchange's disconnect command can also close legacy remote PowerShell sessions in the same host. [Disconnect behavior](https://learn.microsoft.com/en-us/powershell/module/exchangepowershell/disconnect-exchangeonline?view=exchange-ps).
 
@@ -72,7 +72,7 @@ Run workload cleanup in a fresh PowerShell session. The script closes its verifi
   -TenantId "<tenant-guid>" -ClientId "<application-client-guid>" -IncludeWorkloadRbac -Apply
 ```
 
-The script verifies the target's identity in both workloads before removing its membership from `AI Readiness Purview Read-Only` and `AI Readiness Exchange Read-Only`, and then removes the matching workload service-principal references. These steps precede Entra deletion while the target IDs are available. Shared role groups and management-role definitions remain intact. Restricted omits workload cleanup and does not support this flag.
+The script verifies the target's identity in both workloads before removing its membership from `AI Readiness Purview Read-Only` and `AI Readiness Exchange Read-Only`, and then removes the matching workload service-principal references. It also lists every directory role assignment held by the dedicated enterprise application (for example Security Reader) and removes them before the enterprise application is deleted. These steps precede Entra deletion while the target IDs are available. Shared role groups and management-role definitions remain intact. Restricted omits workload cleanup and does not support this flag.
 
 Record the enterprise application's **service-principal object ID** printed by preview. If Entra deletion already occurred and a workload retry is needed, supply that exact retained ID with `-ServicePrincipalObjectId "<enterprise-application-object-guid>"`. It must match the live enterprise application when one exists. Do not substitute the client ID or an ID from another tenant.
 
@@ -82,7 +82,9 @@ Additional manually assigned Entra roles, other workload role groups, custom ass
 
 Optionally add `-RemoveEnvironmentFile` to the reviewed apply command. That file's removal is separately confirmed with the plan, then performed only after successful remote deletion and verification that both Entra objects are absent. Keep the file until identity checks and any cleanup retries are complete. Deleting a local environment file alone does not revoke consent, and application grants do not expire when a client secret expires.
 
-Application deletion does not remove local certificate files, private keys in certificate stores, other environment files, modules, Python environments, backups or copied evidence. Review ownership and reuse of certificates manually before deleting any private key; a certificate may serve another application. Review any additional registrations or service principals in other tenants separately. [Microsoft application removal guidance](https://learn.microsoft.com/en-us/entra/identity-platform/howto-remove-app).
+Add `-RemoveLocalCertificate` to remove the certificate that setup `-EnableSharePointAppOnly` created in `Cert:\CurrentUser\My`. The script reads its thumbprint from the selected environment file, refuses any certificate setup did not create (subject ending in "workload access"), and removes it only after remote cleanup succeeds. Otherwise application deletion does not remove local certificate files, private keys in certificate stores, other environment files, modules, Python environments, backups or copied evidence. Review ownership and reuse of other certificates manually before deleting any private key; a certificate may serve another application.
+
+Delegated enrichment keeps a DPAPI-protected token cache and an account record under `.cache/delegated/`. Remove that folder, or run `cleanup-local-assessment.ps1`, when the engagement ends. Review any additional registrations or service principals in other tenants separately. [Microsoft application removal guidance](https://learn.microsoft.com/en-us/entra/identity-platform/howto-remove-app).
 
 If the environment file is unavailable or the application was renamed, use that Microsoft admin-center removal procedure after verifying the tenant, client ID and object IDs against the engagement record. Complete workload cleanup first, then verify both the app registration and enterprise application are absent. Shared applications require removal of only the reviewed assessment credentials and actual consent grants; changing the requested-permissions manifest alone is insufficient.
 
@@ -100,14 +102,17 @@ The script runs offline, lists the saved assessment artifacts it found, and asks
 
 | Location | Discovered artifacts |
 |---|---|
-| `output/collections/` | Saved live collections and their portable package folders |
-| `output/assessments/` | Offline assessment package folders |
-| `output/portal-reviews/` | Imported PDF review folders, previews and generated review manifests |
-| `Reports/` | Generated reports and diagnostics |
+| `output/collections/` | Legacy saved live collections and custom companion package folders |
+| `output/assessments/` | Legacy offline assessment package folders |
+| `output/portal-reviews/` | Legacy imported PDF review folders, previews and generated review manifests |
+| `Reports/` | Customer folders containing portable assessments, inputs and each build's reports, `Evidence/` pages and explicitly requested shared-result snapshots; also legacy flat reports |
 | `.cache/purview/` | Purview evidence cache files and subfolders |
 | `.cache/sharepoint_dag/` | Downloaded SharePoint DAG evidence files and subfolders |
+| `.cache/portal-reviews/` | Imported PDF staging folders, page previews and generated review manifests |
+| `.cache/delegated/` | Delegated sign-in cache files and subfolders |
+| `.cache/collector_diagnostics.log` | Sanitized collector diagnostics file |
 
-Discovery selects each location's direct children; removal includes the contents of selected subfolders. The storage folders themselves remain. Missing or empty locations require no confirmation. Keep the approved retained copy outside the selected locations, and review the full list before confirming. Custom export folders and artifacts saved elsewhere are not part of default discovery.
+Discovery selects each storage directory's direct children and the diagnostics file; removal includes the contents of selected subfolders. Selecting a customer folder under `Reports/` includes all of its assessments. The storage folders themselves remain. Missing or empty locations require no confirmation. Keep the approved retained copy outside the selected locations, and review the full list before confirming. Custom export folders and artifacts saved elsewhere are not part of default discovery.
 
 To list the default selection without deleting or prompting:
 
@@ -118,7 +123,7 @@ To list the default selection without deleting or prompting:
 To select only particular working copies, supply optional literal paths instead of the default discovery:
 
 ```powershell
-.\cleanup-local-assessment.ps1 -Path ".\output\collections\<collection-stem>_package"
+.\cleanup-local-assessment.ps1 -Path ".\Reports\<customer>\<assessment>"
 ```
 
 `-Path` accepts multiple files or subfolders inside this checkout's `output/`, `Reports/` or `.cache/`; relative explicit paths use the current directory. The script rejects those three roots themselves, outside paths and overlapping parent/child selections. Standard PowerShell `-Confirm:$false` is available for an already authorized automated run.

@@ -134,7 +134,7 @@ class AuthenticationMethodsTests(unittest.TestCase):
     def test_report_and_workbook_keep_aggregate_values_without_user_identities(self):
         from Core.evidence_layer import build_evidence_bundle
         from Core.export_recommendations import export_to_excel
-        from openpyxl import load_workbook
+        from tests.workbook_test_helpers import load_workbook_pair as load_workbook
         results = empty_service_results()
         client = SimpleNamespace(auth_methods_registration=[registration('do-not-render-identity', ['mobilePhone'], isAdmin=True)],
                                  collection_status={'auth_methods': {'availability_status': 'available'}})
@@ -151,8 +151,8 @@ class AuthenticationMethodsTests(unittest.TestCase):
             book = load_workbook(output, read_only=True)
             try:
                 for sheet in ('Authentication Coverage', 'Authentication Methods', 'MFA Preferences', 'MFA Populations'):
-                    self.assertIn(sheet, book.sheetnames)
-                    self.assertNotIn('do-not-render-identity', str(list(book[sheet].values)))
+                    self.assertIn(sheet, book.technical.sheetnames)
+                    self.assertNotIn('do-not-render-identity', str(list(book.technical[sheet].values)))
             finally:
                 book.close()
             collection = save_collection(Path(directory)/'collection.json', tenant_id='11111111-1111-4111-8111-111111111111',

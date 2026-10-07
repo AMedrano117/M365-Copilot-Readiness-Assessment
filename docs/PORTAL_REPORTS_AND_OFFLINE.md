@@ -41,11 +41,11 @@ Substitute the actual filenames; either historical input can be omitted. Use a p
 | `.cache/purview/*.json` | Reads the saved Purview policy/configuration payload and original cache timestamp. This cache does not contain M365, Entra or Defender collections and is not a DSPM assessment export. |
 | Collection JSON saved by a live assessment (automatically or to a custom `--save-collection` path) | Replays all service data saved during that collection through `--collection-input`. |
 
-The importer does not reconstruct missing raw collector data from a workbook or promote old conclusions into current control results. Historical findings join one action register when they need confirmation; their full original evidence remains in the workbook. Original dates are retained; a historical report's generation date does not refresh its underlying evidence. User-level Copilot evidence requires `--include-user-usage-detail` for the workbook and remains excluded from HTML.
+The importer does not reconstruct missing raw collector data from a workbook or promote old conclusions into current control results. Historical findings join one action register when they need confirmation; their full original evidence remains in the workbook. Original dates are retained; a historical report's generation date does not refresh its underlying evidence. User-level Copilot evidence is included by default in the workbook and remains excluded from HTML.
 
 Tenant GUIDs are compared wherever saved sources record them. Older workbooks may contain only a display name, so their tenant identity cannot be verified automatically. Cache input is explicit: offline mode never searches for or silently reuses another tenant's cache. A partial Purview cache cannot be combined with `--collection-input` to overwrite a full saved collection.
 
-A successful recovery build automatically creates `output/assessments/<tenant>_<UTC>_<id>/` containing the original inputs, `rebuild.json`, deliverables and an operator log. Copy the whole folder and replay with `--mode offline --collection-input PATH\rebuild.json`; resupplying the original workbook/cache/export paths is unnecessary after the first successful build. Portal-only builds use this recipe format too. This preserves the evidence that exists without creating a tenant collection or promoting historical conclusions.
+A recovery build creates `Reports/<customer>/<date>/` containing the original inputs, `rebuild.json`, a `Builds/<build>/` folder and an operator log. Use `--customer-name "Example Customer"` to choose the organizational folder name; otherwise it uses the tenant display name, then tenant ID. Copy the whole assessment folder and replay with `--mode offline --collection-input PATH\rebuild.json`; resupplying the original workbook/cache/export paths is unnecessary after the first successful build. Portal-only builds use this recipe format too. This preserves the evidence that exists without creating a tenant collection or promoting historical conclusions.
 
 ## Choose the execution mode
 
@@ -63,15 +63,15 @@ Follow [RUN.md](RUN.md) for the canonical prepare, collect, add exports and revi
 ```powershell
 .\.venv\Scripts\python.exe main.py --mode live --check-connections
 .\.venv\Scripts\python.exe main.py --mode live
-# Replace <saved-file> with the collection filename printed by the live run.
+# Replace <collection-input> with the full path printed by the live run.
 .\.venv\Scripts\python.exe main.py --mode offline `
-  --collection-input ".\output\collections\<saved-file>.json" `
+  --collection-input "<collection-input>" `
   --reports-dir ".\output\customer\exports" --open-html-report
 ```
 
-Create the exports folder before the offline command. If exports already exist, include `--reports-dir` in the live run. Every live assessment automatically saves a unique collection plus an adjacent portable package containing service evidence, original supplemental files, settings, outputs and an operator log. Preflight does not save a collection; offline mode does not create or overwrite one. `--save-collection PATH` only overrides the live collection destination.
+Create the exports folder before the offline command. If exports already exist, include `--reports-dir` in the live run. Every live assessment automatically saves `collection.json` in its portable `Reports/<customer>/<date>/` folder, alongside original supplemental files, settings, `Builds/<build>/` and an operator log. Preflight does not save a collection; offline mode does not create or overwrite one. `--save-collection PATH` overrides the live collection destination and retains an adjacent companion package.
 
-Copy the entire `<collection-stem>_package` folder to move the evidence, then use its `collection.json` with `--collection-input`. Packaged report/profile/provider inputs restore automatically. Repeated report options add inputs; explicit single-file options override their packaged counterpart. Successful offline builds preserve new external inputs in `rebuilds/` and save the latest replay recipe in `rebuild.json`, leaving the original collection unchanged. Legacy collections that predate packaging still require their original exports and settings. See [package layout and replay rules](RUN.md#portable-assessment-folder).
+Copy the entire assessment folder to move the evidence, then use its `collection.json` with `--collection-input`. For a custom save destination or an older collection, copy the entire `<collection-stem>_package` companion folder. Packaged report/profile/provider inputs restore automatically. Repeated report options add inputs; explicit single-file options override their packaged counterpart. Successful offline builds preserve new external inputs in `Rebuilds/` and save the latest replay recipe in `rebuild.json`, leaving the original collection unchanged. Legacy collections that predate packaging still require their original exports and settings. See [package layout and replay rules](RUN.md#portable-assessment-folder).
 
 Offline building requires local Python dependencies but no `.env`, credential, certificate, browser sign-in, API call or administrative PowerShell. Saved sources retain their original dates. The evaluation date is recorded and reused; `--evaluation-date YYYY-MM-DD` deliberately reassesses freshness. Offline execution alone does not establish or prevent readiness.
 
@@ -79,7 +79,7 @@ Structured-export discovery is not recursive. Repeat `--reports-dir` for separat
 
 Without a saved collection, `--mode offline --reports-dir PATH` produces a portal-only assessment with missing tenant controls identified. `--prior-report` and `--purview-cache` are recovery inputs; `--snapshot-json` and `--baseline` are assessment comparison inputs, not raw collection replacements.
 
-HTML and Excel appear in `Reports/`, with packaged deliverables also retained in the assessment folder. `--report-format both` adds CSV. User-level Copilot detail requires `--include-user-usage-detail` for each workbook build and remains excluded from HTML. Protect the full package, including original exports, as confidential evidence; keep credentials and private certificates outside it.
+HTML, Excel and all companion files appear together in the assessment folder's `Builds/<build>/`. The default workflow records them in place, keeping one generated copy. `--report-format both` adds CSV. User-level Copilot detail is included by default in each workbook build and remains excluded from HTML. Protect the full package, including original exports, as confidential evidence; keep credentials and private certificates outside it.
 
 At closeout, retain the complete agreed package and verify its offline replay before removing local
 working copies. [CLEANUP.md](CLEANUP.md) separates dedicated application removal from local artifact
@@ -159,7 +159,7 @@ administrative sign-in during collection, and `--services` never revokes applica
 
 Microsoft 365 E5 without SAM entitlement provides DAG activity reporting limited to 10,000 sites; permission snapshot reports are unavailable under that route. If using that route, complete the required activity-data collection setup; allow up to 24 hours and expect history to accumulate from enablement. [DAG access and limitations](https://learn.microsoft.com/en-us/sharepoint/data-access-governance-reports). Microsoft 365 Business Premium is a base subscription and is distinct from the paid Microsoft 365 Copilot add-on.
 
-For Standard's Purview configuration collection, arrange access to DLP, labels, retention, and Exchange organization, rights-management and audit settings. Purview portal access alone does not establish all Exchange permissions. Unattended setup assigns entire management roles containing the required commands; those roles may include write capabilities despite read-only group names. Review actual RBAC with the workload administrator. Use preflight and the final Collection Coverage worksheet to identify gaps; see [Purview permissions](https://learn.microsoft.com/en-us/purview/purview-permissions). Advanced features can require additional licensing even when authentication succeeds. Report an unavailable entitlement to the services team before considering a purchase.
+For Standard's Purview configuration collection, arrange access to DLP, labels, retention, and Exchange organization, rights-management and audit settings. Purview portal access alone does not establish all Exchange permissions. Standard setup assigns Global Reader by default in both Standard and Unattended modes, granting broad tenant read access. Explicit `-WorkloadRbac RoleGroups` assigns entire management roles containing the required commands; those roles may include write capabilities despite read-only group names. Review actual RBAC with the workload administrator. Use preflight and the final Collection Coverage worksheet to identify gaps; see [Purview permissions](https://learn.microsoft.com/en-us/purview/purview-permissions). Advanced features can require additional licensing even when authentication succeeds. Report an unavailable entitlement to the services team before considering a purchase.
 
 ## Reports to obtain next
 
@@ -206,7 +206,7 @@ For an agreed Restricted assessment, use `--env-file .env.restricted` on both co
 `--interactive-auth fresh`. The application's access and resulting coverage are described in
 [the permissions guide](PERMISSIONS.md).
 
-The assessment saves the collection JSON and adjacent portable package automatically in `output/collections/` and prints their locations. No save option is required. The access check alone does not create a collection.
+The assessment automatically saves `collection.json` in `Reports/<customer>/<date>/` and prints its location. Use `--customer-name "Example Customer"` to choose the customer folder name. No save option is required. The access check alone does not create a collection.
 
 Please collect the following using the instructions above:
 

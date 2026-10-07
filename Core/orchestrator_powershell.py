@@ -14,12 +14,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from .spinner import get_timestamp, _stdout_lock
 from . import console_reporting as console
+from . import collection_progress
 
 
 PURVIEW_CACHE_MAX_AGE_SECONDS = 8 * 60 * 60
 PURVIEW_CACHE_SCHEMA_VERSION = 3
 COLLECTOR_DIAGNOSTICS_PATH = (
-    Path(__file__).resolve().parent.parent / "Reports" / "collector_diagnostics.log"
+    Path(__file__).resolve().parent.parent / ".cache" / "collector_diagnostics.log"
 )
 
 
@@ -33,11 +34,52 @@ def _sanitize_collector_detail(detail):
         sanitized,
     )
     sanitized = re.sub(r"\beyJ[A-Za-z0-9_-]{20,}(?:\.[A-Za-z0-9_-]+){1,2}\b", "[REDACTED_JWT]", sanitized)
-    for variable_name in ("CLIENT_SECRET", "AZURE_CLIENT_SECRET"):
-        secret = os.environ.get(variable_name, "")
+    secrets = [os.environ.get(name, "") for name in _SECRET_VARIABLES] + list(_RUNTIME_SECRETS)
+    for secret in secrets:
         if len(secret) >= 8:
             sanitized = sanitized.replace(secret, "[REDACTED]")
     return sanitized[:2000]
+
+
+# Secret-bearing variables and runtime values (for example workload tokens)
+# that must never reach diagnostics, console output or process arguments.
+_SECRET_VARIABLES = (
+    "CLIENT_SECRET", "AZURE_CLIENT_SECRET", "CERTIFICATE_PASSWORD",
+    "SHAREPOINT_CERTIFICATE_PASSWORD", "PURVIEW_CERTIFICATE_PASSWORD",
+)
+_RUNTIME_SECRETS = set()
+
+
+def remember_runtime_secret(value):
+    """Register a runtime secret so diagnostics redact it."""
+    if isinstance(value, str) and len(value) >= 8:
+        _RUNTIME_SECRETS.add(value)
+
+
+def certificate_settings(prefix):
+    """Return (path, thumbprint, password) for a workload certificate.
+
+    The generic CERTIFICATE_PATH is reused only for PFX/P12 files, which the
+    PowerShell modules accept; PEM files remain Graph-only.
+    """
+    path = os.environ.get(f"{prefix}_CERTIFICATE_PATH", "")
+    if not path and os.environ.get("CERTIFICATE_PATH", "").lower().endswith((".pfx", ".p12")):
+        path = os.environ.get("CERTIFICATE_PATH", "")
+    thumbprint = os.environ.get(f"{prefix}_CERTIFICATE_THUMBPRINT", "")
+    password = os.environ.get(f"{prefix}_CERTIFICATE_PASSWORD", os.environ.get("CERTIFICATE_PASSWORD", ""))
+    return path, thumbprint, password
+
+
+def certificate_arguments(prefix):
+    """Split certificate settings into non-secret arguments and stdin secrets."""
+    path, thumbprint, password = certificate_settings(prefix)
+    arguments = []
+    if path:
+        arguments.extend(["-CertificatePath", path])
+    if thumbprint:
+        arguments.extend(["-CertificateThumbprint", thumbprint])
+    secrets = {"certificate_password": password} if password else {}
+    return arguments, secrets
 
 
 def _record_collector_diagnostics(collector, lines):
@@ -75,11 +117,70 @@ def _collector_failure_reason(lines):
         for line in candidates:
             if re.search(pattern, line):
                 return line
-    return 'PowerShell collector failed. See Reports/collector_diagnostics.log for details.'
+    return 'PowerShell collector failed. See .cache/collector_diagnostics.log for details.'
 
 
-def _launch_powershell(script_path, script_args, prefer_windows=False):
-    """Launch the PowerShell edition appropriate for the selected collector."""
+def powershell_environment(executable, base=None):
+    """Return a child environment that suits the selected PowerShell edition.
+
+    PowerShell 7 prepends its installation module folder ($PSHOME\\Modules, for
+    example C:\\Program Files\\PowerShell\\7\\Modules) to PSModulePath. When
+    Python was started from PowerShell 7 and then launches Windows PowerShell
+    5.1, that folder makes 5.1 load incompatible core modules (for example
+    Microsoft.PowerShell.Security, which provides ConvertTo-SecureString and
+    Set-Acl). Remove only that versioned installation folder; user and
+    all-users module folders (Documents\\PowerShell\\Modules) stay available
+    because they hold edition-neutral modules such as ExchangeOnlineManagement.
+    """
+    environment = dict(os.environ if base is None else base)
+    if Path(str(executable)).stem.lower() != "powershell":
+        return environment
+    # Windows environment keys are case-insensitive; os.environ upper-cases them.
+    key = next((name for name in environment if name.lower() == "psmodulepath"), None)
+    value = environment.get(key) if key else None
+    if not value:
+        return environment
+    kept = [entry for entry in dict.fromkeys(value.split(os.pathsep))
+            if entry and not _is_powershell7_core_modules(entry)]
+    del environment[key]
+    if kept:
+        environment["PSModulePath"] = os.pathsep.join(kept)
+    return environment
+
+
+def _is_powershell7_core_modules(entry):
+    """True for PowerShell 7's own $PSHOME\\Modules folder, in any install layout."""
+    parts = [part.lower() for part in re.split(r"[\\/]+", entry) if part]
+    if "windowspowershell" in parts:
+        return False
+    # MSI/ZIP layout: ...\PowerShell\7\Modules or ...\PowerShell\7-preview\Modules
+    if any(part == "powershell" and index + 1 < len(parts) and re.match(r"^\d", parts[index + 1])
+           for index, part in enumerate(parts)):
+        return True
+    # Microsoft Store layout: ...\WindowsApps\Microsoft.PowerShell_7.x_...\Modules
+    if any(part.startswith("microsoft.powershell_") or part.startswith("microsoft.powershellpreview_")
+           for part in parts):
+        return True
+    # Any other folder outside Windows PowerShell that ships the core modules.
+    try:
+        return os.path.isdir(os.path.join(entry, "Microsoft.PowerShell.Security"))
+    except OSError:
+        return False
+
+
+def _launch_powershell(script_path, script_args, prefer_windows=False, secrets=None):
+    """Launch the PowerShell edition appropriate for the selected collector.
+
+    Secrets (certificate passwords, workload access tokens) are never placed on
+    the command line, where other local processes can read them. When supplied,
+    the collector receives ``-SecretsFromStdin`` and one JSON line on stdin.
+    """
+    secrets = {key: value for key, value in (secrets or {}).items() if value}
+    for value in secrets.values():
+        remember_runtime_secret(value)
+    script_args = list(script_args)
+    if secrets and "-SecretsFromStdin" not in script_args:
+        script_args.append("-SecretsFromStdin")
     candidates = []
     # Discover both hosts in the conventional order, then prefer Windows
     # PowerShell for the SharePoint Online module when requested.
@@ -98,10 +199,12 @@ def _launch_powershell(script_path, script_args, prefer_windows=False):
     last_error = None
     for executable in candidates:
         try:
-            return subprocess.Popen(
+            process = subprocess.Popen(
                 [executable, "-NoProfile", "-File", script_path, *script_args],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
+                stdin=subprocess.PIPE if secrets else None,
+                env=powershell_environment(executable),
                 text=True,
                 encoding='utf-8',
                 errors='replace',
@@ -111,8 +214,53 @@ def _launch_powershell(script_path, script_args, prefer_windows=False):
             # Microsoft Store execution aliases can resolve via PATH even when the
             # corresponding application is not installed. Try the next host.
             last_error = exc
+            continue
+        if secrets:
+            try:
+                process.stdin.write(json.dumps(secrets) + "\n")
+                process.stdin.flush()
+            except OSError:
+                # The collector exited before reading; its own error is reported.
+                pass
+            finally:
+                try:
+                    process.stdin.close()
+                except OSError:
+                    pass
+                # communicate() must not try to reuse the closed pipe.
+                process.stdin = None
+        return process
 
     raise last_error
+
+
+def _communicate_with_progress(process, progress_key):
+    """Like communicate(), but applies PROGRESS lines from stderr as they arrive.
+
+    Only a real process is streamed; substitutes that provide communicate()
+    (for example in tests) use it unchanged.
+    """
+    if not isinstance(process, subprocess.Popen):
+        return process.communicate()
+    stderr_lines = []
+
+    def read_stderr():
+        try:
+            for line in iter(process.stderr.readline, ''):
+                if collection_progress.handle_collector_line(progress_key, line.strip()):
+                    continue
+                if line.startswith('AUTH_PROMPT'):
+                    collection_progress.note(progress_key, 'waiting for the browser sign-in')
+                stderr_lines.append(line)
+        except ValueError:
+            pass  # stream closed
+
+    reader = threading.Thread(target=read_stderr, daemon=True)
+    reader.start()
+    stdout = process.stdout.read()
+    process.wait()
+    reader.join(timeout=5)
+    return stdout, ''.join(stderr_lines)
 
 
 def _format_age(seconds):
@@ -134,8 +282,13 @@ def _get_purview_cache_path(tenant_id):
     return cache_dir / f"{hashed_key}.json"
 
 
-def _inspect_purview_cache(tenant_id, max_age_seconds=PURVIEW_CACHE_MAX_AGE_SECONDS):
-    """Inspect cached Purview deployment data and report whether it can be reused."""
+def _inspect_purview_cache(tenant_id, max_age_seconds=PURVIEW_CACHE_MAX_AGE_SECONDS, reuse_incomplete=True):
+    """Inspect cached Purview deployment data and report whether it can be reused.
+
+    With ``reuse_incomplete=False`` (an application token can recollect without
+    a sign-in), a cache missing a required dataset is not reused, so a newly
+    assigned workload role takes effect on the next run.
+    """
     if not tenant_id:
         return None
 
@@ -181,6 +334,22 @@ def _inspect_purview_cache(tenant_id, max_age_seconds=PURVIEW_CACHE_MAX_AGE_SECO
             return {
                 "usable": False,
                 "reason": "incompatible",
+                "cache_path": str(cache_path),
+            }
+        label_policies = (parsed_payload.get("label_policies") or {}).get("policies") or []
+        if isinstance(label_policies, dict):
+            label_policies = [label_policies]
+        if any(isinstance(item, dict) and "ExchangeLocationCount" not in item for item in label_policies):
+            # Collected before label publishing scope was recorded (methodology 3.0).
+            return {
+                "usable": False,
+                "reason": "incompatible",
+                "cache_path": str(cache_path),
+            }
+        if not reuse_incomplete and ((parsed_payload.get("collection_summary") or {}).get("required_failures")):
+            return {
+                "usable": False,
+                "reason": "incomplete",
                 "cache_path": str(cache_path),
             }
         return {
@@ -277,7 +446,7 @@ async def collect_power_platform_data(
 
     def start_spinner(message):
         """Start spinner with a new message."""
-        if not console.is_verbose() or not sys.stdout.isatty():
+        if not console.is_verbose() or not sys.stdout.isatty() or collection_progress.active():
             return
         spinner_stop_event.clear()
         spinner_thread_holder[0] = threading.Thread(target=run_spinner, args=(message,), daemon=True)
@@ -288,7 +457,7 @@ async def collect_power_platform_data(
         spinner_stop_event.set()
         if spinner_thread_holder[0] and spinner_thread_holder[0].is_alive():
             spinner_thread_holder[0].join(timeout=0.5)
-        if console.is_verbose() and sys.stdout.isatty():
+        if console.is_verbose() and sys.stdout.isatty() and not collection_progress.active():
             with _stdout_lock:
                 sys.stdout.write('\r' + ' ' * 120 + '\r')
                 sys.stdout.flush()
@@ -415,15 +584,23 @@ async def collect_power_platform_data(
             sys.stdout.flush()
 
 
-async def collect_purview_data_via_powershell(auth_mode='auto', tenant_id=None):
-    """Launch PowerShell to collect Purview data with interactive authentication.
-    
-    Sets environment variables that will be consumed by get_purview_client.
-    
+# Last Purview collection failure, used to explain Graph-only fallbacks.
+LAST_PURVIEW_FAILURE = {"reason": ""}
+
+
+async def collect_purview_data_via_powershell(auth_mode='auto', tenant_id=None, allow_application_token=True):
+    """Launch PowerShell to collect Purview data.
+
+    Authentication tiers: an application access token acquired from the
+    existing app credential (client secret or certificate), then an
+    application certificate, then a delegated browser sign-in unless
+    ``auth_mode`` is ``skip``. Tokens and passwords travel over stdin only.
+
     Returns:
         bool: True if data collection succeeded, False otherwise
     """
-    cache_info = _inspect_purview_cache(tenant_id)
+    LAST_PURVIEW_FAILURE["reason"] = ""
+    cache_info = _inspect_purview_cache(tenant_id, reuse_incomplete=not allow_application_token)
 
     if auth_mode == 'fresh':
         if cache_info and cache_info.get('usable'):
@@ -444,7 +621,11 @@ async def collect_purview_data_via_powershell(auth_mode='auto', tenant_id=None):
                 sys.stdout.flush()
         elif cache_info and cache_info.get('reason') == 'incompatible':
             with _stdout_lock:
-                console.detail((f'[{get_timestamp()}]   ℹ️  Purview cache predates the current DLP rule collection; collecting fresh deployment data\n').rstrip())
+                console.detail((f'[{get_timestamp()}]   ℹ️  Purview cache predates the current collection fields; collecting fresh deployment data\n').rstrip())
+                sys.stdout.flush()
+        elif cache_info and cache_info.get('reason') == 'incomplete':
+            with _stdout_lock:
+                console.detail('Purview cache is missing required datasets; collecting again in case access has changed.')
                 sys.stdout.flush()
 
     with _stdout_lock:
@@ -462,30 +643,40 @@ async def collect_purview_data_via_powershell(auth_mode='auto', tenant_id=None):
     # PS1 files are in parent directory, not in Core
     ps_script = os.path.join(os.path.dirname(__file__), '..', 'collect_purview_data.ps1')
     collector_args = [
-        '-DataOnly', '-AuthMode', ('Fresh' if auth_mode == 'fresh' else 'Auto'),
+        '-DataOnly', '-AuthMode', ('Fresh' if auth_mode == 'fresh' else 'Skip' if auth_mode == 'skip' else 'Auto'),
         '-TenantId', tenant_id or os.environ.get('TENANT_ID', ''),
         '-ClientId', os.environ.get('CLIENT_ID', ''),
         '-Organization', os.environ.get('PURVIEW_ORGANIZATION', ''),
     ]
-    certificate_path = os.environ.get('PURVIEW_CERTIFICATE_PATH', '')
-    if not certificate_path and os.environ.get('CERTIFICATE_PATH', '').lower().endswith(('.pfx', '.p12')):
-        certificate_path = os.environ.get('CERTIFICATE_PATH', '')
-    certificate_thumbprint = os.environ.get('PURVIEW_CERTIFICATE_THUMBPRINT', '')
-    certificate_password = os.environ.get('PURVIEW_CERTIFICATE_PASSWORD', os.environ.get('CERTIFICATE_PASSWORD', ''))
-    if certificate_path:
-        collector_args.extend(['-CertificatePath', certificate_path])
-    if certificate_thumbprint:
-        collector_args.extend(['-CertificateThumbprint', certificate_thumbprint])
-    if certificate_password:
-        collector_args.extend(['-CertificatePassword', certificate_password])
+    certificate_path, certificate_thumbprint, _ = certificate_settings('PURVIEW')
+    certificate_args, secrets = certificate_arguments('PURVIEW')
+    collector_args.extend(certificate_args)
+    token_reason = ''
+    if allow_application_token and os.environ.get('PURVIEW_ORGANIZATION'):
+        from .workload_tokens import purview_token_secrets
+        token_secrets, token_details = await purview_token_secrets()
+        secrets.update(token_secrets)
+        token_reason = token_details.get('reason', '')
     if os.environ.get('PURVIEW_INCLUDE_SPECIALIZED', '').strip().lower() in {'1', 'true', 'yes'}:
         collector_args.append('-IncludeSpecialized')
-    if (certificate_path or certificate_thumbprint) and os.environ.get('CLIENT_ID') and os.environ.get('PURVIEW_ORGANIZATION'):
+    certificate_ready = bool(certificate_path or certificate_thumbprint) and os.environ.get('CLIENT_ID') and os.environ.get('PURVIEW_ORGANIZATION')
+    token_ready = bool(secrets.get('exchange_access_token') or secrets.get('compliance_access_token'))
+    if not token_ready and not certificate_ready and auth_mode == 'skip':
+        reason = ('No application path is available for Purview and delegated sign-in is disabled (--interactive-auth skip). '
+                  + (token_reason or 'Consent Exchange.ManageAsApp and assign the default read-only role (setup-service-principal.ps1 -WorkloadRbac GlobalReader).'))
+        LAST_PURVIEW_FAILURE["reason"] = reason
+        console.status('Purview PowerShell: skipped. ' + reason, tone='warning')
+        return False
+    if token_ready:
+        console.status('Purview: connecting to Security & Compliance and Exchange Online with an application token...')
+    elif certificate_ready:
         console.status('Purview: connecting to Security & Compliance and Exchange Online with the application certificate...')
     else:
+        if token_reason:
+            console.detail('Purview application token unavailable: ' + token_reason)
         console.status('Purview: connecting to Security & Compliance and Exchange Online; browser sign-in may be required.')
     process = _launch_powershell(
-        ps_script, collector_args, prefer_windows=bool(certificate_thumbprint)
+        ps_script, collector_args, prefer_windows=bool(certificate_thumbprint), secrets=secrets,
     )
     
     # Spinner control
@@ -508,7 +699,7 @@ async def collect_purview_data_via_powershell(auth_mode='auto', tenant_id=None):
     def start_spinner(message):
         """Start spinner with given message"""
         nonlocal spinner_thread, current_spinner_message
-        if not console.is_verbose() or not sys.stdout.isatty():
+        if not console.is_verbose() or not sys.stdout.isatty() or collection_progress.active():
             return
         current_spinner_message = message
         spinner_stop_event.clear()
@@ -537,12 +728,17 @@ async def collect_purview_data_via_powershell(auth_mode='auto', tenant_id=None):
                 line = line.strip()
                 if not line:
                     continue
+                if collection_progress.handle_collector_line('purview', line):
+                    continue
                 stderr_lines.append(line)
+                if line.startswith('AUTH_PROMPT'):
+                    collection_progress.note('purview', 'waiting for the browser sign-in')
                 if (
                     line.startswith('AUTH_PROMPT')
                     or line.startswith('AUTH_COMPLETE')
                     or line.startswith('AUTH_REUSED')
                     or line.startswith('AUTH_ERROR')
+                    or line.startswith('AUTH_FALLBACK')
                 ):
                     parts = line.split(':', 2)
                     event_type = parts[0]
@@ -550,7 +746,9 @@ async def collect_purview_data_via_powershell(auth_mode='auto', tenant_id=None):
                     service_details = parts[2] if len(parts) > 2 else ''
                     stop_spinner()
                     with _stdout_lock:
-                        if event_type == 'AUTH_PROMPT':
+                        if event_type == 'AUTH_FALLBACK':
+                            console.status(f'{service_name}: {_sanitize_collector_detail(service_details)[:300]}; trying the next authentication method.', tone='warning')
+                        elif event_type == 'AUTH_PROMPT':
                             console.status((f'Browser sign-in requested for {service_name}\n').rstrip())
                             if service_details:
                                 console.detail((f'[{get_timestamp()}]   ℹ️  This popup is for: {service_details}\n').rstrip())
@@ -597,8 +795,9 @@ async def collect_purview_data_via_powershell(auth_mode='auto', tenant_id=None):
             ),
             None,
         )
+        LAST_PURVIEW_FAILURE["reason"] = _sanitize_collector_detail(last_detail or '')[:500]
         with _stdout_lock:
-            console.status((f'Purview interactive collection unavailable; Purview configuration will be reported as not assessed\n').rstrip(), tone='warning')
+            console.status((f'Purview PowerShell collection unavailable; datasets it provides will be reported as not assessed\n').rstrip(), tone='warning')
             if last_detail:
                 console.status((f'Purview collector detail: {last_detail}\n').rstrip(), tone='warning')
             sys.stdout.flush()
@@ -647,11 +846,18 @@ async def collect_purview_data_via_powershell(auth_mode='auto', tenant_id=None):
             if required_failures:
                 names = ', '.join(str(item.get('source', 'Unknown source')) for item in required_failures)
                 console.status((f'Required Purview evidence unavailable: {names}\n').rstrip(), tone='warning')
+                # Sources denied for the same reason (typically one missing
+                # workload role) are reported once, followed by their read roles.
+                grouped = {}
                 for item in required_failures:
-                    role = item.get('required_role', '')
-                    reason = item.get('reason', '')
-                    detail = '; '.join(value for value in (reason, f'Read access: {role}' if role else '') if value)
-                    console.status((f'   {item.get("source", "Purview source")}: {detail}\n').rstrip(), tone='warning')
+                    grouped.setdefault(item.get('reason', ''), []).append(item)
+                for reason, items in grouped.items():
+                    sources = ', '.join(str(item.get('source', 'Purview source')) for item in items)
+                    roles = '; '.join(dict.fromkeys(
+                        str(item.get('source', 'Purview source')) + ': ' + str(item['required_role'])
+                        for item in items if item.get('required_role')))
+                    detail = ' '.join(value for value in (reason, f'Read access: {roles}.' if roles else '') if value)
+                    console.status((f'   {sources}: {detail}\n').rstrip(), tone='warning')
             if optional_failures:
                 names = ', '.join(str(item.get('source', 'Unknown source')) for item in optional_failures)
                 console.status((f'Optional Purview enrichment unavailable: {names}. Core DLP results are unaffected.\n').rstrip(), tone='warning')
@@ -724,22 +930,14 @@ async def collect_sharepoint_governance_via_powershell(admin_url, tenant_id, aut
     console.status('SharePoint: collecting sharing settings and completed governance reports...')
 
     client_id = os.environ.get("CLIENT_ID", "")
-    certificate_path = os.environ.get("SHAREPOINT_CERTIFICATE_PATH", "")
-    if not certificate_path and os.environ.get("CERTIFICATE_PATH", "").lower().endswith((".pfx", ".p12")):
-        certificate_path = os.environ.get("CERTIFICATE_PATH", "")
-    certificate_password = os.environ.get("SHAREPOINT_CERTIFICATE_PASSWORD", os.environ.get("CERTIFICATE_PASSWORD", ""))
-    certificate_thumbprint = os.environ.get("SHAREPOINT_CERTIFICATE_THUMBPRINT", "")
+    certificate_path, certificate_thumbprint, _ = certificate_settings("SHAREPOINT")
+    certificate_args, secrets = certificate_arguments("SHAREPOINT")
 
     args = [
         "-AdminUrl", admin_url, "-TenantId", tenant_id, "-ClientId", client_id,
         "-AuthMode", "Fresh" if auth_mode == "fresh" else "Skip" if auth_mode == "skip" else "Auto",
     ]
-    if certificate_path:
-        args.extend(["-CertificatePath", certificate_path])
-    if certificate_password:
-        args.extend(["-CertificatePassword", certificate_password])
-    if certificate_thumbprint:
-        args.extend(["-CertificateThumbprint", certificate_thumbprint])
+    args.extend(certificate_args)
     download_root = Path(__file__).resolve().parent.parent / ".cache" / "sharepoint_dag"
     download_root.mkdir(parents=True, exist_ok=True)
     download_path = tempfile.mkdtemp(prefix="run-", dir=str(download_root))
@@ -750,8 +948,8 @@ async def collect_sharepoint_governance_via_powershell(admin_url, tenant_id, aut
     if not certificate_path and not certificate_thumbprint and auth_mode != 'skip':
         console.status('SharePoint sign-in: complete the browser prompt when it opens.')
     try:
-        process = _launch_powershell(ps_script, args, prefer_windows=True)
-        stdout, stderr = await __import__('asyncio').to_thread(process.communicate)
+        process = _launch_powershell(ps_script, args, prefer_windows=True, secrets=secrets)
+        stdout, stderr = await __import__('asyncio').to_thread(_communicate_with_progress, process, 'sharepoint')
     except Exception as exc:
         detail = _sanitize_collector_detail(exc)
         _record_collector_diagnostics('SharePoint', [detail])
@@ -769,6 +967,7 @@ async def collect_sharepoint_governance_via_powershell(admin_url, tenant_id, aut
     if process.returncode != 0:
         detail = _collector_failure_reason(stderr_lines)
         _record_collector_diagnostics("SharePoint", stderr_lines)
+        collection_progress.finish('sharepoint', state='failed')
         console.status((f'SharePoint governance collection unavailable: {_sanitize_collector_detail(detail)}').rstrip(), tone='warning')
         return {"available": False, "reason": _sanitize_collector_detail(detail), "failure_stage": "collector", "admin_url": admin_url, "collection_status": {}}
 
@@ -778,6 +977,8 @@ async def collect_sharepoint_governance_via_powershell(admin_url, tenant_id, aut
         gaps = [(name, state) for name, state in states.items() if not state['available'] or state.get('availability_status') == 'partial']
         complete_count = len(states) - len(gaps)
         message = f'SharePoint evidence: {complete_count}/{len(states)} datasets complete' + ('; collection gaps remain.' if gaps else '.')
+        collection_progress.finish('sharepoint', done=complete_count, total=len(states),
+                                   state='partial' if gaps else 'done')
         if gaps:
             console.status(message, tone='warning')
         else:
@@ -792,5 +993,5 @@ async def collect_sharepoint_governance_via_powershell(admin_url, tenant_id, aut
         # Record framing facts, never raw stdout: it can contain tenant records.
         output_summary = f'stdout characters={len(stdout or "")}; nonempty lines={len((stdout or "").splitlines())}; JSON frame present={SHAREPOINT_JSON_BEGIN in (stdout or "")}'
         _record_collector_diagnostics("SharePoint", [f'admin_url={admin_url}', *stderr_lines, output_summary, str(exc)])
-        console.status((f'Warning: SharePoint collector returned unreadable output after the process completed; sharing settings and SAM inventory remain unverified. See Reports/collector_diagnostics.log.').rstrip(), tone='warning')
+        console.status((f'Warning: SharePoint collector returned unreadable output after the process completed; sharing settings and SAM inventory remain unverified. See .cache/collector_diagnostics.log.').rstrip(), tone='warning')
         return {"available": False, "reason": "SharePoint collector returned unreadable output.", "failure_stage": "output", "admin_url": admin_url, "collection_status": {}}

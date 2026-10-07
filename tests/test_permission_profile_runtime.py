@@ -57,6 +57,7 @@ class AuditClient:
             self.graph_roles if 'graph.microsoft.com' in scope else {'Machine.Read.All'}))
         self.calls = []
         self.incomplete = False
+        self.directory_roles = []
 
     async def get_collection(self, path, params=None):
         self.calls.append((path, params))
@@ -67,6 +68,9 @@ class AuditClient:
             rows = [self.resources[app_id]]
         elif path == f'/v1.0/servicePrincipals/{PRINCIPAL_ID}/appRoleAssignments':
             rows = self.assignments
+        elif path == '/v1.0/roleManagement/directory/roleAssignments':
+            assert params['$filter'] == f"principalId eq '{PRINCIPAL_ID}'"
+            rows = self.directory_roles
         else:
             raise AssertionError(f'Unexpected endpoint: {path}')
         return {'value': copy.deepcopy(rows), 'available': True,
@@ -173,6 +177,14 @@ class RestrictedAuditTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result['verified'])
         self.assertIn('Current Graph token: Directory.Read.All', result['reason'])
 
+    async def test_directory_role_assignment_is_excess(self):
+        client = AuditClient()
+        client.directory_roles = [{'id': 'assignment', 'principalId': PRINCIPAL_ID,
+                                   'roleDefinitionId': '5d6b6bb7-de71-4623-b4af-96380a352509', 'directoryScopeId': '/'}]
+        result = await audit_restricted_access(client, APP_ID, client.graph_roles)
+        self.assertFalse(result['verified'])
+        self.assertIn('Directory role assignment: 5d6b6bb7-de71-4623-b4af-96380a352509', result['reason'])
+
     async def test_incomplete_permission_inventory_fails_closed(self):
         client = AuditClient()
         client.incomplete = True
@@ -251,7 +263,7 @@ class RestrictedOrchestrationTests(unittest.IsolatedAsyncioTestCase):
         result = await orchestrate(TENANT_ID, ['M365', 'Entra', 'Defender', 'Purview'], permission_profile='restricted')
         self.assertIsNone(result)
         self.assertEqual(self.pipelines.call_args.kwargs['permission_profile'], 'restricted')
-        saved_path = next(Path('output/collections').glob('*.json'))
+        saved_path = next(Path('Reports').rglob('collection.json'))
         saved = load_collection(saved_path)
         self.assertEqual(saved['assessment_settings']['permission_profile'], 'restricted')
         self.assertNotIn('Purview', saved['enabled_collectors'])
@@ -267,7 +279,7 @@ class RestrictedOrchestrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.setup.call_args.kwargs['collect_licenses'])
         self.pipelines.assert_not_called()
         self.render.assert_not_called()
-        self.assertFalse(Path('output/collections').exists())
+        self.assertFalse(Path('Reports').exists())
 
     async def test_excess_blocks_license_and_tenant_context_reads(self):
         from Core.orchestrator import orchestrate

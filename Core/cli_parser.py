@@ -18,7 +18,7 @@ def parse_arguments(tenant_id_default, services_default):
         argparse.Namespace: Parsed arguments with tenant_id, services, and auth options
     """
     parser = argparse.ArgumentParser(
-        description='Microsoft 365 Copilot and Agents Readiness Assessment Tool',
+        description='AI Readiness and Microsoft 365 Hardening Assessment',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog='''
 Examples:
@@ -50,7 +50,25 @@ Examples:
         '--tenant-id', 
         type=str, 
         default=None,
-        help=f'Tenant ID to analyze. Fallback order: --tenant-id, selected env file TENANT_ID, params.py ({tenant_id_default})'
+        help='Tenant ID to analyze. Order: --tenant-id, then TENANT_ID in the selected environment file. There is no built-in default tenant.'
+    )
+    parser.add_argument(
+        '--confirm-tenant',
+        type=str,
+        default=None,
+        metavar='DOMAIN',
+        help='Expected initial *.onmicrosoft.com domain. Collection stops if the signed-in tenant differs. Overrides EXPECTED_TENANT_DOMAIN and PURVIEW_ORGANIZATION.'
+    )
+    parser.add_argument(
+        '--delegated',
+        choices=['auto', 'off', 'required'],
+        default='auto',
+        help='Delegated sign-in for data that Microsoft only exposes to signed-in administrators. auto=use a cached sign-in or prompt when a terminal is available; off=application permissions only; required=fail preflight without a delegated sign-in.'
+    )
+    parser.add_argument(
+        '--no-progress',
+        action='store_true',
+        help='Do not draw live progress bars during collection (they are drawn only on an interactive terminal).'
     )
     parser.add_argument(
         '--services', 
@@ -85,6 +103,9 @@ Examples:
         default='excel',
         help='Recommendation export format: excel=Excel primary with CSV fallback if needed, csv=CSV only, both=generate both Excel and CSV'
     )
+    parser.add_argument('--extra-exports', nargs='+', default=[],
+                        choices=['evidence-pages'],
+                        help='Optional exports for this run. By default, write the HTML report, readiness summary and Excel workbooks only. Select evidence-pages for linked HTML evidence pages.')
     parser.add_argument(
         '--sam-report',
         action='append',
@@ -98,7 +119,7 @@ Examples:
     execution_mode.add_argument('--offline', dest='mode', action='store_const', const='offline',
                                 help='Compatibility alias for --mode offline.')
     parser.add_argument('--save-collection', metavar='PATH',
-                        help='Optional destination override for the live collection JSON. Live assessments automatically save a unique tenant/date file in output/collections by default.')
+                        help='Optional destination override for the live collection JSON, with a companion portable package. By default, evidence and reports share Reports/<customer>/<assessment>/ without duplicate exports.')
     parser.add_argument('--collection-input', metavar='PATH',
                         help='Saved tenant collection, portable collection.json, or offline rebuild.json recipe to replay, restoring packaged reports and settings. Implies offline mode.')
     parser.add_argument('--evaluation-date', metavar='YYYY-MM-DD',
@@ -112,6 +133,8 @@ Examples:
     parser.add_argument('--purview-cache', metavar='PATH',
                         help='Existing Purview collector cache JSON to read offline. Supplies Purview configuration only; implies offline mode.')
     parser.add_argument('--tenant-name', help='Display name for portal-only offline reports.')
+    parser.add_argument('--customer-name', metavar='NAME',
+                        help='Customer folder label under Reports/. Defaults to the tenant display name or tenant ID; saved packages retain the label for replay.')
     parser.add_argument('--reports-dir', action='append', default=[], metavar='PATH',
                         help='Directory of structured portal exports and PDFs. PDFs in subfolders are also extracted locally into JSON and report previews. Repeat for multiple directories.')
     parser.add_argument('--portal-review', metavar='PATH',
@@ -127,8 +150,8 @@ Examples:
     )
     parser.add_argument(
         '--include-user-usage-detail',
-        action='store_true',
-        help='Include user-level Copilot activity and imported readiness flags in the restricted Excel evidence workbook. HTML remains aggregate-only.'
+        action='store_true', default=True,
+        help='Compatibility alias: user-level usage and prerequisite evidence is included by default in Excel. HTML remains aggregate-only.'
     )
     parser.add_argument(
         '--copilot-dashboard-export',
@@ -146,9 +169,9 @@ Examples:
     )
     parser.add_argument(
         '--preview-collectors',
-        choices=['none', 'power-platform', 'shadow-ai', 'network-access', 'all'],
-        default='none',
-        help='Opt in to supplemental Microsoft preview APIs. Preview data never changes the core readiness decision.'
+        choices=['auto', 'none', 'entra-recommendations', 'power-platform', 'shadow-ai', 'network-access', 'copilot-audit', 'all'],
+        default='auto',
+        help='Standard auto collects Entra recommendations, Shadow AI and Copilot audit. Select none to skip supplemental Microsoft preview APIs. copilot-audit reads aggregate Copilot interaction events from the unified audit log. Beta evidence cannot independently pass a foundation control.'
     )
     parser.add_argument(
         '--sharepoint-admin-url',
@@ -186,7 +209,7 @@ Examples:
         type=str,
         default=None,
         metavar='PATH',
-        help='Optionally write a machine-readable assessment snapshot. No snapshot is created by default.'
+        help='Also write the existing shared assessment result as a single JSON file to PATH.'
     )
     parser.add_argument(
         '--baseline',
@@ -209,6 +232,10 @@ Examples:
     )
     
     args = parser.parse_args()
+    if args.customer_name is not None:
+        args.customer_name = args.customer_name.strip()
+        if not args.customer_name:
+            parser.error('--customer-name must not be blank.')
     if args.lifecycle_report_max_age_days is not None and args.lifecycle_report_max_age_days <= 0:
         parser.error('--lifecycle-report-max-age-days must be positive.')
     args._provided_options = {value.split('=', 1)[0] for value in sys.argv[1:] if value.startswith('--')}
@@ -227,22 +254,26 @@ Examples:
     args.offline = args.mode == 'offline'
     if args.offline and (args.check_connections or args.save_collection):
         parser.error('Offline mode cannot be combined with --check-connections or --save-collection.')
-    if args.offline and (args.preview_collectors != 'none' or args.legacy_power_platform_collector):
+    if args.offline and (args.preview_collectors not in {'none', 'auto'} or args.legacy_power_platform_collector):
         parser.error('Live collectors cannot be enabled in offline mode.')
     if args.offline and args.env_file:
         parser.error('Offline mode does not use credentials or an --env-file.')
     if args.offline and args.permission_profile:
         parser.error('Offline mode uses the saved collection permission profile; omit --permission-profile.')
-    if args.permission_profile == 'restricted' and (args.preview_collectors != 'none' or args.legacy_power_platform_collector):
+    if args.offline and (args.confirm_tenant or args.delegated == 'required'):
+        parser.error('Offline mode does not sign in; omit --confirm-tenant and --delegated required.')
+    if args.permission_profile == 'restricted' and (args.preview_collectors not in {'none', 'auto'} or args.legacy_power_platform_collector):
         parser.error('The restricted permission profile cannot enable preview or legacy collectors.')
+    if args.permission_profile == 'restricted' and args.delegated == 'required':
+        parser.error('The restricted permission profile does not use delegated sign-in; omit --delegated required.')
     return args
 
 
-def resolve_live_permission_profile(explicit=None, preview_collectors='none', legacy=False):
+def resolve_live_permission_profile(explicit=None, preview_collectors='auto', legacy=False):
     """Resolve profile only after the chosen environment file has been loaded."""
     import os
     from .collector_registry import normalize_permission_profile
     profile = normalize_permission_profile(explicit or os.environ.get('PERMISSION_PROFILE') or 'standard')
-    if profile == 'restricted' and (preview_collectors != 'none' or legacy):
+    if profile == 'restricted' and (preview_collectors not in {'none', 'auto'} or legacy):
         raise ValueError('The restricted permission profile cannot enable preview or legacy collectors.')
     return profile

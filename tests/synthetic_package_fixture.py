@@ -32,6 +32,7 @@ def _attach_synthetic_source_objects(results):
                    'OneDriveSharingCapability': 'Disabled', 'DefaultSharingLinkType': 'Direct'}},
         'sites': {'available': True, 'items': [{'Title': 'Fictional pilot',
                   'Url': 'https://synthetic.sharepoint.com/sites/pilot', 'SharingCapability': 'Disabled'}]},
+        'collection_status': {'sharepoint_tenant_settings': _source_state(1), 'sharepoint_site_settings': _source_state(1)},
     }
     registrations = [
         {'id': f'fictional-user-{index}', 'isMfaRegistered': True, 'isMfaCapable': True,
@@ -91,7 +92,73 @@ def _attach_synthetic_source_objects(results):
     )
 
 
-def create_synthetic_package(directory, *, active_incident=False):
+LEGACY_EVENTS = 1500
+GIANT_USER_AGENT = 'Fictional-legacy-client/' + 'x' * 1_100_000
+
+
+def _legacy_signins():
+    """Invented sign-ins covering every outcome, unmatched legacy clients and modern clients."""
+    outcomes = [(0, 'notApplied', None), (53003, 'failure', 'Access has been blocked by Conditional Access policies.'),
+                (50076, 'failure', 'Strong authentication is required.'), (50053, 'notApplied', 'Account is locked.'),
+                (50126, 'notApplied', 'Invalid username or password.'), (None, 'notApplied', None)]
+    clients = ['IMAP4', 'POP3', 'Authenticated SMTP', 'Exchange ActiveSync', 'Other clients', 'Exchange Web Services']
+    events = []
+    for number in range(1, LEGACY_EVENTS + 1):
+        code, access, reason = outcomes[number % len(outcomes)]
+        events.append({'id': f'fictional-signin-{number:05d}', 'createdDateTime': f'2026-09-{8 + number % 6:02d}T{number % 24:02d}:{number % 60:02d}:00Z',
+                       'userId': f'fictional-user-{number % 40 + 1}', 'userPrincipalName': f'fictional.user{number % 40 + 1}@example.invalid',
+                       'userDisplayName': f'Fictional user {number % 40 + 1}', 'appId': f'fictional-app-{number % 3}',
+                       'appDisplayName': f'Fictional mail application {number % 3}', 'resourceDisplayName': 'Office 365 Exchange Online',
+                       'clientAppUsed': clients[number % len(clients)], 'ipAddress': f'192.0.2.{number % 250 + 1}',
+                       'conditionalAccessStatus': access, 'isInteractive': True, 'correlationId': f'fictional-correlation-{number:05d}',
+                       'status': ({} if code is None else {'errorCode': code, 'failureReason': reason}),
+                       'location': {'city': 'Fictional City', 'countryOrRegion': 'US'},
+                       'appliedConditionalAccessPolicies': [{'id': 'fictional-policy', 'displayName': 'Fictional block legacy',
+                                                             'result': 'failure' if access == 'failure' else 'notApplied'}],
+                       'accessToken': 'fictional-token-must-not-be-exported'})
+    events[3]['userAgent'] = GIANT_USER_AGENT
+    events.extend({'id': f'fictional-mapi-{number}', 'createdDateTime': '2026-09-12T10:00:00Z', 'userId': 'fictional-user-1',
+                   'clientAppUsed': 'MAPI Over HTTP', 'status': {'errorCode': 0}} for number in range(1, 4))
+    events.extend({'id': f'fictional-modern-{number}', 'createdDateTime': '2026-09-12T11:00:00Z', 'userId': 'fictional-user-2',
+                   'clientAppUsed': 'Browser', 'status': {'errorCode': 0}} for number in range(1, 6))
+    return events
+
+
+def _attach_evidence_drilldown(results):
+    """Actionable identity findings backed by invented detailed records."""
+    entra = results['entra_info']['_client']
+    for row in entra.auth_methods_registration[:12]:
+        row['isMfaRegistered'] = False
+    entra.role_assignment_schedules.extend(
+        {'id': f'fictional-standing-{index}', 'principalId': f'fictional-user-{index}', 'roleDefinitionId': 'fictional-global-admin',
+         'directoryScopeId': '/', 'status': 'Provisioned', 'principal': {'displayName': f'Fictional standing admin {index}',
+                                                                         '@odata.type': '#microsoft.graph.user'},
+         'roleDefinition': {'displayName': 'Global Administrator'}, 'scheduleInfo': {'expiration': {'type': 'noExpiration'}}}
+        for index in range(1, 4))
+    entra.collection_status['role_assignment_schedules'] = _source_state(len(entra.role_assignment_schedules))
+    entra.signin_logs = _legacy_signins()
+    entra.signin_summary = {'legacy_auth_attempts': LEGACY_EVENTS, 'total_signins_sampled': len(entra.signin_logs)}
+    entra.collection_status['signin_logs'] = {
+        **_source_state(len(entra.signin_logs)), 'collected_at': '2026-09-14T12:00:00Z',
+        'window_start': '2026-09-07T12:00:00Z', 'window_end': '2026-09-14T12:00:00Z',
+        'collection_window': 'createdDateTime ge 2026-09-07T12:00:00Z and createdDateTime le 2026-09-14T12:00:00Z',
+        'source_api': 'https://graph.microsoft.com/v1.0/auditLogs/signIns', 'pages_collected': 2}
+    base = {'Service': 'Entra', 'Feature': 'Microsoft Entra ID P1', 'Status': 'Action Required', 'Disposition': 'Action',
+            'Priority': 'High', 'EvidenceBasis': 'Tenant evidence', 'EvidenceAvailable': 'Yes', 'Confidence': 'High',
+            'DomainId': 'identity', 'ObservationDate': '2026-09-14', 'TenantId': SYNTHETIC_TENANT, 'EvidenceComplete': True}
+    results['entra_info']['recommendations'].extend([
+        {**base, 'FindingKey': 'entra.signins.legacy_auth', 'EvidenceKey': 'legacy_signin_detail', 'ControlId': 'IDENTITY.AUTH',
+         'Observation': f'{LEGACY_EVENTS} legacy authentication sign-ins detected in the returned sign-in records.',
+         'Recommendation': 'Review the linked sign-in records and block legacy authentication.'},
+        {**base, 'FindingKey': 'entra.authentication.mfa_registration', 'EvidenceKey': 'authentication_detail;mfa_registration_detail', 'ControlId': 'IDENTITY.MFA',
+         'Observation': 'Only 138 of 150 users (92.0%) were enrolled in MFA.', 'Recommendation': 'Require MFA registration.'},
+        {**base, 'Feature': 'Microsoft Entra ID P2', 'EvidenceKey': 'admin_role_detail', 'ControlId': 'IDENTITY.ADMIN',
+         'Observation': '3 active directory role assignment schedules have no expiration, including 3 Global Administrator assignments',
+         'Recommendation': 'Convert standing assignments to PIM eligibility.'},
+    ])
+
+
+def create_synthetic_package(directory, *, active_incident=False, evidence_drilldown=False):
     directory = Path(directory)
     exports = directory / 'original_exports'
     exports.mkdir(parents=True, exist_ok=True)
@@ -145,6 +212,23 @@ def create_synthetic_package(directory, *, active_incident=False):
                              'rationale': 'Reviewed effective DLP rules, enforcement mode and exclusions for the fictional SharePoint pilot site and OneDrive location; approved sensitive-content restrictions are enforced across both locations.',
                              'evidence_reference': 'Fictional pilot DLP enforcement and location coverage review'}],
     }}), encoding='utf-8')
+    reviewed_profile=json.loads(profile.read_text(encoding='utf-8'))
+    review=reviewed_profile['readiness_review']
+    review['tenant_scope']={'id':'tenant','description':'Entire fictional tenant: all 150 users, active devices and content',
+        'reviewed_at':'2026-09-14','reviewer_role':'Assessment owner','evidence_reference':'Fictional tenant-wide scope'}
+    for row in review['control_reviews']:
+        row.update(scope_id='tenant',evidence_level='observed_operation',
+            tested_behavior='Fictional test of effective requirements and expected protection results.',
+            tested_scope='All 150 fictional tenant users and their planned content; exclusions reviewed.')
+        row['rationale'] += ' Tested across the entire fictional tenant, including assignments, exclusions and effective behavior.'
+    for control in ('ENDPOINT.POSTURE','DATA.AUDIT'):
+        review['control_reviews'].append({'control_id':control,'scope_id':'tenant','reviewed_at':'2026-09-14',
+            'reviewer_role':'Accountable operational owner','result':'pass','evidence_level':'observed_operation',
+            'rationale':'Fictional tenant-wide test confirmed configuration and actual protection or usable audit searches; scope and exclusions reviewed.',
+            'tested_behavior':'Fictional test confirmed current endpoint protection or usable Copilot event searches.',
+            'tested_scope':'All active tenant devices or tenant Copilot events; exclusions reviewed.',
+            'evidence_reference':'Fictional operational validation '+control})
+    profile.write_text(json.dumps(reviewed_profile),encoding='utf-8')
     results = empty_service_results()
     results['m365_result'][0]['_client'] = SimpleNamespace(
         available=True, users_summary={'total': 150, 'copilot_licensed': 150, 'copilot_license_coverage': 100},
@@ -158,6 +242,8 @@ def create_synthetic_package(directory, *, active_incident=False):
                        'complete': True, 'truncated': False, 'freshness': 'Fresh', 'stale': False},
     )
     _attach_synthetic_source_objects(results)
+    if evidence_drilldown:
+        _attach_evidence_drilldown(results)
     if active_incident:
         defender = results['defender_info']['_client']
         defender.security_incidents[0].update(status='active', severity='high', title='Fictional active exercise')
@@ -190,6 +276,13 @@ def create_synthetic_package(directory, *, active_incident=False):
                           'DomainId': domain, 'EvidenceKey': evidence_key, 'FindingKey': 'synthetic.' + finding_key,
                           'ObservationDate': '2026-09-14', 'EvidenceScope': 'All 150 fictional pilot users, one SharePoint site and one OneDrive location',
                           'TenantId': SYNTHETIC_TENANT, 'EvidenceComplete': True}
+        if finding_key == 'admin_role':
+            recommendation['EvidenceSource'] = 'role_assignment_schedules'
+        elif finding_key == 'tenant_sharing':
+            recommendation['EvidenceSource'] = 'sharepoint_tenant_settings'
+        elif finding_key in {'permissions_snapshot', 'lifecycle'}:
+            recommendation.update(SourceType='portal_export', SourceAvailability='available',
+                SourceFile='permissions.csv' if finding_key == 'permissions_snapshot' else 'lifecycle.csv')
         if finding_key == 'endpoint':
             recommendation.update(ControlId='ENDPOINT.POSTURE', EvidenceBasis='Reviewed endpoint baseline')
         if service_key == 'm365_result':

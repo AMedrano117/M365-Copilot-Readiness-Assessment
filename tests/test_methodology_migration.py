@@ -1,4 +1,4 @@
-"""Only the reviewed 2.0.0 -> 2.1.0 transition can reuse saved evidence."""
+"""Only reviewed transitions (2.0.0 / 2.1.0 / 3.0.0 -> 4.0.0) can reuse saved evidence."""
 
 import contextlib
 import io
@@ -54,14 +54,14 @@ class MethodologyMigrationTests(unittest.TestCase):
             payload = load_collection(source)
             self.assertEqual(payload['methodology_version'], '2.0.0')
             self.assertEqual(payload['original_methodology_version'], '2.0.0')
-            self.assertEqual(payload['effective_methodology_version'], '2.1.0')
+            self.assertEqual(payload['effective_methodology_version'], '4.0.0')
             self.assertEqual(payload['collected_at'], COLLECTED)
             self.assertEqual(payload['evaluation_date'], EVALUATED)
             self.assertEqual(payload['service_results'], json.loads(before[source])['service_results'])
             context = collection_context(payload)
             self.assertEqual(context['collected_methodology_version'], '2.0.0')
             self.assertEqual(context['methodology_migration']['from'], '2.0.0')
-            self.assertEqual(context['methodology_migration']['to'], '2.1.0')
+            self.assertEqual(context['methodology_migration']['to'], '4.0.0')
             for path, contents in before.items():
                 self.assertEqual(path.read_bytes(), contents)
             retained = Path(payload['resolved_inputs']['sam_report'][0])
@@ -86,7 +86,7 @@ class MethodologyMigrationTests(unittest.TestCase):
                 recipe_path = folder / 'rebuild.json'
                 before = recipe_path.read_bytes()
                 payload = load_collection(recipe_path)
-                self.assertEqual(payload['methodology_migration']['to'], '2.1.0')
+                self.assertEqual(payload['methodology_migration']['to'], '4.0.0')
                 self.assertEqual(payload['evaluation_date'], EVALUATED)
                 self.assertEqual(recipe_path.read_bytes(), before)
                 retained = Path(payload['resolved_inputs']['sam_report'][0])
@@ -121,20 +121,20 @@ class MethodologyMigrationTests(unittest.TestCase):
                  patch('Core.offline_collection.save_collection', side_effect=AssertionError('Unexpected collection save')):
                 self.assertEqual(run_offline_report(self.parse('--collection-input', source)), 0)
             bundle = render.call_args.kwargs['evidence_bundle']
-            self.assertEqual(bundle['assessment_result']['methodology_version'], '2.1.0')
+            self.assertEqual(bundle['assessment_result']['methodology_version'], '4.0.0')
             self.assertEqual(bundle['assessment_result']['evaluation_date'], EVALUATED)
-            self.assertIn('Methodology migration 2.0.0 -> 2.1.0', console.getvalue())
+            self.assertIn('Methodology migration 2.0.0 -> 4.0.0', console.getvalue())
             self.assertEqual((folder / 'collection.json').read_bytes(), before)
             receipt = json.loads((folder / 'operator-log.jsonl').read_text(encoding='utf-8').splitlines()[-1])
             self.assertEqual(receipt['methodology_migration']['from'], '2.0.0')
             recipe = json.loads((folder / 'rebuild.json').read_text(encoding='utf-8'))
-            self.assertEqual(recipe['methodology_version'], '2.1.0')
+            self.assertEqual(recipe['methodology_version'], '4.0.0')
             self.assertEqual(recipe['original_methodology_version'], '2.0.0')
             self.assertEqual(load_collection(folder / 'rebuild.json')['methodology_migration']['from'], '2.0.0')
             workbook_path = export_to_excel(bundle['recommendations'], filename=str(root / 'migration.xlsx'), evidence_bundle=bundle)
             workbook = load_workbook(workbook_path, read_only=True)
             try:
-                self.assertIn('2.0.0 -> 2.1.0', str(list(workbook['Collection Coverage'].values)))
+                self.assertIn('2.0.0 -> 4.0.0', str(list(workbook['Collection Coverage'].values)))
             finally:
                 workbook.close()
 

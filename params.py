@@ -1,4 +1,7 @@
-TENANT_ID = "92be237d-7eaa-4f11-be0e-0d87ca6abf1e"  # e.g., 'contoso.onmicrosoft.com' or GUID
+# Deliberately blank. The tenant must come from --tenant-id or the selected
+# environment file's TENANT_ID so a run can never fall back to another
+# customer's tenant.
+TENANT_ID = ""
 
 # Services to analyze - valid values: "M365", "Entra", "Defender", "Purview", "Power Platform", "Copilot Studio"
 # Empty array = analyze all services

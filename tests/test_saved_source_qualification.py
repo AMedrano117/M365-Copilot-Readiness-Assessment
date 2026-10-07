@@ -23,7 +23,8 @@ def state(status="available"):
 
 def assessment(rows, client=None):
     return build_assessment_result(rows, {"collection_context": {"collected_at": DAY},
-        "source_statuses": {"defender_" + key: value for key, value in getattr(client, "collection_status", {}).items()}},
+        "source_statuses": {"defender_" + key: dict(value, source_file='fictional-defender.json')
+                            for key, value in getattr(client, "collection_status", {}).items()}},
         evaluation_date=DAY, expected_tenant_id=TENANT)
 
 
@@ -153,7 +154,8 @@ class SavedSourceQualificationTests(unittest.TestCase):
                 {"Service": "Entra", "Feature": "Sign-in protection", "Observation": "Multifactor authentication is required by Conditional Access policies.",
                  "FindingKey": "conditional-access-mfa", "Disposition": "Assurance", "EvidenceKey": "conditional_access_detail"}]
         result = assessment(rows)
-        self.assertEqual(len(result["strengths"]), 1)
+        self.assertEqual(len(result["strengths"]), 0)
+        self.assertEqual(sum(row["Disposition"]=="Assurance" for row in result["recommendations"]),1)
 
     def test_signin_sample_and_label_definitions_keep_their_actual_scope(self):
         entra = SimpleNamespace(collection_status={"signin_logs": state()})

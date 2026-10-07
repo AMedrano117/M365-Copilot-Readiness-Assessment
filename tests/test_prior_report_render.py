@@ -3,7 +3,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from openpyxl import load_workbook
+from tests.workbook_test_helpers import load_workbook_pair as load_workbook
 
 from Core.export_recommendations import export_to_excel, export_to_html
 
@@ -81,7 +81,8 @@ class PriorReportRenderTests(unittest.TestCase):
         self.assertTrue(any(row['metric_id'] == 'copilot.active_users' and row['value'] == 5 and row['observed_at'] == '2026-07-15' for row in historical_usage))
         self.assertEqual(result['counts']['confirmation'], 1)
         self.assertEqual(result['counts']['strengths'], 0)
-        self.assertIn('Readiness unconfirmed', html)
+        self.assertEqual(result['decision'], 'Readiness unconfirmed')
+        self.assertIn('Not enough evidence to decide yet', html)
         self.assertIn('Its conclusion has not been revalidated from saved facts', html)
         self.assertNotIn('supplied portal exports only', html)
         self.assertNotIn('private-user@example.invalid', html)
@@ -110,7 +111,7 @@ class PriorReportRenderTests(unittest.TestCase):
             'Empty evidence': {'rows': []},
         }
         path = export_to_excel(self.current, evidence_bundle=self.bundle)
-        workbook = load_workbook(path, data_only=False)
+        workbook = load_workbook(path, data_only=False).technical
         try:
             self.assertIn('Prior Report Sources', workbook.sheetnames)
             mapping = list(workbook['Prior Report Sources'].values)

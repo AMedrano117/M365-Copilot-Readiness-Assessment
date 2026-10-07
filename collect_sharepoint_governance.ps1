@@ -7,26 +7,57 @@ param(
     [string]$CertificatePassword,
     [string]$CertificateThumbprint,
     [string]$DownloadPath,
-    [switch]$ConnectionOnly
+    [switch]$ConnectionOnly,
+    # Read secrets as one JSON line from stdin so they never appear in the
+    # process command line. The Python orchestrator always uses this path.
+    [switch]$SecretsFromStdin
 )
+
+if ($SecretsFromStdin) {
+    $secretLine = [Console]::In.ReadLine()
+    if ($secretLine) {
+        $secretPayload = $secretLine | ConvertFrom-Json
+        if ($secretPayload.certificate_password) { $CertificatePassword = [string]$secretPayload.certificate_password }
+    }
+    Remove-Variable -Name secretLine, secretPayload -ErrorAction SilentlyContinue
+}
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 $OutputEncoding = [Console]::OutputEncoding
 
+# Live progress for the Python orchestrator (stderr):
+# PROGRESS:TOTAL:<n>, PROGRESS:STEP:<dataset starting>, PROGRESS:NOTE:<text>, PROGRESS:END.
+function Write-CollectionStep {
+    param([string]$Kind, [string]$Value = '')
+    [Console]::Error.WriteLine("PROGRESS:${Kind}:$Value")
+}
+
 function Convert-ObjectToMap {
     param([object]$InputObject, [string[]]$Properties)
     $result = [ordered]@{}
     foreach ($name in $Properties) {
         $property = $InputObject.PSObject.Properties[$name]
-        if ($null -ne $property) { $result[$name] = $property.Value }
+        if ($null -ne $property) {
+            $value = $property.Value
+            # Windows PowerShell serializes DateTime as /Date(epoch)/. Preserve
+            # the native wall-clock value, kind and offset as round-trip ISO so
+            # another system can read the original timestamp directly.
+            if ($value -is [DateTime] -or $value -is [DateTimeOffset]) {
+                $value = $value.ToString('o', [Globalization.CultureInfo]::InvariantCulture)
+            }
+            $result[$name] = $value
+        }
     }
     return $result
 }
 
 function New-SourceState {
     param([bool]$Available, [string]$Reason = '', [int]$Records = 0)
+    # Provenance: which identity read this dataset (see collector-registry.json auth_paths).
+    $credentialType = if ($script:usingCertificate) { 'workload_app_certificate' } else { 'delegated_user' }
+    $authPathId = if ($script:usingCertificate) { 'spo_admin_certificate' } else { 'spo_admin_delegated' }
     return [ordered]@{
         available = $Available
         availability_status = $(if ($Available) { 'available' } else { 'unavailable' })
@@ -34,7 +65,72 @@ function New-SourceState {
         pages_collected = 1
         truncated = $false
         reason = $Reason
+        credential_type = $credentialType
+        auth_path_id = $authPathId
+        coverage = 'full'
+        evidence_quality = 'standard'
     }
+}
+
+function Get-SiteSettingsWithDetails {
+    param([string[]]$Properties)
+    $collectionStartedAt = [DateTime]::UtcNow.ToString('o')
+    # -Limit All returns the inventory, but Microsoft documents that many
+    # sharing/expiry properties can be unpopulated/default values in this
+    # mode. Read settings separately by Identity and retain the listing as
+    # dated source evidence, including when a detail request fails.
+    $inventory = @(Get-SPOSite -Limit All -ErrorAction Stop)
+    $listingCompletedAt = [DateTime]::UtcNow.ToString('o')
+    $items = @()
+    $detailFailures = @()
+    $detailsCollected = 0
+    $siteIndex = 0
+    foreach ($listedSite in $inventory) {
+        $siteIndex++
+        Write-CollectionStep NOTE "site settings ($siteIndex of $($inventory.Count))"
+        $record = Convert-ObjectToMap -InputObject $listedSite -Properties @('Url','Title','Template','Owner','SiteId','GroupId')
+        $record['InventoryRecord'] = Convert-ObjectToMap -InputObject $listedSite -Properties $Properties
+        $record['InventoryObservedAt'] = $listingCompletedAt
+        $identity = [string]$listedSite.Url
+        $requestStartedAt = [DateTime]::UtcNow.ToString('o')
+        try {
+            if ([string]::IsNullOrWhiteSpace($identity)) { throw 'The returned site inventory record has no Url for its Identity detail request.' }
+            $siteDetail = Get-SPOSite -Identity $identity -ErrorAction Stop
+            if ($null -eq $siteDetail) { throw 'Get-SPOSite -Identity returned no site detail.' }
+            $detailMap = Convert-ObjectToMap -InputObject $siteDetail -Properties $Properties
+            foreach ($name in $detailMap.Keys) { $record[$name] = $detailMap[$name] }
+            $record['SettingsReadStatus'] = 'available'
+            $record['SettingsSource'] = 'Get-SPOSite -Identity'
+            $detailsCollected++
+        } catch {
+            $reason = $_.Exception.Message
+            $record['SettingsReadStatus'] = 'unavailable'
+            $record['SettingsReadError'] = $reason
+            $detailFailures += [ordered]@{ identity=$identity; reason=$reason; request_started_at=$requestStartedAt; request_completed_at=[DateTime]::UtcNow.ToString('o') }
+        }
+        $record['SettingsReadStartedAt'] = $requestStartedAt
+        $record['SettingsReadAt'] = [DateTime]::UtcNow.ToString('o')
+        $items += $record
+    }
+    $state = New-SourceState -Available $true -Records $items.Count
+    $state['availability_status'] = $(if ($detailFailures.Count) { 'partial' } else { 'available' })
+    $state['complete'] = $detailFailures.Count -eq 0
+    $state['coverage'] = $(if ($detailFailures.Count) { 'partial' } else { 'full' })
+    $state['settings_read_mode'] = 'per_site_identity'
+    $state['source_api'] = 'SharePoint Online Management Shell: Get-SPOSite -Identity'
+    $state['details_requested'] = $inventory.Count
+    $state['details_collected'] = $detailsCollected
+    $state['detail_failures'] = $detailFailures
+    $state['collection_started_at'] = $collectionStartedAt
+    $state['collection_completed_at'] = [DateTime]::UtcNow.ToString('o')
+    $state['collected_at'] = $state['collection_completed_at']
+    $state['listing'] = [ordered]@{ source='Get-SPOSite -Limit All'; records_collected=$inventory.Count; collection_started_at=$collectionStartedAt; collection_completed_at=$listingCompletedAt; settings_verified=$false }
+    $state['scope'] = 'Sharing and protection settings for each returned site, read independently by Identity; failed sites remain in the retained inventory.'
+    $state['limitations'] = 'Configuration only. Omitted settings remain unknown; settings do not prove current links, permissioned-user counts, or observed access behavior.'
+    $state['documentation_verified_at'] = '2026-10-02'
+    $state['documentation_urls'] = @('https://learn.microsoft.com/en-us/powershell/module/microsoft.online.sharepoint.powershell/get-sposite?view=sharepoint-ps')
+    $state['reason'] = $(if ($detailFailures.Count) { "$($detailFailures.Count) of $($inventory.Count) site detail requests failed; inventory records are retained." } else { '' })
+    return [ordered]@{ available=$true; records_collected=$items.Count; items=$items; reason=$state['reason']; source_state=$state }
 }
 
 function Find-SharePointModuleManifest {
@@ -84,7 +180,9 @@ if (-not $loadedSharePointModule -or $loadedSharePointModule.Version -lt [versio
     throw "Microsoft.Online.SharePoint.PowerShell 16.0.27215.12000 or later is required for item-level Everyone/EEEU report coverage. Installed: $($loadedSharePointModule.Version)"
 }
 
-$usingCertificate = -not [string]::IsNullOrWhiteSpace($CertificateThumbprint) -or -not [string]::IsNullOrWhiteSpace($CertificatePath)
+Write-CollectionStep NOTE 'signing in to SharePoint administration'
+$script:usingCertificate = -not [string]::IsNullOrWhiteSpace($CertificateThumbprint) -or -not [string]::IsNullOrWhiteSpace($CertificatePath)
+$usingCertificate = $script:usingCertificate
 if ($usingCertificate) {
     [Console]::Error.WriteLine('AUTH_REUSED:SharePoint:Using application certificate authentication')
     if ($CertificateThumbprint) {
@@ -130,12 +228,16 @@ $tenantProperties = @(
     'ShowEveryoneExceptExternalUsersClaim','OrphanedPersonalSitesRetentionPeriod',
     'OneDriveStorageQuota','EnableAutoExpirationVersionTrim','MajorVersionLimit',
     'ExpireVersionsAfterDays','SelfServiceSiteCreationDisabled','IsLoopEnabled','IsFluidEnabled',
-    'IsWhiteboardEnabled','IsCollabMeetingNotesFluidEnabled'
+    'IsWhiteboardEnabled','IsCollabMeetingNotesFluidEnabled','EnableRestrictedAccessControl'
 )
 $siteProperties = @(
-    'Url','Title','Template','Owner','SharingCapability','DefaultSharingLinkType',
+    'Url','Title','Template','Owner','SiteId','GroupId','SharingCapability','DefaultSharingLinkType',
+    'DefaultShareLinkScope','DefaultShareLinkRole','DefaultLinkToExistingAccess',
     'DefaultLinkPermission','AnonymousLinkExpirationInDays','ExternalUserExpirationInDays',
-    'ConditionalAccessPolicy','LimitedAccessFileType','SensitivityLabel'
+    'OverrideTenantAnonymousLinkExpirationPolicy','OverrideTenantExternalUserExpirationPolicy',
+    'ConditionalAccessPolicy','LimitedAccessFileType','SensitivityLabel',
+    'RestrictContentOrgWideSearch','RestrictedAccessControl',
+    'LastContentModifiedDate','LastItemModifiedDate','TimeCreated'
 )
 
 $payload = [ordered]@{
@@ -150,6 +252,8 @@ $payload = [ordered]@{
     collection_status = [ordered]@{}
 }
 
+Write-CollectionStep TOTAL 6
+Write-CollectionStep STEP 'tenant sharing settings'
 try {
     $tenant = Get-SPOTenant
     $payload.tenant.available = $true
@@ -160,17 +264,41 @@ try {
     $payload.collection_status['sharepoint_tenant_settings'] = New-SourceState -Available $false -Reason $_.Exception.Message
 }
 
+Write-CollectionStep STEP 'site sharing settings (all sites)'
 try {
-    $siteItems = @(Get-SPOSite -Limit All -Detailed | ForEach-Object { Convert-ObjectToMap -InputObject $_ -Properties $siteProperties })
-    $payload.sites.available = $true
-    $payload.sites.items = $siteItems
-    $payload.sites.records_collected = $siteItems.Count
-    $payload.collection_status['sharepoint_site_settings'] = New-SourceState -Available $true -Records $siteItems.Count
+    $siteCollection = Get-SiteSettingsWithDetails -Properties $siteProperties
+    $payload.sites.available = $siteCollection.available
+    $payload.sites.items = $siteCollection.items
+    $payload.sites.records_collected = $siteCollection.records_collected
+    $payload.sites.reason = $siteCollection.reason
+    $payload.collection_status['sharepoint_site_settings'] = $siteCollection.source_state
 } catch {
     $payload.sites.reason = $_.Exception.Message
     $payload.collection_status['sharepoint_site_settings'] = New-SourceState -Available $false -Reason $_.Exception.Message
 }
 
+Write-CollectionStep STEP 'Copilot content controls'
+# Copilot content controls. Cmdlets and properties vary by module version, so
+# each is read only when present; absence is reported, never treated as off.
+$copilotControls = [ordered]@{ available = $false; restricted_search_mode = ''; restricted_search_allowed_sites = $null; reason = '' }
+try {
+    if (Get-Command Get-SPOTenantRestrictedSearchMode -ErrorAction SilentlyContinue) {
+        $searchMode = Get-SPOTenantRestrictedSearchMode -ErrorAction Stop
+        $modeValue = if ($searchMode.PSObject.Properties['Mode']) { $searchMode.Mode } else { $searchMode }
+        $copilotControls.restricted_search_mode = [string]$modeValue
+        $copilotControls.available = $true
+        if (Get-Command Get-SPOTenantRestrictedSearchAllowedList -ErrorAction SilentlyContinue) {
+            $copilotControls.restricted_search_allowed_sites = @(Get-SPOTenantRestrictedSearchAllowedList -ErrorAction Stop | Where-Object { $_ }).Count
+        }
+    } else {
+        $copilotControls.reason = 'Get-SPOTenantRestrictedSearchMode is not available in the installed SharePoint Online module.'
+    }
+} catch {
+    $copilotControls.reason = $_.Exception.Message
+}
+$payload['copilot_content_controls'] = $copilotControls
+
+Write-CollectionStep STEP 'Data access governance reports'
 $dagQueries = @(
     @{ entity='PermissionedUsers'; workload='SharePoint'; type='Snapshot' },
     @{ entity='PermissionedUsers'; workload='OneDriveForBusiness'; type='Snapshot' },
@@ -188,7 +316,10 @@ $dagQueries = @(
 )
 $dagRows = @()
 $dagErrors = @()
+$dagIndex = 0
 foreach ($query in $dagQueries) {
+    $dagIndex++
+    Write-CollectionStep NOTE "Data access governance reports ($dagIndex of $($dagQueries.Count))"
     try {
         $queryParameters = @{ ReportEntity = $query.entity }
         if ($query.workload) { $queryParameters['Workload'] = $query.workload }
@@ -210,6 +341,7 @@ foreach ($query in $dagQueries) {
     }
 }
 
+Write-CollectionStep STEP 'recent-activity report status'
 # Recent-activity reports require tenant-approved audit data collection. Read the
 # state only; this assessment never starts or stops collection.
 $activityEntities = @(
@@ -259,6 +391,7 @@ $payload.collection_status['sharepoint_dag_reports'] = [ordered]@{
     reason = $payload.dag_reports.reason
 }
 
+Write-CollectionStep STEP 'downloading completed reports'
 # Reuse completed Microsoft reports without starting a new scan. Downloads remain in the
 # tool's ignored cache and are passed into the existing SAM report parser by main.py.
 if ($DownloadPath -and $dagRows.Count -gt 0) {
@@ -307,6 +440,7 @@ if ($DownloadPath -and $dagRows.Count -gt 0) {
     }
 }
 
+Write-CollectionStep END
 $payload['available'] = $payload.tenant.available -or $payload.sites.available -or $payload.dag_reports.available
 # SharePoint modules may write banners/warnings to stdout. Explicit framing keeps
 # those messages separate from the single authoritative evidence document.

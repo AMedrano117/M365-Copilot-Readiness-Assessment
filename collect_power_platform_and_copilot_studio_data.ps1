@@ -90,23 +90,23 @@ try {
             # Not connected, need to authenticate
         }
     }
-    
+
     if (-not $connected) {
-        Write-ConditionalOutput "" 
+        Write-ConditionalOutput ""
         Write-ConditionalOutput "      > Authenticating to Azure (Tenant: $TenantId)..." -Color Cyan
-        Write-ConditionalOutput "" 
+        Write-ConditionalOutput ""
         [Console]::Error.WriteLine("AUTH_PROMPT:Power Platform Admin APIs:Power Platform admin and Copilot Studio environment data via Azure device sign-in")
-        
+
         # Connect to Azure account using device code authentication
         # This works reliably in subprocess scenarios
         # Do NOT pipe to Out-Null - we need to see the device code!
         Connect-AzAccount -Tenant $TenantId -UseDeviceAuthentication -Scope Process -Force -ErrorAction Stop -WarningAction SilentlyContinue
-        
-        Write-ConditionalOutput "" 
+
+        Write-ConditionalOutput ""
         Write-ConditionalOutput "      > Authentication successful!" -Color Green
         [Console]::Error.WriteLine("AUTH_COMPLETE:Power Platform Admin APIs")
     }
-    
+
 } catch {
     [Console]::Error.WriteLine("AUTH_ERROR:Power Platform Admin APIs:$($_.Exception.Message)")
     Write-ConditionalOutput "      X Connection failed: $($_.Exception.Message)" -Color Red
@@ -132,7 +132,29 @@ $flowToken = ConvertFrom-AzAccessToken (
 $powerPlatformData = @{}
 $permissionFailures = @()
 
-# Helper function for API calls
+$collectionStatus = [ordered]@{}
+
+function Get-PowerPlatformFailureCategory {
+    param([int]$StatusCode)
+    if ($StatusCode -in @(401, 403)) { return 'permission_denied' }
+    if ($StatusCode -eq 404) { return 'not_provisioned' }
+    if ($StatusCode -eq 429 -or ($StatusCode -ge 500 -and $StatusCode -lt 600)) { return 'transient' }
+    return 'collection_error'
+}
+
+function Get-PowerPlatformFailureLabel {
+    param([string]$Category)
+    switch ($Category) {
+        'permission_denied' { return 'Permission denied' }
+        'not_provisioned' { return 'Not provisioned' }
+        'transient' { return 'Temporarily unavailable' }
+        default { return 'Collection error' }
+    }
+}
+
+# Helper function for API calls. Returns a result object so throttling,
+# missing features and permission failures are reported separately instead
+# of all appearing as "permission denied".
 function Invoke-PowerPlatformApi {
     param(
         [string]$Uri,
@@ -144,32 +166,40 @@ function Invoke-PowerPlatformApi {
             "Content-Type" = "application/json"
             Accept = "application/json"
         } -ErrorAction Stop
-        return $response
+        return [pscustomobject]@{ ok = $true; status = 200; category = ''; message = ''; data = $response }
     } catch {
-        return $null
+        $statusCode = 0
+        try { $statusCode = [int]$_.Exception.Response.StatusCode } catch { $statusCode = 0 }
+        $message = [string]$_.Exception.Message
+        if ($message.Length -gt 300) { $message = $message.Substring(0, 300) }
+        return [pscustomobject]@{
+            ok = $false; status = $statusCode; data = $null; message = $message
+            category = (Get-PowerPlatformFailureCategory -StatusCode $statusCode)
+        }
     }
 }
 
 # Collect Environments
 Write-ConditionalOutput "      > Environments..." -NoNewline
-try {
-    $environments = Invoke-PowerPlatformApi `
-        -Uri "https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments?api-version=2023-06-01" `
-        -Token $bapToken
-    
-    if ($environments) {
-        $powerPlatformData["environments"] = $environments.value
-        Write-ConditionalOutput " $($environments.value.Count) found" -Color Green
-        
-        $environmentNames = @($environments.value | ForEach-Object { $_.name } | Where-Object { $_ })
-    } else {
-        throw "No environments returned"
-    }
-} catch {
-    Write-ConditionalOutput " Permission denied" -Color Red
+$environmentResult = Invoke-PowerPlatformApi `
+    -Uri "https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments?api-version=2023-06-01" `
+    -Token $bapToken
+if ($environmentResult.ok -and $environmentResult.data) {
+    $environments = $environmentResult.data
+    $powerPlatformData["environments"] = $environments.value
+    Write-ConditionalOutput " $($environments.value.Count) found" -Color Green
+    $environmentNames = @($environments.value | ForEach-Object { $_.name } | Where-Object { $_ })
+    $collectionStatus["environments"] = [ordered]@{ available = $true; availability_status = 'available'; records_collected = @($environments.value).Count }
+} else {
+    $label = Get-PowerPlatformFailureLabel -Category $environmentResult.category
+    Write-ConditionalOutput " $label" -Color Red
     $powerPlatformData["environments"] = @()
-    $permissionFailures += "Environments"
+    $permissionFailures += "Environments ($label)"
     $environmentNames = @()
+    $collectionStatus["environments"] = [ordered]@{
+        available = $false; availability_status = 'unavailable'; status_code = $environmentResult.status
+        error_category = $environmentResult.category; reason = ("$label. " + $environmentResult.message).Trim()
+    }
 }
 
 # Collect each resource type across every environment. Partial failures remain visible without
@@ -200,11 +230,12 @@ if ($environmentNames.Count -gt 0) {
         Write-ConditionalOutput "      > $($collection.Label)..." -NoNewline
         $combined = @()
         $failedEnvironments = @()
+        $failureCategories = @()
         foreach ($envName in $environmentNames) {
             $uri = & $collection.Uri $envName
-            $response = Invoke-PowerPlatformApi -Uri $uri -Token $collection.Token
-            if ($response) {
-                foreach ($item in @($response.value)) {
+            $result = Invoke-PowerPlatformApi -Uri $uri -Token $collection.Token
+            if ($result.ok) {
+                foreach ($item in @($result.data.value)) {
                     if ($null -ne $item) {
                         $item | Add-Member -NotePropertyName assessmentEnvironmentId -NotePropertyValue $envName -Force
                         $combined += $item
@@ -212,14 +243,26 @@ if ($environmentNames.Count -gt 0) {
                 }
             } else {
                 $failedEnvironments += $envName
+                $failureCategories += $result.category
             }
         }
         $powerPlatformData[$collection.Key] = $combined
         if ($failedEnvironments.Count -gt 0) {
-            $permissionFailures += "$($collection.Label) ($($failedEnvironments.Count)/$($environmentNames.Count) environments unread)"
-            Write-ConditionalOutput " $($combined.Count) found; $($failedEnvironments.Count) environment(s) unread" -Color Yellow
+            $categories = @($failureCategories | Sort-Object -Unique)
+            $labels = ($categories | ForEach-Object { Get-PowerPlatformFailureLabel -Category $_ }) -join ', '
+            $permissionFailures += "$($collection.Label) ($($failedEnvironments.Count)/$($environmentNames.Count) environments unread: $labels)"
+            Write-ConditionalOutput " $($combined.Count) found; $($failedEnvironments.Count) environment(s) unread ($labels)" -Color Yellow
+            $partial = $failedEnvironments.Count -lt $environmentNames.Count
+            $collectionStatus[$collection.Key] = [ordered]@{
+                available = $partial
+                availability_status = $(if ($partial) { 'partial' } else { 'unavailable' })
+                records_collected = $combined.Count
+                error_category = $(if ($categories.Count -eq 1) { $categories[0] } else { 'mixed' })
+                reason = "$($failedEnvironments.Count) of $($environmentNames.Count) environments unread: $labels"
+            }
         } else {
             Write-ConditionalOutput " $($combined.Count) found" -Color Green
+            $collectionStatus[$collection.Key] = [ordered]@{ available = $true; availability_status = 'available'; records_collected = $combined.Count }
         }
     }
 } else {
@@ -233,7 +276,10 @@ if ($environmentNames.Count -gt 0) {
 }
 
 # Step 3: Serialize and output data
+# "permission_failures" keeps its historical name for compatibility; each entry
+# now states the actual failure type. collection_status carries the categories.
 $powerPlatformData["permission_failures"] = $permissionFailures
+$powerPlatformData["collection_status"] = $collectionStatus
 
 if ($permissionFailures.Count -gt 0) {
     $failureList = $permissionFailures -join ", "
@@ -243,7 +289,7 @@ if ($permissionFailures.Count -gt 0) {
 if (-not $DataOnly) {
     Write-ConditionalOutput ""
     if ($permissionFailures.Count -gt 0) {
-        Write-ConditionalOutput "Warning: Permission denied for $($permissionFailures.Count) data sources: $failureList" -Color Yellow
+        Write-ConditionalOutput "Warning: $($permissionFailures.Count) data sources were not fully read: $failureList" -Color Yellow
         Write-ConditionalOutput "    License recommendations will still be generated. Deployment recommendations limited." -Color Gray
         Write-ConditionalOutput ""
     }
@@ -262,7 +308,7 @@ if ($DataOnly) {
     # Interactive mode: Pass data to Python via stdin
     $env:POWER_PLATFORM_DATA_SOURCE = "stdin"
     $jsonData | python main.py
-    
+
     Write-ConditionalOutput ""
     Write-ConditionalOutput "================================================================" -Color Cyan
     Write-ConditionalOutput "Assessment Complete!" -Color Green

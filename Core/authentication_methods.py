@@ -53,7 +53,7 @@ PHONE_PREFERENCES = {'sms', 'voice', 'voicemobile', 'voicealternatemobile', 'voi
 # The registration report also returns these older service spellings in saved
 # v1.0 responses. Keep unrecognized future values visible instead of guessing.
 PREFERENCE_ALIASES = {'phoneappnotification': 'push', 'phoneappotp': 'oath'}
-FIELDS = ('isAdmin', 'userType', 'isMfaRegistered', 'isMfaCapable', 'isPasswordlessCapable',
+FIELDS = ('isAdmin', 'userType', 'isMfaRegistered', 'isMfaCapable', 'isPasswordlessCapable', 'isSsprRegistered', 'isSsprEnabled', 'isSsprCapable',
           'methodsRegistered', 'isSystemPreferredAuthenticationMethodEnabled',
           'systemPreferredAuthenticationMethods', 'userPreferredMethodForSecondaryAuthentication',
           'lastUpdatedDateTime')
@@ -206,8 +206,17 @@ def summarize_registrations(records, state=None):
     summary_rows.append({'Metric': 'MFA registration rate (%)',
                          'Value': round(metrics['mfa_registered'] / registered_known * 100, 1) if registered_known else 'Unknown',
                          'Known users': registered_known, 'Unknown users': total - registered_known,
+                         'Numerator':metrics['mfa_registered'] if registered_known else None, 'Denominator':registered_known or None,
+                         'Population':'Users with a known registration flag', 'Scope':state.get('scope','Returned registration report'),
+                         'Observation window':state.get('collection_window') or {'start':min(dates) if dates else '', 'end':max(dates) if dates else ''},
                          'Interpretation': 'Percentage of users with a known registration flag; not an enforcement or method-strength score.'})
     metric('MFA capable users', 'mfa_capable', 'mfa_capable_known', 'Registered for an MFA method allowed by policy; does not prove it was used.')
+    for flag, label in (('isSsprRegistered','SSPR registered'),('isSsprEnabled','SSPR enabled'),('isSsprCapable','SSPR capable')):
+        known = sum(type(row.get(flag)) is bool for row in records)
+        count = sum(row.get(flag) is True for row in records)
+        summary_rows.append({'Metric':label,'Value':count if known else 'Unknown','Known users':known,'Unknown users':total-known,
+            'Numerator':count if known else None,'Denominator':known or None,
+            'Interpretation':'Returned registration report population; capability and registration do not prove enforcement.'})
     metric('Passwordless capable users', 'passwordless_capable', 'passwordless_capable_known', 'Graph capability flag; passwordless is not always phishing-resistant.')
     metric('Phishing-resistant method registered', 'phishing_resistant_registered', 'resistant_inventory_known', 'FIDO2/passkeys, Windows Hello, or macOS platform credentials. CBA requires separate MFA configuration verification.')
     metric('Phone method registered', 'phone_registered', 'method_inventory_known', 'SMS/voice availability; may coexist with stronger methods and may be disabled by policy.')
@@ -222,6 +231,9 @@ def summarize_registrations(records, state=None):
     by_label = {label: (group, note) for label, group, note in METHODS.values()}
     method_rows = [{'Method': label, 'Registered users': count,
                     'Percent of known inventories': round(count / metrics['method_inventory_known'] * 100, 1),
+                    'Numerator':count,'Denominator':metrics['method_inventory_known'],
+                    'Population':'Users with a known method inventory','Scope':state.get('scope','Returned registration report'),
+                    'Observation window':state.get('collection_window') or {'start':min(dates) if dates else '', 'end':max(dates) if dates else ''},
                     'Strength / purpose': by_label.get(label, ('review', 'Unknown method; review required'))[1]}
                    for label, count in sorted(registered.items(), key=lambda item: (-item[1], item[0]))]
     preference_rows = [{'Method': _preference(value)[0],
@@ -268,8 +280,12 @@ def legacy_registration_summary(records):
     total = report['total_users']
     return {'total_users': total, 'mfa_registered': metrics.get('mfa_registered', 0),
             'mfa_capable': metrics.get('mfa_capable', 0), 'passwordless_enabled': metrics.get('passwordless_registered', 0),
-            'mfa_registration_rate': int(metrics.get('mfa_registered', 0) / total * 100) if total else 0,
-            'passwordless_adoption_rate': int(metrics.get('passwordless_registered', 0) / total * 100) if total else 0,
+            'mfa_registration_rate': round(metrics.get('mfa_registered', 0) / metrics['mfa_registered_known'] * 100,1) if metrics.get('mfa_registered_known') else None,
+            'passwordless_adoption_rate': round(metrics.get('passwordless_registered', 0) / metrics['method_inventory_known'] * 100,1) if metrics.get('method_inventory_known') else None,
+            'percentage_basis':{'mfa':{'numerator':metrics.get('mfa_registered'),'denominator':metrics.get('mfa_registered_known') or None},
+                                'passwordless':{'numerator':metrics.get('passwordless_registered'),'denominator':metrics.get('method_inventory_known') or None},
+                                'population':'Known registration or method flags','scope':'Returned authentication registration report',
+                                'observation_window':{'start':report['updated_from'],'end':report['updated_to']}},
             'methods': {'microsoftAuthenticator': metrics.get('authenticator_registered', 0),
                         'microsoftAuthenticatorPasswordless': metrics.get('authenticator_passwordless_registered', 0),
                         'fido2': metrics.get('fido_registered', 0),

@@ -1,7 +1,7 @@
 from .get_recommendation import get_recommendation, recommendation_graph_gap
 import sys
 from .spinner import get_timestamp, _stdout_lock
-from azure.core.exceptions import HttpResponseError
+from .access_errors import ACCESS_ERRORS, describe_access_failure
 from .service_categorization import determine_service_type, resolve_plan_statuses, RETIRED_PLANS
 from .get_m365_client import extract_m365_insights_from_client
 
@@ -47,12 +47,10 @@ async def get_m365_info(client, services_and_licenses=None, m365_client=None):
             subscribed_skus = await client.subscribed_skus.get()
         
         license_info = process_m365_licenses(subscribed_skus)
-    except HttpResponseError as e:
+    except ACCESS_ERRORS as e:
+        _category, message = describe_access_failure("M365 service plans", e)
         with _stdout_lock:
-            if e.status_code == 403:
-                print(f"[{get_timestamp()}] [WARNING]  M365 service plans: Insufficient permissions (requires admin role)")
-            else:
-                print(f"[{get_timestamp()}] [WARNING]  M365 service plans: HTTP {e.status_code}")
+            print(f"[{get_timestamp()}] [WARNING]  {message}")
         return ([], [])
     
     # Extract M365 insights once for all recommendations

@@ -45,6 +45,18 @@ async def get_deployment_status(client, pp_insights=None):
             result['env_default'] = 0  # Not in standard pp_insights
         
         sites, connectors, users = await asyncio.gather(*tasks, return_exceptions=True)
+        from Core.source_evidence import envelope_complete
+        result['collection_status'] = {}
+        result['assessment_datasets'] = {}
+        for name, response in (('sites', sites), ('external_connections', connectors), ('users', users)):
+            state = (response.get('_collection_metadata', {}) if isinstance(response, dict) else {})
+            if isinstance(response, Exception):
+                state = {'availability_status': 'unavailable', 'available': False, 'complete': False, 'reason': str(response)}
+            result['collection_status'][name] = state
+            result['assessment_datasets'][name] = [{'records': response.get('value', []) if isinstance(response, dict) else [], 'source': state}]
+        # Retain positive/partial records but never describe a failed or partial
+        # source as a completed zero-result deployment check.
+        result['available'] = all(envelope_complete(state) for state in result['collection_status'].values())
         
         # Check SharePoint sites
         if not isinstance(sites, Exception) and sites and sites.value:
@@ -60,7 +72,7 @@ async def get_deployment_status(client, pp_insights=None):
         if not isinstance(users, Exception) and users and users.value:
             copilot_skus = ['c28afa23-5a37-4837-938f-7cc48d0cca5c', 'f2b5e97e-f677-4bb5-8127-5c3ce7b6a64e']
             for user in users.value:
-                if user.assigned_licenses:
+                if getattr(user, 'assigned_licenses', None):
                     for license in user.assigned_licenses:
                         if license.sku_id and str(license.sku_id).lower() in [s.lower() for s in copilot_skus]:
                             result['has_copilot_users'] = True

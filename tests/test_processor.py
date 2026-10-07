@@ -30,6 +30,17 @@ class ProcessorEvidenceReconciliationTests(unittest.TestCase):
         self.assertEqual(defender["Recommendation"], "")
         self.assertIn("collected through Entra ID Protection", defender["Observation"])
 
+    def test_structured_risk_evidence_uses_completeness_instead_of_observation_wording(self):
+        for complete, expected in [(True, 'Reference'), (False, 'Coverage')]:
+            with self.subTest(complete=complete):
+                rows = reconcile_overlapping_evidence([
+                    {'Service': 'Entra', 'FindingKey': 'entra.identity_risk.users',
+                     'EvidenceComplete': complete, 'Observation': 'Eight unresolved records require review.'},
+                    {'Service': 'Defender', 'Observation': 'Identity risk data could not be retrieved',
+                     'Disposition': 'Coverage', 'Recommendation': 'Review the missing source.'},
+                ])
+                self.assertEqual(rows[1]['Disposition'], expected)
+
     def test_unread_entra_risk_keeps_defender_coverage_gap(self):
         rows = reconcile_overlapping_evidence([
             {

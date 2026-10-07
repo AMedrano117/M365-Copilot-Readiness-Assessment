@@ -4,7 +4,7 @@ from .service_categorization import determine_service_type, resolve_plan_statuse
 from .get_purview_client import get_purview_client
 import sys
 from .spinner import get_timestamp, _stdout_lock
-from azure.core.exceptions import HttpResponseError
+from .access_errors import ACCESS_ERRORS, describe_access_failure
 
 async def fetch_purview_licenses(client):
     """Fetch license data to check if Purview is licensed"""
@@ -58,15 +58,13 @@ async def get_purview_info(client, services_and_licenses=None, purview_client=No
             subscribed_skus = await fetch_purview_licenses(client)
         
         purview_plans = get_purview_service_plans(subscribed_skus)
-    except HttpResponseError as e:
+    except ACCESS_ERRORS as e:
+        _category, message = describe_access_failure("Purview information", e)
         with _stdout_lock:
-            if e.status_code == 403:
-                print(f"[{get_timestamp()}] [WARNING]  Purview information: Insufficient permissions (requires admin role)")
-            else:
-                print(f"[{get_timestamp()}] [WARNING]  Purview information: HTTP {e.status_code}")
+            print(f"[{get_timestamp()}] [WARNING]  {message}")
         return {
             'available': False,
-            'reason': f'Insufficient permissions (HTTP {e.status_code})',
+            'reason': message,
             'has_purview': False,
             'recommendations': []
         }

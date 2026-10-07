@@ -24,7 +24,53 @@ def recommendation_graph_gap(service, permission_profile="standard"):
     )
 
 
-def get_recommendation(recommendation_type, feature_name, sku_name, status="Success", client=None, pp_client=None, pp_insights=None, purview_client=None, defender_client=None, defender_insights=None, entra_insights=None, m365_insights=None, permission_profile="standard"):
+def get_recommendation(*args, **kwargs):
+    """Retain legacy Graph query envelopes on async recommendation records.
+
+    Context-local capture also isolates concurrently evaluated feature modules.
+    Sync recommendation modules and restricted-profile transport gating retain
+    their existing behavior.
+    """
+    import inspect
+    result = _get_recommendation(*args, **kwargs)
+    if not inspect.isawaitable(result):
+        return result
+
+    async def collect():
+        from .get_graph_client import LEGACY_COLLECTION_EVIDENCE
+        from .source_evidence import envelope_complete
+        from .evidence_contract import stable_id
+        datasets = {}
+        token = LEGACY_COLLECTION_EVIDENCE.set(datasets)
+        try:
+            rows = await result
+        finally:
+            LEGACY_COLLECTION_EVIDENCE.reset(token)
+        if datasets:
+            states = [entry['source'] for entries in datasets.values() for entry in entries]
+            complete = all(envelope_complete(state) for state in states)
+            failures = [state for state in states if state['availability_status'] not in {'available', 'partial'}]
+            source_name = 'legacy_graph.probe.' + stable_id(sorted(datasets))
+            # An aggregate supports only the returned sources, never a claim of
+            # tenant-wide deployment. Original per-query envelopes are retained.
+            aggregate = {'availability_status': failures[0]['availability_status'] if failures else 'available' if complete else 'partial',
+                         'available': not failures, 'complete': complete,
+                         'scope': '; '.join(sorted({state['scope'] for state in states})),
+                         'source_api': '; '.join(sorted({state['source_api'] for state in states})),
+                         'collected_at': min(state['collected_at'] for state in states)}
+            for row in rows if isinstance(rows, list) else [rows]:
+                if isinstance(row, dict):
+                    row['assessment_datasets'] = datasets
+                    row.setdefault('EvidenceSource', source_name)
+                    row['collection_status'] = {source_name: aggregate}
+                    row.setdefault('EvidenceScope', aggregate['scope'])
+                    row.setdefault('EvidenceComplete', complete)
+        return rows
+
+    return collect()
+
+
+def _get_recommendation(recommendation_type, feature_name, sku_name, status="Success", client=None, pp_client=None, pp_insights=None, purview_client=None, defender_client=None, defender_insights=None, entra_insights=None, m365_insights=None, permission_profile="standard"):
     """
     Get a feature-specific recommendation based on type
     

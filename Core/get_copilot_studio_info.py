@@ -2,7 +2,8 @@ import asyncio
 from .get_recommendation import get_recommendation, recommendation_graph_gap
 import sys
 from .spinner import get_timestamp, _stdout_lock
-from azure.core.exceptions import HttpResponseError, ClientAuthenticationError
+from azure.core.exceptions import ClientAuthenticationError
+from .access_errors import ACCESS_ERRORS, describe_access_failure
 from .service_categorization import determine_service_type
 
 async def fetch_copilot_studio_licenses(client):
@@ -52,15 +53,13 @@ async def get_copilot_studio_info(client, services_and_licenses=None, pp_client=
             subscribed_skus = await fetch_copilot_studio_licenses(client)
         
         copilot_plans = get_copilot_studio_service_plans(subscribed_skus)
-    except HttpResponseError as e:
+    except ACCESS_ERRORS as e:
+        _category, message = describe_access_failure("Copilot Studio information", e)
         with _stdout_lock:
-            if e.status_code == 403:
-                print(f"[{get_timestamp()}] ⚠️  Copilot Studio information: Insufficient permissions (requires admin role)")
-            else:
-                print(f"[{get_timestamp()}] ⚠️  Copilot Studio information: HTTP {e.status_code}")
+            print(f"[{get_timestamp()}] ⚠️  {message}")
         return {
             'available': False,
-            'reason': f'Insufficient permissions (HTTP {e.status_code})',
+            'reason': message,
             'has_copilot_studio': False,
             'recommendations': []
         }

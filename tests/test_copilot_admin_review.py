@@ -60,14 +60,14 @@ class ActivitySummaryTests(unittest.TestCase):
                                                    {'reportPeriod': 28, 'promptsSubmittedForAllApps': 12}]
         self.assertEqual(summarize_activity([row])['total_prompts'], 12)
 
-    def test_default_collector_reads_and_discards_user_detail_after_aggregation(self):
+    def test_default_collector_retains_user_detail_after_aggregation(self):
         responses = [FakeResponse(payload=summary_payload(period, 2, 1)) for period in ('D7', 'D28', 'D90', 'D180')]
         responses.extend([FakeResponse(payload={'value': []}), FakeResponse(payload={'value': [activity()]})])
         client = FakeClient(responses)
         value = asyncio.run(collect_copilot_usage(client))
         self.assertEqual(value['engagement_summary']['total_prompts'], 10)
-        self.assertEqual(value['user_detail'], [])
-        self.assertNotIn('private@example.invalid', json.dumps(value))
+        self.assertEqual(len(value['user_detail']), 1)
+        self.assertNotIn('private@example.invalid', json.dumps(value['engagement_summary']))
         self.assertIn('UsageUserDetail', client.paths[-1][0])
 
     def test_paged_usage_aggregates_all_pages_and_rejects_other_hosts(self):
@@ -101,7 +101,7 @@ class ActivitySummaryTests(unittest.TestCase):
                               FakeResponse(payload={'value': [activity()], '@odata.nextLink': 'https://graph.microsoft.com/v1.0/copilot/reports/next'}), response])
             value = asyncio.run(collect_copilot_usage(FakeClient(responses)))
             self.assertIsNone(value['engagement_summary']['total_prompts'])
-            self.assertEqual(value['user_detail'], [])
+            self.assertEqual(len(value['user_detail']), 1)
 
 
 class CopilotPolicyTests(unittest.TestCase):
@@ -166,6 +166,26 @@ class CopilotPolicyTests(unittest.TestCase):
         self.assertEqual(summary['availability_status'], 'unavailable')
         self.assertIsNone(summary['total_prompts'])
         self.assertIsNone(summary['active_user_days'])
+
+    def test_nine_domain_report_keeps_collected_prompt_activity_visible_with_original_dates(self):
+        from Core.assessment_result import build_assessment_result
+        usage = {'available': True, 'selected_period': 'D28',
+                 'engagement_summary': summarize_activity([activity()])}
+        data = build_admin_review(SimpleNamespace(copilot_usage=usage), SimpleNamespace(),
+                                  {'collected_at': '2026-09-15T12:00:00Z'})
+        assessment = build_assessment_result([], {}, evaluation_date='2026-09-15')
+        self.assertIn('scope', {domain['id'] for domain in assessment['assessment_domains']})
+        self.assertNotIn('adoption', {domain['id'] for domain in assessment['assessment_domains']})
+        before = copy.deepcopy(assessment)
+        html = render_customer_report(assessment, {'copilot_admin_review': data}, 'Fictional')
+        self.assertIn('Collected Copilot prompt activity', html)
+        for topic in ('Paid Copilot prompts', 'Paid Copilot work-chat prompts',
+                      'Paid Copilot web-chat prompts', 'Paid Copilot active user-days'):
+            self.assertEqual(html.count('>' + topic + '</td>'), 1)
+        self.assertIn('>0</td>', html)
+        self.assertIn('>2026-09-14</td>', html)
+        self.assertNotIn('private@example.invalid', html)
+        self.assertEqual(assessment, before)
 
     def test_collection_replay_preserves_new_context_and_source_dates(self):
         from Core.offline_collection import empty_service_results, load_collection, save_collection

@@ -28,8 +28,9 @@ class CustomerProgressRenderTests(unittest.TestCase):
         assessment = result()
         original = copy.deepcopy(assessment)
         html = render_customer_report(assessment, {}, 'Example')
-        self.assertIn('<h1>Preparing for pilot</h1>', html)
-        self.assertIn('Assessment status: Readiness unconfirmed', html)
+        # The headline states the pilot verdict in plain words; the stage stays visible.
+        self.assertIn('<h1>Not enough evidence to decide yet</h1>', html)
+        self.assertIn('Rollout stage: Preparing for pilot', html)
         self.assertEqual(html.count('aria-current="step"'), 1)
         self.assertIn('href="#readiness-requirements"', html)
         self.assertIn('id="readiness-requirements"', html)

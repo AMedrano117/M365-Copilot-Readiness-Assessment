@@ -2,6 +2,7 @@
 Entra Insights - Pre-computed identity & security metrics from Entra client
 Similar to pp_insights and defender_insights patterns
 """
+from Core.source_evidence import source_is_complete
 
 def extract_entra_insights_from_client(entra_client):
     """
@@ -66,7 +67,7 @@ def extract_entra_insights_from_client(entra_client):
             'total_managed_devices': 0,
             'compliant_devices': 0,
             'non_compliant_devices': 0,
-            'compliance_rate': 0,
+            'compliance_rate': None,
             'corporate_owned': 0,
             'byod_devices': 0,
             'compliance_policies': 0,
@@ -94,7 +95,7 @@ def extract_entra_insights_from_client(entra_client):
             
             # Sign-in Logs
             'total_signins_sampled': 0,
-            'mfa_success_rate': 0,
+            'mfa_success_rate': None,
             'ca_failure_count': 0,
             'risky_signins': 0
         }
@@ -118,12 +119,12 @@ def extract_entra_insights_from_client(entra_client):
     # Calculate derived metrics
     total_devices = device_summary.get('total_managed', 0)
     compliant = device_summary.get('compliant', 0)
-    compliance_rate = int((compliant / total_devices * 100)) if total_devices > 0 else 0
+    compliance_rate = int((compliant / total_devices * 100)) if total_devices > 0 else None
     
     # MFA success rate from sign-ins
     mfa_required = signin_summary.get('mfa_required', 0)
     mfa_success = signin_summary.get('mfa_success', 0)
-    mfa_success_rate = int((mfa_success / mfa_required * 100)) if mfa_required > 0 else 0
+    mfa_success_rate = int((mfa_success / mfa_required * 100)) if mfa_required > 0 else None
     
     return {
         'available': True,
@@ -258,7 +259,12 @@ def extract_entra_insights_from_client(entra_client):
         },
         'access_review_metrics': {
             'total_active_reviews': access_review_summary.get('active_reviews', 0),
-            'total_definitions': access_review_summary.get('total_definitions', 0),
+            # Absence requires a completed inventory; a failed/partial query's
+            # legacy summary zero is not a measured absence of review definitions.
+            'total_definitions': (access_review_summary.get('total_definitions')
+                if access_review_summary.get('total_definitions') != 0 or
+                    source_is_complete(entra_client, 'access_reviews')
+                else None),
             'group_reviews': access_review_summary.get('group_membership_reviews', 0),
             'role_reviews': access_review_summary.get('role_assignment_reviews', 0),
             'guest_reviews': access_review_summary.get('guest_user_reviews', 0),
@@ -417,11 +423,11 @@ def build_mfa_metrics(entra_insights):
     metrics = []
     
     reg_rate = entra_insights.get('mfa_registration_rate', 0)
-    if reg_rate > 0:
+    if isinstance(reg_rate, (int,float)) and reg_rate > 0:
         metrics.append(f"{reg_rate}% MFA registered")
     
     passwordless_rate = entra_insights.get('passwordless_adoption_rate', 0)
-    if passwordless_rate > 0:
+    if isinstance(passwordless_rate, (int,float)) and passwordless_rate > 0:
         metrics.append(f"{passwordless_rate}% passwordless")
     
     legacy = entra_insights.get('legacy_auth_attempts', 0)
@@ -537,7 +543,7 @@ def build_device_metrics(entra_insights):
         metrics.append(f"{total} managed devices")
         
         compliance_rate = entra_insights.get('compliance_rate', 0)
-        metrics.append(f"{compliance_rate}% compliant")
+        metrics.append(f"{compliance_rate}% compliant" if compliance_rate is not None else "Compliance rate unknown")
         
         non_compliant = entra_insights.get('non_compliant_devices', 0)
         if non_compliant > 0:
@@ -679,6 +685,8 @@ def get_passwordless_recommendation(entra_insights):
     
     adoption_rate = entra_insights.get('passwordless_adoption_rate', 0)
     
+    if adoption_rate is None:
+        return "Confirm passwordless registration coverage; the population is unknown."
     if adoption_rate == 0:
         return "Enable passwordless authentication (FIDO2, Windows Hello, Authenticator) for better Copilot UX"
     elif adoption_rate < 50:

@@ -37,7 +37,7 @@ def run_offline_report(args):
             if payload.get('source_file'):
                 protected.add((package_folder.parent / payload['source_file']).resolve())
             protected.update(Path(path).resolve() for paths in payload.get('resolved_inputs', {}).values() for path in paths)
-            if target.is_relative_to(package_folder / 'inputs') or target.is_relative_to(package_folder / 'rebuilds'):
+            if any(target.is_relative_to(package_folder / name) for name in ('inputs', 'rebuilds', 'Rebuilds')):
                 protected.add(target)
         if target in protected:
             raise ValueError('Snapshot output cannot overwrite a collection, original input, or package manifest. Choose a new output path.')
@@ -104,9 +104,13 @@ def run_offline_report(args):
         context['historical_sources'] = historical_sources
         context['scope'] = ('Saved tenant collection; ' if payload and payload.get('has_tenant_collection', True) else '') + '; '.join(
             [item['source_type'] for item in historical_sources] + ['Supplied portal exports'])
-    tenant_name = (payload or {}).get("tenant_name") or args.tenant_name or (prior or {}).get('tenant_name') or "Portal export review"
+    known_tenant_name = (payload or {}).get("tenant_name") or args.tenant_name or (prior or {}).get('tenant_name')
+    tenant_name = known_tenant_name or "Portal export review"
+    from .export_paths import new_deliverables_directory
+    package_directory = (payload or {}).get('package_directory') or new_offline_package(
+        known_tenant_name, customer_name=getattr(args, 'customer_name', None), tenant_id=expected_tenant_id)
     receipt = dict(
-        folder=(payload or {}).get('package_directory'), mode='offline', tenant_id=expected_tenant_id,
+        folder=package_directory, mode='offline', tenant_id=expected_tenant_id,
         collected_at=context.get('collected_at'), evaluation_date=args.evaluation_date,
         diagnostics=(payload or {}).get('package', {}).get('diagnostics', []),
         collection_input=args.collection_input,
@@ -115,7 +119,10 @@ def run_offline_report(args):
     result = render_with_failure_receipt(
         process_and_print_all_information, receipt=receipt,
         **results, tenant_name=tenant_name, open_html_report=args.open_html_report,
+        customer_name=getattr(args, 'customer_name', None),
+        output_dir=new_deliverables_directory(package_directory),
         report_format=args.report_format, sam_report_paths=args.sam_report,
+        extra_exports=getattr(args, 'extra_exports', None),
         dspm_report_paths=args.dspm_report,
         data_exposure_enabled=(payload or {}).get('assessment_settings', {}).get('data_exposure_enabled', True),
         assessment_profile=args.assessment_profile, provider_evidence=args.provider_evidence,
@@ -137,14 +144,12 @@ def run_offline_report(args):
     recipe = None
     recovered_raw_collection = False
     if result and result.get('html_path'):
-        if not receipt['folder']:
-            receipt['folder'] = new_offline_package(tenant_name)
-            if payload and payload.get('format') == 'm365-readiness-collection':
-                # Recover a raw collection saved before supplemental packaging failed.
-                # Copy the immutable original; do not synthesize or overwrite a collection.
-                import shutil
-                shutil.copy2(args.collection_input, Path(receipt['folder']) / 'collection.json')
-                recovered_raw_collection = True
+        if not (payload or {}).get('package_directory') and payload and payload.get('format') == 'm365-readiness-collection':
+            # Recover a raw collection saved before supplemental packaging failed.
+            # Copy the immutable original; do not synthesize or overwrite a collection.
+            import shutil
+            shutil.copy2(args.collection_input, Path(receipt['folder']) / 'collection.json')
+            recovered_raw_collection = True
         recipe = save_rebuild_recipe(receipt['folder'], args,
                                      settings,
                                      tenant_id=expected_tenant_id, tenant_name=tenant_name,

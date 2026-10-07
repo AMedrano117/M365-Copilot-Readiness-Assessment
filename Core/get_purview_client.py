@@ -81,6 +81,16 @@ def load_purview_data_from_stdin():
     return None
 
 
+def _container_available(container, data_present):
+    from .source_evidence import envelope_flag
+    status = str(container.get('availability_status') or '').lower()
+    if status and status not in {'available', 'partial'}:
+        return False
+    if envelope_flag(container.get('permission_denied')) is True:
+        return False
+    return envelope_flag(container['available']) is True if 'available' in container else data_present
+
+
 def extract_collection(data, key, nested_key):
     """Normalize PowerShell JSON so collections stay collections.
 
@@ -95,7 +105,6 @@ def extract_collection(data, key, nested_key):
     if not isinstance(container, dict):
         return [], False
 
-    permission_denied = bool(container.get('permission_denied'))
     value = container.get(nested_key, [])
 
     if isinstance(value, list):
@@ -107,10 +116,7 @@ def extract_collection(data, key, nested_key):
     else:
         items = [value]
 
-    if 'available' in container:
-        available = bool(container.get('available'))
-    else:
-        available = not permission_denied and (nested_key in container)
+    available = _container_available(container, nested_key in container)
     return items, available
 
 
@@ -123,9 +129,9 @@ def extract_object(data, key):
         return {}, False
     if 'data' in container:
         value = container.get('data') or {}
-        return value if isinstance(value, dict) else {}, bool(container.get('available'))
+        return value if isinstance(value, dict) else {}, _container_available(container, isinstance(container.get('data'), dict))
     # Legacy collectors wrote the object directly without collection metadata.
-    return container, bool(container)
+    return container, _container_available(container, bool(container))
 
 
 def collection_state(data, key, optional=False):
@@ -133,20 +139,43 @@ def collection_state(data, key, optional=False):
     container = data.get(key, {}) if isinstance(data, dict) else {}
     if not isinstance(container, dict):
         container = {}
-    if 'available' in container:
-        available = bool(container.get('available'))
-    else:
-        available = bool(container) and not bool(container.get('permission_denied'))
-    return {
-        'availability_status': container.get('availability_status', 'available' if available else 'unavailable'),
+    from .source_evidence import envelope_flag
+    record_fields = ('policies', 'labels', 'rules', 'cases', 'data')
+    present = next((field for field in record_fields if field in container), None)
+    # Raw singleton configuration is a legacy shape; reason/status-only
+    # envelopes do not establish that a query returned an object.
+    metadata = {'available', 'availability_status', 'count', 'reason', 'error_category', 'permission_denied',
+                'complete', 'truncated', 'required_role', 'optional', 'technical_error', 'collected_at',
+                'source_file', 'source_type', 'scope', 'tenant_id', 'schema_version'}
+    data_present = present is not None or bool(set(container) - metadata)
+    available = _container_available(container, data_present)
+    value = container.get(present) if present else None
+    count = len(value) if isinstance(value, list) else 1 if isinstance(value, dict) and value else 0
+    if present is None:
+        reported = container.get('count')
+        count = int(reported) if type(reported) is int and reported >= 0 else 1 if available and data_present else 0
+    state = {
+        'availability_status': container.get('availability_status') or ('available' if available else 'unavailable'),
         'available': available,
-        'records_collected': int(container.get('count', 1 if available else 0) or 0),
+        'records_collected': count,
         'reason': container.get('reason', ''),
-        'error_category': container.get('error_category', 'permission_denied' if container.get('permission_denied') else ''),
+        'error_category': container.get('error_category', 'permission_denied' if envelope_flag(container.get('permission_denied')) is True else ''),
         'required_role': container.get('required_role', ''),
         'optional': bool(container.get('optional', optional)),
         'technical_error': container.get('technical_error', ''),
     }
+    # Provenance and completeness recorded by the collector (PowerShell or the
+    # Microsoft Graph baseline). Preview-quality sources set complete=False.
+    for field in ('complete', 'truncated', 'credential_type', 'auth_path_id', 'coverage',
+                  'evidence_quality', 'source', 'unlock', 'graph_label_count', 'active_count',
+                  'collected_at', 'refresh_date', 'source_file', 'source_type', 'source_hash',
+                  'scope', 'tenant_id', 'schema_version', 'source_api',
+                  'collection_started_at', 'collection_completed_at'):
+        if field in container:
+            state[field] = container[field]
+    if 'available' in container and type(container['available']) is not bool:
+        state['original_available'] = container['available']
+    return state
 
 
 async def get_purview_client(tenant_id, payload=None):
@@ -363,10 +392,27 @@ def hydrate_purview_client(purview_data):
     
     def fetch_org_config():
         if org_config_available:
+            # Keep the actual property names and values so a saved False can be
+            # distinguished from a source that never returned the setting.
+            raw_fields = {key: value for key, value in org_config_data.items()
+                          if str(key).replace('_', '').casefold() in {'customerlockboxenabled', 'auditdisabled'}}
+            def explicit_boolean(name):
+                values = []
+                for key, value in raw_fields.items():
+                    if str(key).replace('_', '').casefold() != name:
+                        continue
+                    if type(value) is bool:
+                        values.append(value)
+                    elif isinstance(value, str) and value.strip().casefold() in {'true', 'false'}:
+                        values.append(value.strip().casefold() == 'true')
+                    else:
+                        return None
+                return values[0] if values and len(set(values)) == 1 else None
             return {
                 'available': True,
-                'customer_lockbox_enabled': org_config_data.get('CustomerLockBoxEnabled', False),
-                'audit_disabled': org_config_data.get('AuditDisabled', False)
+                'customer_lockbox_enabled': explicit_boolean('customerlockboxenabled'),
+                'audit_disabled': explicit_boolean('auditdisabled'),
+                'raw_data': raw_fields,
             }
         return {'available': False}
     
@@ -464,6 +510,7 @@ def hydrate_purview_client(purview_data):
             self.sensitivity_labels = sensitivity_labels if not isinstance(sensitivity_labels, Exception) else {'available': False}
             self.label_policies = label_policies if not isinstance(label_policies, Exception) else {'available': False}
             self.retention_labels = retention_labels if not isinstance(retention_labels, Exception) else {'available': False}
+            self.retention_policies = {'available':retention_available, 'policies':retention_data}
             self.retention_events = retention_events if not isinstance(retention_events, Exception) else {'available': False}
             self.retention_event_types = retention_event_types if not isinstance(retention_event_types, Exception) else {'available': False}
             self.information_barriers = information_barriers if not isinstance(information_barriers, Exception) else {'available': False}

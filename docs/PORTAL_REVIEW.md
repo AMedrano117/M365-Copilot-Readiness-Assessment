@@ -16,12 +16,16 @@ The same `--reports-dir` option works in live mode. The tool prepares PDFs befor
 ## What happens automatically
 
 - Selectable PDF text is extracted locally. Image-only pages use installed Windows OCR; no external AI service or portal connection is used.
-- The importer creates `output/portal-reviews/<run>/portal-review.json`, page previews, original copies and an import log. The console prints the JSON location.
-- The HTML includes expandable captures, source excerpts with page numbers, full extracted text, page previews and original PDF downloads. The workbook contains **Portal Review** and **PDF Extracted Text** tabs.
+- The importer stages `portal-review.json`, page previews, original copies and an import log in `.cache/portal-reviews/<run>/`. The console prints the JSON location. The assessment package preserves the JSON and required assets for offline replay.
+- **PDF report highlights** appears near the top of the HTML, with visible source excerpts, follow-up, dates and links to specific captured pages. The executive summary includes selected highlights from each supplied report. Expand **Admin pages** for full extracted text, page previews and original PDF downloads.
+- Both workbooks include a visible **PDF Highlights** sheet with the same excerpts and source-page links. The assessment workbook places it after **Coverage**; the technical workbook retains **Portal Review** and **PDF Extracted Text** as well.
+- The shared evidence model retains all dated excerpts as supporting context for the HTML Evidence Portal and workbook. These excerpts do not establish control results or measured populations.
 - Source hashes deduplicate identical PDFs. Rebuilding the saved package restores its JSON and assets without repeating OCR or needing the original reports folder.
 - Unreadable or password-protected PDFs are skipped with a warning. If OCR is unavailable, readable previews and originals are still included, with an explicit text-extraction limitation.
 
 This is automatic text extraction, not a human or AI interpretation of every chart. OCR can mix the reading order of dashboard cards and misread numbers. Extracted content does not pass controls, close actions or change readiness. Confirm values against the original pages; structured CSV/API evidence still drives measurements. The selected assessment tenant is recorded as context, not independently verified from the PDF. Creation metadata supplies the capture date when present; missing dates remain unknown, and a capture date does not refresh the underlying report.
+
+Highlights recognize complete statements and literal source blocks about app health, adoption, feedback, DLP, labeling, compliance and usage. Numbers remain quoted text; the generator does not convert OCR card values into verified metrics or merge them with newer API counts. Unknown refresh dates and unavailable usage remain unknown. Older saved manifests gain highlights during replay without another OCR pass; unfamiliar layouts retain their supplied notes or summary alongside the complete source text.
 
 Install dependencies once using `.\.venv\Scripts\python.exe -m pip install -r requirements.lock.txt`. PDF import uses PyMuPDF. Windows OCR requires an installed recognition language; the local PowerShell worker uses image APIs only and requires no tenant permissions. PDF limits are 50 files per import, 20 pages per file, 50 MiB per original, and 100 MiB total reviewed assets. Structured data exports are read from the top level of each reports folder; PDF discovery also includes subfolders.
 

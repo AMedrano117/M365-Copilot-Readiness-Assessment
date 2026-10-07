@@ -16,6 +16,8 @@ import io
 import logging
 import os
 import re
+from contextvars import ContextVar
+from datetime import datetime, timezone
 
 import httpx
 from azure.identity import CertificateCredential, ClientSecretCredential
@@ -26,6 +28,8 @@ logging.getLogger("azure.identity").setLevel(logging.ERROR)
 
 GRAPH_SCOPE = "https://graph.microsoft.com/.default"
 GRAPH_BASE_URL = "https://graph.microsoft.com"
+LEGACY_COLLECTION_EVIDENCE = ContextVar('legacy_collection_evidence', default=None)
+LEGACY_COLLECTION_PATHS = {'users', 'groups', 'sites', 'organization', 'external/connections', 'subscribedSkus'}
 
 
 def _load_env(env_path=None):
@@ -139,6 +143,18 @@ class _Endpoint:
 
     async def get(self, request_configuration=None):
         path = "/v1.0/" + "/".join(self._segments)
+        if '/'.join(self._segments) in LEGACY_COLLECTION_PATHS:
+            envelope = await self._client.get_collection(path)
+            metadata = {key: value for key, value in envelope.items() if key != 'value'}
+            metadata['scope'] = 'Returned records from ' + metadata['source_api']
+            metadata['collected_at'] = metadata['collection_started_at']
+            capture = LEGACY_COLLECTION_EVIDENCE.get()
+            if capture is not None:
+                name = 'legacy_graph.' + '.'.join(self._segments)
+                capture.setdefault(name, []).append({'records': envelope['value'], 'source': metadata})
+            if envelope['availability_status'] == 'unavailable':
+                raise GraphRequestError(envelope.get('status_code', 0), envelope.get('reason', 'Collection unavailable'))
+            return _model({'value': envelope['value'], '_collection_metadata': metadata})
         payload = await self._client.get_json(path)
         return _model(payload)
 
@@ -146,8 +162,11 @@ class _Endpoint:
 class GraphRestClient:
     """Authenticated async REST client with throttling retry and pagination."""
 
-    def __init__(self, credential, timeout=60.0, max_retries=4):
+    def __init__(self, credential, timeout=60.0, max_retries=4, scopes=None):
         self.credential = credential
+        # Application clients use the .default scope; a delegated client passes
+        # the specific delegated scopes it needs.
+        self.scopes = tuple(scopes) if scopes else (GRAPH_SCOPE,)
         self.max_retries = max_retries
         self._http = httpx.AsyncClient(
             base_url=GRAPH_BASE_URL,
@@ -160,7 +179,9 @@ class GraphRestClient:
         return _Endpoint(self, [_snake_to_camel(name)])
 
     async def _authorization_header(self):
-        token = await asyncio.to_thread(self.credential.get_token, GRAPH_SCOPE)
+        # Read from the instance dict: unknown attributes resolve to Graph endpoints.
+        scopes = self.__dict__.get("scopes") or (GRAPH_SCOPE,)
+        token = await asyncio.to_thread(self.credential.get_token, *scopes)
         return {"Authorization": f"Bearer {token.token}"}
 
     async def request(self, method, path, *, params=None, headers=None, content=None, json=None):
@@ -205,33 +226,46 @@ class GraphRestClient:
         pages = 0
         next_path = path
         next_params = params
+        started = datetime.now(timezone.utc).isoformat()
+        requests = []
+        def absolute(request_path):
+            return str(httpx.URL(GRAPH_BASE_URL).join(request_path))
+        def provenance():
+            return {'source_api':absolute(path), 'request_params':dict(params or {}),
+                'page_requests':requests, 'max_pages':max_pages,
+                'collection_started_at':started, 'collection_completed_at':datetime.now(timezone.utc).isoformat()}
         try:
             while next_path and pages < max_pages:
+                requests.append({'url':absolute(next_path), 'params':dict(next_params or {})})
                 payload = await self.get_json(next_path, params=next_params, headers=headers)
+                if not isinstance(payload, dict) or not isinstance(payload.get('value'), list):
+                    raise GraphRequestError(0, 'Collection response does not contain a value array')
                 pages += 1
-                page_items = payload.get("value", []) if isinstance(payload, dict) else []
-                if isinstance(page_items, list):
-                    items.extend(page_items)
-                next_path = payload.get("@odata.nextLink") if isinstance(payload, dict) else None
+                items.extend(payload['value'])
+                next_path = payload.get("@odata.nextLink")
                 next_params = None
             truncated = bool(next_path)
             return {
+                **provenance(),
                 "available": True,
                 "availability_status": "partial" if truncated else "available",
                 "value": items,
                 "records_collected": len(items),
                 "pages_collected": pages,
                 "truncated": truncated,
+                "complete": not truncated,
                 "reason": "Pagination safety limit reached" if truncated else "",
             }
         except (GraphRequestError, httpx.TransportError) as exc:
             return {
+                **provenance(),
                 "available": bool(pages),
                 "availability_status": "partial" if pages else "unavailable",
                 "value": items,
                 "records_collected": len(items),
                 "pages_collected": pages,
                 "truncated": bool(pages),
+                "complete": False,
                 "status_code": getattr(exc, "status_code", 0),
                 "reason": str(exc),
                 "error": str(exc),
@@ -283,6 +317,26 @@ def get_shared_credential():
 
 def get_power_platform_credential():
     return get_shared_credential()
+
+
+async def get_access_token(scope, credential=None):
+    """Acquire an application token without blocking the event loop.
+
+    azure-identity caches tokens per scope, so repeated calls are cheap.
+    """
+    credential = credential or get_shared_credential()
+    token = await asyncio.to_thread(credential.get_token, scope)
+    return token.token
+
+
+def credential_kind():
+    """Return 'certificate' or 'client_secret' for the configured Graph credential."""
+    _ensure_env_loaded()
+    if os.getenv("CERTIFICATE_PATH"):
+        return "certificate"
+    if os.getenv("CLIENT_SECRET"):
+        return "client_secret"
+    return ""
 
 
 async def get_api_client(service_name):

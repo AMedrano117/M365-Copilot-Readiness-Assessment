@@ -133,11 +133,33 @@ def detect_sharepoint_report(record_or_headers):
         return "special_group_permissions"
     if location and _has_column(record, "Number of users having access", "Number of users with permissions", "Permissioned users") and _has_column(record, "Anyone link count", "EEEU permission count", "Everyone permission count"):
         return "permission_snapshot"
+    if location and _has_column(record, "Links created"):
+        # Data access governance sharing-link activity reports (Anyone, People
+        # in your organization, Specific people shared externally) share this
+        # header; they count links created during the report period.
+        return "sharing_links_activity"
     if any(_has_column(record, *EXPOSURE_COLUMNS[domain]) for domain in SAM_DOMAINS):
         return "exposure_counts"
     if location and _has_column(record, "Link Type", "Sharing Link Type", "Permission Recipient"):
         return "sharing_details"
     return ""
+
+
+SHARING_LINK_REPORT_NAMES = (
+    ("anyone_links", "Anyone links"),
+    ("people_in_your_organization_links", "People in your organization links"),
+    ("specific_people_links_shared_externally", "Specific people links shared externally"),
+)
+
+
+def sharing_link_type(source_file):
+    """Link type of a sharing-link activity report from Microsoft's export file name.
+
+    The three reports share one header, so the name Microsoft gives the
+    download is the only distinguishing mark. Renamed files stay unattributed.
+    """
+    name = _normalized_key(Path(str(source_file)).stem)
+    return next((label for prefix, label in SHARING_LINK_REPORT_NAMES if name.startswith(_normalized_key(prefix))), "Sharing links")
 
 
 def _matches_authoritative_schema(record, source_kind):
@@ -344,6 +366,8 @@ def _classify_record(record, source_kind):
         "Source": "SharePoint Advanced Management" if source_kind == "sam" else "Microsoft Purview DSPM",
         "Source File": _text(record.get("_source_file")),
         "Source Sheet": _text(record.get("_source_sheet")),
+        'Source Record': record.get('_source_row', 'Not retained'),
+        'Source Hash': record.get('_source_hash', ''),
         "Report Type": record.get("_report_type", detect_sharepoint_report(record) if source_kind == "sam" else "dspm_assessment"),
         "Report Date": (_report_date(record).isoformat() if _report_date(record) else ""),
         "Tenant ID": _text(_value(record, "Tenant ID")),
@@ -352,10 +376,20 @@ def _classify_record(record, source_kind):
         "Site Name": site_name,
         "Site URL": site_url,
         "Item URL": item_url,
+        'Item ID': _text(_value(record, 'Item ID', 'Object ID', 'UniqueId', 'File ID')),
+        'Permission ID': _text(_value(record, 'Permission ID', 'PermissionId')),
+        'Permission Recipient': permission_recipient,
+        'Permission Role': _text(_value(record, 'Role definition', 'Role', 'Permission Level', 'Roles')),
+        'Link ID': _text(_value(record, 'Link ID', 'Sharing Link ID', 'SharingLinkId')),
+        'Link Type': link_type,
+        'Link Expiration': _text(_value(record, 'Expiration', 'Expiration Date', 'Link Expiration', 'ExpirationDateTime')),
         "Owner": owner,
         "Sensitivity Label": label,
         "Risk Signals": "; ".join(signals.keys()),
         "Signal Count": sum(signals.values()),
+        **{name + ' Count': count for name, count in signals.items()},
+        'Record Granularity': ('Item or permission detail' if item_url or _value(record, 'Item ID', 'Permission ID', 'Link ID')
+                              else 'Location-level counts; individual link/permission records were not supplied'),
         "Severity": severity,
         "RecommendationId": "",
         "Flagged By": "",
@@ -392,10 +426,12 @@ def _lifecycle_row(record, report_date=None, date_basis="", source_hash=""):
         "Source": "SharePoint Content Management Assessment",
         "Source File": record.get("_source_file", ""),
         "Source Sheet": record.get("_source_sheet", ""),
+        'Source Record': record.get('_source_row', 'Not retained'),
         "Report Date": date.isoformat() if date else "",
         "Report Date Basis": date_basis or ("Report date field" if date else "Unknown"),
         "Source Hash": source_hash,
         "Workload": _workload(record), "Site Name": site_name, "Site URL": site_url,
+        'Site ID': _text(_value(record, 'Site ID')),
         "Owner": _text(_value(record, "Email address of site owners")),
         "Is Ownerless": _flag(_value(record, "Is ownerless")),
         "Is Inactive": _flag(_value(record, "Is inactive")),
@@ -423,7 +459,7 @@ def _scan_reports(paths, source_kind, evaluation_date=None, max_age_days=None, *
     result = {
         "kind": source_kind, "files_requested": len(paths), "files_parsed": 0,
         "files_loaded": 0, "files_recognized": 0, "records_read": 0,
-        "records_selected": 0, "errors": [], "risk_rows": [], "reports": [],
+        "records_selected": 0, "errors": [], "risk_rows": [], "reports": [], "retained_records": [],
         "lifecycle_rows": [], "evidence_truncated": False, "signals": {},
         "affected_sites": [], "max_age_days": max_age, "observations": [],
     }
@@ -437,6 +473,7 @@ def _scan_reports(paths, source_kind, evaluation_date=None, max_age_days=None, *
         try:
             documents = {}
             file_hash = hashlib.sha256(path.read_bytes()).hexdigest()
+            source_row = 0
             for raw in _read_records(path):
                 record = dict(raw or {})
                 headers_only = bool(record.pop("_headers_only", False))
@@ -444,6 +481,7 @@ def _scan_reports(paths, source_kind, evaluation_date=None, max_age_days=None, *
                     continue
                 if not headers_only:
                     result["records_read"] += 1
+                    source_row += 1
                 report_type = detect_sharepoint_report(record) if source_kind == "sam" else (
                     "dspm_assessment" if _matches_authoritative_schema(record, source_kind) else ""
                 )
@@ -454,6 +492,8 @@ def _scan_reports(paths, source_kind, evaluation_date=None, max_age_days=None, *
                 if headers_only or not report_type:
                     continue
                 record["_source_file"] = source_file
+                record['_source_row'] = source_row
+                record['_source_hash'] = file_hash
                 record["_report_type"] = report_type
                 date = _report_date(record)
                 date_basis = "Report date field" if date else "Unknown"
@@ -464,6 +504,8 @@ def _scan_reports(paths, source_kind, evaluation_date=None, max_age_days=None, *
                     confirmed_date = _parse_date(lifecycle_report_dates.get(file_hash))
                     if confirmed_date:
                         date, date_basis = confirmed_date, "Operator-confirmed report date"
+                result['retained_records'].append(dict(record, _evidence_date=date.isoformat() if date else '',
+                                                     _date_basis=date_basis))
                 workload = _workload(record)
                 tenant = _text(_value(record, "Tenant ID"))
                 if not tenant:
@@ -521,6 +563,23 @@ def _scan_reports(paths, source_kind, evaluation_date=None, max_age_days=None, *
                     continue
                 if report_type == "label_inventory":
                     continue
+                if report_type == "sharing_links_activity":
+                    # Activity context only: links created during the report
+                    # period, not the current permission state. Permission
+                    # snapshots remain the source for exposure counts.
+                    link_type = sharing_link_type(source_file)
+                    count = _number(_value(record, "Links created"))
+                    result['observations'].append({
+                        'metric_id': 'sam.links_created.' + _normalized_key(link_type).replace(' ', '_'),
+                        'label': link_type + ' created in the report period', 'domain_id': 'content',
+                        'control_id': 'CONTENT.PERMISSIONS', 'value': max(0, count), 'unit': 'links',
+                        'availability': 'available', 'tenant_id': tenant, 'population': workload,
+                        'scope': object_identity or 'Exported row', 'affected_objects': [object_identity] if object_identity else [],
+                        'observed_at': date.isoformat() if date else '', 'complete': False,
+                        'source_type': 'portal_export', 'source_file': source_file, 'source_schema': report_type,
+                        'source_hash': file_hash, 'max_age_days': max_age,
+                    })
+                    continue
                 if report_type == "permission_snapshot" and site_id:
                     block["_baseline_signals"].update((name, tenant.lower(), workload.lower(), site_id) for name in SAM_DOMAINS if _has_column(record, *EXPOSURE_COLUMNS[name]) and _known_domain_value(record, name))
                 risk = _classify_record(record, source_kind)
@@ -535,7 +594,12 @@ def _scan_reports(paths, source_kind, evaluation_date=None, max_age_days=None, *
                     block["_maxima"][key] = max(block["_maxima"].get(key, 0), count)
                     if report_type == "special_group_permissions" and site_id:
                         block["_detail_sites"][key] = (name, tenant.lower(), workload.lower(), site_id)
-                evidence_key = (*identity, risk["Risk Signals"])
+                # Preserve distinct permission/link records and different measured
+                # values. Identical copies across overlapping files still merge.
+                evidence_key = (*identity, risk["Risk Signals"],
+                                tuple(sorted(signals.items())),
+                                *(risk.get(field, '') for field in ('Item ID', 'Permission ID', 'Permission Recipient',
+                                                                    'Permission Role', 'Link ID', 'Link Type', 'Link Expiration')))
                 if evidence_key in block["_risks"] or len(block["_risks"]) < MAX_EVIDENCE_ROWS:
                     previous = block["_risks"].get(evidence_key)
                     if not previous or risk["Signal Count"] > previous["Signal Count"]:
@@ -637,6 +701,11 @@ def _scan_reports(paths, source_kind, evaluation_date=None, max_age_days=None, *
         block["freshness"] = "unknown" if age is None or age < 0 else ("fresh" if age <= block["max_age_days"] else "stale")
         block['population_count'] = len(block['_population'])
         block['scope_note'] = 'Exported objects only; tenant-wide completeness is not established.'
+        if block['report_type'] == 'sharing_links_activity' and block['status'] == 'empty':
+            # A header-only activity report is a normal result, not a problem.
+            block['status'] = 'no_activity'
+            block['scope_note'] = ('No sites had links of this type created during the report period. '
+                                   'This does not show that no such links exist.')
         if block['status'] == 'future_date':
             block['scope_note'] += ' Report date is after the evaluation date; retained for review and excluded from exposure totals.'
         if block['report_type'] == 'permission_snapshot' and block['status'] == 'selected':

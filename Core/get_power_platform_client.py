@@ -8,7 +8,6 @@ import asyncio
 import json
 import os
 import sys
-from azure.identity.aio import AzureCliCredential
 from .spinner import get_timestamp
 
 _POWER_PLATFORM_CLIENT_CACHE = None
@@ -385,7 +384,7 @@ async def get_power_platform_client(tenant_id):
     
     # No preloaded data - fall back to service principal API calls
     try:
-        # Import and get Power Platform credential (prefers CLI, falls back to browser)
+        # Use the assessment application's credential (application permissions only).
         from .get_graph_client import get_power_platform_credential
         _pp_debug(f"[DEBUG] Getting Power Platform credential...")
         credential = get_power_platform_credential()  # NOT async - remove await
@@ -394,11 +393,11 @@ async def get_power_platform_client(tenant_id):
         # Get tokens for both BAP and Flow APIs (they require different scopes)
         try:
             _pp_debug(f"[DEBUG] Requesting BAP token for scope: {POWER_PLATFORM_SCOPE}")
-            bap_token_response = credential.get_token(POWER_PLATFORM_SCOPE)
+            bap_token_response = await asyncio.to_thread(credential.get_token, POWER_PLATFORM_SCOPE)
             _pp_debug(f"[DEBUG] BAP token acquired successfully")
             
             _pp_debug(f"[DEBUG] Requesting Flow token for scope: {FLOW_API_SCOPE}")
-            flow_token_response = credential.get_token(FLOW_API_SCOPE)
+            flow_token_response = await asyncio.to_thread(credential.get_token, FLOW_API_SCOPE)
             _pp_debug(f"[DEBUG] Flow token acquired successfully")
         except Exception as token_error:
             # Service principal may not have Power Platform API permissions

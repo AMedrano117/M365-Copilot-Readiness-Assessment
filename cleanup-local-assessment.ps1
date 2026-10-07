@@ -3,8 +3,9 @@
   Finds local assessment artifacts and confirms their removal.
 .DESCRIPTION
   Defaults to the contents of this checkout's output/collections,
-  output/assessments, output/portal-reviews, Reports, .cache/purview, and
-  .cache/sharepoint_dag folders.
+  output/assessments, output/portal-reviews, Reports, .cache/purview,
+  .cache/sharepoint_dag, .cache/portal-reviews and .cache/delegated (delegated
+  sign-in cache) folders, plus .cache/collector_diagnostics.log.
   Lists all discovered assessments, then asks once before removing them. The
   standard storage folders are retained. Use -WhatIf for a preview, or -Path
   to select individual files or subdirectories instead. The output, Reports, and
@@ -17,7 +18,7 @@
 .EXAMPLE
   .\cleanup-local-assessment.ps1 -WhatIf
 .EXAMPLE
-  .\cleanup-local-assessment.ps1 -Path '.\output\customer\completed-assessment'
+  .\cleanup-local-assessment.ps1 -Path '.\Reports\customer\completed-assessment'
 #>
 #Requires -Version 5.1
 [CmdletBinding(SupportsShouldProcess=$true, ConfirmImpact='High')]
@@ -31,7 +32,7 @@ $repositoryRoot = [IO.Path]::GetFullPath($PSScriptRoot).TrimEnd([IO.Path]::Direc
 $allowedRoots = @('output', 'Reports', '.cache' | ForEach-Object {
     [IO.Path]::GetFullPath((Join-Path $repositoryRoot $_))
 })
-$defaultLocations = @('output/collections', 'output/assessments', 'output/portal-reviews', 'Reports', '.cache/purview', '.cache/sharepoint_dag')
+$defaultLocations = @('output/collections', 'output/assessments', 'output/portal-reviews', 'Reports', '.cache/purview', '.cache/sharepoint_dag', '.cache/portal-reviews', '.cache/delegated', '.cache/collector_diagnostics.log')
 
 function Test-DescendantPath {
     param([string]$Candidate, [string]$Parent)
@@ -58,6 +59,11 @@ function Get-DefaultArtifactPaths {
         Assert-CleanupAncestors -AbsolutePath $locationPath
         if (-not (Test-Path -LiteralPath $locationPath)) { continue }
         $locationItem = Get-Item -LiteralPath $locationPath -Force -ErrorAction Stop
+        if ($relativeLocation -eq '.cache/collector_diagnostics.log') {
+            if ($locationItem.PSIsContainer) { throw "Expected a collector diagnostics file at '$locationPath'. Review this location manually." }
+            $locationItem.FullName
+            continue
+        }
         if (-not $locationItem.PSIsContainer) { throw "Expected an assessment storage directory at '$locationPath'. Review this location manually." }
         foreach ($child in @(Get-ChildItem -LiteralPath $locationPath -Force -ErrorAction Stop)) {
             # Only children are selected; keep the standard storage folders.

@@ -62,15 +62,17 @@ class CollectionAutosaveTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_default_saves_distinct_replayable_collections_and_prints_paths(self):
         await self.run_assessment()
-        first = next(Path('output/collections').glob('*.json'))
+        first = next(Path('Reports').glob('*/*/collection.json'))
         original = first.read_text(encoding='utf-8')
         await self.run_assessment()
-        files = list(Path('output/collections').glob('*.json'))
+        files = list(Path('Reports').glob('*/*/collection.json'))
         self.assertEqual(len(files), 2)
         self.assertEqual(first.read_text(encoding='utf-8'), original)
         self.assertNotIn('DO_NOT_SAVE', original)
         for path in files:
-            self.assertTrue(path.name.startswith('tenant-collection_example_customer_'))
+            self.assertEqual(path.name, 'collection.json')
+            self.assertEqual(path.parent.parent.name, 'Example customer')
+            self.assertEqual(load_collection(path)['package_directory'], str(path.parent.resolve()))
             loaded = load_collection(path)
             self.assertEqual(loaded['tenant_name'], 'Example customer')
             self.assertEqual(loaded['service_results']['m365_result'][1][0]['Feature'], 'Collected evidence')
@@ -83,6 +85,7 @@ class CollectionAutosaveTests(unittest.IsolatedAsyncioTestCase):
         path = Path('custom evidence') / "customer's collection.json"
         await self.run_assessment(save_collection_path=str(path))
         self.assertTrue(path.is_file())
+        self.assertFalse(list(Path('Reports').glob('*/*/collection.json')))
         self.assertFalse(Path('output/collections').exists())
         self.assertEqual(load_collection(path)['tenant_name'], 'Example customer')
         self.assertIn("customer''s collection.json'", self.output.getvalue())
@@ -93,13 +96,14 @@ class CollectionAutosaveTests(unittest.IsolatedAsyncioTestCase):
         result = await self.run_assessment(check_connections=True, save_collection_path=str(path))
         self.assertEqual(result, 0)
         self.assertEqual(path.read_text(encoding='utf-8'), 'retain existing evidence')
+        self.assertFalse(list(Path('Reports').glob('*/*/collection.json')))
         self.assertFalse(Path('output/collections').exists())
         self.processor.assert_not_called()
         self.assertNotIn('COLLECTION INPUT', self.output.getvalue())
 
     async def test_checkpoint_exists_before_sharepoint_and_survives_interruption(self):
         async def interrupted_sharepoint(*args, **kwargs):
-            path = next(Path('output/collections').glob('*.json'))
+            path = next(Path('Reports').glob('*/*/collection.json'))
             saved = load_collection(path)
             self.assertEqual(saved['collection_progress']['status'], 'in_progress')
             self.assertEqual(saved['collection_progress']['services']['m365']['status'], 'pending')
@@ -110,7 +114,7 @@ class CollectionAutosaveTests(unittest.IsolatedAsyncioTestCase):
         }), patch('Core.orchestrator.collect_sharepoint_with_retry', side_effect=interrupted_sharepoint):
             with self.assertRaises(asyncio.CancelledError):
                 await self.run_assessment()
-        saved = load_collection(next(Path('output/collections').glob('*.json')))
+        saved = load_collection(next(Path('Reports').glob('*/*/collection.json')))
         self.assertEqual(saved['collection_progress']['status'], 'interrupted')
         self.assertEqual(saved['service_results']['m365_result'][1][0]['Status'], 'Not Assessed')
         self.processor.assert_not_called()
@@ -119,7 +123,7 @@ class CollectionAutosaveTests(unittest.IsolatedAsyncioTestCase):
         self.processor.side_effect = ValueError('Synthetic report rendering failure')
         result = await self.run_assessment()
         self.assertEqual(result, 1)
-        path = next(Path('output/collections').glob('*.json'))
+        path = next(Path('Reports').glob('*/*/collection.json'))
         self.assertEqual(load_collection(path)['tenant_name'], 'Example customer')
         self.assertIn(display_path(path), self.output.getvalue())
 
@@ -133,7 +137,7 @@ class CollectionAutosaveTests(unittest.IsolatedAsyncioTestCase):
     async def test_packaging_failure_prints_saved_collection_for_recovery(self):
         with patch('Core.assessment_package.package_inputs', side_effect=ValueError('Synthetic missing attachment')):
             self.assertEqual(await self.run_assessment(), 1)
-        path = next(Path('output/collections').glob('*.json'))
+        path = next(Path('Reports').glob('*/*/collection.json'))
         self.assertEqual(load_collection(path)['tenant_name'], 'Example customer')
         self.assertIn('PACKAGING ERROR', self.output.getvalue())
         self.assertIn(display_path(path), self.output.getvalue())
@@ -149,7 +153,7 @@ class CollectionAutosaveTests(unittest.IsolatedAsyncioTestCase):
         self.processor.side_effect = process_and_print_all_information
         self.assertEqual(await self.run_assessment(sam_report_paths=[str(report)]), 1)
         self.assertIn('does not match', self.output.getvalue())
-        collection = next(Path('output/collections').glob('*.json'))
+        collection = next(Path('Reports').glob('*/*/collection.json'))
         with patch('sys.argv', ['main.py', '--collection-input', str(collection)]):
             args = parse_arguments(None, [])
         with self.assertRaisesRegex(ValueError, 'does not match'):
@@ -165,7 +169,7 @@ class CollectionAutosaveTests(unittest.IsolatedAsyncioTestCase):
              patch('Core.processor.print_recommendations_summary'):
             await self.run_assessment(evaluation_date='2026-09-15')
             live = render.call_args.kwargs['evidence_bundle']['assessment_result']
-            collection = next(Path('output/collections').glob('*.json'))
+            collection = next(Path('Reports').glob('*/*/collection.json'))
             package = Path(load_collection(collection)['package_directory'])
             moved = Path('copied assessment').resolve()
             shutil.copytree(package, moved)

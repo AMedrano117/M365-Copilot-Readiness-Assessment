@@ -161,6 +161,13 @@ def build_admin_review(m365_client, purview_client, context=None):
     audit_enabled = _boolean(audit.get('unified_audit_enabled')) if source_is_complete(purview_client, 'audit_config', audit) else None
     add('data_protection', 'Unified audit logging', 'Enabled' if audit_enabled is True else 'Disabled' if audit_enabled is False else None,
         'Exchange organization audit configuration', policy_date, 'Logging configuration does not prove all Copilot events are captured.')
+    from .copilot_settings import limited_mode_value
+    limited_mode = getattr(m365_client, 'copilot_limited_mode', {}) or {}
+    add('settings', 'Copilot limited mode', limited_mode_value(limited_mode),
+        'Microsoft Graph Copilot admin settings (delegated sign-in)', collected,
+        'Collected with a signed-in administrator; Microsoft does not expose this setting to applications.'
+        if limited_mode.get('available') else
+        (limited_mode.get('reason') or 'Not collected. Run with --delegated auto and sign in as at least a Global Reader to add it.'))
     connections = getattr(m365_client, 'external_connections', None)
     connections_ok = source_is_complete(m365_client, 'external_connections')
     add('applications', 'External connections returned', len(connections) if connections_ok and isinstance(connections, list) else None,
@@ -169,7 +176,7 @@ def build_admin_review(m365_client, purview_client, context=None):
         {'Topic': 'Unlicensed Copilot Chat active users', 'Reason': 'Microsoft Graph Copilot reports cover licensed users. Audit events have different scope and are not a replacement for this portal count.', 'When needed': 'When included Chat adoption is in scope.'},
         {'Topic': 'Agent activity, Copilot Search, credits and assisted hours', 'Reason': 'These portal metrics are not returned by the supported reporting endpoints used here.', 'When needed': 'When these experiences or value/cost measurements are in scope.'},
         {'Topic': 'Security dashboard referenced files/sites and recommendation completion', 'Reason': 'DLP configuration and access exports do not reproduce these dashboard totals.', 'When needed': 'When the dashboard totals are needed in the customer deliverable.'},
-        {'Topic': 'Optimize checklist and remaining Copilot experience settings', 'Reason': 'The full checklist is not exposed by the interfaces used here. Some individual settings need a separate delegated API permission or are preview-only.', 'When needed': 'Review the remaining applicable settings; screenshots are optional evidence of that review.'},
+        {'Topic': 'Optimize checklist and remaining Copilot experience settings', 'Reason': 'The full checklist is not exposed by the interfaces used here. Copilot limited mode is collected when a delegated sign-in is available; other settings are preview-only or portal-only.', 'When needed': 'Review the remaining applicable settings; screenshots are optional evidence of that review.'},
     ]
     return {'rows': rows, 'dlp': dlp, 'manual_checks': manual,
             'collection_date': collected, 'qualification': 'Original evidence dates are retained. These configuration and usage observations do not reproduce a portal score or establish pilot approval.'}

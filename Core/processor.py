@@ -19,7 +19,6 @@ from .cross_provider_assessment import (
     load_assessment_profile,
     load_provider_evidence,
     run_integrity_checks,
-    write_snapshot,
 )
 
 
@@ -45,8 +44,10 @@ def reconcile_overlapping_evidence(recommendations):
     entra_risk_was_read = any(
         str(row.get('Service', '') or '') == 'Entra'
         and (
-            'risky users detected in the tenant' in str(row.get('Observation', '') or '').lower()
-            or 'no risky users detected' in str(row.get('Observation', '') or '').lower()
+            (row.get('FindingKey') == 'entra.identity_risk.users' and row.get('EvidenceComplete') is True)
+            or (row.get('EvidenceComplete') is not False and (
+                'risky users detected in the tenant' in str(row.get('Observation', '') or '').lower()
+                or 'no risky users detected' in str(row.get('Observation', '') or '').lower()))
         )
         for row in records
     )
@@ -94,25 +95,31 @@ def classify_export_path(path):
     return None, path
 
 
-def export_tabular_reports(all_recommendations, report_tenant_name, report_format, evidence_bundle=None):
+def export_tabular_reports(all_recommendations, report_tenant_name, report_format, evidence_bundle=None, stem=None, output_dir=None):
     """Export recommendations in the requested tabular format with Excel-first fallback."""
     csv_path = None
     excel_path = None
+    csv_name = stem + '.csv' if stem else None
 
     if report_format == 'csv':
-        csv_path = export_to_csv(all_recommendations, tenant_name=report_tenant_name)
+        csv_path = export_to_csv(all_recommendations, filename=csv_name, tenant_name=report_tenant_name, output_dir=output_dir)
         return csv_path, excel_path
 
     if report_format in {'excel', 'both'}:
+        from .workbook_layout import WorkbookLayoutError
         try:
             preferred_path = export_to_excel(
                 all_recommendations,
+                filename=stem + '.xlsx' if stem else None,
                 tenant_name=report_tenant_name,
                 evidence_bundle=evidence_bundle,
+                output_dir=output_dir,
             )
+        except WorkbookLayoutError:
+            raise
         except Exception as exc:
             print(f"Warning: Excel export failed ({exc}). Falling back to CSV export...")
-            preferred_path = export_to_csv(all_recommendations, tenant_name=report_tenant_name)
+            preferred_path = export_to_csv(all_recommendations, filename=csv_name, tenant_name=report_tenant_name, output_dir=output_dir)
 
         export_kind, resolved_path = classify_export_path(preferred_path)
         if export_kind == 'excel':
@@ -121,7 +128,7 @@ def export_tabular_reports(all_recommendations, report_tenant_name, report_forma
             csv_path = resolved_path
 
     if report_format == 'both' and not csv_path:
-        csv_path = export_to_csv(all_recommendations, tenant_name=report_tenant_name)
+        csv_path = export_to_csv(all_recommendations, filename=csv_name, tenant_name=report_tenant_name, output_dir=output_dir)
 
     return csv_path, excel_path
 
@@ -136,13 +143,26 @@ def process_and_print_all_information(m365_result, entra_info,
                                       connection_results=None, reports_dirs=None,
                                       copilot_readiness_export=None, collection_context=None,
                                       expected_tenant_id=None, offline_copilot_dashboard_export=None,
-                                      offline_power_platform_inventory=None, include_user_usage_detail=False,
-                                      prior_report=None, portal_review=None):
+                                      offline_power_platform_inventory=None, include_user_usage_detail=True,
+                                      prior_report=None, portal_review=None, output_dir=None, customer_name=None,
+                                      extra_exports=None):
     """Process all service information and generate recommendations."""
     # Unpack M365 results
     (m365_info, m365_recommendations) = m365_result
     m365_info = dict(m365_info) if isinstance(m365_info, dict) else {}
     m365_recommendations = list(m365_recommendations or [])
+    # SharePoint findings are rebuilt from the saved payload so replays apply
+    # the current rules (for example numeric enum values from SharePoint
+    # PowerShell). They are deterministic from that payload. Only findings the
+    # collection originally produced from it are replaced; supplied evidence
+    # without them is left as it is.
+    sharepoint_payload = getattr(m365_info.get('_client'), 'sharepoint_governance', None)
+    if (isinstance(sharepoint_payload, dict) and sharepoint_payload
+            and any(str(row.get('FindingKey') or '').startswith('sharepoint.') for row in m365_recommendations)):
+        from .sharepoint_governance import build_sharepoint_recommendations
+        m365_recommendations = [row for row in m365_recommendations
+                                if not str(row.get('FindingKey') or '').startswith('sharepoint.')]
+        m365_recommendations.extend(build_sharepoint_recommendations(sharepoint_payload))
     m365_result = (m365_info, m365_recommendations)
     evidence_bundle = None
     from datetime import datetime, timezone
@@ -241,6 +261,11 @@ def process_and_print_all_information(m365_result, entra_info,
         lifecycle_max_age_days=(collection_context or {}).get('assessment_settings', {}).get('lifecycle_report_max_age_days'),
         lifecycle_report_dates=(collection_context or {}).get('assessment_settings', {}).get('lifecycle_report_dates'),
     )
+    # Exported Data access governance reports answer the report families the
+    # SharePoint collector could not read itself.
+    from .sharepoint_governance import reconcile_dag_coverage
+    m365_recommendations = reconcile_dag_coverage(
+        m365_recommendations, ((data_exposure_info.get('sources') or {}).get('sam') or {}).get('reports'))
     if data_exposure_info.get('operator_messages'):
         from .console_reporting import detail
         for message in data_exposure_info['operator_messages']:
@@ -257,6 +282,17 @@ def process_and_print_all_information(m365_result, entra_info,
     defender_info = dict(defender_info)
     defender_info['recommendations'] = qualify_saved_recommendations(defender_info.get('recommendations', []), 'Defender', defender_info.get('_client'))
     defender_info['recommendations'] += assess_defender_configuration(defender_info.get('_client'), (collection_context or {}).get('collected_at'))
+    # Methodology 3.0: judge each required control on tenant-wide configuration,
+    # so the pilot decision never depends on a supplied pilot roster.
+    from .tenant_baseline import assess_tenant_baseline
+    _m365_baseline_client = m365_info.get('_client') if isinstance(m365_info, dict) else None
+    _collected_at = (collection_context or {}).get('collected_at') or ''
+    baseline_rows = assess_tenant_baseline(
+        m365_client=_m365_baseline_client, entra_client=entra_info.get('_client'),
+        purview_client=purview_info.get('_client'), collected_at=_collected_at)
+    entra_info['recommendations'] += [row for row in baseline_rows if row['Service'] == 'Entra']
+    purview_info['recommendations'] += [row for row in baseline_rows if row['Service'] == 'Purview']
+    m365_recommendations = list(m365_recommendations) + [row for row in baseline_rows if row['Service'] == 'M365']
     all_recommendations = collect_all_recommendations(
         m365_recommendations, entra_info, purview_info, 
         defender_info, power_platform_info, copilot_studio_info,
@@ -275,6 +311,7 @@ def process_and_print_all_information(m365_result, entra_info,
             power_platform_info,
             copilot_studio_info,
             data_exposure_info,
+            collection_context=collection_context,
         )
         evidence_bundle['prior_report'] = prior_report or {}
         evidence_bundle['portal_review'] = portal_review_data
@@ -356,7 +393,7 @@ def process_and_print_all_information(m365_result, entra_info,
                 }
         for result in connection_results or []:
             source_statuses[f"connection_{result.get('collector_id', 'unknown')}"] = {
-                'availability_status': 'available' if result.get('status') == 'Ready' else
+                'availability_status': 'available' if result.get('status') in {'Ready', 'Ready with gaps'} else
                     'not_requested' if result.get('status') == 'Optional source not selected' else
                     'deferred' if result.get('status') in {'Sign-in required', 'Interactive sign-in required', 'Browser sign-in will follow'} else 'unavailable',
                 'records_collected': '',
@@ -366,7 +403,12 @@ def process_and_print_all_information(m365_result, entra_info,
                 'maturity': result.get('maturity', ''),
                 'evidence_purpose': result.get('evidence_purpose', ''),
             }
+        # Record which identity and auth path produced each dataset. Older
+        # collections without a saved plan show the identity as unrecorded.
+        from .auth_plan import annotate_source_statuses
+        annotate_source_statuses(source_statuses, (collection_context or {}).get('auth_plan') or {})
         evidence_bundle['source_statuses'] = source_statuses
+        evidence_bundle['auth_plan'] = (collection_context or {}).get('auth_plan') or {}
         evidence_bundle['import_receipt'] = [
             {'Source': report.get('source_file'), 'Status': report.get('status'),
              'Original Date': report.get('report_date'), 'Scope': report.get('workload'),
@@ -393,12 +435,22 @@ def process_and_print_all_information(m365_result, entra_info,
         evidence_bundle['collection_context'] = collection_context or {}
         evidence_bundle['expected_tenant_id'] = expected_tenant_id
         evidence_bundle['observations'] = data_exposure_info.get('observations', [])
+        from .assessment_catalog import collect_assessment_sources
+        evidence_bundle['assessment_sources'] = collect_assessment_sources(
+            [m365_client, entra_client, defender_client, purview_client],
+            collected_at=(collection_context or {}).get('collected_at', ''), data_exposure=data_exposure_info, profile=profile,
+            recommendations=all_recommendations)
         from .assessment_result import build_assessment_result
+        from .expanded_findings import expanded_findings
+        all_recommendations.extend(expanded_findings(evidence_bundle, profile=profile,
+            evaluation_date=evaluation_date,tenant_id=expected_tenant_id))
         assessment_result = build_assessment_result(all_recommendations, evidence_bundle,
             evaluation_date=evaluation_date, expected_tenant_id=expected_tenant_id)
         evidence_bundle['assessment_result'] = assessment_result
         from .copilot_admin_review import build_admin_review
         evidence_bundle['copilot_admin_review'] = build_admin_review(m365_client, purview_client, collection_context)
+        from .investigation_details import prepare_investigation_details
+        prepare_investigation_details(evidence_bundle, assessment_result)
         all_recommendations = assessment_result['recommendations']
         evidence_bundle['recommendations'] = all_recommendations
         control_results = assessment_result.get('control_results', control_results)
@@ -456,35 +508,83 @@ def process_and_print_all_information(m365_result, entra_info,
         evidence_bundle['baseline_comparison'] = compare_baseline(all_recommendations, control_results, baseline)
         evidence_bundle['integrity'] = run_integrity_checks(all_recommendations, evidence_bundle)
 
-        if snapshot_json:
-            snapshot_path = write_snapshot(snapshot_json, {
-                'methodology_version': evidence_bundle['run_manifest']['methodology_version'],
-                'assessment_version': evidence_bundle['run_manifest']['assessment_version'],
-                'tenant': report_tenant_name,
-                'generated_at': evidence_bundle['run_manifest']['generated_at'],
-                'conclusions': conclusions,
-                'control_results': control_results,
-                'recommendations': all_recommendations,
-                'collection_coverage': source_statuses,
-                'integrity': evidence_bundle['integrity'],
-                'assessment_result': assessment_result,
-                'tenant_id': expected_tenant_id,
-                'evaluation_date': evaluation_date,
-            })
-            from .console_reporting import detail_path
-            detail_path('Snapshot JSON', snapshot_path)
+        from pathlib import Path
+        from .evidence_selection import build_evidence_selection
+        from .assessment_serialization import write_assessment_result
+        from .export_recommendations import build_report_filename
+        from .finding_evidence import build_finding_evidence
+        from .html_evidence_pages import write_html_evidence_pages
+        from .technical_guidance import attach_technical_guidance
+        from .workbook_evidence import add_evidence_sheets, sync_workbook_locations
+        from .export_paths import (new_assessment_directory, new_deliverables_directory, report_directory, report_file_stem,
+                                  SUMMARY_STEM, EVIDENCE_FOLDER)
+        from .workbook_layout import technical_workbook_path
+        extra_exports = set(extra_exports or ())
+        include_evidence_pages = 'evidence-pages' in extra_exports
+        if output_dir is None:
+            package_directory = new_assessment_directory(customer_name=customer_name,
+                tenant_name=report_tenant_name, tenant_id=expected_tenant_id)
+            output_dir = new_deliverables_directory(package_directory)
+        reports_root = report_directory(output_dir)
+        filename_context = dict(customer_name=customer_name, tenant_name=report_tenant_name,
+                                tenant_id=expected_tenant_id)
+        base_stem = Path(build_report_filename('json', **filename_context)).stem
+        summary_stem = report_file_stem(SUMMARY_STEM, **filename_context)
+        suffix, number = '', 1
+        while True:
+            report_stem = base_stem + suffix
+            summary_name = summary_stem + suffix + '.html'
+            evidence_folder_name = EVIDENCE_FOLDER + suffix
+            destinations = [
+                reports_root / f'{report_stem}.html', reports_root / f'{report_stem}.xlsx', reports_root / f'{report_stem}.csv',
+                technical_workbook_path(reports_root / f'{report_stem}.xlsx'),
+                reports_root / summary_name]
+            if include_evidence_pages:
+                destinations.append(reports_root / evidence_folder_name)
+            if not any(path.exists() for path in destinations):
+                break
+            number += 1
+            suffix = f' ({number})'
+        # Retained deliverables share the same native rows, IDs and counts.
+        selection = attach_technical_guidance(build_evidence_selection(assessment_result, evidence_bundle,
+            tenant_name=report_tenant_name, generated_at=evidence_bundle['run_manifest']['generated_at']))
+        finding_model = build_finding_evidence(selection)
+        evidence_bundle['finding_evidence'] = finding_model
+        if include_evidence_pages:
+            evidence_bundle['html_evidence_folder'] = evidence_folder_name
+        add_evidence_sheets(evidence_bundle, assessment_result, finding_model,
+                            html_folder=evidence_folder_name if include_evidence_pages else None)
         csv_path, excel_path = export_tabular_reports(
             all_recommendations,
             report_tenant_name,
             report_format,
             evidence_bundle=evidence_bundle,
+            stem=report_stem,
+            output_dir=reports_root,
         )
+        sync_workbook_locations(assessment_result, finding_model)
+        technical_excel_path = evidence_bundle.get('technical_excel_path') if excel_path else None
+        if include_evidence_pages:
+            evidence_pages = write_html_evidence_pages(
+                finding_model, reports_root / evidence_folder_name, report_name=f'{report_stem}.html',
+                workbook_name=Path(excel_path).name if excel_path else None,
+                technical_workbook_name=Path(technical_excel_path).name if technical_excel_path else None)
+            evidence_bundle['html_evidence_folder_path'] = evidence_pages['folder']
+            evidence_bundle['html_evidence_index'] = evidence_pages['index']
         html_path = export_to_html(
             all_recommendations,
+            filename=f'{report_stem}.html',
             tenant_name=report_tenant_name,
             evidence_bundle=evidence_bundle,
             excel_path=excel_path,
+            technical_excel_path=technical_excel_path,
+            output_dir=reports_root,
+            summary_filename=summary_name,
         )
+        if snapshot_json:
+            snapshot_path = write_assessment_result(snapshot_json, assessment_result)
+            from .console_reporting import detail_path
+            detail_path('Shared assessment JSON', snapshot_path)
         print_recommendations_summary(
             all_recommendations,
             csv_path,
@@ -494,7 +594,8 @@ def process_and_print_all_information(m365_result, entra_info,
             evidence_bundle=evidence_bundle,
         )
         if open_html_report and html_path:
-            opened = open_html_report_file(html_path)
+            # The one-page summary is the entry point; it links to the full report.
+            opened = open_html_report_file(evidence_bundle.get('summary_html_path') or html_path)
             if opened:
                 print("HTML report opened in your default browser.")
     else:
@@ -504,7 +605,11 @@ def process_and_print_all_information(m365_result, entra_info,
             evidence_bundle=evidence_bundle,
         )
     
-    return {'html_path': html_path if all_recommendations else None,
+    return {'report_directory': str(reports_root) if all_recommendations else None,
+            'html_path': html_path if all_recommendations else None,
+            'summary_html_path': (evidence_bundle or {}).get('summary_html_path') if all_recommendations else None,
             'excel_path': excel_path if all_recommendations else None,
+            'technical_excel_path': technical_excel_path if all_recommendations else None,
             'csv_path': csv_path if all_recommendations else None,
+            'html_evidence_folder_path': (evidence_bundle or {}).get('html_evidence_folder_path'),
             'evidence_bundle': evidence_bundle}

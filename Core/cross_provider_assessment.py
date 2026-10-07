@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-METHODOLOGY_VERSION = "2.1.0"
+METHODOLOGY_VERSION = "4.0.0"
 ASSESSMENT_VERSION = "2.1.0"
 GUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
 
@@ -80,7 +80,7 @@ def load_assessment_profile(path):
     if not isinstance(use_cases, list):
         errors.append("use_cases must be an array")
         use_cases = []
-    if "readiness_review" in payload:
+    if 'readiness_review' in payload or 'assessment_context' in payload:
         from .control_reviews import validate_readiness_review
         errors.extend(validate_readiness_review(payload))
     from .control_reviews import LoadedAssessmentProfile
@@ -309,7 +309,7 @@ def assess_provider_and_use_cases(profile, provider_evidence, foundation_decisio
             if item.get("can_invoke_tools") or item.get("can_write"):
                 applicable_controls.append("ACTIONS-001")
             applicable_controls = list(dict.fromkeys(applicable_controls))
-            foundation_ok = foundation_decision in {"Ready for a controlled pilot", "Controlled pilot with conditions"}
+            foundation_ok = foundation_decision in {"Ready for a controlled pilot", "Controlled pilot with conditions", "Ready for broader adoption"}
             ready = bool(complete and foundation_ok and provider_result and provider_result["Approval Status"] == "Approved")
             use_cases.append({"Use Case": item.get("name", "Unnamed use case"), "Business Owner": item.get("business_owner", ""), "Provider": provider, "Product / Tier": f"{product} / {tier}".strip(" /"), "Applicable Controls": "; ".join(applicable_controls), "Readiness": "Ready for controlled pilot" if ready else "Not ready", "Reason": "Foundation, provider review, and required profile fields are satisfied." if ready else "Foundation, provider approval, or required use-case evidence is incomplete."})
 
@@ -347,7 +347,7 @@ def build_run_manifest(tenant_name, inputs, collectors, source_statuses=None):
 
 
 def run_integrity_checks(recommendations, evidence_bundle):
-    issues = []
+    issues = list(evidence_bundle.get("investigation_validation") or [])
     sheets = evidence_bundle.get("sheets", {})
     for key, sheet in sheets.items():
         for index, row in enumerate(sheet.get("rows", []), start=2):
@@ -373,15 +373,18 @@ def _load_baseline(path):
         from openpyxl import load_workbook
         workbook = load_workbook(source, read_only=True, data_only=True)
         payload = {"methodology_version": "", "recommendations": [], "control_results": []}
-        if "Run Manifest" in workbook.sheetnames:
-            rows = list(workbook["Run Manifest"].iter_rows(values_only=True))
-            manifest = {str(row[0]): row[1] for row in rows[1:] if row and row[0]}
-            payload["methodology_version"] = str(manifest.get("Methodology Version", ""))
-        if "Recommendations" in workbook.sheetnames:
-            rows = workbook["Recommendations"].iter_rows(values_only=True)
-            headers = [str(value or "") for value in next(rows, [])]
-            payload["recommendations"] = [dict(zip(headers, row)) for row in rows]
-        return payload
+        try:
+            if "Run Manifest" in workbook.sheetnames:
+                rows = list(workbook["Run Manifest"].iter_rows(values_only=True))
+                manifest = {str(row[0]): row[1] for row in rows[1:] if row and row[0]}
+                payload["methodology_version"] = str(manifest.get("Methodology Version", ""))
+            if "Recommendations" in workbook.sheetnames:
+                rows = workbook["Recommendations"].iter_rows(values_only=True)
+                headers = [str(value or "") for value in next(rows, [])]
+                payload["recommendations"] = [dict(zip(headers, row)) for row in rows]
+            return payload
+        finally:
+            workbook.close()
     raise ValueError("Baseline must be an XLSX workbook or snapshot JSON.")
 
 

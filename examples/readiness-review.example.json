@@ -1,7 +1,11 @@
 {
   "version": "1.0",
   "ai_products": [
-    {"provider": "Microsoft", "product": "Microsoft 365 Copilot", "tier": "Enterprise"}
+    {
+      "provider": "Microsoft",
+      "product": "Microsoft 365 Copilot",
+      "tier": "Enterprise"
+    }
   ],
   "use_cases": [
     {
@@ -9,11 +13,20 @@
       "business_owner": "Fictional operations sponsor",
       "provider": "Microsoft",
       "product": "Microsoft 365 Copilot",
-      "intended_users": ["Ten fictional pilot users"],
-      "approved_data": ["Approved internal project documents in the fictional pilot site"],
-      "prohibited_data": ["Restricted client data and personnel records"],
+      "intended_users": [
+        "Ten fictional pilot users"
+      ],
+      "approved_data": [
+        "Approved internal project documents in the fictional pilot site"
+      ],
+      "prohibited_data": [
+        "Restricted client data and personnel records"
+      ],
       "required_outcome": "Reduce median first-draft time from 40 to 30 minutes while reviewers accept at least 9 of 10 drafts",
-      "risk_measurements": ["Unsupported statements", "Sensitive-data disclosure incidents"],
+      "risk_measurements": [
+        "Unsupported statements",
+        "Sensitive-data disclosure incidents"
+      ],
       "expand_stop_decision": "Stop for a disclosure incident. Review quality, time and risk results with the sponsor before expanding."
     }
   ],
@@ -31,47 +44,99 @@
     "pilot_plan": {
       "reviewed_at": "2026-09-01",
       "reviewer_role": "Business sponsor",
-      "use_case_names": ["Draft approved project summaries"],
+      "use_case_names": [
+        "Draft approved project summaries"
+      ],
       "baseline": "Ten fictional sample documents required a median of 40 minutes per first draft; reviewers retained the quality rubric.",
       "evidence_reference": "FICTIONAL-CHARTER-001 and FICTIONAL-BASELINE-001"
     },
     "control_reviews": [
       {
         "control_id": "DATA.RETENTION",
-        "scope_id": "fictional-pilot",
+        "scope_id": "fictional-tenant",
         "reviewed_at": "2026-09-14",
         "reviewer_role": "Information governance owner",
         "result": "pass",
         "rationale": "Fictional retention requirements and the applied policy were reviewed for the approved project site; the owner accepted coverage for this population.",
-        "evidence_reference": "FICTIONAL-RETENTION-REVIEW-001: requirements and policy scope record"
+        "evidence_reference": "FICTIONAL-RETENTION-REVIEW-001: requirements and policy scope record",
+        "evidence_level": "owner_review"
       },
       {
         "control_id": "DATA.EXPOSURE",
-        "scope_id": "fictional-pilot",
+        "scope_id": "fictional-tenant",
         "reviewed_at": "2026-09-14",
         "reviewer_role": "Information protection owner and content owner",
         "result": "pass",
         "rationale": "Fictional sensitive content in the pilot site was identified and its effective access was reviewed against the approved user list.",
-        "evidence_reference": "FICTIONAL-ACCESS-REVIEW-001: reviewed sensitive content and access records"
+        "evidence_reference": "FICTIONAL-ACCESS-REVIEW-001: reviewed sensitive content and access records",
+        "evidence_level": "owner_review"
       },
       {
         "control_id": "LICENSE.ASSIGNMENT",
-        "scope_id": "fictional-pilot",
+        "scope_id": "fictional-tenant",
         "reviewed_at": "2026-09-14",
         "reviewer_role": "Microsoft 365 administrator",
         "result": "pass",
         "rationale": "The fictional named pilot roster was checked against assigned Copilot licenses and required base licenses.",
-        "evidence_reference": "FICTIONAL-LICENSE-REVIEW-001: reviewed roster and assignments"
+        "evidence_reference": "FICTIONAL-LICENSE-REVIEW-001: reviewed roster and assignments",
+        "evidence_level": "owner_review"
       },
       {
         "control_id": "LICENSE.APPS",
-        "scope_id": "fictional-pilot",
+        "scope_id": "fictional-tenant",
         "reviewed_at": "2026-09-14",
         "reviewer_role": "Microsoft 365 application administrator",
         "result": "fail",
         "rationale": "Two fictional pilot devices still require the approved application update before they can join the pilot.",
-        "evidence_reference": "FICTIONAL-APP-REVIEW-001: reviewed device and application prerequisite inventory"
+        "evidence_reference": "FICTIONAL-APP-REVIEW-001: reviewed device and application prerequisite inventory",
+        "evidence_level": "owner_review"
+      }
+    ],
+    "tenant_scope": {
+      "id": "fictional-tenant",
+      "description": "All fictional tenant users, active devices and content; each review records tested scope and exclusions",
+      "reviewed_at": "2026-09-01",
+      "reviewer_role": "Assessment owner",
+      "evidence_reference": "FICTIONAL-TENANT-SCOPE-001"
+    },
+    "check_reviews": [
+      {
+        "check_id": "CLASSIFICATION.ENFORCEMENT",
+        "scope_id": "fictional-tenant",
+        "reviewed_at": "2026-09-14",
+        "reviewer_role": "Information protection owner",
+        "result": "fail",
+        "evidence_level": "observed_operation",
+        "rationale": "Fictional test confirmed that a planned sensitive-data prompt was allowed; simulation does not establish enforcement.",
+        "evidence_reference": "FICTIONAL-DLP-TEST-001: test steps, actual behavior and tenant scope",
+        "tested_behavior": "Fictional sensitive-data prompt test: expected restriction; actual prompt allowed.",
+        "tested_scope": "Fictional tenant-wide policy assignments, protected labels, content locations and exclusions."
       }
     ]
+  },
+  "assessment_context": {
+    "planned_services": [
+      "Microsoft 365 Copilot"
+    ],
+    "owners": {
+      "identity": "Fictional identity owner",
+      "devices": "Fictional device owner",
+      "data_protection": "Fictional information protection owner",
+      "security_operations": "Fictional security owner",
+      "adoption": "Fictional business sponsor"
+    },
+    "business_requirements": [
+      "Draft approved project summaries"
+    ],
+    "legal_requirements": [
+      "Owner review required"
+    ],
+    "device_activity_days": 30,
+    "endpoint_reporting_days": 7,
+    "exceptions": [],
+    "remediation_dates": {
+      "LICENSE.APPS": "2026-09-20"
+    },
+    "reassessment_plan": "Repeat prerequisite and operational checks after remediation"
   }
 }
