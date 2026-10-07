@@ -39,7 +39,16 @@ function Convert-ObjectToMap {
     $result = [ordered]@{}
     foreach ($name in $Properties) {
         $property = $InputObject.PSObject.Properties[$name]
-        if ($null -ne $property) { $result[$name] = $property.Value }
+        if ($null -ne $property) {
+            $value = $property.Value
+            # Windows PowerShell serializes DateTime as /Date(epoch)/. Preserve
+            # the native wall-clock value, kind and offset as round-trip ISO so
+            # another system can read the original timestamp directly.
+            if ($value -is [DateTime] -or $value -is [DateTimeOffset]) {
+                $value = $value.ToString('o', [Globalization.CultureInfo]::InvariantCulture)
+            }
+            $result[$name] = $value
+        }
     }
     return $result
 }
@@ -61,6 +70,67 @@ function New-SourceState {
         coverage = 'full'
         evidence_quality = 'standard'
     }
+}
+
+function Get-SiteSettingsWithDetails {
+    param([string[]]$Properties)
+    $collectionStartedAt = [DateTime]::UtcNow.ToString('o')
+    # -Limit All returns the inventory, but Microsoft documents that many
+    # sharing/expiry properties can be unpopulated/default values in this
+    # mode. Read settings separately by Identity and retain the listing as
+    # dated source evidence, including when a detail request fails.
+    $inventory = @(Get-SPOSite -Limit All -ErrorAction Stop)
+    $listingCompletedAt = [DateTime]::UtcNow.ToString('o')
+    $items = @()
+    $detailFailures = @()
+    $detailsCollected = 0
+    $siteIndex = 0
+    foreach ($listedSite in $inventory) {
+        $siteIndex++
+        Write-CollectionStep NOTE "site settings ($siteIndex of $($inventory.Count))"
+        $record = Convert-ObjectToMap -InputObject $listedSite -Properties @('Url','Title','Template','Owner','SiteId','GroupId')
+        $record['InventoryRecord'] = Convert-ObjectToMap -InputObject $listedSite -Properties $Properties
+        $record['InventoryObservedAt'] = $listingCompletedAt
+        $identity = [string]$listedSite.Url
+        $requestStartedAt = [DateTime]::UtcNow.ToString('o')
+        try {
+            if ([string]::IsNullOrWhiteSpace($identity)) { throw 'The returned site inventory record has no Url for its Identity detail request.' }
+            $siteDetail = Get-SPOSite -Identity $identity -ErrorAction Stop
+            if ($null -eq $siteDetail) { throw 'Get-SPOSite -Identity returned no site detail.' }
+            $detailMap = Convert-ObjectToMap -InputObject $siteDetail -Properties $Properties
+            foreach ($name in $detailMap.Keys) { $record[$name] = $detailMap[$name] }
+            $record['SettingsReadStatus'] = 'available'
+            $record['SettingsSource'] = 'Get-SPOSite -Identity'
+            $detailsCollected++
+        } catch {
+            $reason = $_.Exception.Message
+            $record['SettingsReadStatus'] = 'unavailable'
+            $record['SettingsReadError'] = $reason
+            $detailFailures += [ordered]@{ identity=$identity; reason=$reason; request_started_at=$requestStartedAt; request_completed_at=[DateTime]::UtcNow.ToString('o') }
+        }
+        $record['SettingsReadStartedAt'] = $requestStartedAt
+        $record['SettingsReadAt'] = [DateTime]::UtcNow.ToString('o')
+        $items += $record
+    }
+    $state = New-SourceState -Available $true -Records $items.Count
+    $state['availability_status'] = $(if ($detailFailures.Count) { 'partial' } else { 'available' })
+    $state['complete'] = $detailFailures.Count -eq 0
+    $state['coverage'] = $(if ($detailFailures.Count) { 'partial' } else { 'full' })
+    $state['settings_read_mode'] = 'per_site_identity'
+    $state['source_api'] = 'SharePoint Online Management Shell: Get-SPOSite -Identity'
+    $state['details_requested'] = $inventory.Count
+    $state['details_collected'] = $detailsCollected
+    $state['detail_failures'] = $detailFailures
+    $state['collection_started_at'] = $collectionStartedAt
+    $state['collection_completed_at'] = [DateTime]::UtcNow.ToString('o')
+    $state['collected_at'] = $state['collection_completed_at']
+    $state['listing'] = [ordered]@{ source='Get-SPOSite -Limit All'; records_collected=$inventory.Count; collection_started_at=$collectionStartedAt; collection_completed_at=$listingCompletedAt; settings_verified=$false }
+    $state['scope'] = 'Sharing and protection settings for each returned site, read independently by Identity; failed sites remain in the retained inventory.'
+    $state['limitations'] = 'Configuration only. Omitted settings remain unknown; settings do not prove current links, permissioned-user counts, or observed access behavior.'
+    $state['documentation_verified_at'] = '2026-10-02'
+    $state['documentation_urls'] = @('https://learn.microsoft.com/en-us/powershell/module/microsoft.online.sharepoint.powershell/get-sposite?view=sharepoint-ps')
+    $state['reason'] = $(if ($detailFailures.Count) { "$($detailFailures.Count) of $($inventory.Count) site detail requests failed; inventory records are retained." } else { '' })
+    return [ordered]@{ available=$true; records_collected=$items.Count; items=$items; reason=$state['reason']; source_state=$state }
 }
 
 function Find-SharePointModuleManifest {
@@ -161,10 +231,13 @@ $tenantProperties = @(
     'IsWhiteboardEnabled','IsCollabMeetingNotesFluidEnabled','EnableRestrictedAccessControl'
 )
 $siteProperties = @(
-    'Url','Title','Template','Owner','SharingCapability','DefaultSharingLinkType',
+    'Url','Title','Template','Owner','SiteId','GroupId','SharingCapability','DefaultSharingLinkType',
+    'DefaultShareLinkScope','DefaultShareLinkRole','DefaultLinkToExistingAccess',
     'DefaultLinkPermission','AnonymousLinkExpirationInDays','ExternalUserExpirationInDays',
+    'OverrideTenantAnonymousLinkExpirationPolicy','OverrideTenantExternalUserExpirationPolicy',
     'ConditionalAccessPolicy','LimitedAccessFileType','SensitivityLabel',
-    'RestrictContentOrgWideSearch','RestrictedAccessControl'
+    'RestrictContentOrgWideSearch','RestrictedAccessControl',
+    'LastContentModifiedDate','LastItemModifiedDate','TimeCreated'
 )
 
 $payload = [ordered]@{
@@ -193,11 +266,12 @@ try {
 
 Write-CollectionStep STEP 'site sharing settings (all sites)'
 try {
-    $siteItems = @(Get-SPOSite -Limit All -Detailed | ForEach-Object { Convert-ObjectToMap -InputObject $_ -Properties $siteProperties })
-    $payload.sites.available = $true
-    $payload.sites.items = $siteItems
-    $payload.sites.records_collected = $siteItems.Count
-    $payload.collection_status['sharepoint_site_settings'] = New-SourceState -Available $true -Records $siteItems.Count
+    $siteCollection = Get-SiteSettingsWithDetails -Properties $siteProperties
+    $payload.sites.available = $siteCollection.available
+    $payload.sites.items = $siteCollection.items
+    $payload.sites.records_collected = $siteCollection.records_collected
+    $payload.sites.reason = $siteCollection.reason
+    $payload.collection_status['sharepoint_site_settings'] = $siteCollection.source_state
 } catch {
     $payload.sites.reason = $_.Exception.Message
     $payload.collection_status['sharepoint_site_settings'] = New-SourceState -Available $false -Reason $_.Exception.Message

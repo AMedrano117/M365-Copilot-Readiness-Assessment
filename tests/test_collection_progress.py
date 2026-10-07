@@ -112,7 +112,8 @@ class TerminalTests(unittest.TestCase):
         original = sys.stdout
         with patch('Core.console_reporting.enable_virtual_terminal', return_value=True), \
                 patch('Core.console_reporting._use_color', return_value=False), \
-                patch('sys.stderr', new=io.StringIO()):
+                patch('sys.stderr', new=io.StringIO()), \
+                patch.dict('os.environ', {'TERM':'xterm','ASSESSMENT_PROGRESS':'auto'}):
             self.assertTrue(progress.start(stream=terminal))
             try:
                 self.assertIsNot(sys.stdout, original)

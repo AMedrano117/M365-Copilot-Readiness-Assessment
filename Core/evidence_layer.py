@@ -9,6 +9,8 @@ import re
 from .friendly_names import get_friendly_plan_name, get_friendly_sku_name
 from .assessment_model import enrich_assessment_records
 from .copilot_readiness_import import FLAG_COLUMNS
+from .signin_evidence import LEGACY_SIGNIN_COUNT as _LEGACY_SIGNIN_COUNT
+from .signin_evidence import is_legacy_signin_finding as _legacy_signin_finding
 
 
 SHEET_DEFINITIONS = OrderedDict([
@@ -907,6 +909,7 @@ def _build_verified_strengths(entra_client, purview_client, m365_client=None):
                 ),
                 "Benefit": "These rules can identify sensitive information and apply the configured restrictions when people or AI-assisted workflows share it.",
                 "Key": "dlp-enforced",
+                "ControlId": "DATA.DLP", "EvidenceLevel": "configuration",
             })
 
         labels = getattr(purview_client, "sensitivity_labels", {}) or {}
@@ -931,6 +934,7 @@ def _build_verified_strengths(entra_client, purview_client, m365_client=None):
                 "Evidence": "The Exchange audit configuration returned UnifiedAuditLogIngestionEnabled as true.",
                 "Benefit": "This provides activity records needed to investigate access and actions involving Microsoft 365 data.",
                 "Key": "unified-audit-enabled",
+                "ControlId": "DATA.AUDIT", "EvidenceLevel": "configuration",
             })
 
         irm = getattr(purview_client, "irm_config", {}) or {}
@@ -1607,7 +1611,9 @@ def _build_authentication_sheet(entra_client):
     rows = [
         {"RecommendationId": "", "Flagged By": "", "Metric": "Users assessed", "Value": total, "Source State": availability.title(), "Evidence Confidence": "High"},
         {"RecommendationId": "", "Flagged By": "", "Metric": "MFA registered users", "Value": registered, "Source State": availability.title(), "Evidence Confidence": "High"},
-        {"RecommendationId": "", "Flagged By": "", "Metric": "MFA registration rate", "Value": "Not calculated" if rate is None else f"{rate}%", "Source State": availability.title(), "Evidence Confidence": "High"},
+        {"RecommendationId": "", "Flagged By": "", "Metric": "MFA registration rate", "Value": "Not calculated" if rate is None else f"{rate}%", "Source State": availability.title(), "Evidence Confidence": "High",
+         'Numerator':registered,'Denominator':total or None,'Population':'Returned registration summary users',
+         'Scope':'Saved aggregate authentication registration report','Observation window':'Original registration report snapshot; individual dates unavailable'},
         {"RecommendationId": "", "Flagged By": "", "Metric": "MFA capable users", "Value": capable, "Source State": availability.title(), "Evidence Confidence": "High"},
         {"RecommendationId": "", "Flagged By": "", "Metric": "Passwordless registered users", "Value": passwordless, "Source State": availability.title(), "Evidence Confidence": "High"},
     ]
@@ -1619,9 +1625,6 @@ def _build_authentication_sheet(entra_client):
             "Use the restricted source or Entra admin center to follow up with individual users.",
         ],
     }
-
-
-_LEGACY_SIGNIN_COUNT = re.compile(r'\b(\d[\d,]*)\s+legacy(?:\s+authentication|\s+auth)?\s+sign[- ]?ins?\b', re.IGNORECASE)
 
 
 def _mfa_registration_finding(record):
@@ -1637,16 +1640,6 @@ def _mfa_registration_finding(record):
     count = re.search(r'\b(\d[\d,]*)\s+of\s+(\d[\d,]*)\s+users\b', observation, re.IGNORECASE)
     return bool(count and int(count.group(1).replace(',', '')) < int(count.group(2).replace(',', ''))
                 and re.search(r'\b(?:enrolled|registered)\s+(?:in|for)\s+MFA\b', observation, re.IGNORECASE))
-
-
-def _legacy_signin_finding(record):
-    """An observed event count is distinct from a legacy-blocking policy finding."""
-    if str(record.get('Service') or '') != 'Entra':
-        return False
-    if record.get('FindingKey') == 'entra.signins.legacy_auth':
-        return True
-    count = _LEGACY_SIGNIN_COUNT.search(str(record.get('Observation') or ''))
-    return bool(count and int(count.group(1).replace(',', '')) > 0)
 
 
 def _signin_text(value, default='Not returned'):
@@ -1668,7 +1661,8 @@ def _signin_utc(value):
 
 def _build_legacy_signin_sheet(entra_client, recommendations=None, collection_context=None):
     """Retain each matched sign-in event, including repeated users and apps."""
-    from .signin_evidence import is_legacy_signin, LEGACY_CLASSIFICATION_RULE
+    from .signin_evidence import (LEGACY_CLASSIFICATION_RULE, OUTCOME_RULE, classify_signin_outcome,
+                                  is_legacy_signin, unmatched_legacy_client_type)
     from .source_evidence import source_is_complete
 
     state = (getattr(entra_client, 'collection_status', {}) or {}).get('signin_logs', {}) or {}
@@ -1700,16 +1694,24 @@ def _build_legacy_signin_sheet(entra_client, recommendations=None, collection_co
     collected_at = state.get('collected_at') or state.get('collection_completed_at') or getattr(entra_client, 'collected_at', None) or context.get('collected_at') or 'Not retained'
     source_file = state.get('source_file') or getattr(entra_client, 'source_file', None) or context.get('source_file') or 'Not retained'
     rows = []
+    unmatched = {}
     for event in logs:
         if not is_legacy_signin(event):
+            other = unmatched_legacy_client_type(event)
+            if other:
+                unmatched[other] = unmatched.get(other, 0) + 1
             continue
         status = _safe_get(event, 'status', {}) or {}
         device = _safe_get(event, 'deviceDetail', {}) or {}
         location = _safe_get(event, 'location', {}) or {}
         error_code = _safe_get(status, 'errorCode', None)
-        outcome = 'Unknown'
-        if error_code is not None and not isinstance(error_code, bool) and re.fullmatch(r'-?\d+', str(error_code).strip()):
-            outcome = 'Success' if int(error_code) == 0 else 'Failure'
+        outcome = classify_signin_outcome(event)
+        policies = _safe_get(event, 'appliedConditionalAccessPolicies', None)
+        if isinstance(policies, list):
+            applied = '; '.join(f"{_signin_text(_safe_get(policy, 'displayName', None) or _safe_get(policy, 'id', None))}: "
+                                f"{_signin_text(_safe_get(policy, 'result', None))}" for policy in policies) or 'None listed'
+        else:
+            applied = 'Not returned'
         rows.append({
             'RecommendationId': '', 'Flagged By': '',
             'Sign-In ID': _signin_text(_safe_get(event, 'id', None)),
@@ -1722,7 +1724,7 @@ def _build_legacy_signin_sheet(entra_client, recommendations=None, collection_co
             'Service Principal Name': _signin_text(_safe_get(event, 'servicePrincipalName', None) or _safe_get(event, 'servicePrincipalDisplayName', None)),
             'Resource ID': _signin_text(_safe_get(event, 'resourceId', None)),
             'Resource Name': _signin_text(_safe_get(event, 'resourceDisplayName', None)),
-            'Client App / Protocol': _signin_text(_safe_get(event, 'clientAppUsed', None)),
+            'Client App Used (reported client type)': _signin_text(_safe_get(event, 'clientAppUsed', None)),
             'Authentication Protocol': _signin_text(_safe_get(event, 'authenticationProtocol', None)),
             'User Agent': _signin_text(_safe_get(event, 'userAgent', None)),
             'Created UTC': _signin_utc(_safe_get(event, 'createdDateTime', None)),
@@ -1735,10 +1737,13 @@ def _build_legacy_signin_sheet(entra_client, recommendations=None, collection_co
             'Device OS': _signin_text(_safe_get(device, 'operatingSystem', None)),
             'Device Browser': _signin_text(_safe_get(device, 'browser', None)),
             'Error Code': error_code if error_code is not None else 'Not returned',
-            'Outcome': outcome,
+            'Outcome': outcome['outcome'],
+            'Outcome Detail': outcome['detail'],
+            'Outcome Basis': outcome['basis'],
             'Failure Reason': _signin_text(_safe_get(status, 'failureReason', None)),
             'Status Additional Details': _signin_text(_safe_get(status, 'additionalDetails', None)),
             'Conditional Access Status': _signin_text(_safe_get(event, 'conditionalAccessStatus', None)),
+            'Applied Conditional Access Policies': applied,
             'Is Interactive': _bool_text(_safe_get(event, 'isInteractive', None)) or 'Unknown',
             'Correlation ID': _signin_text(_safe_get(event, 'correlationId', None)),
             'Source API': source_api, 'Source File': source_file,
@@ -1780,13 +1785,18 @@ def _build_legacy_signin_sheet(entra_client, recommendations=None, collection_co
         'Original query scope: ' + str(state.get('scope') or 'Not retained; no tenant-wide coverage claim is made') + '.',
         reconciliation,
         'Collection window: ' + str(window) + '. Source filter: ' + str(query_filter) + '.',
-        'Outcome uses status.errorCode: 0 is Success, nonzero is Failure, and a missing or unreadable code is Unknown. A legacy-client match does not prove successful access or that MFA or Conditional Access was bypassed.',
+        OUTCOME_RULE + ' A legacy-client match does not prove successful access or that MFA or Conditional Access was bypassed.',
         'Pagination: ' + str(state.get('pagination') or 'Original pagination behavior was not recorded') +
             f". Pages collected: {state.get('pages_collected', 'Not recorded')}; truncated: {state.get('truncated', 'Not recorded')}.",
         'Permissions: ' + str(state.get('permissions') or 'Effective permissions were not recorded; missing Conditional Access details cannot establish that no policy applied') + '.',
         'Licensing: ' + str(state.get('licensing') or 'The original source licensing and entitlement checks were not recorded') + '.',
         'Retention: ' + str(state.get('retention') or 'Source retention was not recorded; only retained source events are available') + '.',
     ]
+    if unmatched:
+        details.append('Classification gap: ' + str(sum(unmatched.values())) + ' retained sign-in events use Microsoft-listed legacy '
+                       'client types that the historical rule does not match ('
+                       + '; '.join(f'{name}: {number}' for name, number in sorted(unmatched.items()))
+                       + '). They are not included in this sheet or the legacy finding.')
     if state.get('reason'):
         details.append('Collection qualification: ' + str(state['reason']))
     if state.get('limitations'):
@@ -1794,6 +1804,7 @@ def _build_legacy_signin_sheet(entra_client, recommendations=None, collection_co
     if unavailable:
         details.append(unavailable)
     return {'rows': rows, 'summary': f'{count} legacy-client sign-in event records retained. ' + reconciliation,
+            'unmatched_legacy_client_types': unmatched,
             'restricted': True, 'preview_columns': [], 'details': details,
             'reported_count': reported_count, 'matched_count': count,
             'reconciliation_note': reconciliation, 'unavailability_reason': unavailable,
@@ -2736,6 +2747,7 @@ def _build_m365_activity_sheet(m365_client):
     rows = []
 
     def add_metric(workload, metric, value, detail=""):
+        basis=activations_summary.get('percentage_basis',{}) if metric=='Desktop Adoption Rate' else {}
         rows.append({
             "RecommendationId": "",
             "Flagged By": "",
@@ -2743,6 +2755,7 @@ def _build_m365_activity_sheet(m365_client):
             "Metric": metric,
             "Value": value,
             "Detail": detail,
+            'Percentage basis':basis,'Period':basis.get('window',''),
         })
 
     email_summary = _measured_summary(getattr(m365_client, "email_summary", {}))
@@ -2822,6 +2835,11 @@ def _build_ai_usage_sheet(m365_client):
     rows = []
 
     def add(source, period, metric, value, evidence):
+        basis=evidence.get('percentage_basis') or {}
+        if metric=='Active-user rate':
+            metrics=(evidence.get('periods') or {}).get(period,{})
+            basis={'numerator':metrics.get('active_users'),'denominator':metrics.get('enabled_users'),
+                'population':'Enabled paid Microsoft 365 Copilot users','scope':'Returned Copilot usage report','window':period}
         rows.append({
             "RecommendationId": "",
             "Flagged By": "",
@@ -2833,6 +2851,7 @@ def _build_ai_usage_sheet(m365_client):
             "Freshness": evidence.get("freshness", "Unknown"),
             "Availability": "Available" if evidence.get("available") else "Not assessed",
             "Detail": evidence.get("reason", ""),
+            'Percentage basis':basis,
         })
 
     users = getattr(m365_client, "users_summary", {}) or {}

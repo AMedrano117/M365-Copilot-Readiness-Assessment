@@ -430,7 +430,7 @@ class ShadowAiTests(unittest.TestCase):
     def test_discovery_not_enabled(self):
         evidence = asyncio.run(collect_shadow_ai_usage(FakeClient([FakeResponse(200, {"value": []})])))
         self.assertFalse(evidence["available"])
-        self.assertIn("Enable Defender", evidence["reason"])
+        self.assertIn("Confirm discovery configuration", evidence["reason"])
 
     def test_no_generative_ai_activity_is_a_valid_observation(self):
         client = FakeClient([
@@ -440,7 +440,7 @@ class ShadowAiTests(unittest.TestCase):
         evidence = asyncio.run(collect_shadow_ai_usage(client))
         self.assertTrue(evidence["available"])
         self.assertEqual(evidence["application_count"], 0)
-        self.assertIn("no generative AI", evidence["reason"])
+        self.assertIn("no classified AI candidates", evidence["reason"])
 
     def test_observed_generative_ai_is_aggregate_only(self):
         client = FakeClient([
@@ -530,7 +530,7 @@ class ReportPrivacyAndDecisionTests(unittest.TestCase):
         self.assertNotIn("secret.user@contoso.com", body)
         self.assertNotIn("Secret User", body)
         self.assertIn("Pilot suitability and adoption", body)
-        self.assertIn("Why it matters", body)
+        self.assertIn("Supported observations", body)
         self.assertIn("What the pilot should prove", body)
         self.assertIn("How to decide whether to expand", body)
         self.assertNotIn("What “last 28 days” means", body)

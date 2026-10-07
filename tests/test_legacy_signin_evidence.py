@@ -1,11 +1,13 @@
 import os
+import io
+from contextlib import redirect_stdout
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
 
-from openpyxl import load_workbook
+from tests.workbook_test_helpers import load_workbook_pair as load_workbook
 
 from Core.evidence_layer import (
     _apply_explicit_evidence_fallbacks,
@@ -13,9 +15,56 @@ from Core.evidence_layer import (
     build_evidence_bundle,
 )
 from Core.export_recommendations import export_to_excel, export_to_html
+from Core.customer_report import _heading
+from Core.saved_control_checks import qualify_saved_recommendations
 
 
 class LegacySignInEvidenceTests(unittest.TestCase):
+    def test_live_legacy_finding_is_named_for_the_issue_and_preserves_license_observation(self):
+        from Recommendations.entra import AAD_PREMIUM, AAD_PREMIUM_P1
+        for module in (AAD_PREMIUM, AAD_PREMIUM_P1):
+            for count in (8, 0):
+                with self.subTest(module=module.__name__, count=count), redirect_stdout(io.StringIO()):
+                    rows = module.get_recommendation('SPE_E3', entra_insights={
+                        'available': True, 'ca_metrics': {'total_policies': 1, 'require_mfa': 1},
+                        'mfa_metrics': {'total_users': 1, 'mfa_enabled_users': 1},
+                        'signin_metrics': {'legacy_auth_sign_ins': count},
+                        'auth_summary': {'passwordless_adoption_rate': 100},
+                    })
+                    legacy = next(row for row in rows if 'legacy authentication sign-in' in row['Observation'])
+                    self.assertEqual(legacy['Feature'], 'Legacy authentication sign-ins')
+                    self.assertTrue(any(row['Feature'] == 'Microsoft Entra ID P1' for row in rows))
+                    if count:
+                        self.assertEqual(_heading(legacy), 'Review legacy authentication sign-ins')
+
+    def test_saved_product_label_is_corrected_in_export_and_retained_as_original(self):
+        client = self.client()
+        old = {**self.finding(), 'Feature': 'Microsoft Entra ID P1', 'FindingKey': 'entra.signins.legacy_auth'}
+        qualified = qualify_saved_recommendations([old], 'Entra', client)[0]
+        self.assertEqual(qualified['Feature'], 'Legacy authentication sign-ins')
+        self.assertEqual(qualified['OriginalFeature'], 'Microsoft Entra ID P1')
+        self.assertEqual(old['Feature'], 'Microsoft Entra ID P1')
+        self.assertEqual(_heading(old), 'Review legacy authentication sign-ins')
+        bundle = self.bundle(client, [qualified])
+        bundle['evaluation_date'] = '2026-09-30'
+        bundle['collection_context'] = {'collected_at': '2026-09-29T08:00:00Z',
+                                        'tenant_id': '11111111-1111-1111-1111-111111111111'}
+        with TemporaryDirectory() as temporary:
+            path = export_to_excel(bundle['recommendations'], filename='legacy.xlsx', evidence_bundle=bundle,
+                                   output_dir=temporary)
+            workbook = load_workbook(path)
+            try:
+                findings = list(workbook['Findings'].values)
+                columns = {name: number for number, name in enumerate(findings[0])}
+                row = next(row for row in findings[1:] if row[columns['ID']] == 'ENT-001')
+                self.assertEqual(row[columns['Finding']], 'Review legacy authentication sign-ins')
+            finally:
+                workbook.close()
+            html_path = export_to_html(bundle['recommendations'], filename='legacy.html', evidence_bundle=bundle,
+                                       excel_path=path, output_dir=temporary)
+            html = Path(html_path).read_text(encoding='utf-8')
+            self.assertIn('<h3>Review legacy authentication sign-ins</h3>', html)
+
     def finding(self, count=8):
         return {
             'RecommendationId': 'ENT-001', 'Service': 'Entra', 'Feature': 'Legacy sign-in review',
@@ -76,7 +125,7 @@ class LegacySignInEvidenceTests(unittest.TestCase):
         self.assertEqual({row['Sign-In ID'] for row in rows}, {f'event-{index}' for index in range(1, 9)})
         self.assertEqual(len({row['User ID'] for row in rows}), 1)
         self.assertEqual(len({row['Application ID'] for row in rows}), 1)
-        self.assertEqual([row['Outcome'] for row in rows[:3]], ['Success', 'Failure', 'Unknown'])
+        self.assertEqual([row['Outcome'] for row in rows[:3]], ['Succeeded', 'Blocked', 'Unknown'])
         self.assertEqual(rows[0]['Error Code'], 0)
         self.assertEqual(rows[1]['Error Code'], 50076)
         self.assertEqual(rows[1]['Failure Reason'], 'Additional authentication required')
@@ -213,7 +262,7 @@ class LegacySignInEvidenceTests(unittest.TestCase):
                 path = export_to_excel(bundle['recommendations'], filename='legacy.xlsx', evidence_bundle=bundle)
                 workbook = load_workbook(path)
                 try:
-                    rows = list(workbook['Legacy Sign-In Detail'].values)
+                    rows = list(workbook.technical['Legacy Sign-In Detail'].values)
                     self.assertEqual(len(rows), 9)
                     self.assertIn('private-user@example.invalid', rows[1])
                     self.assertIn('event-1', rows[1])

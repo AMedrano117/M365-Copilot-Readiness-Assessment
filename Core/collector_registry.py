@@ -47,7 +47,7 @@ def profile_permission_resources(permission_profile="standard"):
     profile_name = normalize_permission_profile(permission_profile)
     resources = {}
     for collector_id, collector in COLLECTOR_REGISTRY.items():
-        if collector.get("maturity") != "stable":
+        if collector.get("maturity") != "stable" and not (profile_name == 'standard' and collector.get('default_setup')):
             continue
         for resource in collector.get("permission_resources", {}):
             permissions = collector_permissions(collector_id, profile_name, resource)
@@ -56,7 +56,14 @@ def profile_permission_resources(permission_profile="standard"):
     return resources
 
 
-def selected_collector_ids(service_config, preview_collectors="none", legacy=False, permission_profile="standard"):
+def supplemental_enabled(selection, collector, permission_profile="standard"):
+    if normalize_permission_profile(permission_profile) == 'restricted':
+        return False
+    return selection == 'all' or selection == collector or (selection == 'auto' and collector in {
+        'entra-recommendations', 'shadow-ai', 'copilot-audit'})
+
+
+def selected_collector_ids(service_config, preview_collectors="auto", legacy=False, permission_profile="standard"):
     selected = ["graph_core"]
     if service_config.get("run_m365"):
         selected.extend(["m365_usage", "report_settings", "external_connections",
@@ -67,11 +74,13 @@ def selected_collector_ids(service_config, preview_collectors="none", legacy=Fal
         selected.extend(["graph_security", "defender_endpoint"])
     if service_config.get("run_purview"):
         selected.extend(["purview_labels_graph", "purview"])
-    if preview_collectors in {"copilot-audit", "all"} and service_config.get("run_m365"):
+    if supplemental_enabled(preview_collectors, 'entra-recommendations', permission_profile) and service_config.get('run_entra'):
+        selected.append('entra_recommendations')
+    if supplemental_enabled(preview_collectors, 'copilot-audit', permission_profile) and service_config.get("run_m365"):
         selected.append("copilot_audit")
     if preview_collectors in {"power-platform", "all"}:
         selected.append("power_platform")
-    if preview_collectors in {"shadow-ai", "all"}:
+    if supplemental_enabled(preview_collectors, 'shadow-ai', permission_profile) and service_config.get('run_m365'):
         selected.append("shadow_ai")
     if preview_collectors in {"network-access", "all"}:
         selected.append("network_access")

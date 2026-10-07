@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, patch
 from Core.collector_registry import collector_permissions
 from Core.connection_validation import (
     DELEGATED_OPTIONAL, NOT_SELECTED, PERMISSION, READY, SIGN_IN, connection_exit_code, run_connection_checks,
+    _result,
 )
 
 SERVICES = {"run_m365": True, "run_entra": False, "run_defender": False, "run_purview": True,
@@ -28,22 +29,22 @@ def graph_token(roles):
     return SimpleNamespace(token=f"h.{body}.s")
 
 
-def client(missing=()):
+def client(missing=(), collectors=()):
     roles = set()
     for collector in ("graph_core", "m365_usage", "report_settings", "external_connections",
-                      "sharepoint_tenant_settings", "purview_labels_graph"):
+                      "sharepoint_tenant_settings", "purview_labels_graph", "copilot_audit", "shadow_ai", *collectors):
         roles |= collector_permissions(collector)
     roles -= set(missing)
     return SimpleNamespace(credential=SimpleNamespace(get_token=lambda *scopes: graph_token(roles)))
 
 
 class PreflightTests(unittest.IsolatedAsyncioTestCase):
-    async def check(self, graph_client, secrets, *, interactive_auth="skip", delegated="auto", delegated_state="unavailable"):
+    async def check(self, graph_client, secrets, *, interactive_auth="skip", delegated="auto", delegated_state="unavailable", services=None, probe_endpoints=False):
         plan = {}
         with patch.dict(os.environ, ENV, clear=True), redirect_stdout(io.StringIO()), \
                 patch("Core.workload_tokens.purview_token_secrets", AsyncMock(return_value=(secrets, {"reason": "not consented", "exchange_roles": set(), "compliance_roles": set()}))):
             results = await run_connection_checks(
-                graph_client, SERVICES, PLAN, probe_endpoints=False, sharepoint_admin_url="",
+                graph_client, services or SERVICES, PLAN, probe_endpoints=probe_endpoints, sharepoint_admin_url="",
                 interactive_auth=interactive_auth, delegated=delegated, delegated_state=delegated_state,
                 auth_plan_out=plan)
         return {item["collector_id"]: item for item in results}, plan
@@ -65,6 +66,28 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
         results, _ = await self.check(client(missing={"SharePointTenantSettings.Read.All"}), {})
         self.assertEqual(PERMISSION, results["sharepoint_tenant_settings"]["status"])
         self.assertIn("SharePointTenantSettings.Read.All", results["sharepoint_tenant_settings"]["reason"])
+
+    async def test_directory_recommendations_are_checked_by_default_and_missing_consent_is_named(self):
+        collectors = ('entra_controls', 'entra_risk', 'entra_recommendations')
+        services = {**SERVICES, 'run_entra': True}
+        ready, _ = await self.check(client(collectors=collectors), {}, services=services)
+        self.assertEqual(READY, ready['entra_recommendations']['status'])
+        missing, _ = await self.check(client(missing={'DirectoryRecommendations.Read.All'}, collectors=collectors),
+                                      {}, services=services)
+        self.assertEqual(PERMISSION, missing['entra_recommendations']['status'])
+        self.assertIn('DirectoryRecommendations.Read.All', missing['entra_recommendations']['reason'])
+
+    async def test_directory_recommendations_preflight_uses_the_supported_read_only_endpoint(self):
+        async def probe(graph_client, collector_id, path, roles, permissions, **kwargs):
+            return _result(collector_id, READY, 'Synthetic representative read')
+        with patch('Core.connection_validation._graph_probe', AsyncMock(side_effect=probe)) as reader:
+            await self.check(client(collectors=('entra_controls', 'entra_risk', 'entra_recommendations')), {},
+                             services={**SERVICES, 'run_m365': False, 'run_purview': False, 'run_entra': True},
+                             probe_endpoints=True)
+        call = next(call for call in reader.await_args_list if call.args[1] == 'entra_recommendations')
+        self.assertEqual(call.args[2], '/beta/directory/recommendations')
+        self.assertEqual(call.args[4], {'DirectoryRecommendations.Read.All'})
+        self.assertEqual(call.kwargs['params'], {'$select': 'id,status'})
 
     async def test_optional_delegated_enrichment_does_not_fail_preflight(self):
         results, _ = await self.check(client(), {"exchange_access_token": "e"}, delegated="auto")

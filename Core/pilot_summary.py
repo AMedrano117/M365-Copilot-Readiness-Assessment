@@ -10,7 +10,7 @@ from pathlib import Path
 import re
 from urllib.parse import quote
 
-from .customer_report import _heading, _observation, prose
+from .customer_report import _heading, _observation, prose, slug
 
 
 VERDICTS = {
@@ -24,7 +24,7 @@ VERDICTS = {
 
 PILOT_GROUP_GUIDANCE = (
     "Choose 20 to 50 people across two or three roles with clear, repeatable tasks, such as drafting, summarizing meetings or finding information.",
-    "Prefer people who already have MFA registered, a Copilot license and Microsoft 365 Apps on Current Channel or Monthly Enterprise Channel.",
+    "Prefer people with MFA registered, verified entitlement for the planned Copilot experience, and supported Microsoft 365 apps and connected experiences.",
     "Prefer teams whose content sits in sites with named owners, sensible permissions and sensitivity labels.",
     "Agree three to five success measures (for example time saved, output quality and weekly use) and a feedback channel before assigning licenses.",
     "Assign licenses through a group so the pilot is easy to track, extend or stop.",
@@ -66,6 +66,10 @@ li strong { color:var(--navy); }
 .tag[data-priority="high"], .tag[data-priority="critical"] { background:var(--red-pale); color:var(--red); }
 .tag[data-priority="medium"] { background:var(--amber-pale); color:var(--amber); }
 .passed li::marker { color:var(--green); }
+.decision-group { border-top:1px solid var(--line); padding:10px 0; }
+.decision-group summary { cursor:pointer; color:var(--navy); font-weight:600; }
+.decision-group summary span { display:block; font-size:12px; font-weight:400; }
+.decision-group ul { font-size:13px; }
 footer { color:var(--muted); font-size:13px; }
 footer p { margin:6px 0; }
 a { color:var(--teal); }
@@ -104,11 +108,13 @@ def _more(rows, limit=8):
     return f'<p class="more">{more} more in the full report.</p>' if more > 0 else ''
 
 
-def render_pilot_summary(result, bundle, tenant_name, report_path=None, workbook_path=None):
+def render_pilot_summary(result, bundle, tenant_name, report_path=None, workbook_path=None, technical_workbook_path=None):
+    from .report_presentation import decision_groups
     actions = result.get("actions") or []
     numbers = {row.get("RecommendationId"): index for index, row in enumerate(actions, 1)}
     report_name = Path(report_path).name if report_path else ""
     workbook_name = Path(workbook_path).name if workbook_path else ""
+    technical_name = Path(technical_workbook_path).name if technical_workbook_path else ""
     headline, state = VERDICTS.get(result.get("decision"), (result.get("decision") or "Assessment outcome", "unknown"))
 
     gates = [row for row in result.get("controls") or [] if row.get("security_gate")]
@@ -123,19 +129,37 @@ def render_pilot_summary(result, bundle, tenant_name, report_path=None, workbook
     scores = "".join(f'<div class="score" data-kind="{kind}"><b>{value}</b><span>{label}</span></div>' for kind, value, label in (
         ("pass", len(passed), f"of {len(gates)} required checks passed"),
         ("fail", len(failing), "required checks failing"),
-        ("confirm", len(unanswered), "checks to confirm (not readable)"),
+        ("confirm", len(unanswered), "checks awaiting sufficient evidence"),
     ))
 
     sections = []
+    pdf_section = ''
+    from .portal_insights import featured_highlights, report_highlights
+    highlights = featured_highlights(report_highlights(bundle.get('portal_review')))
+    if highlights:
+        items = []
+        for row in highlights:
+            source_link = (f'<a href="{quote(report_name)}#portal-{slug(row["capture_id"])}">'
+                           f'{prose(row["report"])}{(" · page " + str(row["page"])) if row["page"] else ""}</a>'
+                           if report_name else prose(row['report']))
+            items.append('<li><strong>' + prose(row['topic']) + '</strong>'
+                         '<span class="found">' + prose(row['excerpt']) + '</span>'
+                         '<span class="owner">' + source_link + ' · Captured ' + prose(row['captured_at'] or 'date unavailable')
+                         + ' · Report refreshed ' + prose(row['report_date'] or 'not verified') + '</span></li>')
+        all_link = f'<p><a href="{quote(report_name)}#pdf-report-highlights">All PDF report highlights and source pages</a></p>' if report_name else ''
+        pdf_section = ('<section id="pdf-summary"><h2>What the supplied PDF reports show</h2>'
+                        '<p class="intro">Source excerpts for review. Check OCR and card layout against the original pages; '
+                        'their dates and populations may differ from the collected metrics. They do not independently establish readiness.</p>'
+                        '<ul>' + ''.join(items) + '</ul>' + all_link + '</section>')
     if blockers:
         sections.append(
             '<section id="fix-first"><h2>1. Fix before the pilot</h2>'
-            '<p class="intro">These conditions were found in the tenant and apply to every user, so they affect any pilot group.</p>'
+            '<p class="intro">These confirmed conditions require remediation before pilot approval. Review the affected population and exceptions in the evidence workbook.</p>'
             f'<ol>{_action_items(blockers, numbers, report_name, bundle)}</ol>{_more(blockers)}</section>')
     if confirm:
         sections.append(
             f'<section id="confirm"><h2>{len(sections) + 1}. Confirm before the pilot</h2>'
-            '<p class="intro">The assessment could not read these settings. Confirm each one with its owner; none of them is a known failure.</p>'
+            '<p class="intro">These checks lack sufficient current evidence of scope, configuration or effective operation. Record the missing evidence and tested behavior with the accountable owner.</p>'
             f'<ol>{_action_items(confirm, numbers, report_name, bundle, found=False)}</ol>{_more(confirm)}</section>')
     if later:
         sections.append(
@@ -157,10 +181,14 @@ def render_pilot_summary(result, bundle, tenant_name, report_path=None, workbook
                         for row in strengths)
         sections.append(f'<section id="in-place" class="passed"><h2>{len(sections) + 1}. Already in place</h2><ul>{items}</ul></section>')
 
+    executive = result.get('executive_summary') or {}
+    decisions = executive.get('Decisions required') or []
+    if decisions:
+        sections.append('<section id="decisions-required"><h2>Decisions required</h2>' + decision_groups(result) + '</section>')
     guidance = "".join(f"<li>{prose(item)}</li>" for item in PILOT_GROUP_GUIDANCE)
     sections.append(
         f'<section id="pilot-group"><h2>{len(sections) + 1}. Choosing the pilot group</h2>'
-        '<p class="intro">The assessment checked controls across the whole tenant, so this verdict holds for whichever pilot group you choose. '
+        '<p class="intro">The readiness baseline covers the whole tenant. Pilot users, devices and content can be recorded as additional context. '
         'You do not need to name the pilot users for the assessment.</p>'
         f'<ul>{guidance}</ul></section>')
 
@@ -169,14 +197,15 @@ def render_pilot_summary(result, bundle, tenant_name, report_path=None, workbook
     period_text = f"{start} to {end}" if start and end and start != end else (start or end or "see the full report")
     links = " · ".join(link for link in (
         f'<a href="{quote(report_name)}">Full assessment report</a>' if report_name else "",
-        f'<a href="{quote(workbook_name)}">Evidence workbook</a>' if workbook_name else "",
+        f'<a href="{quote(workbook_name)}">Assessment workbook</a>' if workbook_name else "",
+        f'<a href="{quote(technical_name)}">Technical evidence workbook</a>' if technical_name else "",
     ) if link)
     tenant = escape(str(tenant_name or "Tenant"))
     return f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{tenant} — Copilot pilot readiness summary</title><style>{SUMMARY_CSS}</style></head><body><div class="page">
-<header><div class="brand">MICROSOFT 365 COPILOT<span>Pilot readiness summary</span></div><div class="meta"><strong>{tenant}</strong>Evaluated {prose(result.get("evaluation_date"))}</div></header>
+<header><div class="brand">MICROSOFT 365 COPILOT<span>Executive readiness summary</span></div><div class="meta"><strong>{tenant}</strong>Evaluated {prose(result.get("evaluation_date"))}</div></header>
 <main><section class="verdict" data-state="{state}" id="verdict"><div class="kicker">Pilot readiness</div><h1>{escape(headline)}</h1>
-<p>{prose(result.get("rationale"))}</p><div class="scores">{scores}</div></section>
-{"".join(sections)}</main>
-<footer><p>{links}</p><p>Evidence period: {prose(period_text)}. Methodology {prose(result.get("methodology_version"))}: each required check is judged on tenant-wide configuration. Checks that could not be read are listed to confirm and are not counted as failures. The full report and workbook hold the evidence behind every item.</p></footer>
+<p>{prose(result.get("rationale"))}</p><p>Scope: {prose(executive.get('Scope') or 'Tenant-wide Microsoft 365 foundation')}. Evidence dates: {prose(period_text)}.</p><div class="scores">{scores}</div></section>
+{pdf_section}{"".join(sections)}</main>
+<footer><p>{links}</p><p>Evidence period: {prose(period_text)}. Methodology {prose(result.get("methodology_version"))}: required checks distinguish configuration, policy enforcement, observed operation and dated owner reviews. Missing operational proof remains unresolved. The full report and workbook hold the evidence or precise collection gap behind every finding.</p></footer>
 </div></body></html>'''

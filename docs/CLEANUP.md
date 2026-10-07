@@ -10,7 +10,7 @@ If setup reported a credential recovery file, restore and verify the normal envi
 
 ## 1. Retain and verify the final evidence
 
-Copy the complete assessment folder, including original inputs, `collection.json` or `rebuild.json`, `rebuilds/`, deliverables and the operator log, to the customer's approved storage. Verify that copy before selecting local artifacts for removal:
+Copy the complete assessment folder, including original inputs, `collection.json` or `rebuild.json`, `Rebuilds/`, deliverables and the operator log, to the customer's approved storage. Verify that copy before selecting local artifacts for removal:
 
 ```powershell
 python main.py --mode offline --collection-input "<retained-package>\collection.json"
@@ -102,14 +102,17 @@ The script runs offline, lists the saved assessment artifacts it found, and asks
 
 | Location | Discovered artifacts |
 |---|---|
-| `output/collections/` | Saved live collections and their portable package folders |
-| `output/assessments/` | Offline assessment package folders |
-| `output/portal-reviews/` | Imported PDF review folders, previews and generated review manifests |
-| `Reports/` | Generated reports and diagnostics |
+| `output/collections/` | Legacy saved live collections and custom companion package folders |
+| `output/assessments/` | Legacy offline assessment package folders |
+| `output/portal-reviews/` | Legacy imported PDF review folders, previews and generated review manifests |
+| `Reports/` | Customer folders containing portable assessments, inputs and each build's reports, `Evidence/` pages, `App Builder/` files and `json/` packages; also legacy flat reports |
 | `.cache/purview/` | Purview evidence cache files and subfolders |
 | `.cache/sharepoint_dag/` | Downloaded SharePoint DAG evidence files and subfolders |
+| `.cache/portal-reviews/` | Imported PDF staging folders, page previews and generated review manifests |
+| `.cache/delegated/` | Delegated sign-in cache files and subfolders |
+| `.cache/collector_diagnostics.log` | Sanitized collector diagnostics file |
 
-Discovery selects each location's direct children; removal includes the contents of selected subfolders. The storage folders themselves remain. Missing or empty locations require no confirmation. Keep the approved retained copy outside the selected locations, and review the full list before confirming. Custom export folders and artifacts saved elsewhere are not part of default discovery.
+Discovery selects each storage directory's direct children and the diagnostics file; removal includes the contents of selected subfolders. Selecting a customer folder under `Reports/` includes all of its assessments. The storage folders themselves remain. Missing or empty locations require no confirmation. Keep the approved retained copy outside the selected locations, and review the full list before confirming. Custom export folders and artifacts saved elsewhere are not part of default discovery.
 
 To list the default selection without deleting or prompting:
 
@@ -120,7 +123,7 @@ To list the default selection without deleting or prompting:
 To select only particular working copies, supply optional literal paths instead of the default discovery:
 
 ```powershell
-.\cleanup-local-assessment.ps1 -Path ".\output\collections\<collection-stem>_package"
+.\cleanup-local-assessment.ps1 -Path ".\Reports\<customer>\<assessment>"
 ```
 
 `-Path` accepts multiple files or subfolders inside this checkout's `output/`, `Reports/` or `.cache/`; relative explicit paths use the current directory. The script rejects those three roots themselves, outside paths and overlapping parent/child selections. Standard PowerShell `-Confirm:$false` is available for an already authorized automated run.

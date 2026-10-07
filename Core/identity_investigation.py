@@ -180,7 +180,12 @@ def select_identity_item(key, row, rec):
         state = _text(row, 'State').lower().replace('_', '')
         report_only = state == 'enabledforreportingbutnotenforced'
         reason = ''
-        if finding == 'baseline.identity.sign_in':
+        if finding == 'baseline.identity.scope':
+            if state == 'enabled' and any(_tokens(row.get(field)) for field in ('Exclude Users','Exclude Groups','Exclude Roles','Exclude Applications')):
+                reason = 'Assignments or exclusions require effective coverage review'
+            elif report_only and _yes(row.get('Blocks Legacy Auth')):
+                reason = 'Legacy-client block policy is report-only and requires coverage review'
+        elif finding == 'baseline.identity.sign_in':
             from .tenant_baseline import OFFICE_365_APP_IDS
             apps = _tokens(row.get('Include Applications'))
             covers_m365 = _yes(row.get('Targets All Apps')) or _yes(row.get('Targets M365')) or bool(apps & {str(value).lower() for value in OFFICE_365_APP_IDS})

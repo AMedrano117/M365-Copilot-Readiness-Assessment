@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from openpyxl import load_workbook
+from tests.workbook_test_helpers import load_workbook_pair as load_workbook
 
 from Core.copilot_readiness_import import FLAG_COLUMNS
 from Core.evidence_layer import _build_data_exposure_sheet, build_evidence_bundle
@@ -112,16 +112,16 @@ class PortalReportEvidenceTests(unittest.TestCase):
         path = export_to_excel(bundle["recommendations"], filename="test.xlsx", evidence_bundle=bundle)
         workbook = load_workbook(path)
         self.addCleanup(workbook.close)
-        self.assertIn("Copilot Readiness Export", workbook.sheetnames)
-        self.assertIn("Copilot Readiness Users", workbook.sheetnames)
-        self.assertIn("SharePoint Lifecycle Detail", workbook.sheetnames)
-        users = list(workbook["Copilot Readiness Users"].values)
+        self.assertIn("Copilot Readiness Export", workbook.technical.sheetnames)
+        self.assertIn("Copilot Readiness Users", workbook.technical.sheetnames)
+        self.assertIn("SharePoint Lifecycle Detail", workbook.technical.sheetnames)
+        users = list(workbook.technical["Copilot Readiness Users"].values)
         self.assertIn("restricted.person@example.test", users[1])
         self.assertIn("Unknown", users[1])
-        lifecycle = list(workbook["SharePoint Lifecycle Detail"].values)
+        lifecycle = list(workbook.technical["SharePoint Lifecycle Detail"].values)
         self.assertIn("private.owner@example.test", lifecycle[1])
         self.assertIn("2026-09-12", lifecycle[1])
-        source_rows = list(workbook["Data Exposure Detail"].values)
+        source_rows = list(workbook.technical["Data Exposure Detail"].values)
         self.assertIn("Source Status", source_rows[0])
         self.assertIn("Report Type", source_rows[0])
         status_index = source_rows[0].index("Source Status")
@@ -134,7 +134,7 @@ class PortalReportEvidenceTests(unittest.TestCase):
         path = export_to_excel(bundle["recommendations"], filename="literal.xlsx", evidence_bundle=bundle)
         workbook = load_workbook(path)
         self.addCleanup(workbook.close)
-        cell = workbook["Copilot Readiness Users"]["A2"]
+        cell = workbook.technical["Copilot Readiness Users"]["A2"]
         self.assertEqual(cell.data_type, "s")
         self.assertEqual(cell.value, readiness["user_details"][0]["user_principal_name"])
 

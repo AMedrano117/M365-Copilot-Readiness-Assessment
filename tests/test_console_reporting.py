@@ -1,5 +1,6 @@
 import io
 import json
+import copy
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -61,6 +62,61 @@ class ConsoleReportingTests(unittest.TestCase):
                 print_paragraph(message, indent='  ')
         self.assertEqual(' '.join(message.split()), ' '.join(output.getvalue().split()))
         self.assertIn('output/one-long-original-export-name-that-must-remain-copyable.csv', output.getvalue())
+
+    def test_offline_source_gaps_are_saved_results_without_live_access_instructions(self):
+        configure_console(verbose=False, color='never')
+        self.addCleanup(configure_console)
+        states = {
+            'entra_recommendations': {'availability_status': 'unavailable', 'available': False,
+                                     'reason': 'HTTP 403. Grant DirectoryRecommendations.Read.All now.'},
+            'risky_users': {'availability_status': 'unavailable', 'reason': 'Tenant was not licensed.'},
+            'shadow_ai_usage': {'availability_status': 'not_requested'},
+            'connection_entra': {'availability_status': 'unavailable', 'reason': 'Preflight unavailable'},
+        }
+        before = copy.deepcopy(states)
+        output = io.StringIO()
+        with redirect_stdout(output):
+            print_source_gaps(states, mode='offline', collected_at='2026-09-14T12:00:00Z')
+        text = ' '.join(output.getvalue().split())
+        self.assertIn('Saved collection gaps: 2', text)
+        self.assertIn('from 2026-09-14T12:00:00Z', text)
+        self.assertIn('offline rebuild made no tenant requests', text)
+        self.assertIn('entra_recommendations: unavailable in saved evidence.', text)
+        self.assertIn('still limit evidence coverage', text)
+        self.assertNotIn('Source collection gaps', text)
+        self.assertNotIn('Grant DirectoryRecommendations', text)
+        self.assertNotIn('shadow_ai_usage', text)
+        self.assertNotIn('connection_entra', text)
+        self.assertEqual(states, before)
+
+    def test_verbose_offline_preserves_original_service_response_as_saved_evidence(self):
+        configure_console(verbose=True, color='never')
+        self.addCleanup(configure_console)
+        output = io.StringIO()
+        with redirect_stdout(output):
+            print_source_gaps({'risky_users': {'availability_status': 'unavailable',
+                                             'reason': 'HTTP 403: tenant was not licensed.'}}, mode='offline')
+        self.assertIn('Saved collection gaps: 1', output.getvalue())
+        self.assertIn('HTTP 403: tenant was not licensed.', output.getvalue())
+        self.assertIn('did not check current permissions or licensing', ' '.join(output.getvalue().split()))
+
+    def test_offline_assessment_summary_uses_saved_gap_heading_and_counts_admin_pages(self):
+        from Core.export_recommendations import print_recommendations_summary
+        configure_console(verbose=False, color='never')
+        self.addCleanup(configure_console)
+        output = io.StringIO()
+        with redirect_stdout(output):
+            print_recommendations_summary([{'Service': 'Entra', 'Feature': 'Policy review',
+                                           'Observation': 'No policy evidence retained',
+                                           'Recommendation': 'Review policy evidence',
+                                           'Status': 'Not Assessed', 'Priority': 'Medium'}], evidence_bundle={
+                'collection_context': {'mode': 'offline', 'collected_at': '2026-09-14T12:00:00Z'},
+                'source_statuses': {'entra_recommendations': {'availability_status': 'unavailable'}},
+                'portal_review': {'captures': [{'previews': [{}, {}], 'extracted_pages': [{}, {}]},
+                                               {'previews': [{}, {}, {}], 'extracted_pages': [{}, {}, {}]}]},
+            })
+        self.assertIn('Saved collection gaps: 1', output.getvalue())
+        self.assertIn('Admin-center captures: 2 captures, 5 pages.', output.getvalue())
 
     def test_console_groups_import_states_and_json_preserves_each_receipt(self):
         configure_console(verbose=True, color='never')

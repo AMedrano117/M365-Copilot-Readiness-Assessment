@@ -24,6 +24,7 @@ PREFERRED_STATUS_ORDER = [
     "Success",
     "Unknown",
 ]
+EXCEL_MAX_DATA_ROWS = 1_048_575
 
 from .new_recommendation import (  # noqa: F401  (re-exported)
     NOT_ASSESSED_STATUS,
@@ -116,19 +117,28 @@ def customer_coverage_label(record):
 
 
 def sanitize_filename_component(value):
-    """Convert tenant names into filesystem-friendly filename segments."""
-    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", str(value or "").strip())
-    safe = safe.strip("._-").lower()
-    return safe[:80]
+    """Convert labels into short readable filename components."""
+    from .export_paths import customer_folder_name
+    return customer_folder_name(value) if value else ''
 
 
-def build_report_filename(extension, tenant_name=None):
-    """Build a timestamped report filename, optionally including tenant name."""
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    tenant_slug = sanitize_filename_component(tenant_name)
-    if tenant_slug:
-        return f"m365_recommendations_{tenant_slug}_{timestamp}.{extension}"
-    return f"m365_recommendations_{timestamp}.{extension}"
+def build_report_filename(extension, tenant_name=None, *, customer_name=None, tenant_id=None):
+    """Include a short customer label; the assessment date stays in the folder."""
+    from .export_paths import REPORT_STEM, report_file_stem
+    stem = report_file_stem(REPORT_STEM, customer_name=customer_name,
+                            tenant_name=tenant_name, tenant_id=tenant_id)
+    return f"{stem}.{extension}"
+
+
+def _default_report_filename(folder, extension, tenant_name=None):
+    """Preserve earlier direct exports when a caller does not provide a name."""
+    name = Path(build_report_filename(extension, tenant_name))
+    candidate, number = name.name, 2
+    from .workbook_layout import technical_workbook_path
+    while (folder / candidate).exists() or (extension == 'xlsx' and technical_workbook_path(folder / candidate).exists()):
+        candidate = f'{name.stem} ({number}){name.suffix}'
+        number += 1
+    return candidate
 
 
 def sort_values_with_preferences(values, preferred_order):
@@ -227,7 +237,7 @@ _OPTIONAL_EXCEL_TEXT = {
 _NARRATIVE_EXCEL_SHEETS = {
     'Action Plan', 'Recommendations', 'Evidence Index', 'Assessment Summary',
     'Domain Results', 'Run Manifest', 'Evidence Observations', 'Collection Coverage',
-    'PDF Extracted Text',
+    'PDF Extracted Text', 'PDF Highlights',
 }
 
 
@@ -242,11 +252,7 @@ def _utf16_chunks(value, limit=32000):
 
 
 def _excel_safe_rows(rows, sheet_title):
-    """Keep optional long narratives from suppressing the entire workbook.
-
-    Investigation and identifying fields retain their full values in adjacent
-    continuation columns. Optional narrative truncation is always explicit.
-    """
+    """Preserve every long field through adjacent continuation columns."""
     output = []
     for original in rows:
         row = {}
@@ -259,9 +265,6 @@ def _excel_safe_rows(rows, sheet_title):
                 row[header] = value
                 continue
             chunks = list(_utf16_chunks(value))
-            if str(header).casefold() in _OPTIONAL_EXCEL_TEXT and sheet_title in _NARRATIVE_EXCEL_SHEETS:
-                row[header] = chunks[0] + '\n[Truncated for Excel: this optional text exceeds the cell limit.]'
-                continue
             row[header] = chunks[0]
             for index, chunk in enumerate(chunks[1:], 2):
                 continuation = f'{header} (continued {index})'
@@ -276,7 +279,7 @@ def _excel_safe_rows(rows, sheet_title):
         output.append(row)
     return output
 
-def export_to_csv(recommendations, filename=None, tenant_name=None):
+def export_to_csv(recommendations, filename=None, tenant_name=None, output_dir=None):
     """
     Export recommendations to CSV file
     
@@ -289,12 +292,11 @@ def export_to_csv(recommendations, filename=None, tenant_name=None):
     """
     recommendations = enrich_assessment_records(recommendations)
 
-    # Create Reports folder if it doesn't exist
-    recommendations_dir = Path("Reports")
-    recommendations_dir.mkdir(exist_ok=True)
+    from .export_paths import report_directory
+    recommendations_dir = report_directory(output_dir, tenant_name=tenant_name)
     
     if not filename:
-        filename = build_report_filename("csv", tenant_name=tenant_name)
+        filename = _default_report_filename(recommendations_dir, 'csv', tenant_name)
     
     if not filename.endswith('.csv'):
         filename += '.csv'
@@ -318,7 +320,7 @@ def export_to_csv(recommendations, filename=None, tenant_name=None):
     
     return str(filepath)
 
-def export_to_json(recommendations, filename=None, tenant_name=None):
+def export_to_json(recommendations, filename=None, tenant_name=None, output_dir=None):
     """
     Export recommendations to JSON file
     
@@ -331,12 +333,11 @@ def export_to_json(recommendations, filename=None, tenant_name=None):
     """
     recommendations = enrich_assessment_records(recommendations)
 
-    # Create Reports folder if it doesn't exist
-    recommendations_dir = Path("Reports")
-    recommendations_dir.mkdir(exist_ok=True)
+    from .export_paths import report_directory
+    recommendations_dir = report_directory(output_dir, tenant_name=tenant_name)
     
     if not filename:
-        filename = build_report_filename("json", tenant_name=tenant_name)
+        filename = _default_report_filename(recommendations_dir, 'json', tenant_name)
     
     if not filename.endswith('.json'):
         filename += '.json'
@@ -356,6 +357,23 @@ def export_to_json(recommendations, filename=None, tenant_name=None):
 
 def _append_dict_rows_to_sheet(ws, rows, header_fill, header_font, wrap_alignment, table_name=None):
     if not rows:
+        return
+    if len(rows)>EXCEL_MAX_DATA_ROWS:
+        base=ws.title
+        used={title.casefold() for title in ws.parent.sheetnames}
+        for offset in range(0,len(rows),EXCEL_MAX_DATA_ROWS):
+            number=offset//EXCEL_MAX_DATA_ROWS+1
+            part=ws
+            if number>1:
+                suffix=number
+                title=base[:31-len(f' {suffix}')]+f' {suffix}'
+                while title.casefold() in used:
+                    suffix+=1
+                    title=base[:31-len(f' {suffix}')]+f' {suffix}'
+                used.add(title.casefold())
+                part=ws.parent.create_sheet(title)
+            _append_dict_rows_to_sheet(part,rows[offset:offset+EXCEL_MAX_DATA_ROWS],header_fill,header_font,wrap_alignment,
+                table_name=(table_name or base)+f'Part{number}')
         return
 
     rows = _excel_safe_rows(rows, ws.title)
@@ -466,7 +484,7 @@ def _adoption_guidance_rows(result):
     return guidance_rows(build_adoption_guidance(result, numbers))
 
 
-def export_to_excel(recommendations, filename=None, tenant_name=None, evidence_bundle=None):
+def export_to_excel(recommendations, filename=None, tenant_name=None, evidence_bundle=None, output_dir=None):
     """
     Export recommendations to Excel file
     Requires openpyxl: pip install openpyxl
@@ -478,30 +496,42 @@ def export_to_excel(recommendations, filename=None, tenant_name=None, evidence_b
     Returns:
         str: Path to created Excel file
     """
-    from .assessment_result import build_assessment_result
-    from .investigation_details import prepare_investigation_details
-    evidence_bundle = evidence_bundle if evidence_bundle is not None else {}
-    result = evidence_bundle.get('assessment_result')
-    if result is None:
-        result = build_assessment_result(recommendations, evidence_bundle)
-        evidence_bundle['assessment_result'] = result
-    prepare_investigation_details(evidence_bundle, result)
-    recommendations = result['recommendations']
-
     try:
         from openpyxl import Workbook
         from openpyxl.styles import Font, PatternFill, Alignment
     except ImportError:
         print("Warning: openpyxl not installed. Install it with: pip install openpyxl")
         print("Falling back to CSV export...")
-        return export_to_csv(recommendations, filename, tenant_name=tenant_name)
-    
-    # Create Reports folder if it doesn't exist
-    recommendations_dir = Path("Reports")
-    recommendations_dir.mkdir(exist_ok=True)
+        csv_filename = str(Path(filename).with_suffix('.csv')) if filename else None
+        return export_to_csv(recommendations, csv_filename, tenant_name=tenant_name, output_dir=output_dir)
+
+    from .assessment_result import build_assessment_result
+    from .investigation_details import prepare_investigation_details
+    from .customer_report import _heading
+    from .workbook_evidence import technical_recommendation_rows
+    evidence_bundle = evidence_bundle if evidence_bundle is not None else {}
+    result = evidence_bundle.get('assessment_result')
+    if result is None:
+        result = build_assessment_result(recommendations, evidence_bundle)
+        evidence_bundle['assessment_result'] = result
+    prepare_investigation_details(evidence_bundle, result)
+    if not evidence_bundle.get('finding_evidence'):
+        from .dashboard_export import build_dashboard_export
+        from .finding_evidence import build_finding_evidence
+        from .workbook_evidence import add_evidence_sheets
+        model = build_finding_evidence(build_dashboard_export(result, evidence_bundle, tenant_name=tenant_name))
+        evidence_bundle['finding_evidence'] = model
+        add_evidence_sheets(evidence_bundle, result, model)
+    from .raw_evidence import MAX_DATA_ROWS, split_evidence_sheets
+    # Evidence sheets added after preparation are split with the same configured capacity.
+    split_evidence_sheets(evidence_bundle, result, evidence_bundle.get('worksheet_row_capacity', MAX_DATA_ROWS))
+    recommendations = result['recommendations']
+
+    from .export_paths import report_directory
+    recommendations_dir = report_directory(output_dir, tenant_name=tenant_name)
     
     if not filename:
-        filename = build_report_filename("xlsx", tenant_name=tenant_name)
+        filename = _default_report_filename(recommendations_dir, 'xlsx', tenant_name)
     
     if not filename.endswith('.xlsx'):
         filename += '.xlsx'
@@ -537,6 +567,8 @@ def export_to_excel(recommendations, filename=None, tenant_name=None, evidence_b
         "Domain": rec.get("Domain", ""),
         "Type": rec.get("ActionType", ""),
         "Priority": rec.get("Priority", ""),
+        "Finding": _heading(rec),
+        "Evidence": rec.get('InvestigationRange') or rec.get('InvestigationStatus') or 'Supporting location not supplied',
         "What We Found": rec.get("Observation", ""),
         "Recommended Action": rec.get("Recommendation", ""),
         "Responsible Role": rec.get("OwnerRole", ""),
@@ -545,7 +577,6 @@ def export_to_excel(recommendations, filename=None, tenant_name=None, evidence_b
         "Completion Evidence": rec.get("CompletionEvidence", ""),
         "Observed": rec.get("ObservationDate", ""),
         "Qualification": " ".join(str(value) for value in (rec.get("Qualification"), rec.get("InvestigationQualification")) if value),
-        "Evidence": rec.get('InvestigationRange') or rec.get('InvestigationStatus') or 'Supporting location not supplied',
         "Investigation Details": (rec.get("InvestigationSummary") or rec.get("InvestigationStatus", ""))
             if rec.get('InvestigationCount') else ': '.join(dict.fromkeys(str(value) for value in
                 (rec.get('InvestigationStatus'), rec.get('InvestigationSummary')) if value)),
@@ -749,7 +780,7 @@ def export_to_excel(recommendations, filename=None, tenant_name=None, evidence_b
             else [{"Status": "Passed", "Issue": "No pre-export integrity issues were detected."}]
         )
         for title, rows, table_name in (
-            ("Control Results", evidence_bundle.get('control_results', []), "ControlResults"),
+            ("Control Results", evidence_bundle.get('control_results') or result.get('control_results', []), "ControlResults"),
             ("Provider Register", evidence_bundle.get('provider_evidence', {}).get('rows', []), "ProviderRegister"),
             ("Use Case Readiness", evidence_bundle.get('conclusions', {}).get('use_cases', []), "UseCaseReadiness"),
             ("Improvement Tracking", evidence_bundle.get('baseline_comparison', {}).get('rows', []), "ImprovementTracking"),
@@ -781,21 +812,62 @@ def export_to_excel(recommendations, filename=None, tenant_name=None, evidence_b
             header_font, wrap_alignment,
         )
 
+    from .portal_insights import workbook_highlights
     for title, rows in (
+        ('Findings Register', [{'RecommendationId':row.get('RecommendationId'),
+            'Finding': _heading(row),
+            'Priority':row.get('Priority'), 'Disposition':row.get('Disposition'),
+            'Readiness effect':row.get('PilotImpact'),
+            'Supporting evidence':row.get('InvestigationRange') or row.get('InvestigationStatus'),
+            'Raw source evidence':next(iter(row.get('RawEvidenceRanges',[])),''),
+            'Assessment domain':row.get('AssessmentDomainId'), 'Control':row.get('ControlId'),
+            'Original feature':row.get('Feature'), 'Observation':row.get('Observation'),
+            'Responsible role':row.get('OwnerRole'),
+            'Evidence level':row.get('EvidenceLevel'), 'Operational result':row.get('OperationalResult'),
+            'Observed':row.get('ObservationDate'), 'Qualification':row.get('Qualification'),
+            'Guidance verification':row.get('GuidanceVerification'), 'Guidance verified at':row.get('GuidanceVerifiedAt'),
+            'Guidance scope':row.get('GuidanceVerificationScope'),
+            'Supporting ranges':row.get('InvestigationRanges',[]),
+            'Raw source ranges':row.get('RawEvidenceRanges',[]),
+            'Detail qualification':row.get('InvestigationQualification'),
+            'Raw qualification':row.get('RawEvidenceQualification'),
+            **({'Evidence kind':row.get('EvidenceKind'), 'Evidence availability':row.get('EvidenceAvailability'),
+                'Detail records':row.get('DetailRecords'), 'Record unit':row.get('RecordUnit'),
+                'Affected entities':row.get('AffectedEntities'), 'Entity unit':row.get('EntityUnit'),
+                'Supporting context records':row.get('ContextRecords'),
+                'Evidence records':row.get('EvidenceRecordsRange') or row.get('InvestigationRange')
+                    or next(iter(row.get('RawEvidenceRanges') or []), '') or row.get('EvidenceAvailability'),
+                'Evidence record ranges':row.get('EvidenceRecordsRanges',[]),
+                'Technical fix':(row.get('TechnicalGuidance') or {}).get('guidance_status'),
+                'Technical evidence page':(evidence_bundle.get('technical_evidence_pages') or {}).get(row.get('RecommendationId')), 'App Builder files':row.get('AppBuilderFiles')}
+               if 'EvidenceKind' in row else {})}
+            for row in sorted(result['recommendations'],key=lambda item:(
+                {'Action':0,'Coverage':1,'Assurance':2,'Opportunity':3,'Reference':4}.get(item.get('Disposition'),5),
+                {'High':0,'Medium':1,'Low':2}.get(item.get('Priority'),3),_heading(item)))]),
+        ('Technical Recommendations', technical_recommendation_rows(result, heading=_heading)
+         if any('EvidenceKind' in row for row in result['recommendations']) else []),
+        ('Assessment Coverage', result.get('domain_coverage',[])),
+        ('Device Reconciliation', (result.get('device_reconciliation') or {}).get('records',[])),
+        ('Device Coverage', [{key:value for key,value in (result.get('device_reconciliation') or {}).items() if key!='records'}]),
+        ('Assessment Context', [{'Field':key,'Value':value} for key,value in result.get('assessment_context',{}).items()]),
+        ('Executive Summary', [{'Item':key,'Value':value} for key,value in result.get('executive_summary',{}).items()]),
+        ('Source Windows', result.get('source_windows',[])),
+        ('Documentation Verification',result.get('documentation_verification',[])),
         ('Assessment Summary', [{'Item': 'Deployment decision', 'Value': result['decision']},
             {'Item': 'Rationale', 'Value': result['rationale']},
             {'Item': 'Evaluation date', 'Value': result.get('evaluation_date')},
             *[{'Item': key, 'Value': value} for key, value in result['counts'].items()]]),
         ('Domain Results', [{'Domain': row['title'], 'Status': row.get('status'),
             'Summary': row.get('summary'), 'Actions': row.get('action_count'),
-            'Responsible Role': row.get('owner_role')} for row in result['domains']]),
+            'Responsible Role': row.get('owner_role')} for row in result.get('assessment_domains',result['domains'])]),
         ('Evidence Observations', result.get('observations', result.get('evidence', []))),
         ('Adoption Metrics', result.get('adoption_metrics', [])),
         ('Import Receipt', evidence_bundle.get('import_receipt', [])),
         ('Portal Review', (evidence_bundle.get('portal_review') or {}).get('rows', [])),
+        ('PDF Highlights', workbook_highlights(evidence_bundle.get('portal_review'))),
         ('PDF Extracted Text', [{'Source File': capture.get('source_name'), 'Page': page['page'],
                                 'Method': page['method'], 'Extracted text': page['text'],
-                                'Qualification': capture.get('qualification')}
+                                'Qualification': capture.get('qualification'), 'Capture ID': capture.get('id')}
                                for capture in (evidence_bundle.get('portal_review') or {}).get('captures', [])
                                for page in capture.get('extracted_pages', [])]),
         ('Copilot Admin Data', (evidence_bundle.get('copilot_admin_review') or {}).get('rows', [])),
@@ -853,8 +925,10 @@ def export_to_excel(recommendations, filename=None, tenant_name=None, evidence_b
                 and 1 <= first_column <= last_column <= target_sheet.max_column)
 
     for title, column_name in (('Action Plan', 'Investigation Details'), ('Action Plan', 'Evidence'),
+                               ('Findings Register','Supporting evidence'), ('Findings Register','Raw source evidence'),
                                ('Evidence Index', 'Workbook Tab'), ('Recommendations', 'Evidence Sheet'),
-                               ('Evidence Index', 'Supporting Records'), ('Recommendations', 'Supporting Records')):
+                               ('Evidence Index', 'Supporting Records'), ('Recommendations', 'Supporting Records'),
+                               ('Findings Register', 'Evidence records')):
         if title not in wb:
             continue
         sheet = wb[title]
@@ -868,13 +942,43 @@ def export_to_excel(recommendations, filename=None, tenant_name=None, evidence_b
             cell = sheet.cell(row_number, columns[column_name])
             if title == 'Action Plan' and rec.get('InvestigationNote'):
                 cell.comment = Comment(str(rec['InvestigationNote']), 'Assessment')
-            location = str(rec.get('InvestigationRange') or '')
+            if column_name == 'Evidence records':
+                location = str(cell.value or '')
+            else:
+                location = str(next(iter(rec.get('RawEvidenceRanges',[])),'') if column_name=='Raw source evidence' else rec.get('InvestigationRange') or '')
             if not valid_location(location):
                 continue
             if column_name in {'Workbook Tab', 'Evidence Sheet'}:
                 cell.value = location
             cell.hyperlink = '#' + location
             cell.style = 'Hyperlink'
+
+    # Technical fixes link back to their findings and out to the verified Microsoft documentation.
+    if 'Technical Recommendations' in wb and 'Findings Register' in wb:
+        fixes, register = wb['Technical Recommendations'], wb['Findings Register']
+        fix_columns = {cell.value: cell.column for cell in fixes[1]}
+        register_columns = {cell.value: cell.column for cell in register[1]}
+        register_rows = {register.cell(number, register_columns['RecommendationId']).value: number
+                         for number in range(2, register.max_row + 1)}
+        fix_rows = {fixes.cell(number, fix_columns['RecommendationId']).value: number for number in range(2, fixes.max_row + 1)}
+        for number in range(2, fixes.max_row + 1):
+            identifier = fixes.cell(number, fix_columns['RecommendationId']).value
+            if identifier in register_rows:
+                cell = fixes.cell(number, fix_columns['RecommendationId'])
+                cell.hyperlink = f"#'Findings Register'!A{register_rows[identifier]}"
+                cell.style = 'Hyperlink'
+            for index in range(1, 4):
+                column = fix_columns.get(f'Documentation {index}')
+                url = fixes.cell(number, column).value if column else None
+                if isinstance(url, str) and url.startswith('https://'):
+                    fixes.cell(number, column).hyperlink = url
+                    fixes.cell(number, column).style = 'Hyperlink'
+        if 'Technical fix' in register_columns:
+            for identifier, number in register_rows.items():
+                if identifier in fix_rows:
+                    cell = register.cell(number, register_columns['Technical fix'])
+                    cell.hyperlink = f"#'Technical Recommendations'!A{fix_rows[identifier]}"
+                    cell.style = 'Hyperlink'
 
     # The compact worklist points to the actual records behind each item,
     # including separate grant rows for a single application.
@@ -896,11 +1000,15 @@ def export_to_excel(recommendations, filename=None, tenant_name=None, evidence_b
                 if isinstance(cell.value, str):
                     cell.data_type = 's'
 
-    # Save workbook
-    wb.save(filepath)
+    from .workbook_layout import split_workbook_layout, technical_workbook_path
+    technical_path = technical_workbook_path(filepath)
+    assessment, technical = split_workbook_layout(wb, result, evidence_bundle, filepath, technical_path,
+                                                  tenant_name=tenant_name)
+    assessment.save(filepath)
+    technical.save(technical_path)
     return str(filepath)
 
-def export_to_html(recommendations, filename=None, tenant_name=None, evidence_bundle=None, excel_path=None):
+def export_to_html(recommendations, filename=None, tenant_name=None, evidence_bundle=None, excel_path=None, output_dir=None, summary_filename=None, technical_excel_path=None):
     """Render the same assessed result used by the workbook and operator receipt."""
     from .assessment_result import build_assessment_result
     from .investigation_details import prepare_investigation_details
@@ -911,17 +1019,20 @@ def export_to_html(recommendations, filename=None, tenant_name=None, evidence_bu
         result = build_assessment_result(recommendations, bundle)
         bundle['assessment_result'] = result
     prepare_investigation_details(bundle, result)
-    folder = Path('Reports')
-    folder.mkdir(exist_ok=True)
-    name = filename or build_report_filename('html', tenant_name=tenant_name)
+    from .export_paths import report_directory
+    folder = report_directory(output_dir, tenant_name=tenant_name)
+    name = filename or _default_report_filename(folder, 'html', tenant_name)
     if not name.endswith('.html'):
         name += '.html'
     path = folder / name
-    summary_path = path.with_name(path.stem + '_summary.html')
-    path.write_text(render_customer_report(result, bundle, tenant_name, excel_path, summary_path=summary_path), encoding='utf-8')
+    summary_path = path.with_name(summary_filename or path.stem + ' Summary.html')
+    technical_excel_path = technical_excel_path or (bundle.get('technical_excel_path') if excel_path else None)
+    path.write_text(render_customer_report(result, bundle, tenant_name, excel_path, summary_path=summary_path,
+                                          technical_workbook_path=technical_excel_path), encoding='utf-8')
     # A short pilot-readiness summary beside the full report; both come from the same result.
     from .pilot_summary import render_pilot_summary
-    summary_path.write_text(render_pilot_summary(result, bundle, tenant_name, path, excel_path), encoding='utf-8')
+    summary_path.write_text(render_pilot_summary(result, bundle, tenant_name, path, excel_path,
+                                               technical_workbook_path=technical_excel_path), encoding='utf-8')
     bundle['summary_html_path'] = str(summary_path)
     return str(path)
 
@@ -1002,7 +1113,7 @@ def print_recommendations_summary(
           + ' | ' + style(f'{len(low_priority)} low', 'info'))
     detail(f"Service-plan/context items (workbook): {len(opportunities)}")
     strength_count = len(assurances)
-    status(f"Verified strengths: {strength_count}", 'success' if strength_count else 'muted')
+    status(f"Supported observations: {strength_count}", 'success' if strength_count else 'muted')
     if coverage_items:
         detail(f"Coverage gaps: {len(coverage_items)} (included in the action total)")
 
@@ -1014,10 +1125,22 @@ def print_recommendations_summary(
             action_label = "action" if count == 1 else "actions"
             print(f"  • {domain['title']}: {count} {action_label}")
 
-    print_source_gaps((evidence_bundle or {}).get('source_statuses'))
-    if html_path or excel_path or csv_path:
+    context = (evidence_bundle or {}).get('collection_context') or {}
+    print_source_gaps((evidence_bundle or {}).get('source_statuses'),
+                      mode=context.get('mode', 'live'), collected_at=context.get('collected_at'))
+    captures = ((evidence_bundle or {}).get('portal_review') or {}).get('captures') or []
+    if captures:
+        pages = sum(max(len(capture.get('extracted_pages') or []), len(capture.get('previews') or []))
+                    for capture in captures)
+        status(f'Admin-center captures: {len(captures)} captures, {pages} pages. Open Admin pages in the HTML report.')
+    if html_path or excel_path or csv_path or (evidence_bundle or {}).get('dashboard_json_path'):
         section('OUTPUT FILES')
         summary_path = (evidence_bundle or {}).get('summary_html_path')
-        for label, path in (('Summary', summary_path), ('HTML', html_path), ('Workbook', excel_path), ('CSV', csv_path)):
+        for label, path in (('Summary', summary_path), ('HTML', html_path), ('Assessment workbook', excel_path),
+                            ('Technical evidence workbook', (evidence_bundle or {}).get('technical_excel_path')), ('CSV', csv_path),
+                            ('Technical evidence pages', (evidence_bundle or {}).get('html_evidence_index')),
+                            ('App Builder upload guide', (evidence_bundle or {}).get('app_builder_guide')),
+                            ('JSON upload (ZIP)', (evidence_bundle or {}).get('dashboard_json_archive_path')),
+                            ('JSON index', (evidence_bundle or {}).get('dashboard_json_path'))):
             if path:
                 print(f"{label}: {style(display_path(path), 'path')}")

@@ -20,7 +20,7 @@ from . import collection_progress
 PURVIEW_CACHE_MAX_AGE_SECONDS = 8 * 60 * 60
 PURVIEW_CACHE_SCHEMA_VERSION = 3
 COLLECTOR_DIAGNOSTICS_PATH = (
-    Path(__file__).resolve().parent.parent / "Reports" / "collector_diagnostics.log"
+    Path(__file__).resolve().parent.parent / ".cache" / "collector_diagnostics.log"
 )
 
 
@@ -117,7 +117,7 @@ def _collector_failure_reason(lines):
         for line in candidates:
             if re.search(pattern, line):
                 return line
-    return 'PowerShell collector failed. See Reports/collector_diagnostics.log for details.'
+    return 'PowerShell collector failed. See .cache/collector_diagnostics.log for details.'
 
 
 def powershell_environment(executable, base=None):
@@ -993,5 +993,5 @@ async def collect_sharepoint_governance_via_powershell(admin_url, tenant_id, aut
         # Record framing facts, never raw stdout: it can contain tenant records.
         output_summary = f'stdout characters={len(stdout or "")}; nonempty lines={len((stdout or "").splitlines())}; JSON frame present={SHAREPOINT_JSON_BEGIN in (stdout or "")}'
         _record_collector_diagnostics("SharePoint", [f'admin_url={admin_url}', *stderr_lines, output_summary, str(exc)])
-        console.status((f'Warning: SharePoint collector returned unreadable output after the process completed; sharing settings and SAM inventory remain unverified. See Reports/collector_diagnostics.log.').rstrip(), tone='warning')
+        console.status((f'Warning: SharePoint collector returned unreadable output after the process completed; sharing settings and SAM inventory remain unverified. See .cache/collector_diagnostics.log.').rstrip(), tone='warning')
         return {"available": False, "reason": "SharePoint collector returned unreadable output.", "failure_stage": "output", "admin_url": admin_url, "collection_status": {}}

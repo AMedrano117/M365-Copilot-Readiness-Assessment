@@ -1,4 +1,4 @@
-"""Tenant-wide baseline checks for the pilot decision (methodology 3.0).
+"""Tenant-wide configuration components for the pilot decision (methodology 4.0).
 
 A pilot group is chosen from the tenant's own users, so a control that is
 enforced for all users covers any pilot group. The assessment therefore judges
@@ -74,10 +74,11 @@ def _row(service, control_id, feature, observation, recommendation, *, dispositi
 
 # --- Identity: Conditional Access and security defaults -------------------------------
 
-def conditional_access_facts(policies):
+def conditional_access_facts(policies, strengths=None):
     """Classify Conditional Access policies by what they enforce for everyone."""
     facts = {"enforced_mfa_all": [], "report_only_mfa_all": [], "enforced_mfa_scoped": [],
-             "legacy_block_all": [], "report_only_legacy_block": [], "mfa_all_exclusions": 0}
+             "legacy_block_all": [], "report_only_legacy_block": [], "mfa_all_exclusions": 0, 'scope_unknown':[]}
+    strengths = {str(_get(row,'id','')):row for row in (strengths or [])}
     for policy in _list(policies):
         state = str(_get(policy, "state", "")).lower()
         name = _get(policy, "displayName", "") or "Unnamed policy"
@@ -88,12 +89,26 @@ def conditional_access_facts(policies):
         controls = {str(item) for item in _list(_get(grant, "builtInControls", []))}
         all_users = "All" in _list(_get(users, "includeUsers", []))
         apps = set(map(str, _list(_get(applications, "includeApplications", []))))
-        all_apps = "All" in apps or bool(apps & OFFICE_365_APP_IDS)
-        requires_mfa = "mfa" in controls or bool(_get(grant, "authenticationStrength"))
+        all_apps = 'All' in apps and not _list(_get(applications,'excludeApplications',[]))
+        strength = _get(grant,'authenticationStrength',{}) or {}
+        strength_id = str(_get(strength,'id',''))
+        strength_mfa = str(_get(strengths.get(strength_id, strength),'requirementsSatisfied','')).lower() == 'mfa' or strength_id in {
+            '00000000-0000-0000-0000-000000000002','00000000-0000-0000-0000-000000000003','00000000-0000-0000-0000-000000000004'}
+        requires_mfa = ('mfa' in controls or strength_mfa) and (
+            str(_get(grant,'operator','AND')).upper()!='OR' or controls <= {'mfa'})
         clients = set(map(str, _list(_get(conditions, "clientAppTypes", []))))
-        blocks_legacy = "block" in controls and bool(clients & LEGACY_CLIENTS)
+        exclusions = any(_list(_get(users,key,[])) for key in ('excludeUsers','excludeGroups','excludeRoles')) or bool(_get(users,'excludeGuestsOrExternalUsers'))
+        restricted = any(_get(conditions,key) for key in ('locations','platforms','devices','signInRiskLevels','userRiskLevels','clientApplications','authenticationFlows'))
+        mfa_clients = not clients or 'all' in clients
+        blocks_legacy = 'block' in controls and LEGACY_CLIENTS <= clients and not exclusions and not restricted and all_apps
         enforced = state == "enabled"
         report_only = state in {"enabledforreportingbutnotenforced", "enabled_for_reporting_but_not_enforced"}
+        authentication_policy = ('mfa' in controls or bool(strength_id)
+                                 or 'block' in controls and bool(LEGACY_CLIENTS.intersection(clients)))
+        if authentication_policy and enforced and all_users and (exclusions or restricted or requires_mfa and not mfa_clients or strength_id and not strength_mfa or not all_apps):
+            facts['scope_unknown'].append(name)
+        all_users = all_users and not exclusions and not restricted
+        requires_mfa = requires_mfa and mfa_clients
         if requires_mfa and all_users and all_apps:
             if enforced:
                 facts["enforced_mfa_all"].append(name)
@@ -120,16 +135,22 @@ def assess_identity_baseline(entra_client, collected_at=""):
     if not source_is_complete(entra_client, "ca_policies"):
         if defaults_on:
             return [_row("Entra", "IDENTITY.AUTH", "Require MFA and block legacy sign-in for all users",
-                         "Security defaults are enabled: every user must register for and use multifactor authentication, "
-                         "and legacy authentication is blocked tenant-wide.", "",
+                         "Security defaults are enabled, configuring registration, risk-based MFA requirements and legacy authentication blocking. "
+                         "Returned sign-ins or a tested operational review must establish observed protection.", "",
                          disposition="Assurance", priority="Low", finding_key="baseline.identity.sign_in",
                          evidence_key="conditional_access_detail", source="security_defaults",
                          scope=scope, date=collected_at)]
         return []
-    facts = conditional_access_facts(getattr(entra_client, "ca_policies", []) or [])
+    from .expanded_collection import dataset_rows
+    facts = conditional_access_facts(getattr(entra_client, "ca_policies", []) or [], dataset_rows(entra_client,'authentication_strengths'))
     feature = "Require MFA and block legacy sign-in for all users"
     mfa_all = facts["enforced_mfa_all"]
     legacy = facts["legacy_block_all"]
+    if facts['scope_unknown'] and not (mfa_all and legacy or defaults_on):
+        return [_row('Entra','IDENTITY.AUTH',feature,
+            'Policy conditions, grant alternatives, authentication strengths or exclusions prevent a tenant-wide coverage conclusion: ' + _names(facts['scope_unknown']) + '.',
+            'Review assignments, effective grant requirements, exclusions and compensating controls before changing enforcement. Record dependencies and user-impact risks.',
+            disposition='Coverage',finding_key='baseline.identity.scope',evidence_key='conditional_access_detail',source='ca_policies',scope=scope,date=collected_at)]
     if (mfa_all or defaults_on) and (legacy or defaults_on):
         parts = []
         if mfa_all:
@@ -137,7 +158,7 @@ def assess_identity_baseline(entra_client, collected_at=""):
             parts.append(f"Conditional Access requires MFA for all users and cloud apps ({_names(mfa_all)}"
                          + (f"; {exclusions} excluded user or group assignment(s) to review" if exclusions else "") + ")")
         elif defaults_on:
-            parts.append("Security defaults require MFA for all users")
+            parts.append("Security defaults configure registration and risk-based MFA requirements")
         parts.append(f"legacy authentication is blocked for all users ({_names(legacy)})" if legacy
                      else "security defaults block legacy authentication")
         return [_row("Entra", "IDENTITY.AUTH", feature, "; ".join(parts) + ".", "",
@@ -172,8 +193,12 @@ def enforced_mfa_policy_count(policies):
     count = 0
     for policy in _list(policies):
         grant = _get(policy, "grantControls", {}) or {}
-        if str(_get(policy, "state", "")).lower() == "enabled" and (
-                "mfa" in {str(item) for item in _list(_get(grant, "builtInControls", []))} or _get(grant, "authenticationStrength")):
+        controls = {str(item) for item in _list(_get(grant, "builtInControls", []))}
+        strength = _get(grant, 'authenticationStrength', {}) or {}
+        known_mfa = str(_get(strength, 'requirementsSatisfied', '')).lower() == 'mfa' or str(_get(strength, 'id', '')) in {
+            '00000000-0000-0000-0000-000000000002', '00000000-0000-0000-0000-000000000003', '00000000-0000-0000-0000-000000000004'}
+        mandatory = str(_get(grant, 'operator', 'AND')).upper() != 'OR' or controls <= {'mfa'}
+        if str(_get(policy, "state", "")).lower() == "enabled" and mandatory and ('mfa' in controls or known_mfa):
             count += 1
     return count
 
@@ -211,10 +236,13 @@ def dlp_facts(policies):
         if enabled:
             facts["enabled"] += 1
         unified = _unified_locations(policy)
-        copilot = any(COPILOT_DLP_LOCATION in str(_get(item, "Location", "")).lower() for item in unified)
-        tenant_unified = any(any(_get(inc, "Identity") == "All" or _get(inc, "Type") == "Tenant"
-                                 for inc in _list(_get(item, "Inclusions", []))) for item in unified)
-        workloads = {label for field, label in M365_DLP_LOCATIONS if _all_location(_get(policy, field))}
+        copilot_locations = [item for item in unified if COPILOT_DLP_LOCATION in str(_get(item, "Location", "")).lower()]
+        copilot = bool(copilot_locations)
+        tenant_copilot = any(not _list(_get(item, 'Exclusions', [])) and
+            any(_get(inc, 'Identity') == 'All' or _get(inc, 'Type') == 'Tenant'
+                for inc in _list(_get(item, 'Inclusions', []))) for item in copilot_locations)
+        workloads = {label for field, label in M365_DLP_LOCATIONS if _all_location(_get(policy, field)) and
+                     not _list(_get(policy, field + 'Exception', []))}
         if copilot and enabled and mode == "enable":
             facts["copilot_enforced"].append(name)
         elif copilot and enabled:
@@ -222,12 +250,12 @@ def dlp_facts(policies):
         if not (enabled and mode == "enable"):
             continue
         facts["enforced"].append(name)
-        if workloads or (copilot and tenant_unified):
+        if workloads or tenant_copilot:
             facts["enforced_tenant"].append(name)
             facts["workloads"].update(workloads)
-            if copilot:
+            if tenant_copilot:
                 facts["workloads"].add("Microsoft 365 Copilot")
-        elif any(_list(_get(policy, field)) for field, _ in M365_DLP_LOCATIONS):
+        elif copilot or any(_list(_get(policy, field)) for field, _ in M365_DLP_LOCATIONS):
             facts["scoped_enforced"].append(name)
     return facts
 
@@ -253,8 +281,8 @@ def assess_data_protection_baseline(purview_client, collected_at=""):
         if facts["enforced_tenant"]:
             copilot = (f" {len(facts['copilot_enforced'])} enforced polic{'y applies' if len(facts['copilot_enforced']) == 1 else 'ies apply'} "
                        f"to Microsoft 365 Copilot ({_names(facts['copilot_enforced'], 2)})." if facts["copilot_enforced"] else "")
-            rows.append(_purview_row(purview_client, "DATA.DLP", "Data loss prevention is enforced tenant-wide",
-                f"{len(facts['enforced'])} of {facts['total']} DLP policies are enforced; {len(facts['enforced_tenant'])} apply to all "
+            rows.append(_purview_row(purview_client, "DATA.DLP", "DLP policies configured in enforcement mode",
+                f"{len(facts['enforced'])} of {facts['total']} DLP policies are configured in enforcement mode; {len(facts['enforced_tenant'])} apply to all "
                 f"users or locations for {', '.join(sorted(facts['workloads']))}.{copilot}", "",
                 disposition="Assurance", priority="Low", finding_key="baseline.dlp.enforced", source="dlp_policies", date=date))
             if not facts["copilot_enforced"]:
@@ -284,7 +312,9 @@ def assess_data_protection_baseline(purview_client, collected_at=""):
         names = [_get(policy, "Name", "") for policy in active]
         has_scope = any(_get(policy, "ExchangeLocation") is not None or _get(policy, "ExchangeLocationCount") is not None
                         for policy in label_policies)
-        to_everyone = [_get(policy, "Name", "") for policy in active if _all_location(_get(policy, "ExchangeLocation"))]
+        to_everyone = [_get(policy, "Name", "") for policy in active if _all_location(_get(policy, "ExchangeLocation")) and
+                       not _list(_get(policy, 'ExchangeLocationException', [])) and
+                       not _get(policy, 'ExchangeLocationExceptionCount', 0)]
         feature = "Confirm sensitivity labels are published to users"
         if not active:
             rows.append(_purview_row(purview_client, "DATA.PUBLISHING", feature,
@@ -332,8 +362,8 @@ def assess_m365_baseline(m365_client, collected_at=""):
     if source_is_complete(m365_client, "external_connections"):
         connections = _list(getattr(m365_client, "external_connections", []) or [])
         if not connections:
-            rows.append(_row("M365", "APPS.CONNECTIONS", "No Copilot connectors are configured",
-                "Microsoft Graph returned no Copilot (Graph) connectors, so Copilot answers only from Microsoft 365 content the user can already open.", "",
+            rows.append(_row("M365", "APPS.CONNECTIONS", "No Graph connector connections returned",
+                "Microsoft Graph returned no external connections in this connector inventory. Other agent integrations and connected sources require separate review; this inventory alone does not establish Copilot's complete content boundary.", "",
                 disposition="Assurance", priority="Low", finding_key="baseline.connectors.inventory",
                 evidence_key="external_connection_detail", source="m365_external_connections", scope=scope, date=collected_at))
         else:

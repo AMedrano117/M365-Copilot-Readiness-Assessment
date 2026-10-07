@@ -10,7 +10,7 @@ import re
 from urllib.parse import unquote
 
 
-from openpyxl import load_workbook
+from tests.workbook_test_helpers import load_workbook_pair as load_workbook
 
 from Core.export_recommendations import (
     export_to_excel,
@@ -121,10 +121,11 @@ class ExportRecommendationsTests(unittest.TestCase):
         excel_path = export_to_excel(recommendations, filename="tenant_report.xlsx", tenant_name="Contoso", evidence_bundle=bundle)
         workbook = load_workbook(excel_path)
         self.addCleanup(workbook.close)
-        self.assertEqual(workbook.sheetnames[:3], ["Action Plan", "Evidence Index", "Collection Coverage"])
+        self.assertEqual(workbook.sheetnames[:3], ["Start Here", "Action Plan", "Findings"])
         for title in ("Recommendations", "Evidence Index", "App Access Detail", "Assessment Summary", "Domain Results", "Evidence Observations"):
-            self.assertIn(title, workbook.sheetnames)
-            self.assertEqual(len(workbook[title].tables), 1)
+            target = workbook if title in {"Recommendations", "Evidence Index"} else workbook.technical
+            self.assertIn(title, target.sheetnames)
+            self.assertEqual(len(target[title].tables), 1)
         for worksheet in workbook.worksheets:
             if worksheet.tables:
                 self.assertIsNone(worksheet.auto_filter.ref)
@@ -155,7 +156,7 @@ class ExportRecommendationsTests(unittest.TestCase):
         path = export_to_excel(recommendations, filename='focused.xlsx', evidence_bundle=bundle)
         workbook = load_workbook(path)
         self.addCleanup(workbook.close)
-        rows = list(workbook['Investigation Items'].values)
+        rows = list(workbook.technical['Investigation Items'].values)
         self.assertEqual(len(rows), 2)
         self.assertEqual(len(rows[0]), 12)
         self.assertIn('flagged-app-object', rows[1])
@@ -167,30 +168,30 @@ class ExportRecommendationsTests(unittest.TestCase):
             number = next(i for i in range(2, sheet.max_row + 1)
                           if sheet.cell(i, headers['RecommendationId']).value == 'DEF-001')
             cell = sheet.cell(number, headers[column_name])
-            self.assertEqual(cell.hyperlink.target, "#'Investigation Items'!A2:L2")
+            self.assertEqual(cell.hyperlink.target, '#' + bundle['assessment_result']['actions'][0]['AssessmentEvidenceRange'] if title == 'Action Plan' else workbook.technical_path.name + "#'Investigation Items'!A2:L2")
             if title == 'Action Plan':
                 self.assertEqual(cell.value, '1 item to review')
                 self.assertIsNotNone(cell.comment)
                 self.assertIn('distinct applications', cell.comment.text)
                 self.assertIn('grant instances', cell.comment.text)
-                self.assertLessEqual(len(headers), 15)
-                self.assertEqual(sheet.cell(number, headers['Evidence']).hyperlink.target, "#'Investigation Items'!A2:L2")
+                self.assertLessEqual(len(headers), 16)
+                self.assertEqual(sheet.cell(number, headers['Evidence']).hyperlink.target, '#' + bundle['assessment_result']['actions'][0]['AssessmentEvidenceRange'])
             self.assertNotIn('Evidence IDs', headers)
             self.assertNotIn('Evidence Reconciliation', headers)
         self.assertNotIn('Evidence Reconciliation', workbook.sheetnames)
         html_path = export_to_html(recommendations, filename='focused.html', evidence_bundle=bundle, excel_path=path)
         html = Path(html_path).read_text(encoding='utf-8')
-        self.assertIn('Investigation Items', html)
+        self.assertIn(bundle['assessment_result']['actions'][0]['AssessmentEvidenceRange'], unquote(html))
         action_plan = html.split('id="action-plan"', 1)[1].split('</section>', 1)[0]
-        investigation_link = re.search(r'href="([^"]+)"[^>]*>1 item to review in workbook</a>', action_plan)
+        investigation_link = re.search(r'href="([^"]+)"[^>]*>1 supporting record in workbook</a>', action_plan)
         self.assertIsNotNone(investigation_link)
-        self.assertEqual(unquote(investigation_link.group(1)), "focused.xlsx#'Investigation Items'!A2:L2")
+        self.assertEqual(unquote(investigation_link.group(1)), 'focused.xlsx#' + bundle['assessment_result']['actions'][0]['AssessmentEvidenceRange'])
         self.assertNotIn('flagged-app-object', html)
         self.assertNotIn('healthy-app-object', html)
         self.assertNotIn('Risky App', action_plan)
         without_workbook = export_to_html(recommendations, filename='focused_without_workbook.html', evidence_bundle=bundle)
         self.assertNotIn('item to review in workbook</a>', Path(without_workbook).read_text(encoding='utf-8'))
-        self.assertFalse(list(Path('Reports').glob('*_evidence')))
+        self.assertFalse(list(Path('Reports').rglob('*_evidence')))
 
     def test_missing_items_have_visible_status_and_explanation_without_an_invented_worklist(self):
         bundle = self._sample_evidence_bundle()
@@ -225,11 +226,12 @@ class ExportRecommendationsTests(unittest.TestCase):
         self.addCleanup(workbook.close)
         headers = {cell.value: cell.column for cell in workbook['Recommendations'][1]}
         observation = workbook['Recommendations'].cell(2, headers['Observation']).value
-        self.assertIn('[Truncated for Excel:', observation)
+        self.assertEqual(observation + workbook['Recommendations'].cell(2, headers['Observation (continued 2)']).value,
+                         recommendations[0]['Observation'])
         self.assertLessEqual(len(observation.encode('utf-16-le')) // 2, 32767)
         for title, field in (('App Access Detail', 'Enterprise Application Object ID'),
                              ('Investigation Items', 'Identifier / URL')):
-            rows = list(workbook[title].values)
+            rows = list(workbook.technical[title].values)
             detail = dict(zip(rows[0], rows[1]))
             self.assertEqual(detail[field] + detail[field + ' (continued 2)'], identifier)
             self.assertIn('Full values continue', detail['Excel Export Note'])
@@ -238,15 +240,15 @@ class ExportRecommendationsTests(unittest.TestCase):
         recommendations = self._sample_recommendations()
         evidence_bundle = self._sample_evidence_bundle()
         html_path = export_to_html(recommendations, filename="tenant_report.html", tenant_name="Contoso",
-            evidence_bundle=evidence_bundle, excel_path=str(Path("Reports") / "tenant_report.xlsx"))
+            evidence_bundle=evidence_bundle, excel_path=str(Path("Reports") / "contoso" / "tenant_report.xlsx"))
         html = Path(html_path).read_text(encoding="utf-8")
         action_plan = html.split('id="action-plan"', 1)[1].split("</section>", 1)[0]
         self.assertIn("What we found", action_plan)
         self.assertIn("What to do", action_plan)
         self.assertNotIn("Control ID", action_plan)
         self.assertNotIn("DEF-001", action_plan)
-        self.assertIn("Observed strengths", html)
-        self.assertIn("Why it matters", html)
+        self.assertIn("Supported observations", html)
+        self.assertIn("Collection coverage and outstanding catalog reviews", html)
         self.assertIn("Technical appendix and evidence workbook", html)
         self.assertIn('<details class="appendix-panel" id="engineer-appendix">', html)
         self.assertIn('href="tenant_report.xlsx"', html)
@@ -353,7 +355,7 @@ class ExportRecommendationsTests(unittest.TestCase):
         path = export_to_excel(self._sample_recommendations(), filename="license_and_data.xlsx", evidence_bundle=evidence_bundle)
         workbook = load_workbook(path)
         self.addCleanup(workbook.close)
-        cells = [str(cell.value or "") for row in workbook["Purview Policy Detail"] for cell in row]
+        cells = [str(cell.value or "") for row in workbook.technical["Purview Policy Detail"] for cell in row]
         self.assertIn("Protect financial data", cells)
         self.assertIn("Block financial records", cells)
         self.assertIn("Block access, Notify users", cells)
@@ -430,13 +432,13 @@ class ExportRecommendationsTests(unittest.TestCase):
         self.assertNotIn("Built offline", executive)
         self.assertNotIn("source_file", executive)
         self.assertNotIn("Not established to Not established", html)
-        for key, label in (("remediation", "Remediation actions"), ("confirmation", "Findings to confirm"), ("evidence_gaps", "Evidence checks"), ("strengths", "Verified strengths")):
+        for key, label in (("remediation", "Remediation actions"), ("confirmation", "Findings to confirm"), ("evidence_gaps", "Evidence checks"), ("strengths", "Supported observations")):
             self.assertIn(f'<div class="value">{result["counts"][key]}</div><div class="stat-label">{label}</div>', executive)
         self.assertIn(f'>{len(result["actions"])} actions</span>', html)
         self.assertEqual(len(re.findall(r'<article class="action" ', html)), len(result["actions"]))
         self.assertIn("Active users", html)
         self.assertIn("85", html)
-        self.assertNotIn('id="domain-external_ai"', html)
+        self.assertIn('id="domain-external_ai"', html)
         self.assertNotIn("Three readiness conclusions", html)
 
     def test_html_shows_provider_and_use_case_review_only_when_records_are_supplied(self):
@@ -505,10 +507,10 @@ class ExportRecommendationsTests(unittest.TestCase):
         self.assertGreater(expected, 0)
         with redirect_stdout(output):
             print_recommendations_summary(recommendations, tenant_name="Contoso", evidence_bundle=bundle)
-        self.assertIn(f"Verified strengths: {expected}", output.getvalue())
-        self.assertIn(f'<div class="value">{expected}</div><div class="stat-label">Verified strengths</div>', html)
+        self.assertIn(f"Supported observations: {expected}", output.getvalue())
+        self.assertIn(f'<div class="value">{expected}</div><div class="stat-label">Supported observations</div>', html)
 
-    def test_zero_count_configuration_context_has_an_exact_html_link(self):
+    def test_configuration_context_records_have_an_exact_html_link(self):
         recommendations = self._sample_recommendations()[:1]
         recommendations[0].update(Service='Entra', Feature='Conditional Access scope review',
                                   EvidenceKey='conditional_access_detail', EvidenceBasis='Tenant evidence',
@@ -520,12 +522,13 @@ class ExportRecommendationsTests(unittest.TestCase):
         ]}}
         workbook_path = export_to_excel(recommendations, filename='context.xlsx', evidence_bundle=bundle)
         result_row = next(row for row in bundle['assessment_result']['recommendations'] if row['RecommendationId'] == 'DEF-001')
-        self.assertEqual(result_row['InvestigationCount'], 0)
+        self.assertEqual(result_row['InvestigationCount'], 1)
+        self.assertIn('No selected affected-object population', result_row['InvestigationQualification'])
         self.assertTrue(result_row['InvestigationRange'])
         html = Path(export_to_html(recommendations, filename='context.html', evidence_bundle=bundle,
                                   excel_path=workbook_path)).read_text(encoding='utf-8')
-        self.assertIn('context.xlsx#' + result_row['InvestigationRange'], unquote(html))
-        self.assertIn(result_row['InvestigationSummary'] + ' in workbook</a>', html)
+        self.assertIn('context.xlsx#' + result_row['AssessmentEvidenceRange'], unquote(html))
+        self.assertIn('1 supporting record in workbook</a>', html)
         self.assertNotIn('private-policy-id', html)
         self.assertNotIn('Private policy', html)
 
@@ -544,7 +547,7 @@ class ExportRecommendationsTests(unittest.TestCase):
         workbook_path = export_to_excel([rec], filename='opportunity.xlsx', evidence_bundle=bundle)
         workbook = load_workbook(workbook_path)
         self.addCleanup(workbook.close)
-        self.assertIn('Optional Resources', workbook.sheetnames)
+        self.assertIn('Logs Declared records', workbook.technical.sheetnames)
         self.assertNotIn('DEF-001', {row['RecommendationId'] for row in bundle['assessment_result']['actions']})
         for title in ('Evidence Index', 'Recommendations'):
             sheet = workbook[title]
@@ -559,7 +562,7 @@ class ExportRecommendationsTests(unittest.TestCase):
         html = Path(export_to_html([rec], filename='opportunity.html', evidence_bundle=bundle,
                                   excel_path=workbook_path)).read_text(encoding='utf-8')
         self.assertIn('Review optional pilot resources with their accountable owner.', html)
-        self.assertIn('1 item to review in workbook</a>', html)
+        self.assertIn('1 supporting record in workbook</a>', html)
         for private_value in ('private-resource-id', 'Private resource', 'private-source-file.json', 'private-filter-identity'):
             self.assertNotIn(private_value, html)
 
@@ -578,7 +581,7 @@ class ExportRecommendationsTests(unittest.TestCase):
         workbook_path = export_to_excel(recommendations, filename='grant-links.xlsx', evidence_bundle=bundle)
         workbook = load_workbook(workbook_path)
         self.addCleanup(workbook.close)
-        sheet = workbook['Investigation Items']
+        sheet = workbook.technical['Investigation Items']
         headers = {cell.value: cell.column for cell in sheet[1]}
         source = sheet.cell(2, headers['Source Detail'])
         self.assertEqual(source.value, "'Application Grant Detail'!A2:D3")

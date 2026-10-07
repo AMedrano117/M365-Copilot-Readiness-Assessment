@@ -64,12 +64,14 @@ def _plan_content(raw, plan):
 def validate_readiness_review(profile, *, allowed_controls=None):
     """Return schema errors without evaluating time or modifying supplied values."""
     raw = _profile_raw(profile)
+    from .assessment_catalog import context_validation, CHECK_BY_ID
+    context_errors = context_validation(raw)
     supplied = raw.get("readiness_review")
     if supplied is None:
-        return []
+        return context_errors
     if not isinstance(supplied, dict):
         return ["readiness_review must be an object"]
-    errors = []
+    errors = list(context_errors)
     if supplied.get("version") != REVIEW_VERSION:
         errors.append("readiness_review.version must be 1.0")
     try:
@@ -95,9 +97,9 @@ def validate_readiness_review(profile, *, allowed_controls=None):
                 errors.append(f"{label}.{name} must be an ISO date")
         return True
 
-    for key in ("pilot_scope", "expansion_scope"):
+    for key in ("tenant_scope", "pilot_scope", "expansion_scope"):
         scope = supplied.get(key)
-        if key == "expansion_scope" and scope is None:
+        if scope is None and (key != 'pilot_scope' or supplied.get('tenant_scope')):
             continue
         if fields(scope, "readiness_review." + key, ("id", "description", "reviewer_role", "evidence_reference")):
             if scope.get("population_count") is not None and (isinstance(scope["population_count"], bool)
@@ -126,6 +128,7 @@ def validate_readiness_review(profile, *, allowed_controls=None):
     for key, required in (
         ("control_reviews", ("control_id", "scope_id", "reviewer_role", "rationale", "evidence_reference")),
         ("pilot_conditions", ("action_id", "scope_id", "reviewer_role", "condition", "evidence_reference")),
+        ('check_reviews', ('check_id', 'scope_id', 'reviewer_role', 'rationale', 'evidence_reference', 'evidence_level')),
     ):
         rows = supplied.get(key, [])
         if not isinstance(rows, list):
@@ -135,13 +138,30 @@ def validate_readiness_review(profile, *, allowed_controls=None):
             label = f"readiness_review.{key}[{index}]"
             if not fields(row, label, required):
                 continue
+            for name in ('tested_behavior', 'tested_scope'):
+                if name in row and not _text(row[name]):
+                    errors.append(label + '.' + name + ' must contain text')
             if not _text(row.get("scope_id")) or row.get("scope_id") not in scopes:
                 errors.append(label + ".scope_id must identify a supplied scope")
             if key == "control_reviews":
+                if row.get('evidence_level') is not None and row.get('evidence_level') not in {'configuration','policy_enforcement','observed_operation','owner_review'}:
+                    errors.append(label + '.evidence_level is invalid')
                 if not _text(row.get("control_id")) or row.get("control_id") not in allowed_controls:
                     errors.append(label + ".control_id is not a supported control")
                 if not _text(row.get("result")) or row.get("result") not in {"pass", "fail"}:
                     errors.append(label + ".result must be pass or fail; blanket not-applicable results are not supported")
+            elif key == 'check_reviews':
+                check = CHECK_BY_ID.get(row.get('check_id'))
+                if not check:
+                    errors.append(label + '.check_id is not a catalog check')
+                if row.get('result') not in {'pass', 'fail', 'not_applicable'}:
+                    errors.append(label + '.result must be pass, fail or not_applicable')
+                if row.get('result') == 'not_applicable' and check and check['applicability'] != 'requirements-dependent':
+                    errors.append(label + '.not_applicable is only allowed for requirements-dependent capabilities')
+                if row.get('evidence_level') not in {'configuration','policy_enforcement','observed_operation','owner_review'}:
+                    errors.append(label + '.evidence_level is invalid')
+                if row.get('scope_id') != (supplied.get('tenant_scope') or {}).get('id'):
+                    errors.append(label + '.scope_id must identify tenant_scope')
             elif row.get("scope_id") != (supplied.get("pilot_scope") if isinstance(supplied.get("pilot_scope"), dict) else {}).get("id"):
                 errors.append(label + ".scope_id must identify the pilot scope")
 
@@ -170,7 +190,7 @@ def build_review_evidence(profile, *, evaluation_date=None, expected_tenant_id=N
     raw = _profile_raw(profile)
     supplied = raw.get("readiness_review")
     result = {"available": False, "status": "not_supplied", "errors": [], "observations": [],
-              "pilot_scope": {}, "expansion_scope": {}, "pilot_plan": {}, "pilot_outcomes": {},
+              "tenant_scope": {}, "pilot_scope": {}, "expansion_scope": {}, "pilot_plan": {}, "pilot_outcomes": {},
               "expansion_approval": {}, "pilot_conditions": [], "control_reviews": []}
     if supplied is None:
         return result
@@ -194,11 +214,11 @@ def build_review_evidence(profile, *, evaluation_date=None, expected_tenant_id=N
             "The review is after the assessment evaluation date." if age < 0 else "The review is more than 35 days old and requires confirmation.")
         return copied
 
-    for key in ("pilot_scope", "expansion_scope", "pilot_plan", "pilot_outcomes", "expansion_approval"):
+    for key in ("tenant_scope", "pilot_scope", "expansion_scope", "pilot_plan", "pilot_outcomes", "expansion_approval"):
         if supplied.get(key):
             item = _plan_content(raw, supplied[key]) if key == "pilot_plan" else supplied[key]
             result[key] = qualify(item)
-    scopes = {result[key]["id"]: result[key] for key in ("pilot_scope", "expansion_scope") if result[key]}
+    scopes = {result[key]["id"]: result[key] for key in ("tenant_scope", "pilot_scope", "expansion_scope") if result[key]}
     for original in supplied.get("control_reviews", []):
         row = qualify(original)
         scope = scopes[row["scope_id"]]
@@ -213,6 +233,7 @@ def build_review_evidence(profile, *, evaluation_date=None, expected_tenant_id=N
             "population": scope["description"], "value": ("Passed review: " if row["result"] == "pass" else "Failed review: ") + row["rationale"], "unit": "control review",
             "control_result": row["result"], "availability": "available", "observed_at": row["reviewed_at"],
             "source_type": "operator_attestation", "source_file": source_file, "source_schema": REVIEW_VERSION,
+            'evidence_level':row.get('evidence_level','owner_review'),
             "complete": row["current"], "max_age_days": REVIEW_MAX_AGE_DAYS,
             "reviewer_role": row["reviewer_role"], "evidence_reference": row["evidence_reference"],
             "scope_id": scope["id"], "qualifications": ["Dated operator attestation: " + row["evidence_reference"]],

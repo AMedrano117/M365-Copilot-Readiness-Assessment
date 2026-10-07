@@ -459,7 +459,7 @@ def _scan_reports(paths, source_kind, evaluation_date=None, max_age_days=None, *
     result = {
         "kind": source_kind, "files_requested": len(paths), "files_parsed": 0,
         "files_loaded": 0, "files_recognized": 0, "records_read": 0,
-        "records_selected": 0, "errors": [], "risk_rows": [], "reports": [],
+        "records_selected": 0, "errors": [], "risk_rows": [], "reports": [], "retained_records": [],
         "lifecycle_rows": [], "evidence_truncated": False, "signals": {},
         "affected_sites": [], "max_age_days": max_age, "observations": [],
     }
@@ -504,6 +504,8 @@ def _scan_reports(paths, source_kind, evaluation_date=None, max_age_days=None, *
                     confirmed_date = _parse_date(lifecycle_report_dates.get(file_hash))
                     if confirmed_date:
                         date, date_basis = confirmed_date, "Operator-confirmed report date"
+                result['retained_records'].append(dict(record, _evidence_date=date.isoformat() if date else '',
+                                                     _date_basis=date_basis))
                 workload = _workload(record)
                 tenant = _text(_value(record, "Tenant ID"))
                 if not tenant:

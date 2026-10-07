@@ -216,12 +216,13 @@ class PurviewCacheTests(unittest.TestCase):
 
 
 class PurviewScriptTests(unittest.TestCase):
-    def test_label_policy_scope_is_recorded_without_names(self):
+    def test_label_policy_assignments_exclusions_and_counts_are_retained(self):
         from pathlib import Path
         script = (Path(__file__).resolve().parents[1] / "collect_purview_data.ps1").read_text(encoding="utf-8-sig")
         block = script[script.index("$labelPolicies = @(Get-LabelPolicy"):script.index("$purviewData['label_policies'] = New-CollectionSuccess")]
         self.assertIn("ExchangeLocationCount", block)
-        self.assertIn("-contains 'All') { 'All' } else { '' }", block)
+        for field in ('ExchangeLocationException', 'ModernGroupLocationException', 'Labels', 'Identity'):
+            self.assertIn(field, block)
 
     def test_connection_probe_reports_exposed_datasets_instead_of_failing(self):
         from pathlib import Path

@@ -39,7 +39,7 @@ class StartupCollectionProgressTests(unittest.IsolatedAsyncioTestCase):
 
         def stop_before_live_work(*, offline):
             self.assertFalse(offline)
-            self.assertIn('M365 COPILOT READINESS', output.visible)
+            self.assertIn('AI READINESS AND M365 HARDENING', output.visible)
             self.assertIn('Mode: live', output.visible)
             raise SystemExit(73)
 

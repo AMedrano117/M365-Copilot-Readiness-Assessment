@@ -488,6 +488,7 @@ def hydrate_purview_client(purview_data):
             self.sensitivity_labels = sensitivity_labels if not isinstance(sensitivity_labels, Exception) else {'available': False}
             self.label_policies = label_policies if not isinstance(label_policies, Exception) else {'available': False}
             self.retention_labels = retention_labels if not isinstance(retention_labels, Exception) else {'available': False}
+            self.retention_policies = {'available':retention_available, 'policies':retention_data}
             self.retention_events = retention_events if not isinstance(retention_events, Exception) else {'available': False}
             self.retention_event_types = retention_event_types if not isinstance(retention_event_types, Exception) else {'available': False}
             self.information_barriers = information_barriers if not isinstance(information_barriers, Exception) else {'available': False}

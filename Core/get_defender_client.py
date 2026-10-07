@@ -34,7 +34,7 @@ class DefenderClient:
             "total": 0, "active": 0, "resolved": 0, "high_severity": 0
         }
         self.secure_score = {}
-        self.secure_score_summary = {"current_score": 0, "max_score": 0, "percentage": 0}
+        self.secure_score_summary = {"current_score": None, "max_score": None, "percentage": None}
         self.secure_score_controls = []
         self.control_summary = {"total": 0, "implemented": 0, "not_implemented": 0}
         self.identity_controls = []
@@ -114,13 +114,13 @@ def _count(items, field):
     return result
 
 
-async def _collect_mde_machines():
+async def _collect_mde_machines(path='/api/machines'):
     items = []
     pages = 0
     http = None
     try:
         http = await get_api_client("defender")
-        next_url = "/api/machines"
+        next_url = path
         while next_url and pages < 1000:
             response = await get_with_retry(http, next_url)
             if response.status_code >= 400:
@@ -179,6 +179,7 @@ async def get_defender_client(tenant_id, graph_client):
         for name, (path, params) in graph_requests.items()
     }
     tasks["machines"] = _collect_mde_machines()
+    tasks['antivirus_health'] = _collect_mde_machines('/api/deviceavinfo')
     from . import collection_progress
     tasks = collection_progress.track('defender', tasks)
     results = await asyncio.gather(*tasks.values(), return_exceptions=True)
@@ -196,6 +197,17 @@ async def get_defender_client(tenant_id, graph_client):
         collected[name] = result
         client.collection_status[name] = _status(result)
         client.data_sources[name] = source_is_complete(client, name)
+
+    from datetime import datetime, timezone
+    client.assessment_datasets = {}
+    for name, result in collected.items():
+        state = client.collection_status[name]
+        state.update(collected_at=datetime.now(timezone.utc).isoformat(),
+                     source_api=('https://api.security.microsoft.com/api/deviceavinfo' if name == 'antivirus_health'
+                                 else 'https://api.security.microsoft.com/api/machines' if name == 'machines'
+                                 else 'https://graph.microsoft.com' + graph_requests[name][0]),
+                     scope='Returned tenant records', complete=client.data_sources[name])
+        client.assessment_datasets[name] = [{'records': result.get('value', []), 'source': state}]
 
     alerts = collected["alerts"].get("value", []) if collected["alerts"].get("available") else []
     client.security_alerts = alerts
@@ -230,7 +242,9 @@ async def get_defender_client(tenant_id, graph_client):
         client.secure_score_summary = {
             "current_score": current,
             "max_score": maximum,
-            "percentage": round(current / maximum * 100, 2) if maximum else 0,
+            "percentage": round(current / maximum * 100, 2) if maximum else None,
+            "numerator":current,"denominator":maximum or None,"population":"Available Secure Score points",
+            "scope":"Latest returned tenant Secure Score record","observation_window":latest.get('createdDateTime',''),
         }
 
     controls = collected["secure_score_controls"].get("value", []) if collected["secure_score_controls"].get("available") else []

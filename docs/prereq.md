@@ -96,7 +96,7 @@ Restricted setup and live preflight stop on excess requested or granted applicat
 | Copilot limited mode (Standard, optional) | Delegated sign-in (`--delegated auto`) | `CopilotSettings-LimitedMode.Read`; at least Global Reader | Microsoft does not expose this setting to applications. |
 | Power Platform inventory export | No live sign-in | An exported Manage > Inventory CSV | Supplemental only. |
 | Power Platform inventory API | Application credential | Tenant-scoped Power Platform Reader RBAC | Preview and opt-in. |
-| Defender Cloud Apps discovery | Application credential | `CloudApp-Discovery.Read.All` | Preview and opt-in; requires a populated discovery data stream. |
+| Defender Cloud Apps discovery | Application credential | `CloudApp-Discovery.Read.All` | Beta; attempted by Standard auto; requires usable discovery streams. Effective tenant entitlement and unmanaged-device visibility need review. |
 | Global Secure Access | Application credential | `NetworkAccess.Read.All` and `NetworkAccessPolicy.Read.All` | Preview and opt-in; requires the feature to be provisioned. |
 
 The stable Graph permission sets and allowed sources are defined in `collector-registry.json`. Restricted retains organization, user, application, reporting, Entra policy, directory-role, MFA registration, access-review, managed-device, audit, identity-risk, external-connection, alert, incident and Secure Score reads. Its site, group-licensing and delegated consent-grant inventories are deliberately unassessed; excluded sources must not be treated as empty inventories or healthy controls.

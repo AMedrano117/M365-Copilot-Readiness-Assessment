@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import unittest
 from urllib.parse import unquote
 
-from openpyxl import load_workbook
+from tests.workbook_test_helpers import load_workbook_pair as load_workbook
 from openpyxl.utils import get_column_letter
 
 from Core.evidence_layer import build_evidence_bundle
@@ -78,23 +78,25 @@ class InvestigationEventExportTests(unittest.TestCase):
                                  collection_status={'signin_logs': state()})
         bundle = self.build(client, '8 legacy authentication sign-ins detected in the past 30 days, bypassing MFA and CA protections')
         path, workbook = self.export(bundle)
-        sheet = workbook['Legacy Sign-In Detail']
+        sheet = workbook.technical['Legacy Sign-In Detail']
         values = list(sheet.values)
         records = [dict(zip(values[0], row)) for row in values[1:]]
         self.assertEqual([row['Sign-In ID'] for row in records], [f'event-{i}' for i in range(1, 9)])
-        self.assertEqual([row['Outcome'] for row in records].count('Success'), 7)
-        self.assertEqual(records[-1]['Outcome'], 'Failure')
+        self.assertEqual([row['Outcome'] for row in records].count('Succeeded'), 7)
+        self.assertEqual(records[-1]['Outcome'], 'Blocked')
         for row in records:
             for field in ('User ID', 'User Principal Name', 'Application ID', 'Created UTC',
-                          'IP Address', 'Correlation ID', 'Client App / Protocol'):
+                          'IP Address', 'Correlation ID', 'Client App Used (reported client type)'):
                 self.assertTrue(row[field], field)
         rec = next(row for row in bundle['assessment_result']['actions'] if row.get('FindingKey') == 'entra.signins.legacy_auth')
         expected = f"'Legacy Sign-In Detail'!A2:{get_column_letter(sheet.max_column)}9"
-        self.assertEqual(rec['InvestigationRange'], expected)
+        original = bundle['sheets']['legacy_signin_detail']['rows']
+        original_width = len(dict.fromkeys(field for row in original for field in row))
+        self.assertEqual(rec['InvestigationRange'], f"'Legacy Sign-In Detail'!A2:{get_column_letter(original_width)}9")
         for title, field in (('Action Plan', 'Investigation Details'), ('Evidence Index', 'Workbook Tab'),
                              ('Recommendations', 'Evidence Sheet')):
             row = self.row(workbook, title, rec['RecommendationId'])
-            self.assertEqual(row[field].hyperlink.target, '#' + expected)
+            self.assertEqual(row[field].hyperlink.target, '#' + rec['AssessmentEvidenceRange'] if title == 'Action Plan' else workbook.technical_path.name + '#' + expected)
         action = self.row(workbook, 'Action Plan', rec['RecommendationId'])
         self.assertEqual(action['Investigation Details'].value, '8 sign-in records')
         self.assertNotIn('30 days', action['What We Found'].value)
@@ -103,7 +105,7 @@ class InvestigationEventExportTests(unittest.TestCase):
                               if row['Item Type'] == 'Sign-in event']), 8)
         html_path = export_to_html(bundle['recommendations'], filename='investigation.html', evidence_bundle=bundle, excel_path=path)
         html = Path(html_path).read_text(encoding='utf-8')
-        self.assertIn('investigation.xlsx#' + expected, unquote(html))
+        self.assertIn('investigation.xlsx#' + rec['AssessmentEvidenceRange'], unquote(html))
         for private in ('private-user@example.test', '192.0.2.42', 'Private device', 'correlation-1'):
             self.assertNotIn(private, html)
 
@@ -112,7 +114,7 @@ class InvestigationEventExportTests(unittest.TestCase):
                                  signin_summary={'legacy_auth_attempts': 8}, collection_status={'signin_logs': state()})
         bundle = self.build(client, '8 legacy authentication sign-ins detected in the returned sign-in records.')
         _, workbook = self.export(bundle)
-        self.assertEqual(workbook['Legacy Sign-In Detail'].max_row, 4)
+        self.assertEqual(workbook.technical['Legacy Sign-In Detail'].max_row, 4)
         rec = next(row for row in bundle['assessment_result']['actions'] if row.get('FindingKey') == 'entra.signins.legacy_auth')
         qualification = self.row(workbook, 'Action Plan', rec['RecommendationId'])['Qualification'].value
         self.assertIn('8', qualification)
@@ -141,7 +143,7 @@ class InvestigationEventExportTests(unittest.TestCase):
                                  collection_status={'auth_methods': state()})
         bundle = self.build(client, 'Only 1 of 3 users (33.3%) were enrolled in MFA.')
         _, workbook = self.export(bundle)
-        values = list(workbook['MFA Registration Review'].values)
+        values = list(workbook.technical['MFA Registration Review'].values)
         self.assertEqual(len(values), 2)
         self.assertEqual(dict(zip(values[0], values[1]))['User ID'], 'unregistered')
         rec = next(row for row in bundle['assessment_result']['actions'] if row.get('FindingKey') == 'entra.authentication.mfa_registration')

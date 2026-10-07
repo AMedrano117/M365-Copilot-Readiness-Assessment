@@ -39,8 +39,8 @@
       "label": "Microsoft Graph report settings",
       "requires": {"graph_roles": ["ReportSettings.Read.All"]},
       "unlock": "Grant and consent Microsoft Graph application permission ReportSettings.Read.All (rerun setup)."},
-    "graph_audit_query": {"kind": "graph_app", "coverage": "partial", "evidence_quality": "preview", "profiles": ["standard"],
-      "label": "Microsoft Purview Audit Log Query API",
+    "graph_audit_query": {"kind": "graph_app", "coverage": "partial", "evidence_quality": "standard", "profiles": ["standard"],
+      "label": "Microsoft Graph saved audit query",
       "requires": {"graph_roles": ["AuditLogsQuery.Read.All"]},
       "unlock": "Opt in with --preview-collectors copilot-audit and grant AuditLogsQuery.Read.All (setup -PreviewCollectors CopilotAudit)."},
     "spo_admin_certificate": {"kind": "workload_app_certificate", "coverage": "full", "evidence_quality": "standard", "profiles": ["standard"],
@@ -86,7 +86,13 @@
       "excluded_sources": [
         "sites",
         "groups",
-        "oauth_grants"
+        "oauth_grants",
+        "directory_devices",
+        "ca_group_members",
+        "application_owners",
+        "application_permissions",
+        "entra_recommendations",
+        "entra_impacted_resources"
       ],
       "excluded_collectors": [
         "sharepoint_governance",
@@ -97,7 +103,8 @@
         "power_platform",
         "shadow_ai",
         "network_access",
-        "legacy_power_platform"
+        "legacy_power_platform",
+        "entra_recommendations"
       ],
       "excluded_permissions": {
         "graph": [
@@ -133,13 +140,14 @@
       "datasets":[{"id":"purview_policies","auth_paths":["purview_ps_token","purview_ps_certificate","purview_ps_delegated"]}]},
     {"id":"copilot_admin_settings","name":"Copilot admin settings (delegated)","maturity":"stable","auth_modes":["delegated_browser"],"permissions":["CopilotSettings-LimitedMode.Read (delegated)"],"permission_resources":{},"delegated_permission_resources":{"graph":["CopilotSettings-LimitedMode.Read"]},"modules":[],"license":"Microsoft 365 Copilot","purpose":"Copilot limited mode, which Microsoft exposes only to signed-in administrators","decision_effect":false,"default_setup":true,
       "datasets":[{"id":"copilot_limited_mode","auth_paths":["graph_delegated"]}]},
-    {"id":"copilot_audit","name":"Copilot interaction audit (preview)","maturity":"preview","auth_modes":["certificate","client_secret"],"permissions":["AuditLogsQuery.Read.All"],"permission_resources":{"graph":["AuditLogsQuery.Read.All"]},"modules":[],"license":"Microsoft Purview Audit","purpose":"Aggregate Copilot interaction events from the unified audit log","decision_effect":false,"default_setup":false,"preview_pack":"CopilotAudit",
+    {"id":"copilot_audit","name":"Copilot interaction audit (preview)","maturity":"stable","auth_modes":["certificate","client_secret"],"permissions":["AuditLogsQuery.Read.All"],"permission_resources":{"graph":["AuditLogsQuery.Read.All"]},"modules":[],"license":"Microsoft Purview Audit","purpose":"Aggregate Copilot interaction events from the unified audit log","decision_effect":true,"default_setup":true,"preview_pack":"CopilotAudit",
       "datasets":[{"id":"copilot_interaction_audit","baseline":"graph_audit_query","auth_paths":["graph_audit_query"]}]},
     {"id":"power_platform","name":"Power Platform unified inventory API","maturity":"preview","auth_modes":["certificate","client_secret"],"permissions":["Power Platform Reader tenant RBAC"],"permission_resources":{},"modules":[],"license":"Inventory must be enabled","purpose":"Agents, apps, flows, environments, and connectors","decision_effect":false,"default_setup":false,"preview_pack":"PowerPlatform",
       "datasets":[{"id":"power_platform_inventory","baseline":"power_platform_app","auth_paths":["power_platform_app"]}]},
-    {"id":"shadow_ai","name":"Defender Cloud Apps discovery","maturity":"preview","auth_modes":["certificate","client_secret"],"permissions":["CloudApp-Discovery.Read.All"],"permission_resources":{"graph":["CloudApp-Discovery.Read.All"]},"modules":[],"license":"Cloud Discovery data stream required","purpose":"Aggregate external generative-AI activity","decision_effect":false,"default_setup":false,"preview_pack":"ShadowAI"},
+    {"id":"shadow_ai","name":"Defender Cloud Apps discovery","maturity":"preview","auth_modes":["certificate","client_secret"],"permissions":["CloudApp-Discovery.Read.All"],"permission_resources":{"graph":["CloudApp-Discovery.Read.All"]},"modules":[],"license":"Cloud Discovery data stream required","purpose":"Aggregate external generative-AI activity","decision_effect":false,"default_setup":true,"preview_pack":"ShadowAI"},
     {"id":"network_access","name":"Global Secure Access","maturity":"preview","auth_modes":["certificate","client_secret"],"permissions":["NetworkAccess.Read.All","NetworkAccessPolicy.Read.All"],"permission_resources":{"graph":["NetworkAccess.Read.All","NetworkAccessPolicy.Read.All"]},"modules":[],"license":"Global Secure Access provisioning and licensing","purpose":"Optional network egress controls","decision_effect":false,"default_setup":false,"preview_pack":"NetworkAccess"},
     {"id":"legacy_power_platform","name":"Legacy Power Platform collector","maturity":"compatibility","auth_modes":["delegated_browser"],"permissions":["Power Platform administrative delegated access"],"permission_resources":{},"modules":["Az.Accounts"],"license":"Power Platform","purpose":"Compatibility inventory when unified inventory is unavailable","decision_effect":false,"default_setup":false,
-      "datasets":[{"id":"legacy_power_platform","auth_paths":["legacy_pp_delegated"]}]}
+      "datasets":[{"id":"legacy_power_platform","auth_paths":["legacy_pp_delegated"]}]},
+    {"id":"entra_recommendations","name":"Microsoft Entra recommendations","maturity":"preview","auth_modes":["certificate","client_secret"],"permissions":["DirectoryRecommendations.Read.All"],"permission_resources":{"graph":["DirectoryRecommendations.Read.All"]},"modules":[],"license":"Requirements vary by recommendation","purpose":"Dated recommendations and impacted resources; beta context only","decision_effect":false,"default_setup":true}
   ]
 }

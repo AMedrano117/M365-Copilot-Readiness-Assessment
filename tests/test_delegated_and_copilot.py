@@ -177,15 +177,15 @@ class CopilotAuditTests(unittest.IsolatedAsyncioTestCase):
             return await collect_copilot_interaction_audit(
                 graph, sleep=no_sleep, clock=lambda: datetime(2026, 9, 22, tzinfo=timezone.utc), **kwargs)
 
-    async def test_aggregates_only_by_default(self):
+    async def test_aggregates_and_user_metadata_by_default(self):
         evidence = await self.collect(AuditGraph(["running", "succeeded"], RECORDS), max_wait_minutes=5)
         self.assertTrue(evidence["available"])
         summary = evidence["summary"]
         self.assertEqual(3, summary["total_events"])
         self.assertEqual(2, summary["distinct_users"])
         self.assertEqual({"Teams": 2, "Word": 1}, summary["events_by_app_host"])
-        self.assertNotIn("events_by_user", summary)
-        self.assertEqual("preview", evidence["evidence_quality"])
+        self.assertEqual(summary["events_by_user"], {"a@contoso.com":2,"b@contoso.com":1})
+        self.assertEqual("standard", evidence["evidence_quality"])
         rows = build_copilot_audit_recommendations(evidence)
         self.assertEqual("Reference", rows[0]["Disposition"])
         self.assertIn("3 Copilot interaction event(s) from 2 distinct user(s)", rows[0]["Observation"])
@@ -208,7 +208,7 @@ class CopilotAuditTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("AuditLogsQuery.Read.All", evidence["reason"])
 
     def test_user_detail_only_when_requested(self):
-        self.assertEqual({"a@contoso.com": 1, "A@contoso.com": 1, "b@contoso.com": 1},
+        self.assertEqual({"a@contoso.com": 2, "b@contoso.com": 1},
                          summarize_records(RECORDS, include_user_detail=True)["events_by_user"])
 
 

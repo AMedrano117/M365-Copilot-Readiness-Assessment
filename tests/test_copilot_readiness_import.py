@@ -56,8 +56,8 @@ class CopilotReadinessImportTests(unittest.TestCase):
         self.assertIn("exported rows only", result["summary"])
         self.assertIn("do not establish actual Copilot usage", result["summary"])
         self.assertNotIn("active_users", result)
-        self.assertNotIn("user_details", result)
-        self.assertNotIn("@example.test", json.dumps(result))
+        self.assertEqual(len(result["user_details"]), 3)
+        self.assertNotIn("@example.test", json.dumps(result["metrics"]))
         self.assertEqual(result["source_file"], "readiness.csv")
         self.assertNotIn(self.temp.name, json.dumps(result))
 
@@ -155,7 +155,7 @@ class CopilotReadinessImportTests(unittest.TestCase):
         self.assertFalse(result["available"])
         self.assertIn("duplicate user", result["error"])
         self.assertEqual(result["metrics"], {})
-        self.assertNotIn("@example.test", json.dumps(result))
+        self.assertNotIn("@example.test", json.dumps(result["metrics"]))
 
     def test_invalid_metadata_does_not_use_filename_or_other_rows_as_a_fallback(self):
         rows = [self.row("one@example.test"), self.row("two@example.test", **{

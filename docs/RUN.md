@@ -78,7 +78,7 @@ browser sign-in. The live run's per-service dataset totals and **Source collecti
 what was actually collected. If an interactive retry succeeds, use its final dataset result;
 the first failed attempt does not mean that workload is still missing.
 
-The full live run automatically saves a unique collection under `output/collections/` and its adjacent portable package. At the end, find **COLLECTION INPUT (`--collection-input`)**: it gives the exact file to reuse, followed by a copyable offline command. No save switch is required. `--save-collection PATH` remains an optional custom destination:
+The full live run automatically creates `Reports/<customer>/<YYYY-MM-DD>/` and saves `collection.json` there. The customer folder uses the tenant display name, falling back to the tenant ID; names preserve spaces and capitalization, with unsafe characters replaced by spaces and long names shortened to 32 characters. Set `--customer-name "Example Customer"` to choose the organizational name; offline replay restores it. At the end, find **COLLECTION INPUT (`--collection-input`)**: it gives the exact file to reuse, followed by a copyable offline command. No save switch is required. `--save-collection PATH` remains an optional custom destination and retains an adjacent `<collection-stem>_package/`:
 
 ```powershell
 .\.venv\Scripts\python.exe main.py --mode live `
@@ -103,7 +103,7 @@ Datasets with no application path are reported as not assessed with their unlock
 `--reports-dir` accepts supported structured exports and PDF captures. PDFs in that folder or
 its subfolders are automatically read using local text extraction/OCR and included with JSON
 and page previews. See [PDF import](PORTAL_REVIEW.md) for its qualifications and limits.
-The live command already produces HTML and Excel. An offline rebuild is needed only to add
+The live command already produces HTML, Excel and a dashboard JSON folder. An offline rebuild is needed only to add
 evidence or regenerate those deliverables; an immediate second run is optional.
 
 ### Interrupted collection and temporary service failures
@@ -114,7 +114,7 @@ Graph, Entra, Defender and AI usage read requests retry transient failures up to
 
 ### Read the console and copy the next command
 
-The default console shows collection progress, warnings or failures, the deployment decision and action counts, report locations, and the final **COLLECTION INPUT** handoff. Each build writes three deliverables: the one-page pilot readiness **Summary** (`*_summary.html`, the file `--open-html-report` opens), the full **HTML** report and the evidence **Workbook**. The summary links to the full report's actions, and the full report links back to the summary. Copy its entire path into `--collection-input`, or copy the offline command printed immediately below it and add `--reports-dir` for new exports. Use the file shown there: a live package has `collection.json`; a build made only from exports or earlier reports has `rebuild.json`. Neither the HTML report, Excel workbook nor an assessment snapshot is a collection input. Preflight-only runs do not create one.
+The default console shows collection progress, warnings or failures, the deployment decision and action counts, report locations, and the final **COLLECTION INPUT** handoff. Each default build writes four primary deliverables: the one-page pilot readiness **Summary** (`Readiness Summary - <company>.html`, the file `--open-html-report` opens), the full **HTML** report, the **Assessment workbook**, and the **Technical evidence workbook**. The summary links to the full report's actions, and the full report links back to the summary and directly to the workbooks. Separate evidence pages, App Builder files and dashboard JSON packages require `--extra-exports`; select them explicitly for each run. Copy the collection input's entire path into `--collection-input`, or copy the offline command printed immediately below it and add `--reports-dir` for new exports. Use the file shown there: a live package has `collection.json`; a build made only from exports or earlier reports has `rebuild.json`. Neither the HTML report, Excel workbook nor an assessment JSON is a collection input. Preflight-only runs do not create one.
 
 Use `--verbose` (or `-v`) when troubleshooting to also see authentication/configuration provenance, processing details, actions by assessment area, and input receipt details:
 
@@ -135,7 +135,7 @@ Standard setup accepts `-SharePointAdminUrl` and saves it in `.env`. Without the
 
 If no URL is configured, the live workflow can request it when SharePoint collection is selected and interactive authentication is allowed. An explicitly configured URL with invalid syntax must be corrected; the tool does not silently replace it or prompt over it. With `--interactive-auth skip` or unattended execution, a missing URL leaves SharePoint administration unassessed with a configuration reason, and SharePoint administrative PowerShell is not launched. Missing URL configuration is not a missing permission. Other selected sources can still run. Restricted does not use or prompt for this URL. Purview's initial `.onmicrosoft.com` organization-domain discovery is separate and does not establish the SharePoint hostname.
 
-Accepted browser sign-in confirms authentication only. Review the subsequent SharePoint dataset summary for collection gaps. Unreadable collector output is reported separately from authentication failures, with sanitized details in `Reports/collector_diagnostics.log`. An interactive retry accepts the same verified URL. Adding portal exports offline supplements saved evidence; it does not refresh sharing settings or repair a failed live collection.
+Accepted browser sign-in confirms authentication only. Review the subsequent SharePoint dataset summary for collection gaps. Unreadable collector output is reported separately from authentication failures, with sanitized details in `.cache/collector_diagnostics.log`. An interactive retry accepts the same verified URL. Adding portal exports offline supplements saved evidence; it does not refresh sharing settings or repair a failed live collection.
 
 ## 3. Add completed portal exports and rebuild
 
@@ -205,15 +205,15 @@ it. A PDF skipped warning does not stop other imports; consult the warning and i
 
 ## Portable assessment folder
 
-A live collection has an adjacent `<collection-stem>_package/` folder. The top-level collection refers to it with a relative path. To move the assessment, copy the whole package and replay the copy's `collection.json`:
+A default live assessment keeps its collection, original inputs and reports together under the customer's folder. Assessments use a short UTC date, adding ` (2)` for another assessment on the same date. Builds are numbered `1`, `2`, and so on; replay retains earlier reports. To move the assessment, copy the whole assessment folder and replay the copy's `collection.json`:
 
 ```text
-<collection-stem>_package/
+Reports/<customer>/<date>/
   collection.json          saved service evidence and versioned manifest/settings
   inputs/                  original reports and supplemental inputs, grouped by source
   rebuild.json             latest successful offline build's inputs/settings
-  rebuilds/                retained build recipes and subsequently added input files
-  deliverables/            generated report artifacts
+  Rebuilds/<number>/        retained build recipes and subsequently added input files
+  Builds/<number>/          generated report artifacts, written once per build
   operator-log.jsonl        build receipts and output locations
 ```
 
@@ -223,11 +223,11 @@ A live collection has an adjacent `<collection-stem>_package/` folder. The top-l
   --open-html-report
 ```
 
-Copy the folder contents to `customer-copy` before using that example. Preserve `inputs/` and the relative layout. A collection JSON from before package support still works, but its external reports/settings must be supplied explicitly.
+Copy the folder contents to `customer-copy` before using that example. Preserve `inputs/` and the relative layout. Older `<collection-stem>_package/` folders and custom `--save-collection` destinations remain supported; copy their entire companion package and replay its `collection.json`. A collection JSON from before package support still works, but its external reports/settings must be supplied explicitly. Portal-only assessments use the same customer folder layout with `rebuild.json` instead of `collection.json`.
 
-The manifest validates original files with SHA-256 hashes. Do not edit, remove or add files inside recorded input directories; place revised exports in a separate directory and pass `--reports-dir` again. Version 2 collections and rebuild recipes require the same methodology version as the running tool, except for the explicit **2.0.0 → 2.1.0** and **2.0.0/2.1.0 → 3.0.0** compatibility migrations. They retain the unchanged raw collection schema, collected facts and base findings, then apply the current control matching and the 3.0.0 tenant-wide baseline. Readiness conclusions can change. The offline build prints a migration warning and records the original/effective methodology in source context, the workbook and operator receipt. Original collection files, source hashes and evidence dates remain unchanged; a successful derived rebuild recipe records the migration. No new tenant connection is needed. Other version mismatches still require the matching tool version or a separately supported migration. Version 1 compatibility preserves precomputed conclusions as historical.
+The manifest validates original files with SHA-256 hashes. Do not edit, remove or add files inside recorded input directories; place revised exports in a separate directory and pass `--reports-dir` again. Version 2 collections and rebuild recipes require the same methodology version as the running tool, except for the explicit **2.0.0 → 2.1.0** and **2.0.0/2.1.0/3.0.0 → 4.0.0** compatibility migrations. They retain the unchanged raw collection schema, collected facts and base findings, then apply the current control matching and the 4.0.0 tenant-wide configuration and operational baseline. Readiness conclusions can change. The offline build prints a migration warning and records the original/effective methodology in source context, the workbook and operator receipt. Original collection files, source hashes and evidence dates remain unchanged; a successful derived rebuild recipe records the migration. No new tenant connection is needed. Other version mismatches still require the matching tool version or a separately supported migration. Version 1 compatibility preserves precomputed conclusions as historical.
 
-Replay restores packaged reports, assessment profile, provider evidence, baseline and relevant settings. Repeated report arguments add evidence; explicit single-file supplemental arguments replace their packaged counterpart. Successful offline builds copy later external inputs into `rebuilds/` and update `rebuild.json`, so a copied package retains the latest build's evidence. The original `collection.json` stays unchanged. Downloaded DAG files are preserved when the collector supplies their local paths; a URL or summary count cannot reconstruct a missing export. The builder records the import/selection results and report locations. Review the workbook's source statuses for selected, superseded, unsupported or unreadable inputs.
+Replay restores packaged reports, assessment profile, provider evidence, baseline and relevant settings. Repeated report arguments add evidence; explicit single-file supplemental arguments replace their packaged counterpart. Successful offline builds copy later external inputs into `Rebuilds/` and update `rebuild.json`, so a copied package retains the latest build's evidence. The original `collection.json` stays unchanged. Downloaded DAG files are preserved when the collector supplies their local paths; a URL or summary count cannot reconstruct a missing export. The builder records the import/selection results and report locations. Review the workbook's source statuses for selected, superseded, unsupported or unreadable inputs.
 
 The package records an **evaluation date**, which is reused to make freshness assessments repeatable. Deliberately change it when asking whether old evidence is still suitable today:
 
@@ -239,15 +239,46 @@ The package records an **evaluation date**, which is reused to make freshness as
 
 Later evaluation dates can change conclusions about freshness. Equal supported evidence, settings, methodology and evaluation date should yield equal assessment results; report filenames and build timestamps may differ. A legacy workbook preserves conclusions made under its original methodology as historical observations.
 
-User-level Copilot workbook detail requires `--include-user-usage-detail` on every run; HTML remains aggregate-only. The package contains original confidential evidence even when user detail is excluded from generated deliverables. Keep credentials, `.env` files and private certificates outside it. Preserve the complete package, including `rebuilds/`, after adding exports; see the receipt for the exact replay inputs.
+User-level Copilot workbook detail is included by default; `--include-user-usage-detail` is a compatibility alias and HTML remains aggregate-only. The package contains original confidential evidence even when user detail is excluded from generated deliverables. Keep credentials, `.env` files and private certificates outside it. Preserve the complete package, including `Rebuilds/`, after adding exports; see the receipt for the exact replay inputs.
 
 The saved collection's permission profile and exclusion reasons are preserved during offline replay and shown in report coverage. Rebuild a Restricted collection with the same offline command as any collection; omit `--env-file` and `--permission-profile` offline. Older collections remain compatible and show the profile as unrecorded. Supported exports do not replace every skipped administrative check; review [the evidence gap table](PERMISSIONS.md#evidence-gaps-and-offline-replay).
 
+Offline console output labels failed or partial saved sources as **Saved collection gaps**, with their original collection date. These describe the supplied evidence; the rebuild makes no tenant requests and does not test current permissions or licensing. Normal output lists the affected sources concisely. Add `--verbose` to see the retained service responses. Changing setup permissions does not update an older collection's source outcomes; those remain in coverage until replaced by newly collected evidence.
+
 ## 4. Review the deliverables
 
-HTML and the default Excel workbook are generated in `Reports/`; packaged runs also preserve deliverables in the package. `--report-format both` adds CSV, while `--report-format csv` selects CSV output.
+The default build writes the HTML report, readiness summary and both Excel workbooks together in `Reports/<customer>/<date>/Builds/<build>/`. The workflow records these files in place without creating a second report tree. `--report-format both` adds CSV, while `--report-format csv` selects CSV instead of Excel. `--snapshot-json PATH` writes the whole dashboard assessment as one JSON file without enabling the other extra exports.
 
-The navy and teal executive dashboard includes stacked action counts by assessment area, drawn from the current assessment. Use **Evidence workbook** to open the companion workbook and **Print report** to print the report with expanded action and evidence details. Keep the HTML and workbook together so the local link works.
+Optional companions are selected per run with `--extra-exports evidence-pages app-builder dashboard-json`; omit any choice you do not need. `evidence-pages` adds the `Evidence/` HTML pages. `app-builder` adds the separate `App Builder/` upload set. `dashboard-json` adds `JSON/index.json` and its linked files, plus `Dashboard JSON - <company>.zip` with a `Read First.txt` guide. See [App Builder export](APP_BUILDER.md) and [Dashboard JSON](DASHBOARD_JSON.md). Saved collection inputs and rebuild recipes remain available regardless of these output choices.
+
+The navy and teal executive dashboard includes stacked action counts by assessment area, drawn from the current assessment. Use **Assessment workbook** for findings and readable evidence, **Technical evidence workbook** for full source records, and **Print report** to print expanded action details. Keep the HTML and both workbooks together so local links work.
+
+Document names include the short company label from the customer folder (`--customer-name` overrides the tenant name). Dates stay in the folders:
+
+```text
+Reports/<customer>/<date>/Builds/<build>/
+  AI Readiness and M365 Hardening - <company>.html  full executive report (aggregate-only)
+  AI Readiness and M365 Hardening - <company>.xlsx  assessment workbook
+  Technical Evidence - <company>.xlsx              complete source records and lineage
+  Readiness Summary - <company>.html               one-page readiness summary
+```
+
+**Open the report** by opening `AI Readiness and M365 Hardening - <company>.html` in a browser. Each action and finding shows a one-line evidence summary (records, affected entities, evidence kind and availability) and a collapsed **Technical steps** panel. Supporting-record links open the assessment workbook; full-source links open the technical workbook. With `--extra-exports evidence-pages`, evidence summaries also link to a finding's separate page in `Evidence/`, listing its supporting records, `DET-`/`EVD-` IDs, source dates, limitations and technical fix.
+
+When PDFs are supplied, **PDF highlights** in the navigation opens visible **PDF report highlights** near the top of the HTML. These show app health, adoption, security and usage excerpts, follow-up and links to their source pages. The executive summary includes selected excerpts from each report. Both workbooks have a visible **PDF Highlights** sheet; the assessment workbook places it after **Coverage**. Optional Dashboard JSON and App Builder exports retain the same dated context when requested.
+
+**Admin pages** opens **Imported admin-center pages**. Every capture appears once, including Health, Overview, Security and Usage, regardless of the assessment's domain names. Expand a capture for extracted text, page previews and the original PDF. The technical workbook retains **Portal Review** metadata and **PDF Extracted Text**, which the highlights sheet links to. Capture dates are separate from reporting windows and the tenant collection date; OCR text needs checking against the captured page and does not independently pass or fail a readiness control.
+
+Under **Scope and licensing**, expand **Collected Copilot prompt activity** for saved prompt and active user-day counts, their source dates and reporting scope. These collected aggregates are separate from the supplied PDF captures. The technical workbook's **Copilot Admin Data** tab retains the collected admin-center context.
+
+**Share the report** as follows:
+
+- Executives can receive `AI Readiness and M365 Hardening - <company>.html` and `Readiness Summary - <company>.html` alone; collected records are summarized without user, device or IP details. Supplied admin-page captures retain their original content, so review those before sharing. Links to evidence pages and the workbook only work when those files are present.
+- Technical reviewers need `AI Readiness and M365 Hardening - <company>.html`, `AI Readiness and M365 Hardening - <company>.xlsx` and `Technical Evidence - <company>.xlsx` together in one folder, for example as one ZIP. Include the `Evidence/` folder if that optional export was requested. Treat the evidence and workbooks as confidential.
+
+**Use the assessment workbook** from **Start Here**, then **Action Plan**, **Findings** and **Coverage**. Five readable evidence layouts organize settings, devices, identity, applications and sharing; empty sheets are omitted. A finding's **Evidence** link opens its exact block, and each row's **Evidence ID** opens the complete technical record. Status starts at Open and the target date is left for the owner to fill in. **`Technical Evidence - <company>.xlsx`** retains full raw exports, **Findings Lineage**, dataset-based selected records, source windows, reconciliation and historical sheets. Its **Evidence** lineage rows share the App Builder and HTML evidence IDs. Original range fields remain unchanged; new fields link to the two workbook layouts. See [workbook layout and compatibility registers](ASSESSMENT_EVIDENCE.md#deliverables-and-replay).
+
+**Optional App Builder export:** add `--extra-exports app-builder` for a build that needs the upload files. Then follow `App Builder/00-upload-guide.md` and use the concern's prompt from `00-starter-prompt.txt`. File splitting preserves evidence but can still produce more files than an app accepts; this export is not part of the default report handoff. See [App Builder export](APP_BUILDER.md).
 
 Review the customer report in this order:
 
@@ -258,7 +289,7 @@ Review the customer report in this order:
 
 Use the technical workbook to verify source dates, selected/superseded files, coverage, detailed objects and prior evidence. Missing and unknown values differ from measured zero. A complete report can still conclude that readiness is unconfirmed. Adoption opportunities and unavailable optional capabilities do not become security blockers.
 
-For an integrity warning, review the workbook and `Reports/collector_diagnostics.log` before using the report for deployment approval. After remediation, a **new live collection** verifies changed tenant settings; replaying old evidence cannot do that. Use `--baseline` to compare with a prior workbook or assessment snapshot.
+For an integrity warning, review the workbook and `.cache/collector_diagnostics.log` before using the report for deployment approval. After remediation, a **new live collection** verifies changed tenant settings; replaying old evidence cannot do that. Use `--baseline` to compare with a prior workbook or assessment snapshot.
 
 ## Preview and recovery workflows
 
@@ -284,7 +315,7 @@ This preview uses invented data and intentionally leaves tenant controls unasses
 
 Use actual same-tenant files; either historical input may be omitted. The cache supplies Purview configuration only. Historical findings retain their source dates and require confirmation when their underlying facts cannot be reassessed. The workbook preserves the complete original register. A partial Purview cache cannot overwrite a full `--collection-input`. [Recovery details](PORTAL_REPORTS_AND_OFFLINE.md#combine-an-existing-tenant-report-with-new-exports).
 
-A successful build without a collection automatically creates a portable assessment under `output/assessments/<tenant>_<UTC>_<id>/`. It contains the original inputs, deliverables, an operator log and `rebuild.json`. The tool prints its location. No tenant collection is invented or saved. Copy that whole folder, then replay the recipe:
+A build without a collection creates a portable assessment under `Reports/<customer>/<date>/`. It contains the original inputs, `Builds/<build>/`, an operator log and `rebuild.json`. The tool prints its location. No tenant collection is invented or saved. Copy that whole folder, then replay the recipe:
 
 ```powershell
 .\.venv\Scripts\python.exe main.py --mode offline `
@@ -292,7 +323,7 @@ A successful build without a collection automatically creates a portable assessm
   --open-html-report
 ```
 
-Use the actual copied folder in that example. The same recipe workflow applies to portal-only previews. Original dates and historical qualifications remain unchanged, and user-level detail still requires a new opt-in. After this first successful recovery build, the package restores its inputs automatically.
+Use the actual copied folder in that example. The same recipe workflow applies to portal-only previews. Original dates and historical qualifications remain unchanged, and user-level detail is included by default. After this first successful recovery build, the package restores its inputs automatically.
 
 ## Close out the assessment
 
@@ -317,7 +348,7 @@ For local cleanup, run:
 ```
 
 This lists direct children of `output/collections`, `output/assessments`, `output/portal-reviews`,
-`Reports`, `.cache/purview` and `.cache/sharepoint_dag` in this checkout, covering all customers stored there, then asks once
+`Reports`, `.cache/purview`, `.cache/sharepoint_dag`, `.cache/portal-reviews` and `.cache/delegated`, plus the `.cache/collector_diagnostics.log` file in this checkout, covering all customers stored there, then asks once
 before removing the listed batch. The storage folders remain. No `-Apply` or path is needed;
 `-WhatIf` lists without deletion or prompting, and optional `-Path` selects particular artifacts.
 Keep the retained copy outside the selection. The [cleanup guide](CLEANUP.md) covers retries,
@@ -332,6 +363,7 @@ Run `.\.venv\Scripts\python.exe main.py --help` for the implemented CLI. Keep `-
 | `--verbose`, `-v` | Show detailed processing, source provenance and input receipts in the console. |
 | `--color auto\|always\|never` | Select terminal color behavior. Auto respects `NO_COLOR` and disables color when output is redirected. |
 | `--tenant-id ID`, `--env-file PATH` | Choose the connected tenant/configuration. Consent and roles belong to that target tenant. There is no default tenant. |
+| `--customer-name NAME` | Organize generated assessments under `Reports/<customer>/`; defaults to the tenant display name, then tenant ID. The name is saved for offline replay. |
 | `--confirm-tenant DOMAIN` | Stop before collection unless the signed-in tenant owns this domain. Overrides `EXPECTED_TENANT_DOMAIN`. |
 | `--delegated auto\|off\|required` | Delegated sign-in for data Microsoft exposes only to signed-in administrators (Copilot limited mode). Never replaces application-permission evidence. Standard only. |
 | `--permission-profile standard\|restricted` | Select live permission/collection policy; overrides `PERMISSION_PROFILE` in the selected environment. Defaults to Standard. |
@@ -345,8 +377,9 @@ Run `.\.venv\Scripts\python.exe main.py --help` for the implemented CLI. Keep `-
 | `--copilot-dashboard-export PATH` | Import a supported Copilot Dashboard CSV; arbitrary portal Usage CSV variants need schema validation. |
 | `--power-platform-inventory PATH` | Import an optional Manage > Inventory CSV. |
 | `--assessment-profile PATH`, `--provider-evidence PATH` | Scope use cases and agents/external providers. The assessment profile also accepts dated control-owner reviews and pilot/expansion records; see [Readiness reviews](READINESS_REVIEWS.md). |
-| `--baseline PATH`, `--snapshot-json PATH` | Compare with an earlier result and optionally write a result snapshot. A snapshot is not a replayable collection. |
-| `--preview-collectors power-platform\|shadow-ai\|network-access\|copilot-audit\|all` | Standard only: enable supplemental preview APIs after arranging their permission packs. `copilot-audit` queries the unified audit log for Copilot interaction events (aggregates only; waits up to `COPILOT_AUDIT_MAX_WAIT_MINUTES`, default 8). They do not change the core foundation decision. |
+| `--baseline PATH`, `--snapshot-json PATH` | Compare with an earlier result and optionally write the whole dashboard assessment as one JSON file to a chosen path. This does not enable extra export folders; assessment JSON is not a replayable collection. |
+| `--extra-exports evidence-pages app-builder dashboard-json` | Optional companion exports for this run; select one or more. Default builds omit all three. Evidence pages add `Evidence/`; App Builder adds its upload set; dashboard JSON adds `JSON/` and a ZIP. |
+| `--preview-collectors auto\|none\|entra-recommendations\|power-platform\|shadow-ai\|network-access\|copilot-audit\|all` | Default `auto`: Standard attempts Entra recommendations, Shadow AI discovery and Copilot audit; Restricted resolves to none. Explicit selections preserve compatibility. Audit waits up to `COPILOT_AUDIT_MAX_WAIT_MINUTES` (default 8) and retains bounded metadata rows. Beta sources cannot independently pass foundation controls. |
 | `--sharepoint-admin-url URL` | Actual SharePoint admin-center HTTPS origin; overrides the selected environment's `SHAREPOINT_ADMIN_URL`. No tenant-domain inference. |
 | `--legacy-power-platform-collector` | Standard only: explicit compatibility fallback requiring `Az.Accounts`. |
 

@@ -25,14 +25,18 @@ def review_profile(*, complete=True):
     }]}
     profile["readiness_review"] = {
         "version": "1.0", "tenant_id": TENANT,
+        "tenant_scope": {"id":"tenant","description":"All assessed tenant users, devices and approved content",
+                         "reviewed_at":"2026-09-01","reviewer_role":"Assessment owner","evidence_reference":"Fictional tenant-wide scope"},
         "pilot_scope": {"id": "pilot", "description": "Ten fictional users and their approved internal content", "population_count": 10,
                         "reviewed_at": "2026-09-01", "reviewer_role": "Business sponsor", "evidence_reference": "Fictional pilot charter"},
         "pilot_plan": {"reviewed_at": "2026-09-01", "reviewer_role": "Business sponsor",
                        "baseline": "Forty minutes per first draft, with documented quality review",
                        "use_case_names": ["Draft approved project summaries"], "evidence_reference": "Fictional charter and baseline"},
-        "control_reviews": [{"control_id": key, "scope_id": "pilot", "reviewed_at": "2026-09-14",
+        "control_reviews": [{"control_id": key, "scope_id": "tenant", "evidence_level":"observed_operation", "reviewed_at": "2026-09-14",
                              "reviewer_role": "Accountable control owner", "result": "pass",
-                             "rationale": "The required control was reviewed for the stated pilot population.",
+                             "rationale": "The configuration and effective behavior were tested across the tenant; assignments, exclusions and returned operational records were reviewed.",
+                             "tested_behavior":"The safeguard produced the expected protection or usable search results in the documented test.",
+                             "tested_scope":"All active tenant users, devices and content; exclusions and reporting gaps reviewed.",
                              "evidence_reference": "Fictional reviewed evidence " + key}
                             for key, *_ in QUESTIONS if complete and key != "ADOPTION.BASELINE"],
     }
@@ -189,10 +193,13 @@ class ReadinessProgressTests(unittest.TestCase):
                          "Disposition": "Assurance", "Status": "Success", "Priority": "Low", "EvidenceBasis": "Tenant-wide configuration",
                          "EvidenceAvailable": "Yes", "EvidenceKey": keys[0] if keys else "", "EvidenceScope": "Assessed tenant",
                          "ObservationDate": "2026-09-10", "EvidenceComplete": True, "BaselineCheck": True})
-        result = self.build(records=rows)
-        self.assertEqual(result["decision"], "Ready for a controlled pilot")
-        self.assertEqual(result["rollout_progress"]["current_stage_id"], "pilot")
-        self.assertFalse(any("pilot population" in str(row.get("Observation")) for row in result["actions"]))
+        configuration_only = self.build(records=rows)
+        self.assertEqual(configuration_only['decision'],'Controlled pilot with conditions')
+        from tests.test_methodology_v4 import operational_profile
+        result = self.build(profile=operational_profile(), records=rows)
+        self.assertEqual(result['decision'],'Ready for a controlled pilot')
+        self.assertFalse(result['readiness_review'].get('pilot_scope'))
+        self.assertFalse(any('pilot population' in str(row.get('Observation')) for row in result['actions']))
 
     def test_unreadable_checks_are_conditions_but_too_few_answers_cannot_decide(self):
         few = self.build(records=[source_record(Disposition="Assurance", Status="Success", Priority="Low",
@@ -314,7 +321,7 @@ class ReadinessProgressTests(unittest.TestCase):
         for missing in ("pilot_outcomes", "expansion_approval", "expansion_reviews"):
             partial = copy.deepcopy(profile)
             if missing == "expansion_reviews":
-                partial["readiness_review"]["control_reviews"] = [row for row in partial["readiness_review"]["control_reviews"] if row["scope_id"] == "pilot"]
+                partial["readiness_review"]["control_reviews"] = [row for row in partial["readiness_review"]["control_reviews"] if row["scope_id"] == "tenant"]
             else:
                 del partial["readiness_review"][missing]
             result = self.build(partial)

@@ -35,7 +35,7 @@ registration alone cannot support a phishing-resistant assurance.
 
 ## Shared evidence contract and reconciliation
 
-Evidence schema `1.0.0` and reconciliation version `1.0.0` describe normalized facts independently
+Evidence schema `1.1.0` and reconciliation version `1.0.0` describe normalized facts independently
 of collection or rendering. Each fact retains tenant, domain/control/metric identity, definition,
 population/scope, affected objects, value/unit, numerator/denominator, reporting window/basis,
 original date, source type/file/schema/hash, completeness/truncation, freshness, selection state
@@ -49,7 +49,7 @@ Measured zero is retained only when supported by available evidence.
 Reconciliation follows these rules:
 
 1. Compare sources only when tenant, metric definition, scope/population, affected objects,
-   unit, reporting basis and window match. Unknown tenant/scope stays specific to its source.
+   unit, reporting basis, evidence level and window match. Unknown tenant/scope stays specific to its source.
 2. Prefer complete evidence over a newer incomplete comparable snapshot. Within suitable
    comparable sources, use the latest dated observation.
 3. Keep different values for the same date, or dates that cannot be ordered, as conflicts with
@@ -80,8 +80,8 @@ Package validation rejects changed/missing declared files and source references 
 folder. Successful offline additions are preserved in a separate rebuild recipe, leaving the
 original collection unchanged. Version 2 collections and rebuild recipes require the recorded
 methodology to match the running tool, with explicit compatibility transitions: **2.0.0 → 2.1.0**
-and **2.0.0 or 2.1.0 → 3.0.0**. The raw schema, collected facts and base findings remain usable;
-the current control matching and the 3.0.0 tenant-wide baseline are applied, so deployment
+and **2.0.0, 2.1.0 or 3.0.0 → 4.0.0**. The raw schema, collected facts and base findings remain usable;
+the current control matching and the 4.0.0 tenant-wide configuration and operational baseline are applied, so deployment
 conclusions can change. The migration preserves
 original files, source hashes and evidence dates, and records the source/effective methodology and
 reason in report context, the workbook's Collection Coverage sheet and the operator receipt. Offline builds display
@@ -113,18 +113,18 @@ shows a concrete gap.
 
 ## Deployment decision
 
-Assessment methodology `3.0.0` judges every required control on **tenant-wide configuration**.
+Assessment methodology `4.0.0` judges every required control on **tenant-wide configuration and required operational confirmation**.
 A pilot group is chosen from the tenant's own users, so a control enforced for all users covers
 any pilot group; the assessment never needs the pilot roster. Tenant-wide baseline checks
 (`Core/tenant_baseline.py`) read the collected configuration and record an explicit result for
 each control they can evaluate:
 
-- **Sign-in** passes when an enforced Conditional Access policy requires MFA for all users and
+- **Sign-in configuration** is supported when an enforced Conditional Access policy requires MFA for all users and
   cloud apps and legacy authentication is blocked for all users, or security defaults are on.
-  Report-only, disabled and group-scoped policies never pass it.
-- **DLP** passes when an enforced policy applies to all users or locations for Exchange,
+  Assignments, exclusions, conditions, grant alternatives and authentication strengths must establish scope. Suitable sign-in results or a dated tenant-wide test review must also establish operation; registration alone cannot.
+- **DLP configuration** is supported when an enforced policy applies to all users or locations for Exchange,
   SharePoint, OneDrive, Teams or Microsoft 365 Copilot. The absence of a Copilot-location policy is
-  an optional improvement, not a failure.
+  assessed against planned requirements. Configuration must be accompanied by a dated review of tested protection behavior; simulation alone cannot establish enforcement.
 - **Label publishing** passes when an active publishing policy covers all users; policies limited
   to groups are listed to confirm.
 - **Retention**, **Copilot connectors** and **Copilot licenses** are judged from the collected
@@ -306,7 +306,9 @@ extensibility evidence cannot raise or lower the security and governance readine
 - One tenant condition should produce one action, even when several licenses expose it.
 - Status and priority must agree.
 - Recommendations must identify the observed condition, affected scope, next action, and evidence.
-- Exact objects belong in the engineer workbook; the HTML report should remain decision-oriented.
+- Exact objects belong in the engineer workbook, the linked technical evidence pages and the App Builder files; the customer HTML report remains decision-oriented and aggregate-only.
+- Record counts and affected-entity counts are separate measures with stated units. Evidence is labelled as observed events, entity records, configuration, supporting context or aggregate-only, with its availability (complete, partial, unavailable, not retained, absent, historical or planning).
+- Legacy-authentication evidence uses the retained sign-in events matched by the existing client-type rule. Outcomes come from `status.errorCode` and `conditionalAccessStatus`: Succeeded (0, Conditional Access not failed), Blocked (Conditional Access failure or AADSTS 53000–53003; 50053 sign-in protection), Failed (other codes) or Unknown. The client type does not establish the exact protocol or a successful bypass. Microsoft-listed legacy client types that the rule does not match (for example MAPI over HTTP) are reported as a limitation, not added to the finding.
 - Marketing language, invented percentages, and unsupported causal claims are not acceptable
   evidence.
 - A control should be scored only when its applicability is known or clearly stated as conditional.
@@ -314,7 +316,7 @@ extensibility evidence cannot raise or lower the security and governance readine
   applicability is a remaining decision, not a pass. Optional capabilities cannot make the whole
   foundation assessment incomplete solely because they are unused.
 - Do not combine overlapping users, sites, files, links or permissions into one exposure total.
-- User-level Copilot evidence is opt-in for each workbook build and absent from HTML. Original
+- User-level Copilot evidence is included by default in each workbook build and absent from HTML. Original
   packaged inputs may still contain that detail and require restricted handling.
 
 ## Data exposure and oversharing assessment

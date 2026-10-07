@@ -218,7 +218,7 @@ async def run_connection_checks(
     client,
     service_config,
     interactive_plan,
-    preview_collectors="none",
+    preview_collectors="auto",
     legacy_power_platform_collector=False,
     sharepoint_admin_url="",
     interactive_auth="auto",
@@ -260,6 +260,7 @@ async def run_connection_checks(
         "purview_labels_graph": ("/beta/security/informationProtection/sensitivityLabels", None, None),
         "copilot_audit": ("/v1.0/security/auditLog/queries", {"$top": "1"}, None),
         "shadow_ai": ("/beta/security/dataDiscovery/cloudAppDiscovery/uploadedStreams", {"$top": "1"}, None),
+        "entra_recommendations": ("/beta/directory/recommendations", {"$select": "id,status"}, None),
         "network_access": ("/beta/networkAccess/filteringPolicies", {"$top": "1"}, None),
     }
     permission_map = {name: collector_permissions(name, permission_profile) for name in probes}

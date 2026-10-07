@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-METHODOLOGY_VERSION = "3.0.0"
+METHODOLOGY_VERSION = "4.0.0"
 ASSESSMENT_VERSION = "2.1.0"
 GUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
 
@@ -80,7 +80,7 @@ def load_assessment_profile(path):
     if not isinstance(use_cases, list):
         errors.append("use_cases must be an array")
         use_cases = []
-    if "readiness_review" in payload:
+    if 'readiness_review' in payload or 'assessment_context' in payload:
         from .control_reviews import validate_readiness_review
         errors.extend(validate_readiness_review(payload))
     from .control_reviews import LoadedAssessmentProfile
@@ -373,15 +373,18 @@ def _load_baseline(path):
         from openpyxl import load_workbook
         workbook = load_workbook(source, read_only=True, data_only=True)
         payload = {"methodology_version": "", "recommendations": [], "control_results": []}
-        if "Run Manifest" in workbook.sheetnames:
-            rows = list(workbook["Run Manifest"].iter_rows(values_only=True))
-            manifest = {str(row[0]): row[1] for row in rows[1:] if row and row[0]}
-            payload["methodology_version"] = str(manifest.get("Methodology Version", ""))
-        if "Recommendations" in workbook.sheetnames:
-            rows = workbook["Recommendations"].iter_rows(values_only=True)
-            headers = [str(value or "") for value in next(rows, [])]
-            payload["recommendations"] = [dict(zip(headers, row)) for row in rows]
-        return payload
+        try:
+            if "Run Manifest" in workbook.sheetnames:
+                rows = list(workbook["Run Manifest"].iter_rows(values_only=True))
+                manifest = {str(row[0]): row[1] for row in rows[1:] if row and row[0]}
+                payload["methodology_version"] = str(manifest.get("Methodology Version", ""))
+            if "Recommendations" in workbook.sheetnames:
+                rows = workbook["Recommendations"].iter_rows(values_only=True)
+                headers = [str(value or "") for value in next(rows, [])]
+                payload["recommendations"] = [dict(zip(headers, row)) for row in rows]
+            return payload
+        finally:
+            workbook.close()
     raise ValueError("Baseline must be an XLSX workbook or snapshot JSON.")
 
 

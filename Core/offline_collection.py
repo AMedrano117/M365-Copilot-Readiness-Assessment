@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from datetime import date, datetime, timezone
 from enum import Enum
+from os import name as _platform_name
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
@@ -81,8 +83,9 @@ def _decode(value):
 def save_collection(path=None, *, tenant_id, tenant_name, service_results,
                     enabled_collectors=None, connection_results=None, collected_at=None,
                     assessment_settings=None, supplemental_inputs=None, evaluation_date=None,
-                    collection_progress=None, _checkpoint_package=None, auth_plan=None):
-    """Save evidence, defaulting to a distinct tenant/date file under output/collections."""
+                    collection_progress=None, _checkpoint_package=None, auth_plan=None,
+                    customer_name=None):
+    """Save one collection in its customer assessment folder by default."""
     results = {key: service_results[key] for key in SERVICE_KEYS}
     # The legacy Power Platform collector attaches evidence to its HTTP transport.
     # Copy only its named evidence fields; never serialize transport configuration.
@@ -97,6 +100,7 @@ def save_collection(path=None, *, tenant_id, tenant_name, service_results,
     payload = {
         "format": COLLECTION_FORMAT, "version": COLLECTION_VERSION,
         "tenant_id": tenant_id, "tenant_name": tenant_name,
+        "customer_name": customer_name,
         "collected_at": collected_at or datetime.now(timezone.utc).isoformat(),
         "enabled_collectors": enabled_collectors or [],
         "connection_results": connection_results or [],
@@ -118,37 +122,40 @@ def save_collection(path=None, *, tenant_id, tenant_name, service_results,
     if path:
         target = Path(path)
     else:
-        tenant_slug = re.sub(r"[^A-Za-z0-9._-]+", "_", str(tenant_name or tenant_id or "tenant"))
-        tenant_slug = tenant_slug.strip("._-").lower()[:40] or "tenant"
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        target = Path("output") / "collections" / f"tenant-collection_{tenant_slug}_{timestamp}_{uuid4().hex[:8]}.json"
+        from .export_paths import new_assessment_directory
+        target = new_assessment_directory(
+            customer_name=customer_name, tenant_name=tenant_name, tenant_id=tenant_id) / 'collection.json'
     encoded['source_file'] = target.name
     target.parent.mkdir(parents=True, exist_ok=True)
     from .assessment_package import package_inputs, replace_source_paths
     if _checkpoint_package and _checkpoint_package.get('folder'):
         # A live run owns one package. Reuse its immutable copied inputs rather
         # than copying exports or creating another directory at every checkpoint.
-        package_folder = _checkpoint_package['folder']
+        package_folder = Path(_checkpoint_package['folder'])
         encoded = replace_source_paths(encoded, _checkpoint_package['references'])
         encoded['package'] = dict(_checkpoint_package['manifest'], directory='.')
-        _write_collection_json(package_folder / 'collection.json', encoded)
-        encoded['package']['directory'] = package_folder.name
-        _write_collection_json(target, encoded)
+        canonical = package_folder / 'collection.json'
+        _write_collection_json(canonical, encoded)
+        if target.resolve() != canonical.resolve():
+            encoded['package']['directory'] = package_folder.name
+            _write_collection_json(target, encoded)
         return str(target.resolve())
     # Preserve the collected facts even if copying a supplemental file fails.
     _write_collection_json(target, encoded)
-    package_folder = target.with_name(target.stem + '_package')
+    package_folder = target.with_name(target.stem + '_package') if path else target.parent
     # A custom save destination may be reused; preserve its earlier original files
     # and deliverables by giving the new package a distinct companion directory.
-    if package_folder.exists():
+    if path and package_folder.exists():
         package_folder = target.with_name(target.stem + '_package_' + uuid4().hex[:8])
     try:
         manifest, references = package_inputs(package_folder, supplemental_inputs)
         encoded = replace_source_paths(encoded, references)
         encoded['package'] = dict(manifest, directory='.')
-        _write_collection_json(package_folder / 'collection.json', encoded)
-        encoded['package']['directory'] = package_folder.name
-        _write_collection_json(target, encoded)
+        canonical = package_folder / 'collection.json'
+        _write_collection_json(canonical, encoded)
+        if target.resolve() != canonical.resolve():
+            encoded['package']['directory'] = package_folder.name
+            _write_collection_json(target, encoded)
         if _checkpoint_package is not None:
             _checkpoint_package.update(folder=package_folder, manifest=manifest, references=references)
     except (ValueError, OSError) as exc:
@@ -161,7 +168,17 @@ def _write_collection_json(target, payload):
     temporary = target.with_name(target.name + '.' + uuid4().hex + '.tmp')
     try:
         temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2, allow_nan=False), encoding='utf-8')
-        temporary.replace(target)
+        for attempt in range(3):
+            try:
+                temporary.replace(target)
+                break
+            except PermissionError as exc:
+                # Windows indexing and antivirus can briefly hold a completed
+                # checkpoint open. Keep replacement atomic and bounded; genuine
+                # permission errors still propagate after the short retry.
+                if _platform_name != 'nt' or getattr(exc, 'winerror', None) not in {5, 32, 33} or attempt == 2:
+                    raise
+                time.sleep(0.05 * (attempt + 1))
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -248,6 +265,7 @@ def collection_context(payload=None, source_file=None, evaluation_date=None, mod
     if payload and payload.get('has_tenant_collection') is False:
         source_name = ''
     return {"mode": mode, "source_file": source_name,
+            "customer_name": (payload or {}).get('customer_name'),
             "collected_at": timestamp, "age_days": age,
             "evaluation_date": evaluated,
             "package_directory": (payload or {}).get('package_directory'),

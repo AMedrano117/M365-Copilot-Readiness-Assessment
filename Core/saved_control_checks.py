@@ -168,7 +168,10 @@ def qualify_saved_recommendations(rows, service, client):
             # a 30-day window or successful bypass from a client-type count.
             count = int(legacy_count.group(1))
             row.setdefault("OriginalObservation", observation)
-            row.update(FindingKey="entra.signins.legacy_auth", EvidenceKey="legacy_signin_detail",
+            if row.get("Feature") != "Legacy authentication sign-ins":
+                row.setdefault("OriginalFeature", row.get("Feature"))
+            row.update(Feature="Legacy authentication sign-ins",
+                       FindingKey="entra.signins.legacy_auth", EvidenceKey="legacy_signin_detail",
                        EvidenceSource="entra_signin_logs", EvidenceComplete=source_is_complete(client, "signin_logs"),
                        EvidenceScope="Returned sign-in log records classified by clientAppUsed; includes successful and failed attempts",
                        ReportedLegacySignInCount=count,
@@ -176,7 +179,10 @@ def qualify_saved_recommendations(rows, service, client):
                        Recommendation="Review the linked sign-in records to identify the accounts, applications, clients and IP addresses involved. Distinguish successful requests from failed or blocked attempts using the error code and Conditional Access result. Confirm business dependencies, migrate required clients to modern authentication, and test a policy to block legacy authentication before enforcement.")
         if service == "Entra" and "No legacy authentication sign-ins" in observation:
             complete = source_is_complete(client, "signin_logs")
-            row.update(EvidenceSource="signin_logs", EvidenceComplete=complete, EvidenceScope="Returned sign-in log records",
+            if row.get("Feature") != "Legacy authentication sign-ins":
+                row.setdefault("OriginalFeature", row.get("Feature"))
+            row.update(Feature="Legacy authentication sign-ins", EvidenceSource="signin_logs",
+                       EvidenceComplete=complete, EvidenceScope="Returned sign-in log records",
                        Observation="No legacy authentication sign-ins were found in the returned sign-in records. This sample does not establish that all access uses modern authentication or that every security control is effective."
                        if complete else "The sign-in query did not complete. The absence of legacy authentication has not been established.")
             if not complete:

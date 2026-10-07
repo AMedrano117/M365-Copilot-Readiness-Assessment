@@ -22,8 +22,6 @@ def recommended_actions(result):
     for row in [*(result.get('actions') or []), *(result.get('recommendations') or [])]:
         if not isinstance(row, dict):
             continue
-        if not row.get('Recommendation') and row not in (result.get('actions') or []):
-            continue
         identifier = row.get('RecommendationId')
         if not identifier or identifier in seen:
             continue
@@ -99,7 +97,8 @@ def materialize_declared_evidence(bundle, recommendations):
     for key in list(sheets):
         if key.startswith('declared_investigation.'):
             del sheets[key]
-    used = {str(sheet.get('title') or '').casefold() for sheet in sheets.values()}
+    from .workbook_evidence import RESERVED_TITLES
+    used = {str(sheet.get('title') or '').casefold() for sheet in sheets.values()} | {title.casefold() for title in RESERVED_TITLES}
     output = {}
     for rec in recommendations:
         contract = rec.get('InvestigationEvidence')
@@ -148,7 +147,7 @@ def materialize_declared_evidence(bundle, recommendations):
         except (TypeError, ValueError, RecursionError):
             output[identifier] = _unavailable('Detail mapping missing', 'The supplied evidence records cannot be serialized; supply plain fields, timestamps and nested attributes without circular references.')
             continue
-        title = _title(contract.get('sheet_name') or f"Evidence {identifier}", used)
+        title = _title(contract.get('sheet_name') or 'Logs ' + str(rec.get('Feature') or identifier), used)
         rows = []
         for position, record in enumerate(records, 1):
             record_id = _field(record, contract.get('record_id_field'), ('id', 'Id', 'ID', 'Record ID', 'Object ID'))
@@ -172,6 +171,14 @@ def materialize_declared_evidence(bundle, recommendations):
                 while header in row:
                     header = 'Record.' + header
                 row[header] = value
+            # Log fields precede the export bookkeeping, so identifiers, dates
+            # and source attributes are readable without scrolling past it.
+            original_fields = [name for name in row if name not in {
+                'RecommendationId','Evidence ID','Source Record','Source API / File',
+                'Collected At','Collection Window','Selection / Scope','Record ID',
+                'Entity','Observed At','Record Status'}]
+            row = {**{key:row[key] for key in original_fields},
+                   **{key:value for key,value in row.items() if key not in original_fields}}
             rows.append(row)
         reconciliation = contract.get('reconciliation') or {'operation': 'count'}
         notes, mismatch = [], False
@@ -230,8 +237,11 @@ def validate_investigation_coverage(result, bundle):
         if status not in STATUSES:
             issues.append(f'{identifier}: missing investigation status.')
         location = str(rec.get('InvestigationRange') or '')
-        if location:
-            match = re.fullmatch(r"'((?:[^']|'')+)'!([A-Z]+[1-9][0-9]*:[A-Z]+[1-9][0-9]*)", location)
+        investigation = rec.get('InvestigationRanges') or ([location] if location else [])
+        locations = list(dict.fromkeys([*investigation, *rec.get('RawEvidenceRanges',[])]))
+        counted = 0
+        for target in locations:
+            match = re.fullmatch(r"'((?:[^']|'')+)'!([A-Z]+[1-9][0-9]*:[A-Z]+[1-9][0-9]*)", target)
             if not match or match.group(1).replace("''", "'") not in titles:
                 issues.append(f'{identifier}: supporting record range does not resolve.')
                 continue
@@ -241,6 +251,10 @@ def validate_investigation_coverage(result, bundle):
             width = len(dict.fromkeys(field for row in rows for field in row))
             if first < 2 or last < first or last > len(rows) + 1 or last_column > width:
                 issues.append(f'{identifier}: supporting range is outside the exported records.')
-        elif rec.get('InvestigationCount') or not rec.get('InvestigationQualification'):
+            elif target in investigation:
+                counted += last-first+1
+        if investigation and rec.get('InvestigationCount') != counted:
+            issues.append(f'{identifier}: supporting row count does not reconcile across worksheet ranges.')
+        if not location and (rec.get('InvestigationCount') or not rec.get('InvestigationQualification')):
             issues.append(f'{identifier}: no records and no visible missing-evidence explanation.')
     return issues

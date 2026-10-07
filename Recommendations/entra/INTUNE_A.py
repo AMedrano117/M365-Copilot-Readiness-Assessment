@@ -99,7 +99,7 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
             observations.append(new_recommendation(
                 service="Entra",
                 feature=feature_name,
-                observation=f"{non_compliant_devices} of {total_devices} managed devices ({100-compliance_rate:.1f}%) are non-compliant - may access Copilot despite policy violations",
+                observation=f"{non_compliant_devices} of {total_devices} managed devices are explicitly non-compliant. Their observed access and individual failing settings require separate review",
                 recommendation=f"Block Copilot access from {non_compliant_devices} non-compliant device(s) using Conditional Access. Non-compliant devices fail security requirements: missing encryption, outdated OS, disabled antivirus, jailbroken/rooted, or policy violations. These devices can: 1) Leak Copilot responses through screenshots on unencrypted storage, 2) Be compromised by malware intercepting AI prompts, 3) Violate compliance frameworks (HIPAA, SOC 2) requiring device security. Create CA policy targeting Microsoft 365 requiring 'Require device to be marked as compliant'. Review non-compliance reasons in Intune console and remediate or block access.",
                 link_text="Require Compliant Devices",
                 link_url="https://learn.microsoft.com/mem/intune/protect/device-compliance-get-started",
@@ -112,7 +112,7 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
             observations.append(new_recommendation(
                 service="Entra",
                 feature=feature_name,
-                observation=f"{compliant_devices} of {total_devices} managed devices (100%) are compliant, enforcing security policies for Copilot access",
+                observation=f"{compliant_devices} of {total_devices} managed devices report compliant status. Other states, Conditional Access targeting and observed endpoint protection require separate review",
                 recommendation="",
                 link_text="Device Compliance Best Practices",
                 link_url="https://learn.microsoft.com/mem/intune/protect/device-compliance-get-started",

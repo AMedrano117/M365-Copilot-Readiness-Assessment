@@ -16,6 +16,7 @@ import io
 import logging
 import os
 import re
+from datetime import datetime, timezone
 
 import httpx
 from azure.identity import CertificateCredential, ClientSecretCredential
@@ -210,8 +211,17 @@ class GraphRestClient:
         pages = 0
         next_path = path
         next_params = params
+        started = datetime.now(timezone.utc).isoformat()
+        requests = []
+        def absolute(request_path):
+            return str(httpx.URL(GRAPH_BASE_URL).join(request_path))
+        def provenance():
+            return {'source_api':absolute(path), 'request_params':dict(params or {}),
+                'page_requests':requests, 'max_pages':max_pages,
+                'collection_started_at':started, 'collection_completed_at':datetime.now(timezone.utc).isoformat()}
         try:
             while next_path and pages < max_pages:
+                requests.append({'url':absolute(next_path), 'params':dict(next_params or {})})
                 payload = await self.get_json(next_path, params=next_params, headers=headers)
                 pages += 1
                 page_items = payload.get("value", []) if isinstance(payload, dict) else []
@@ -221,6 +231,7 @@ class GraphRestClient:
                 next_params = None
             truncated = bool(next_path)
             return {
+                **provenance(),
                 "available": True,
                 "availability_status": "partial" if truncated else "available",
                 "value": items,
@@ -231,6 +242,7 @@ class GraphRestClient:
             }
         except (GraphRequestError, httpx.TransportError) as exc:
             return {
+                **provenance(),
                 "available": bool(pages),
                 "availability_status": "partial" if pages else "unavailable",
                 "value": items,

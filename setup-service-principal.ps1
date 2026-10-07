@@ -9,7 +9,7 @@
   SharePoint/Purview administration and directory-wide grant inventory.
   Unattended additionally validates and
   attaches a certificate and adds the SharePoint/Purview app-only permission packs.
-  Preview permission packs are added only when explicitly selected.
+  Standard includes Entra recommendations, Shadow AI discovery and audit read permissions. Additional preview packs remain opt-in.
 #>
 
 #Requires -Version 5.1
@@ -17,7 +17,7 @@
 param(
     [ValidateSet('Standard','Unattended')][string]$Mode = 'Standard',
     [ValidateSet('Standard','Restricted')][string]$PermissionProfile = 'Standard',
-    [ValidateSet('None','PowerPlatform','ShadowAI','NetworkAccess','CopilotAudit','All')]
+    [ValidateSet('None','PowerPlatform','ShadowAI','NetworkAccess','CopilotAudit','EntraRecommendations','All')]
     [string]$PreviewCollectors = 'None',
     [string]$CertificatePath = '',
     [string]$CertificateThumbprint = '',
@@ -1079,7 +1079,11 @@ Write-Host "  Application ID: $($app.AppId)"
 Write-Host "  Service principal object ID: $($servicePrincipal.Id)"
 Write-Host "  Mode: $Mode"
 Write-Host "  Permission profile: $PermissionProfile"
-Write-Host "  Preview collectors: $PreviewCollectors"
+Write-Host "  Additional preview packs: $PreviewCollectors"
+if ($profileName -eq 'standard') {
+    Write-Host '  Default supplemental collectors: Entra recommendations, Shadow AI discovery, Copilot audit'
+    Write-Host '  Entra recommendations permission: DirectoryRecommendations.Read.All (recommendations and impacted resources)'
+}
 Write-Host "  Environment file: $envPath"
 if ($profileName -eq 'standard') {
     if ($configuredSharePointAdminUrl) {

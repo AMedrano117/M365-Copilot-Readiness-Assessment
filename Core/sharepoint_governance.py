@@ -121,7 +121,8 @@ def merge_sharepoint_payloads(graph_payload, spo_payload):
     administration = [(merged.get(name) or {}).get("available") for name in ("sites", "dag_reports")]
     merged["available"] = bool(tenant.get("available")) or any(administration)
     partial = tenant.get("coverage") == "partial" or not all(administration) or any(
-        not state.get("available") for state in states.values() if isinstance(state, dict))
+        not state.get("available") or state.get("availability_status") == "partial" or state.get("complete") is False
+        for state in states.values() if isinstance(state, dict))
     merged["availability_status"] = ("partial" if merged["available"] and partial else
                                      "available" if merged["available"] else
                                      merged.get("availability_status") or "unavailable")
@@ -341,7 +342,7 @@ def build_sharepoint_recommendations(governance):
                 f"Anyone links are the default, no tenant-wide expiration is enforced"
                 + (", and anonymous file or folder links permit editing." if edit_anyone else ".")
             ),
-            recommendation="Change the default link to Specific people, require an expiration for Anyone links, and use view-only anonymous links unless a documented business case requires editing. Review site exceptions before changing the tenant maximum.",
+            recommendation="Change the default sharing link to Specific people, require Anyone links to expire in 30 days or fewer, and set Anyone links to view only unless a documented business case requires editing. Then lower SharePoint and OneDrive external sharing to New and existing guests, after confirming which sites need an approved exception.",
             link_text="Manage external sharing",
             link_url="https://learn.microsoft.com/sharepoint/turn-external-sharing-on-or-off",
             priority="High",

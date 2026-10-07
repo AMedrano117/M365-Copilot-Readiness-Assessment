@@ -76,8 +76,8 @@ def _select(key, row, rec):
         return _item('Sign-in event', _first(row, 'User Principal Name', 'User Display Name', 'User ID'),
             _text(row, 'Sign-In ID'), 'Sign-in client matches the legacy-authentication classification',
             _text(row, 'Outcome'),
-            _details(row, 'Application Name', 'Application ID', 'Resource Name', 'Client App / Protocol',
-                     'IP Address', 'Error Code', 'Failure Reason', 'Conditional Access Status', 'Correlation ID'),
+            _details(row, 'Application Name', 'Application ID', 'Resource Name', 'Client App Used (reported client type)',
+                     'IP Address', 'Error Code', 'Outcome Detail', 'Failure Reason', 'Conditional Access Status', 'Correlation ID'),
             _text(row, 'Created UTC'), 'Entra admin center > Monitoring & health > Sign-in logs',
             'Locate this event by its ID and timestamp. Review the user, client, application, IP address, result and Conditional Access evaluation before changing authentication.')
     if key == 'mfa_registration_detail':
@@ -268,11 +268,19 @@ def prepare_investigation_details(bundle, result):
     """Require evidence or a visible, specific gap for every recommended next step."""
     from .investigation_contract import materialize_declared_evidence, recommended_actions, validate_investigation_coverage
     from .investigation_context import explain_missing_detail, is_consent_configuration, source_limitations, supporting_range
+    signature = (id(result), tuple(row.get('RecommendationId') for row in result.get('recommendations',[])))
+    if bundle.get('_split_investigation_signature') == signature:
+        return result
     sheets = bundle.setdefault('sheets', {})
+    from .raw_evidence import prepare_raw_details
+    prepare_raw_details(bundle, result)
     sheets.pop('investigation_items', None)
     sheets.pop('sharepoint_site_configuration_detail', None)
     actions = recommended_actions(result)
     by_id = materialize_declared_evidence(bundle, actions)
+    for rec in actions:
+        if rec.get('_shared_inventory_support') and rec['RecommendationId'] not in by_id:
+            by_id[rec['RecommendationId']] = dict(rec['_shared_inventory_support'])
     _scope_application_grants(sheets, [rec for rec in actions if rec.get('RecommendationId') not in by_id])
     used_titles = {sheet.get('title', '').casefold() for sheet in sheets.values()}
     title, suffix = 'Investigation Items', 2
@@ -345,6 +353,17 @@ def prepare_investigation_details(bundle, result):
             status = ('Planning decision' if summary == 'Planning input needed' else
                       'Configuration evidence' if summary in {'Review supporting configuration', 'Configuration review needed'} else
                       'Evidence unavailable' if summary in {'Evidence needed', 'Details unavailable'} else 'Detail mapping missing')
+            if location:
+                # Older collections can retain configuration context without an
+                # affected-object subset. Count the linked supporting rows, not
+                # a fictional zero-row range, and qualify their role explicitly.
+                from openpyxl.utils.cell import range_boundaries
+                linked = re.fullmatch(r"'((?:[^']|'')+)'!([A-Z]+[0-9]+:[A-Z]+[0-9]+)",location)
+                if linked:
+                    _,start,_,end = range_boundaries(linked.group(2))
+                    count = end-start+1
+                    summary = f'{count} configuration context record(s)'
+                    notes.append('These linked rows are configuration context. No selected affected-object population is established.')
         else:
             if any(item['Item Type'] in {'Consent configuration', 'Tenant setting', 'Conditional Access policy', 'DLP Policy', 'Label Policy'} for item, _ in candidates):
                 status = 'Configuration evidence'
@@ -393,5 +412,10 @@ def prepare_investigation_details(bundle, result):
             row['Workbook Tab'] = fields['InvestigationRange']
             row['Engineer Follow-Up'] = fields['InvestigationSummary']
     bundle['investigation_coverage'] = [dict(RecommendationId=key, **fields) for key, fields in by_id.items()]
+    from .raw_evidence import split_evidence_sheets
+    split_evidence_sheets(bundle, result, bundle.get('worksheet_row_capacity',1_048_575))
+    # Later export calls reuse these exact sheets and ranges, so the shared
+    # finding-evidence model, workbook and HTML describe identical rows.
+    bundle['_split_investigation_signature'] = signature
     bundle['investigation_validation'] = validate_investigation_coverage(result, bundle)
     return result

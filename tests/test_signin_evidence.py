@@ -64,7 +64,7 @@ class SigninCollectionTests(unittest.IsolatedAsyncioTestCase):
             result = await get_entra_client(SimpleNamespace(), 'test-tenant')
         return result, calls, first_rows, last_rows
 
-    async def test_all_pages_reconcile_with_summary_and_record_exact_open_ended_window(self):
+    async def test_all_pages_reconcile_with_summary_and_record_exact_bounded_window(self):
         client, calls, first_rows, last_rows = await self.collect()
         self.assertEqual(client.signin_logs, first_rows + last_rows)
         self.assertEqual(client.signin_summary['total_signins_sampled'], 4)
@@ -75,9 +75,9 @@ class SigninCollectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(httpx.URL(state['request_url']), calls[0])
         self.assertEqual(dict(calls[0].params), state['request_params'])
         self.assertEqual(state['filters'], state['request_params'])
-        self.assertEqual(state['filter'], 'createdDateTime ge ' + state['window_start'])
-        self.assertEqual(state['window_end'], '')
-        self.assertNotIn(' le ', state['filter'])
+        self.assertEqual(state['filter'], 'createdDateTime ge ' + state['window_start'] + ' and createdDateTime le ' + state['window_end'])
+        self.assertTrue(state['window_end'])
+        self.assertIn(' le ', state['filter'])
         self.assertEqual(state['page_size'], 999)
         self.assertEqual(state['max_pages'], 100)
         self.assertEqual(state['pages_collected'], 2)
@@ -88,7 +88,7 @@ class SigninCollectionTests(unittest.IsolatedAsyncioTestCase):
         finished = datetime.fromisoformat(state['collection_completed_at'])
         self.assertIsNotNone(started.tzinfo)
         self.assertGreaterEqual(finished, started)
-        self.assertIn('no requested upper time bound', state['collection_window'])
+        self.assertIn('le', state['collection_window'])
         self.assertIn('failed and blocked attempts', state['limitations'])
         self.assertIn('AuditLog.Read.All', state['permissions'])
 

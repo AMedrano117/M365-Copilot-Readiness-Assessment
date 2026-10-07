@@ -41,19 +41,19 @@ review records. A review is an operator attestation, identified separately from 
 
 ### Scope and reviewed plan
 
-A readiness review is optional. Methodology 3.0 decides pilot readiness from tenant-wide evidence,
-so no review, scope or pilot roster is needed to reach **Ready for pilot**. Use a review to answer
+A readiness review is optional. Methodology 4.0 decides pilot readiness from tenant-wide evidence,
+so no pilot roster is required for **Ready for pilot**. Required operational confirmation must come from suitable retained records or current dated tenant-wide test reviews. Use a review to answer
 checks the tool cannot read, to document a pilot treatment, or to record the pilot group, plan and
 outcomes before broader adoption. A scope can describe the whole tenant (for example "All users")
 or the pilot group by name and head count; individual users are never required.
 
 `readiness_review` requires `version: "1.0"`, the assessed tenant's GUID in `tenant_id`, and
-`pilot_scope`. A different tenant is rejected. The scope must include:
+`tenant_scope` or the compatible optional `pilot_scope`. Only tenant_scope reviews establish tenant-wide foundation results. Pilot scope remains optional context for treatments and expansion. A different tenant is rejected. The scope must include:
 
 ```json
 {
-  "id": "pilot",
-  "description": "All users (tenant-wide review) or the pilot group name, for example Finance pilot group",
+  "id": "tenant",
+  "description": "All users and the declared active-device and content populations",
   "population_count": 10,
   "reviewed_at": "2026-09-14",
   "reviewer_role": "Business sponsor and Microsoft 365 administrator",
@@ -190,3 +190,5 @@ actual dated scoped review can separately record that attestation through `readi
 
 See [the methodology](METHODOLOGY.md#deployment-decision) for how these milestones relate to the
 deployment recommendation and [RUN.md](RUN.md) for collection and rebuild commands.
+
+See [Assessment evidence and outputs](ASSESSMENT_EVIDENCE.md) for catalog check reviews, evidence levels, structured assessment context and approved exceptions.

@@ -14,7 +14,7 @@ import hashlib
 import json
 
 
-EVIDENCE_SCHEMA_VERSION = "1.0.0"
+EVIDENCE_SCHEMA_VERSION = "1.1.0"
 RECONCILIATION_VERSION = "1.0.0"
 AVAILABILITY_STATES = frozenset({
     "available", "missing", "not_requested", "inaccessible", "unsupported",
@@ -72,6 +72,14 @@ def normalize_observation(source, *, evaluation_date=None, expected_tenant_id=No
     freshness = "unknown" if age is None else "future" if age < 0 else "stale" if age > max_age else "current"
     complete = row.get("complete") is True and not row.get("truncated", False) and availability != "partial"
     qualifiers = list(row.get("qualifications") or [])
+    if row.get('unit')=='%' and value is not None:
+        numerator,denominator=row.get('numerator'),row.get('denominator')
+        if (type(numerator) not in (int,float) or type(denominator) not in (int,float) or denominator<=0 or numerator<0 or
+                not all(row.get(key) for key in ('population','scope','window'))):
+            qualifiers.append('Percentage unavailable: a known numerator, positive denominator, population, scope and observation window are required.')
+            row['reported_value']=value
+            value=None
+            availability='unknown'
     if not tenant:
         qualifiers.append("Tenant identity is not recorded in this source.")
     if not row.get("scope"):
@@ -85,6 +93,7 @@ def normalize_observation(source, *, evaluation_date=None, expected_tenant_id=No
     if not complete:
         qualifiers.append("Completeness is not established for the stated population.")
     row.update({
+        "evidence_level": row.get('evidence_level', 'unknown'),
         "schema_version": EVIDENCE_SCHEMA_VERSION, "tenant_id": tenant,
         "domain_id": row.get("domain_id", ""), "control_id": row.get("control_id", ""),
         "metric_id": row.get("metric_id", ""), "metric_definition": row.get("metric_definition", row.get("metric_id", "")),
@@ -119,7 +128,7 @@ def compatibility_key(row):
     return stable_id([tenant, row.get("control_id"), row.get("metric_id"),
                       row.get("metric_definition"), scope, row.get("population"),
                       row.get("affected_objects"), row.get("unit"),
-                      row.get("reporting_basis"), row.get("window")])
+                      row.get("reporting_basis"), row.get("window"), row.get('evidence_level', 'unknown')])
 
 
 def _comparison_value(value):

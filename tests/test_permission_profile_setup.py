@@ -382,6 +382,10 @@ class OfflineSetupProfileTests(unittest.TestCase):
                 target = actual if permission["Type"] == "Role" else delegated
                 target.setdefault(entry["ResourceAppId"], set()).add(permission["Id"].removeprefix("role-").removeprefix("scope-"))
         self.assertEqual(expected, actual)
+        self.assertIn('DirectoryRecommendations.Read.All', actual[RESOURCE_APP_IDS['graph']])
+        self.assertIn('Entra recommendations permission: DirectoryRecommendations.Read.All', result['output'])
+        self.assertIn('Default supplemental collectors: Entra recommendations, Shadow AI discovery, Copilot audit', result['output'])
+        self.assertIn('Additional preview packs: None', result['output'])
         expected_delegated = {}
         for collector_id, collector in COLLECTOR_REGISTRY.items():
             if collector.get("default_setup"):

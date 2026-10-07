@@ -7,7 +7,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from openpyxl import load_workbook
+from tests.workbook_test_helpers import load_workbook_pair as load_workbook
 from openpyxl.utils import get_column_letter
 
 from Core.export_recommendations import export_to_excel, export_to_html
@@ -183,15 +183,15 @@ class InvestigationContractExportTests(unittest.TestCase):
         rec = recommendation(declaration=declaration(records=[{'id': 'dated', 'timestamp': timestamp,
               'attributes': {'lastSeen': timestamp}}], reconciliation={'expected': 1}))
         _, workbook, _ = self.export(rec)
-        row = dict(zip([cell.value for cell in workbook['Widget Investigation'][1]],
-                       [cell.value for cell in workbook['Widget Investigation'][2]]))
+        row = dict(zip([cell.value for cell in workbook.technical['Logs widgets'][1]],
+                       [cell.value for cell in workbook.technical['Logs widgets'][2]]))
         self.assertEqual(row['Observed At'], timestamp.isoformat())
         self.assertEqual(json.loads(row['attributes'])['lastSeen'], timestamp.isoformat())
 
     def test_fictional_service_exports_retained_records_and_exact_links_without_an_adapter(self):
         rec = recommendation(declaration=declaration())
         path, workbook, bundle = self.export(rec)
-        sheet = workbook['Widget Investigation']
+        sheet = workbook.technical['Logs widgets']
         values = list(sheet.values)
         records = [dict(zip(values[0], row)) for row in values[1:]]
         self.assertEqual([row['Record ID'] for row in records], ['private-widget-1', 'private-widget-2'])
@@ -199,11 +199,11 @@ class InvestigationContractExportTests(unittest.TestCase):
         self.assertEqual(json.loads(records[0]['attributes']), {'region': 'fixture-region', 'codes': ['x', 'y']})
         self.assertEqual(records[0]['Collection Window'], '2026-09-01 through 2026-09-30')
         self.assertEqual(records[0]['Selection / Scope'], 'state=suspended')
-        expected = f"'Widget Investigation'!A2:{get_column_letter(sheet.max_column)}3"
+        expected = f"'Logs widgets'!A2:{get_column_letter(sheet.max_column)}3"
         for title, field in [('Action Plan', 'Investigation Details'), ('Evidence Index', 'Workbook Tab'),
                              ('Recommendations', 'Evidence Sheet')]:
             row = self.row(workbook, title, 'NOVEL-001')
-            self.assertEqual(row[field].hyperlink.target, '#' + expected)
+            self.assertEqual(row[field].hyperlink.target, '#' + bundle['assessment_result']['actions'][0]['AssessmentEvidenceRange'] if title == 'Action Plan' else workbook.technical_path.name + '#' + expected)
         action = self.row(workbook, 'Action Plan', 'NOVEL-001')
         self.assertIn('2', action['Investigation Details'].value)
         self.assertIn('count reproduces 2', action['Qualification'].value)
@@ -218,13 +218,13 @@ class InvestigationContractExportTests(unittest.TestCase):
         contract = declaration(records=[{'id': 'long-record', 'investigationAttributes': original}],
                                reconciliation={'operation': 'count', 'expected': 1})
         _, workbook, _ = self.export(recommendation(declaration=contract))
-        sheet = workbook['Widget Investigation']
+        sheet = workbook.technical['Logs widgets']
         headers = [cell.value for cell in sheet[1]]
         pieces = [sheet.cell(2, column).value for column, header in enumerate(headers, 1)
                   if header == 'investigationAttributes' or str(header).startswith('investigationAttributes (continued')]
         self.assertEqual(''.join(pieces), original)
-        expected = f"#'Widget Investigation'!A2:{get_column_letter(sheet.max_column)}2"
-        self.assertEqual(self.row(workbook, 'Action Plan', 'NOVEL-001')['Investigation Details'].hyperlink.target, expected)
+        expected = f"#'Logs widgets'!A2:{get_column_letter(sheet.max_column)}2"
+        self.assertEqual(self.row(workbook, 'Recommendations', 'NOVEL-001')['Evidence Sheet'].hyperlink.target, workbook.technical_path.name + expected)
 
     def test_missing_mapping_is_visible_in_workbook_action_and_registers(self):
         _, workbook, _ = self.export(recommendation())
@@ -243,7 +243,7 @@ class InvestigationContractExportTests(unittest.TestCase):
         ]:
             with self.subTest(kind=kind):
                 _, workbook, _ = self.export(recommendation(declaration={'kind': kind, 'reason': reason}))
-                self.assertNotIn('Widget Investigation', workbook.sheetnames)
+                self.assertNotIn('Logs widgets', workbook.technical.sheetnames)
                 action = self.row(workbook, 'Action Plan', 'NOVEL-001')
                 self.assertEqual(action['Investigation Details'].value, status)
                 self.assertIn(reason, action['Qualification'].value)
@@ -254,11 +254,11 @@ class InvestigationContractExportTests(unittest.TestCase):
 
     def test_opportunity_records_export_and_link_from_both_registers(self):
         _, workbook, bundle = self.export(recommendation(declaration=declaration(), disposition='Opportunity'))
-        self.assertIn('Widget Investigation', workbook.sheetnames)
+        self.assertIn('Logs widgets', workbook.technical.sheetnames)
         self.assertFalse(any(row['RecommendationId'] == 'NOVEL-001' for row in bundle['assessment_result']['actions']))
         for title, column in (('Evidence Index', 'Workbook Tab'), ('Recommendations', 'Evidence Sheet')):
             cell = self.row(workbook, title, 'NOVEL-001')[column]
-            self.assertTrue(cell.hyperlink.target.startswith("#'Widget Investigation'!A2:"))
+            self.assertTrue(cell.hyperlink.target.startswith(workbook.technical_path.name + "#'Logs widgets'!A2:"))
 
 
 if __name__ == '__main__':

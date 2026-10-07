@@ -147,12 +147,16 @@ async def _fetch_graph_collection_via_http(path, params=None, max_pages=100, hea
     """Fetch a Graph collection using raw HTTP to support endpoints missing in the SDK."""
     started_at = datetime.now(timezone.utc).isoformat()
     endpoint = str(httpx.URL('https://graph.microsoft.com').join(path))
-    request_url = str(httpx.URL(endpoint, params=params))
+    # Passing params=None to URL() clears an already embedded query. The
+    # detail reader accepts paths containing $select/$top, so preserve exactly
+    # the query that the HTTP request will send and retain its parsed fields.
+    request_url = str(httpx.URL(endpoint, params=params)) if params is not None else endpoint
+    request_params = dict(params) if params is not None else dict(httpx.URL(endpoint).params)
 
     def request_metadata():
         return {
             'source_api': endpoint, 'request_url': request_url,
-            'request_params': dict(params or {}), 'max_pages': max_pages,
+            'request_params': request_params, 'max_pages': max_pages,
             'collection_started_at': started_at,
             'collection_completed_at': datetime.now(timezone.utc).isoformat(),
         }
@@ -258,7 +262,7 @@ async def _fetch_graph_object_via_http(path):
     finally:
         await http_client.aclose()
 
-async def get_entra_client(graph_client, tenant_id=None, preview_collectors='none', permission_profile='standard'):
+async def get_entra_client(graph_client, tenant_id=None, preview_collectors='auto', permission_profile='standard'):
     """
     Get authenticated client for Microsoft Entra ID (Azure AD) APIs.
     Fetches comprehensive identity, security, and compliance data.
@@ -536,7 +540,9 @@ async def get_entra_client(graph_client, tenant_id=None, preview_collectors='non
         # Use one pagination-aware HTTP path for every collection that contributes to a
         # finding or workbook count so a first page can never be mistaken for the complete
         # tenant inventory.
-        seven_days_ago = (datetime.now(timezone.utc) - timedelta(days=7)).strftime('%Y-%m-%dT%H:%M:%SZ')
+        signin_end = datetime.now(timezone.utc)
+        seven_days_ago = (signin_end - timedelta(days=7)).strftime('%Y-%m-%dT%H:%M:%SZ')
+        signin_end_text = signin_end.strftime('%Y-%m-%dT%H:%M:%SZ')
         collection_requests = {
             'ca_policies': ("/v1.0/identity/conditionalAccess/policies", {'$top': '999'}, None),
             'auth_methods': ("/v1.0/reports/authenticationMethods/userRegistrationDetails", {'$top': '999'}, None),
@@ -560,7 +566,7 @@ async def get_entra_client(graph_client, tenant_id=None, preview_collectors='non
             'service_principals': ("/v1.0/servicePrincipals", {'$select': 'id,appId,displayName,publisherName,verifiedPublisher,appOwnerOrganizationId,servicePrincipalType,appRoles,oauth2PermissionScopes', '$top': '999'}, None),
             'oauth_grants': ("/v1.0/oauth2PermissionGrants", {'$top': '999'}, None),
             'consent_policies': ("/v1.0/policies/permissionGrantPolicies", {'$top': '999'}, None),
-            'signin_logs': ("/v1.0/auditLogs/signIns", {'$filter': f'createdDateTime ge {seven_days_ago}', '$top': '999'}, None),
+            'signin_logs': ("/v1.0/auditLogs/signIns", {'$filter': f'createdDateTime ge {seven_days_ago} and createdDateTime le {signin_end_text}', '$top': '999'}, None),
         }
         for task_name, (path, params, headers) in collection_requests.items():
             if not source_allowed(task_name, permission_profile):
@@ -614,6 +620,19 @@ async def get_entra_client(graph_client, tenant_id=None, preview_collectors='non
                         'truncated': bool(_task_result.get('truncated')),
                         'reason': _reason,
                     }
+                    # Named dashboard records need the original request and
+                    # collection dates, not just the aggregate fetch outcome.
+                    # Keep only evidence metadata, never headers or transport
+                    # objects, alongside every completed or partial request.
+                    for _metadata_key in (
+                        'source_api', 'request_url', 'request_params', 'max_pages',
+                        'page_requests', 'collection_started_at', 'collection_completed_at',
+                        'status_code', 'window_start', 'window_end',
+                    ):
+                        if _metadata_key in _task_result:
+                            _status[_metadata_key] = _task_result[_metadata_key]
+                    if _task_result.get('collection_completed_at'):
+                        _status['collected_at'] = _task_result['collection_completed_at']
                     client_obj.collection_status[_task_name] = _status
                     client_obj.data_sources[_task_name] = _status['available'] and not _status['truncated']
                 else:
@@ -640,8 +659,8 @@ async def get_entra_client(graph_client, tenant_id=None, preview_collectors='non
             'request_url': signin_result.get('request_url') or str(httpx.URL('https://graph.microsoft.com' + signin_path, params=signin_params)),
             'request_params': signin_result.get('request_params') or dict(signin_params),
             'filter': signin_params['$filter'], 'filters': dict(signin_params),
-            'window_start': seven_days_ago, 'window_end': '',
-            'collection_window': f'createdDateTime ge {seven_days_ago}; no requested upper time bound',
+            'window_start': seven_days_ago, 'window_end': signin_end_text,
+            'collection_window': f'createdDateTime ge {seven_days_ago} and createdDateTime le {signin_end_text}',
             'collection_started_at': signin_result.get('collection_started_at', ''),
             'collection_completed_at': signin_result.get('collection_completed_at', ''),
             'max_pages': signin_result.get('max_pages', 100), 'page_size': 999,
@@ -652,7 +671,7 @@ async def get_entra_client(graph_client, tenant_id=None, preview_collectors='non
             'retention': 'Source-retained events only. Microsoft documents seven days for Entra Free and 30 days for P1/P2 sign-in retention; archived logs are not queried.',
             'classification_rule': LEGACY_CLASSIFICATION_RULE,
             'limitations': 'The v1.0 list API documents interactive user and successful federated sign-ins; this query does not establish coverage of every sign-in category. '
-                           'No upper timestamp filter is sent, so pages are read from a changing source. Retention, ingestion delay, permissions and pagination can limit completeness. '
+                           'The requested interval has both lower and upper bounds. Retention, ingestion delay, permissions and pagination can limit completeness. '
                            'Legacy-client classification includes failed and blocked attempts and does not prove a successful control bypass.',
             'documentation': [
                 'https://learn.microsoft.com/graph/api/signin-list?view=graph-rest-1.0',
@@ -1272,36 +1291,30 @@ async def get_entra_client(graph_client, tenant_id=None, preview_collectors='non
                 client_obj.signin_summary['total_signins_sampled'] = len(signins)
                 
                 for signin in signins:
-                    signin_status = _get_attr(signin, 'status', {}) or {}
-                    error_code = _get_attr(signin_status, 'errorCode', 0) or 0
-                    
-                    # Classify the reported client independently of the result;
-                    # matching failed/blocked attempts are not successful bypasses.
+                    from .operational_evidence import signin_record
+                    from .expanded_collection import plain
+                    classified = signin_record(plain(signin))
                     if is_legacy_signin(signin):
                         client_obj.signin_summary['legacy_auth_attempts'] += 1
-                    
-                    # MFA
-                    auth_details = _get_attr(signin, 'authenticationDetails', []) or []
-                    if auth_details:
-                        for detail in auth_details:
-                            if _get_attr(detail, 'authenticationMethod', '') == 'MFA':
-                                client_obj.signin_summary['mfa_required'] += 1
-                                if _get_attr(detail, 'succeeded', False):
-                                    client_obj.signin_summary['mfa_success'] += 1
-                                else:
-                                    client_obj.signin_summary['mfa_failure'] += 1
-                    
-                    # CA status
-                    ca_status = str(_get_attr(signin, 'conditionalAccessStatus', '') or '').lower()
-                    if ca_status == 'success':
-                        client_obj.signin_summary['ca_success'] += 1
-                    elif ca_status == 'failure':
-                        client_obj.signin_summary['ca_failure'] += 1
-                    
-                    # Failed sign-ins
-                    if error_code != 0:
-                        client_obj.signin_summary['failed_signins'] += 1
-                    
+                    summary = client_obj.signin_summary
+                    def increment(key, condition):
+                        summary[key] = summary.get(key, 0) + int(bool(condition))
+                    increment('successful_signins', classified['SignInOutcome']=='success')
+                    increment('failed_signins', classified['SignInOutcome']=='failure')
+                    increment('unknown_signin_outcomes', classified['SignInOutcome']=='unknown')
+                    increment('mfa_required', classified['MFARequirement']=='required')
+                    increment('mfa_success', classified['MFASatisfaction']=='observed_success')
+                    increment('mfa_previously_satisfied', classified['MFASatisfaction']=='previously_satisfied')
+                    increment('mfa_unknown', classified['MFASatisfaction']=='unknown')
+                    increment('mfa_not_required', classified['MFARequirement']=='not_required')
+                    increment('mfa_failure', any(step.get('succeeded') is False and
+                        'multifactor' in str(step.get('authenticationStepRequirement','')).lower()
+                        for step in classified.get('authenticationDetails',[]) or []))
+                    increment('ca_success', classified['ConditionalAccessResult'].lower()=='success')
+                    increment('ca_failure', classified['ConditionalAccessResult'].lower()=='failure')
+                    increment('ca_report_only', classified['ReportOnlyResults'])
+                    increment('ca_unknown', classified['ConditionalAccessResult'].lower()=='unknown')
+
                     # Risky sign-ins
                     risk_level = str(_get_attr(signin, 'riskLevelDuringSignIn', '') or '').lower()
                     if risk_level in ['high', 'medium']:
@@ -1314,6 +1327,17 @@ async def get_entra_client(graph_client, tenant_id=None, preview_collectors='non
         # ====================================================================
         # GLOBAL SECURE ACCESS (Entra Internet Access) - NetworkAccess API (Beta)
         # ====================================================================
+        from .expanded_collection import collect_entra_details
+        async def detail_fetch(path):
+            if path.endswith('/windowsProtectionState'):
+                result = await _fetch_graph_object_via_http(path)
+                obj = result.pop('object', None)
+                result['value'] = [obj.get('value', obj)] if isinstance(obj, dict) else []
+                result.setdefault('reason', result.get('error', ''))
+                return result
+            return await _fetch_graph_collection_via_http(path)
+        await collect_entra_details(client_obj, detail_fetch, permission_profile=permission_profile,
+                                   preview_collectors=preview_collectors)
         if preview_collectors not in {'network-access', 'all'}:
             not_selected = {
                 'status': 'OptionalNotSelected',

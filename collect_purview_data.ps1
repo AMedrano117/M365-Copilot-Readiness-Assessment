@@ -415,7 +415,7 @@ $purviewData = @{
 Write-CollectionStep STEP 'DLP policies'
 Write-Progress2 "      - DLP Compliance Policies..." -NoNewline
 try {
-    $dlpPolicies = @(Get-DlpCompliancePolicy -ErrorAction Stop | Select-Object Name, DisplayName, Identity, Guid, Mode, Enabled, Workload, Locations, EnforcementPlanes, ExchangeLocation, ExchangeLocationException, SharePointLocation, SharePointLocationException, OneDriveLocation, OneDriveLocationException, TeamsLocation, EndpointDlpLocation, PowerBILocation, PolicyRBACScopes, Comment)
+    $dlpPolicies = @(Get-DlpCompliancePolicy -ErrorAction Stop | Select-Object Name, DisplayName, Identity, Guid, Mode, Enabled, Workload, Locations, EnforcementPlanes, ExchangeLocation, ExchangeLocationException, SharePointLocation, SharePointLocationException, OneDriveLocation, OneDriveLocationException, TeamsLocation, TeamsLocationException, EndpointDlpLocation, PowerBILocation, PolicyRBACScopes, Comment, WhenCreatedUTC, WhenChangedUTC)
     $purviewData['dlp_policies'] = New-CollectionSuccess -Count $dlpPolicies.Count
     $purviewData['dlp_policies']['policies'] = $dlpPolicies
     Write-Progress2 " $($dlpPolicies.Count) found" -ForegroundColor Green
@@ -443,7 +443,7 @@ try {
 Write-CollectionStep STEP 'sensitivity labels'
 Write-Progress2 "      - Sensitivity Labels..." -NoNewline
 try {
-    $labels = @(Get-Label -ErrorAction Stop | Select-Object Name, DisplayName, Tooltip, Enabled)
+    $labels = @(Get-Label -ErrorAction Stop | Select-Object Name, DisplayName, Identity, Guid, ImmutableId, ParentId, Tooltip, Enabled, ContentType, Priority, LabelActions, Settings, WhenCreatedUTC, WhenChangedUTC)
     $purviewData['sensitivity_labels'] = New-CollectionSuccess -Count $labels.Count
     $purviewData['sensitivity_labels']['labels'] = $labels
     Write-Progress2 " $($labels.Count) found" -ForegroundColor Green
@@ -457,7 +457,7 @@ try {
 Write-CollectionStep STEP 'retention policies'
 Write-Progress2 "      - Retention Compliance Policies..." -NoNewline
 try {
-    $retentionPolicies = @(Get-RetentionCompliancePolicy -ErrorAction Stop | Select-Object Name, Enabled, Type)
+    $retentionPolicies = @(Get-RetentionCompliancePolicy -ErrorAction Stop | Select-Object Name, Identity, Guid, Enabled, Type, Mode, Workload, DistributionStatus, Applications, Locations, ExchangeLocation, ExchangeLocationException, SharePointLocation, SharePointLocationException, OneDriveLocation, OneDriveLocationException, ModernGroupLocation, ModernGroupLocationException, TeamsChannelLocation, TeamsChannelLocationException, TeamsChatLocation, TeamsChatLocationException, PolicyRBACScopes, RestrictiveRetention, WhenCreatedUTC, WhenChangedUTC)
     $purviewData['retention_policies'] = New-CollectionSuccess -Count $retentionPolicies.Count
     $purviewData['retention_policies']['policies'] = $retentionPolicies
     Write-Progress2 " $($retentionPolicies.Count) found" -ForegroundColor Green
@@ -471,10 +471,8 @@ try {
 Write-CollectionStep STEP 'label publishing policies'
 Write-Progress2 "      - Sensitivity Label Policies..." -NoNewline
 try {
-    $labelPolicies = @(Get-LabelPolicy -ErrorAction Stop -WarningAction SilentlyContinue | Select-Object Name, Enabled, Mode,
-        # Publishing scope without personal data: whether labels reach all
-        # users, plus counts of named users/groups and excluded entries.
-        @{ Name = 'ExchangeLocation'; Expression = { if (@($_.ExchangeLocation | ForEach-Object { [string]$_ }) -contains 'All') { 'All' } else { '' } } },
+    $labelPolicies = @(Get-LabelPolicy -ErrorAction Stop -WarningAction SilentlyContinue | Select-Object Name, Identity, Guid, Enabled, Mode, Labels, Settings, ExchangeLocation, ExchangeLocationException, ModernGroupLocation, ModernGroupLocationException, PolicyRBACScopes, WhenCreatedUTC, WhenChangedUTC,
+        # Retain assignments and exclusions for investigation, with compatible counts.
         @{ Name = 'ExchangeLocationCount'; Expression = { @($_.ExchangeLocation | Where-Object { $_ }).Count } },
         @{ Name = 'ExchangeLocationExceptionCount'; Expression = { @($_.ExchangeLocationException | Where-Object { $_ }).Count } },
         @{ Name = 'ModernGroupLocationCount'; Expression = { @($_.ModernGroupLocation | Where-Object { $_ }).Count } },

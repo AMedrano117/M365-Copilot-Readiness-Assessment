@@ -220,7 +220,7 @@ class SharedAssessmentTests(unittest.TestCase):
             metric_id="DATA.DLP", scope="Reviewed pilot users and approved content", value="Reviewed enforcement and coverage",
             unit="control result", control_result="pass")]))
         controls = {row["control_id"]: row["status"] for row in result["controls"]}
-        self.assertEqual(controls["DATA.DLP"], "Observed")
+        self.assertEqual(controls["DATA.DLP"], "Not established")
         self.assertEqual(controls["DATA.LABELS"], "Not established")
         self.assertEqual(controls["DATA.AUDIT"], "Not established")
 
@@ -237,12 +237,12 @@ class SharedAssessmentTests(unittest.TestCase):
                 result = self.result([row])
                 check = next(item for item in result["controls"] if item["control_id"] == control)
                 self.assertEqual(check["status"], "Not established")
-                self.assertTrue(any(item["Observation"] == observation for item in result["strengths"]))
+                self.assertTrue(any(item["Observation"] == observation for item in result["recommendations"]))
                 self.assertTrue(any(item.get("ControlId") == control and item["ActionType"] == "Evidence" for item in result["actions"]))
                 reviewed = self.result([row], bundle(observations=[fact(domain_id="identity" if service == "Entra" else "data_protection",
                     control_id=control, metric_id=control, scope="Reviewed pilot population and content", value="Coverage and effective protection reviewed",
                     unit="control result", control_result="pass")]))
-                self.assertEqual(next(item["status"] for item in reviewed["controls"] if item["control_id"] == control), "Observed")
+                self.assertEqual(next(item["status"] for item in reviewed["controls"] if item["control_id"] == control), "Not established" if control in {"IDENTITY.AUTH","DATA.DLP"} else "Observed")
 
     def test_current_risky_user_action_and_milestone_use_specific_review_title(self):
         row = rec(RecommendationId="ENT-013", Feature="Microsoft Entra ID P2", FindingKey="", ControlId="IDENTITY-001",
@@ -259,7 +259,7 @@ class SharedAssessmentTests(unittest.TestCase):
         row = rec(Service="Purview", Feature="Audit", FindingKey="purview.audit", EvidenceKey="purview_policy_detail",
                   Observation="Audit logging is enabled.", Recommendation="", Disposition="Assurance", Status="Success")
         controls = {row["control_id"]: row["status"] for row in self.result([row])["controls"]}
-        self.assertEqual(controls["DATA.AUDIT"], "Observed")
+        self.assertEqual(controls["DATA.AUDIT"], "Not established")
         self.assertEqual(controls["DATA.RETENTION"], "Not established")
 
     def test_different_historical_conditions_from_same_license_feature_are_retained(self):
@@ -280,7 +280,7 @@ class SharedAssessmentTests(unittest.TestCase):
         from tests.test_readiness_progress import review_profile
         observations = [fact(domain_id=domain, control_id=control, metric_id=control, value="Reviewed",
                              scope="pilot population", unit="control result", control_result="pass") for control, domain, *_ in QUESTIONS]
-        result = self.result(evidence=bundle(observations=observations, assessment_profile=review_profile(complete=False)))
+        result = self.result(evidence=bundle(observations=observations, assessment_profile=review_profile()))
         self.assertEqual(result["decision"], "Ready for a controlled pilot")
         self.assertFalse(result["actions"])
         self.assertTrue(all(row["Status"] == "Pass" for row in result["control_results"]))
@@ -291,7 +291,7 @@ class SharedAssessmentTests(unittest.TestCase):
                              scope="pilot population", unit="control result", control_result="pass") for control, domain, *_ in QUESTIONS]
         rows = [rec(FindingKey=key, Disposition="Coverage", Status="Not Assessed") for key in
                 ("offline.tenant_coverage", "portal.unrecognized.optional.csv")]
-        result = self.result(rows, bundle(observations=observations, assessment_profile=review_profile(complete=False)))
+        result = self.result(rows, bundle(observations=observations, assessment_profile=review_profile()))
         self.assertEqual(result["decision"], "Ready for a controlled pilot")
         self.assertFalse(result["actions"])
 

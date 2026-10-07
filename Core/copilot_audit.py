@@ -1,11 +1,9 @@
-"""Copilot interaction events from the unified audit log (opt-in preview).
+"""Copilot interaction metadata from the unified audit log (Standard default).
 
 Uses the Microsoft Purview Audit Log Query API (``/v1.0/security/auditLog/
 queries``) with an application permission. Queries run asynchronously in the
-service, so collection polls within a time budget and keeps aggregates only
-(events per day, per app host and distinct users). Per-user rows are kept only
-when ``--include-user-usage-detail`` is set. No prompt or response content is
-requested or stored.
+service, so collection polls within a time budget and retains investigation
+metadata. No prompt or response content is stored.
 
 Enable with ``--preview-collectors copilot-audit`` and grant
 ``AuditLogsQuery.Read.All`` (setup ``-PreviewCollectors CopilotAudit``).
@@ -19,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 from .new_recommendation import new_recommendation
 
 AUTH_PATH = "graph_audit_query"
-SOURCE = "Microsoft Purview Audit Log Query API (preview collector)"
+SOURCE = "Microsoft Purview Audit Log Query API"
 QUERIES_PATH = "/v1.0/security/auditLog/queries"
 DEFAULT_DAYS = 7
 DEFAULT_MAX_WAIT_MINUTES = 8
@@ -30,9 +28,9 @@ def _base(**extra):
     from .auth_plan import credential_kind_for_path, graph_credential_kind
     state = {
         "available": False, "availability_status": "unavailable", "records_collected": 0,
-        "reason": "", "source": SOURCE, "auth_path_id": AUTH_PATH, "preview": True,
+        "reason": "", "source": SOURCE, "auth_path_id": AUTH_PATH, "preview": False,
         "credential_type": credential_kind_for_path(AUTH_PATH, {"graph_credential": graph_credential_kind()}),
-        "coverage": "partial", "evidence_quality": "preview",
+        "coverage": "partial", "evidence_quality": "standard",
     }
     state.update(extra)
     return state
@@ -75,7 +73,17 @@ def _app_host(record):
     return str(event.get("AppHost") or data.get("AppHost") or record.get("service") or "Unknown")
 
 
-def summarize_records(records, include_user_detail=False):
+def _resource_metadata(record):
+    data = record.get('auditData') or {}
+    if not isinstance(data,dict): return []
+    event = data.get('CopilotEventData') or {}
+    if not isinstance(event,dict): return []
+    return [{key:value for key,value in resource.items() if key in
+             {'ID','Id','Action','SiteUrl','ListItemUniqueId','Type','Name','SensitivityLabelId'}}
+            for resource in event.get('AccessedResources',[]) or [] if isinstance(resource,dict)]
+
+
+def summarize_records(records, include_user_detail=True):
     per_day, per_host, users = Counter(), Counter(), set()
     user_rows = Counter()
     for record in records:
@@ -89,7 +97,7 @@ def summarize_records(records, include_user_detail=False):
         if user:
             users.add(user.lower())
             if include_user_detail:
-                user_rows[user] += 1
+                user_rows[user.lower()] += 1
     summary = {
         "total_events": sum(per_host.values()),
         "distinct_users": len(users),
@@ -102,7 +110,7 @@ def summarize_records(records, include_user_detail=False):
 
 
 async def collect_copilot_interaction_audit(graph_client, *, days=DEFAULT_DAYS, max_wait_minutes=None,
-                                            include_user_detail=False, poll_initial=15, poll_max=60,
+                                            include_user_detail=True, poll_initial=15, poll_max=60,
                                             sleep=asyncio.sleep, clock=None):
     """Return aggregate Copilot interaction evidence; never raises."""
     clock = clock or (lambda: datetime.now(timezone.utc))
@@ -118,7 +126,8 @@ async def collect_copilot_interaction_audit(graph_client, *, days=DEFAULT_DAYS, 
         if status_code == 403:
             reason = ("Microsoft Graph denied the audit query (HTTP 403). Grant and consent AuditLogsQuery.Read.All "
                       "(setup -PreviewCollectors CopilotAudit) and confirm audit is enabled.")
-        return _base(reason=reason, status_code=status_code, window_days=days)
+        return _base(reason=reason, status_code=status_code, window_days=days,
+                     window_start=start.isoformat(), window_end=end.isoformat(), query_status='not_created')
     query_id = query["id"]
     waited, interval = 0.0, float(poll_initial)
     status = str(query.get("status") or "notStarted")
@@ -138,10 +147,20 @@ async def collect_copilot_interaction_audit(graph_client, *, days=DEFAULT_DAYS, 
                   if status not in {"failed", "cancelled"} else f"The audit query ended with status {status}.")
         return _base(reason=reason, availability_status="partial" if status not in {"failed", "cancelled"} else "unavailable",
                      query_status=status, **window)
-    result = await graph_client.get_collection(f"{QUERIES_PATH}/{query_id}/records", params={"$top": "1000"},
-                                               max_pages=max(1, MAX_RECORDS // 1000))
+    try:
+        result = await graph_client.get_collection(f"{QUERIES_PATH}/{query_id}/records", params={"$top": "1000"},
+                                                   max_pages=max(1, MAX_RECORDS // 1000))
+    except Exception as exc:
+        return _base(reason=f'Record retrieval failed ({type(exc).__name__}); the saved query succeeded.',
+                     query_status=status, availability_status='unavailable', **window)
     records = result.get("value", []) if isinstance(result, dict) else []
     summary = summarize_records(records, include_user_detail=include_user_detail)
+    # Only investigation metadata is retained. auditData may contain customer
+    # content and is deliberately reduced to documented identifiers and host.
+    detail = [{key: record.get(key) for key in (
+        'id', 'createdDateTime', 'operation', 'userId', 'userPrincipalName',
+        'service', 'recordType', 'objectId', 'clientIp', 'administrativeUnits') if key in record}
+        | {'AppHost': _app_host(record), 'AccessedResources':_resource_metadata(record)} for record in records if isinstance(record, dict)]
     truncated = bool(result.get("truncated")) if isinstance(result, dict) else False
     available = bool(result.get("available")) if isinstance(result, dict) else False
     return _base(
@@ -149,7 +168,11 @@ async def collect_copilot_interaction_audit(graph_client, *, days=DEFAULT_DAYS, 
         availability_status=("partial" if truncated else "available") if available else "unavailable",
         records_collected=len(records), truncated=truncated, query_status=status,
         reason=result.get("reason", "") if isinstance(result, dict) else "",
-        summary=summary, **window,
+        summary=summary, records=detail,
+        evidence_quality='standard', evidence_level='observed_operation',
+        source_api=QUERIES_PATH, scope='Returned Copilot interaction events in the requested window',
+        pages_collected=result.get('pages_collected', 0), complete=available and not truncated,
+        **window,
     )
 
 
@@ -169,15 +192,15 @@ def build_copilot_audit_recommendations(evidence):
                           "reports omit, and they confirm interactions are being logged for investigation.")
     else:
         observation = f"The unified audit log returned no Copilot interaction events in the last {days} days."
-        recommendation = ("Confirm unified audit logging is enabled and that users have Copilot access; if Copilot is in use, "
-                          "missing events indicate an auditing gap to resolve before the pilot.")
+        recommendation = ("Confirm query scope, retention, access and expected activity with the audit owner. "
+                          "An empty query cannot establish whether logging failed or no matching activity occurred.")
     if evidence.get("truncated"):
         observation += " The record read was capped; counts are a lower bound."
     return [new_recommendation(
-        service="M365", feature="Copilot interaction audit events (preview)", observation=observation,
+        service="M365", feature="Copilot interaction audit events", observation=observation,
         recommendation=recommendation, link_text="Audit logs for Copilot",
         link_url="https://learn.microsoft.com/purview/audit-copilot",
         priority="Low", status="Insight", disposition="Reference",
         finding_key="copilot.audit.interactions", evidence_key="ai_usage_detail",
-        evidence_basis="Preview API", confidence="Medium",
+        evidence_basis="Audit event metadata", confidence="Medium",
     )]

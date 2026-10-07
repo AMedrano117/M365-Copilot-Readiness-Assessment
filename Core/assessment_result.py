@@ -217,6 +217,7 @@ def _qualify_record(original, bundle, day, expected_tenant_id, *, historical=Fal
     metric = row.get("FindingKey") or f"{row.get('Service', '')}.observation.{_finding_identity(row)}"
     fact = normalize_observation({
         **meta, "domain_id": domain, "control_id": row.get("ControlId", ""),
+        'evidence_level':row.get('EvidenceLevel', 'policy_enforcement' if row.get('BaselineCheck') else 'configuration'),
         "metric_id": metric, "value": None if gap else row.get("Observation", ""),
         "unit": "control observation", "availability": "unknown" if gap else "available",
         "historical_conclusion": historical,
@@ -245,6 +246,7 @@ def _qualify_record(original, bundle, day, expected_tenant_id, *, historical=Fal
         "EvidenceStatus": status, "Qualification": qualification.strip(),
         "Historical": "Yes" if historical else "No", "EvidenceId": fact["evidence_id"],
         "EvidenceScope": fact["scope"], "EvidenceComplete": fact["complete"],
+        'EvidenceLevel':fact['evidence_level'],
         "MethodologyVersion": METHODOLOGY_VERSION,
     })
     if not historical and source_state:
@@ -254,6 +256,8 @@ def _qualify_record(original, bundle, day, expected_tenant_id, *, historical=Fal
             row["CollectedWith"] = label
     if status != "supported" and row.get("Disposition") in {"Action", "Assurance"}:
         row["Confidence"] = "Unknown" if fact["freshness"] in {"unknown", "future"} else "Low"
+    from .guidance_verification import qualify_guidance
+    qualify_guidance(row)
     return row, fact
 
 
@@ -334,9 +338,16 @@ def _adoption_observations(bundle, day, expected_tenant_id):
         if str(availability).lower() in {"not assessed", "not present", "not calculated"}:
             availability = "unknown"
         observation_date = source.get("refresh_date") or source.get("Refresh Date") or source.get("observed_at") or ""
+        basis=source.get('percentage_basis') or source.get('Percentage basis') or {}
+        if metric=='copilot.active_rate' and period in (usage.get('periods') or {}) and not historical:
+            metrics=usage['periods'][period]
+            basis={'numerator':metrics.get('active_users'),'denominator':metrics.get('enabled_users')}
+        elif metric=='copilot.estimated_license_coverage' and not historical:
+            basis=((bundle.get('ai_usage') or {}).get('license_coverage') or {}).get('percentage_basis') or basis
         facts.append({
             "domain_id": "adoption", "control_id": "ADOPTION.BASELINE", "metric_id": metric,
             "label": label, "value": _number(value), "unit": unit,
+            'numerator':basis.get('numerator'),'denominator':basis.get('denominator'),
             "availability": str(availability).lower(), "observed_at": observation_date,
             "window": period, "window_label": _window_label(period), "reporting_basis": "reporting period",
             "metric_kind": kind,
@@ -550,6 +561,8 @@ def _supports_question(row, control):
         return False
     if row.get("Disposition") == "Action":
         return True
+    if control in {'IDENTITY.AUTH', 'ENDPOINT.POSTURE', 'DATA.DLP', 'DATA.AUDIT'} and row.get('OperationalResult') != 'pass':
+        return False
     if row.get("BaselineCheck"):
         # Tenant-wide baseline checks evaluate enforcement and scope explicitly.
         return True
@@ -588,7 +601,7 @@ def _action(row):
             (("consent", "oauth"), "Confirm application consent and permissions"),
             (("application grants", "unverified publisher", "high-privilege permissions"), "Confirm the review of application grants"),
             (("overshar", "broad access", "anyone link"), "Confirm access restrictions for business content"),
-            (("endpoint", "device"), "Confirm the pilot device protection baseline"),
+            (("endpoint", "device"), "Confirm the device protection baseline"),
         )
         result["ActionTitle"] = next((title for words, title in topics if any(word in text for word in words)), "Confirm remediation of " + original)
         export_titles = {
@@ -627,6 +640,9 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
     """
     bundle = evidence_bundle or {}
     day = evaluation_day(evaluation_date or bundle.get("evaluation_date"))
+    from .operational_evidence import operational_results, OPERATION_CHECKS
+    operation, devices = operational_results(bundle, bundle.get('assessment_profile'), evaluation_date=day,
+                                             tenant_id=expected_tenant_id)
     prior = bundle.get("prior_report") or {}
     if expected_tenant_id and prior.get("tenant_id") and str(prior["tenant_id"]).lower() != str(expected_tenant_id).lower():
         raise ValueError("Prior assessment tenant ID does not match the assessed tenant.")
@@ -650,6 +666,12 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
     # Facts behind executive strengths pass through exactly the same qualifier as
     # risks; a service cache never gets a new date just because it was imported.
     for original in bundle.get("verified_strengths") or []:
+        # Saved packages may predate the explicit operational control tag.
+        # Normalize the summary as well as newly collected configuration rows.
+        summary_controls = {'dlp-enforced':'DATA.DLP','unified-audit-enabled':'DATA.AUDIT',
+                            'conditional-access-mfa':'IDENTITY.AUTH'}
+        if original.get('Key') in summary_controls:
+            original = dict(original,ControlId=summary_controls[original['Key']],EvidenceLevel='configuration')
         domain = domain_for(original)
         service = "Purview" if domain == "data_protection" else "M365" if domain == "content" else "Entra"
         row, fact = _qualify_record({
@@ -680,8 +702,9 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
     observations.extend(metrics)
     # Canonical explicit evidence can be supplied by collectors/package replay.
     pilot_scope = review.get("pilot_scope") or {}
+    tenant_scope = review.get('tenant_scope') or {}
     review_facts = [dict(row, label=next(question[2] for question in questions if question[0] == row["control_id"]))
-                    for row in review["observations"] if row.get("scope_id") == pilot_scope.get("id")]
+                    for row in review["observations"] if row.get("scope_id") == tenant_scope.get("id")]
     plan = review.get("pilot_plan") or {}
     if plan.get("current") and pilot_scope.get("current") and parse_date(plan["reviewed_at"]) >= parse_date(pilot_scope["reviewed_at"]):
         review_facts.append({
@@ -719,13 +742,48 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
             "SourceType": fact["source_type"], "SourceFile": fact["source_file"], "Historical": "No",
             "MethodologyVersion": METHODOLOGY_VERSION,
         })
+    for control, assessment in operation.items():
+        if assessment['result'] not in {'fail','conflict'}:
+            continue
+        question = next(item for item in questions if item[0] == control)
+        original = {'ControlId':control,'Service':DOMAIN_LOOKUP[question[1]][1],
+            'Feature':'Validate operational behavior: ' + question[2], 'Observation':assessment['reason'],
+            'Recommendation':'Resolve the reviewed operational failure or conflicting evidence and repeat the tenant-wide validation.',
+            'FindingKey':'operation.' + control.lower(), 'DomainId':question[1], 'Priority':'High',
+            'Status':'Action Required','Disposition':'Action' if assessment['result']=='fail' else 'Coverage',
+            'EvidenceBasis':'Tested operational behavior','EvidenceLevel':'observed_operation',
+            'EvidenceScope':'Tenant-wide owner review','EvidenceComplete':True,
+            'ObservationDate':max(str(row.get('reviewed_at') or '') for row in assessment['records']),
+            'SourceType':'operator_attestation', 'SourceFile':(bundle.get('assessment_profile') or {}).get('filename',''),
+            'InvestigationEvidence':{'kind':'records','records':assessment['records'], 'reason':assessment['reason'],
+                'source':{'scope':'Tenant-wide owner review','complete':True,'truncated':False}}}
+        row, fact = _qualify_record(original,bundle,day,expected_tenant_id)
+        if assessment['result']=='conflict': row['EvidenceStatus']='conflict'
+        records.append(row)
+        observations.append(fact)
     controls = []
     for question in questions:
         control, domain, title, _, _, security_gate = question
         matching = [row for row in records if _matches_question(row, question)]
+        if control in operation:
+            for row in matching:
+                row['OperationalResult'] = operation[control]['result']
+                row['OperationalQualification'] = operation[control]['reason']
+                if row.get('Disposition') == 'Assurance' and operation[control]['result'] != 'pass':
+                    row['Qualification'] = (str(row.get('Qualification') or '') + ' Configuration component only; operational confirmation remains unresolved.').strip()
+            if operation[control]['result'] != 'pass' and not any(row.get('Disposition') in {'Action','Coverage'} for row in matching):
+                gap = _gap(question, day)
+                gap.update(FindingKey='coverage.operation.' + control.lower(),
+                           Observation=(gap['Observation'] + ' ' if not matching else '') + operation[control]['reason'], EvidenceLevel='observed_operation',
+                           Recommendation='Provide current tenant-wide operational records or a dated tenant-wide check review documenting tested behavior and its scope.')
+                records.append(gap)
+                matching.append(gap)
         supported = [row for row in matching if _supports_question(row, control)]
         known_facts = [row for row in explicit if row.get("control_id") == control and row.get("control_result") in {"pass", "fail"} and row["selection"] == "selected"
                        and row["freshness"] == "current" and row["complete"] and row["tenant_id"] and row["scope"]]
+        if control in operation:
+            known_facts = [row for row in known_facts if row.get('control_result')=='fail' or
+                           row.get('evidence_level')=='observed_operation' and operation[control]['result']=='pass']
         existing_gap = [row for row in matching if row.get("Disposition") == "Coverage"
                         or (row.get('Disposition') == 'Action' and row.get('EvidenceStatus') != 'supported')]
         if not supported and not known_facts and not existing_gap:
@@ -737,12 +795,15 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
             "status": "Action required" if any(row.get("Disposition") == "Action" for row in supported) or any(row.get("control_result") == "fail" for row in known_facts)
                       else "Observed" if supported or known_facts else "Not established",
             "security_gate": security_gate,
+            'configuration_result': 'supported' if any(row.get('Disposition')=='Assurance' and row.get('EvidenceStatus')=='supported' for row in matching) else 'not_established',
+            'operational_result': operation.get(control, {}).get('result', 'not_applicable'),
             "evidence_ids": [row["EvidenceId"] for row in supported] + [row["evidence_id"] for row in known_facts],
             "recommendation_ids": [row.get("RecommendationId", "") for row in matching],
         })
     reviewed_passes = {fact["control_id"]: fact for fact in explicit
                        if fact.get("source_type") == "operator_attestation" and fact.get("control_result") == "pass"
-                       and fact["selection"] == "selected" and fact["complete"] and fact["freshness"] == "current"}
+                       and fact["selection"] == "selected" and fact["complete"] and fact["freshness"] == "current"
+                       and (fact['control_id'] not in operation or fact.get('evidence_level')=='observed_operation' and operation[fact['control_id']]['result']=='pass')}
     for row in records:
         if row.get("Disposition") != "Coverage" or row.get("EvidenceStatus") != "gap":
             continue
@@ -768,7 +829,7 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
                 gap.update(EvidenceStatus="conflict", Qualification=fact["qualification"], EvidenceId=fact["evidence_id"])
                 records.append(gap)
     used_ids = set()
-    for row in records:
+    for row in [*records, *optional_records]:
         identifier = row.get("RecommendationId") or "REC-" + stable_id([_finding_identity(row), row.get("SourceType"), row.get("EvidenceScope")])[:10].upper()
         if identifier in used_ids:
             identifier += "-" + stable_id([row.get("SourceType"), row.get("EvidenceId")])[:5].upper()
@@ -779,7 +840,8 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
                                  {"Remediation": 0, "Confirmation": 1, "Evidence": 2}[row["ActionType"]], row["DomainId"], row["Feature"]))
     actions_by_id = {row["RecommendationId"]: row for row in actions}
     records = [actions_by_id.get(row["RecommendationId"], row) for row in records]
-    strengths = [row for row in records if row.get("Disposition") == "Assurance" and row["EvidenceStatus"] == "supported"]
+    strengths = [row for row in records if row.get("Disposition") == "Assurance" and row["EvidenceStatus"] == "supported"
+                 and (not row.get('OperationalResult') or row['OperationalResult']=='pass')]
     prior_titles = {_slug(title) for title in (prior.get("sheets") or {})}
     def has_historical_support(row):
         if str(row.get("EvidenceAvailable") or "").lower() != "yes":
@@ -895,6 +957,7 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
             "Methodology Version": METHODOLOGY_VERSION,
             "Status": "Fail" if control["status"] == "Action required" else "Pass" if control["status"] == "Observed" else "Not assessed",
             "Result": "fail" if control["status"] == "Action required" else "pass" if control["status"] == "Observed" else "not_assessed",
+            'Configuration result': control['configuration_result'], 'Operational result':control['operational_result'],
             "Domain": DOMAIN_LOOKUP[control["domain_id"]][1],
             "Required for deployment decision": "Yes" if control["security_gate"] else "No",
             "Recommendation IDs": "; ".join(control["recommendation_ids"]),
@@ -908,7 +971,9 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
         "methodology_version": METHODOLOGY_VERSION, "evaluation_date": day.isoformat(),
         "report_completeness": "Complete", "evidence_completeness": "Incomplete" if any(row["status"] == "Not established" for row in controls) else "Complete",
         "tenant_id": expected_tenant_id or "", "decision": decision, "rationale": rationale,
-        "recommendations": records, "customer_findings": [row for domain in domains for row in domain["findings"]],
+        "recommendations": [*records, *[dict(row, OriginalDisposition=row.get('Disposition'),Disposition='Reference',
+                                            PilotImpact='Outside the explicitly approved readiness scope') for row in optional_records]],
+        "customer_findings": [row for domain in domains for row in domain["findings"]],
         "actions": actions, "domains": domains, "controls": controls, "control_results": control_results,
         "strengths": strengths, "historical_strengths": historical_strengths, "opportunities": opportunities,
         "coverage": coverage, "decision_coverage": [row for row in coverage if row["SecurityGate"]],
@@ -939,4 +1004,7 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
             "Ready for a controlled pilot", "Controlled pilot with conditions", "Pilot only — remediation required"}:
         result["decision"] = "Readiness unconfirmed"
         result["rationale"] = "Complete the remaining pilot requirements before authorizing the next rollout stage."
-    return result
+    result['operational_results'] = operation
+    result['device_reconciliation'] = devices
+    from .assessment_catalog import attach_catalog
+    return attach_catalog(result, bundle)

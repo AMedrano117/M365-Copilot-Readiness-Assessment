@@ -95,13 +95,30 @@ def _date_text(row):
 
 def _heading(row):
     """Use reviewed topic labels for the parser-facing report families."""
+    if row.get('Historical')=='Yes':
+        return str(row.get('OriginalFeature') or row.get('Feature') or 'Historical observation')
     titles = {
+        'entra.signins.legacy_auth': 'Review legacy authentication sign-ins',
         'data_exposure.inactive_sites': 'Review inactive SharePoint sites',
         'data_exposure.ownerless_sites': 'Confirm and assign site owners',
         'sharepoint.dag.not_assessed': 'Complete the SharePoint permissions and sharing review',
         'data_exposure.freshness.sam': 'Refresh the older SharePoint permissions evidence',
         'purview.audit.state': 'Audit logging configuration',
     }
+    control_titles = {
+        'coverage.content.ownership':'Confirm content owners and review dates',
+        'coverage.data.dlp':'Validate DLP protection in operation',
+        'coverage.license.apps':'Verify Microsoft 365 app prerequisites',
+        'coverage.adoption.baseline':'Agree pilot goals and success measures',
+        'dlp-enforced':'DLP enforcement configuration',
+        'unified-audit-enabled':'Unified audit configuration',
+        'azure-rms-enabled':'Rights Management configuration',
+        'sensitivity-labels-published':'Label definitions and publication',
+        'coverage.data_dlp':'Validate DLP protection in operation',
+        'coverage.DATA.DLP':'Validate DLP protection in operation',
+    }
+    if row.get('FindingKey') in control_titles:
+        return control_titles[row['FindingKey']]
     if row.get('FindingKey') in titles:
         return titles[row['FindingKey']]
     feature = str(row.get('ActionTitle') or row.get('Feature') or row.get('Strength') or 'Review this condition')
@@ -110,6 +127,10 @@ def _heading(row):
     observation = str(row.get('Observation') or '').lower()
     for token, title in (
         ('user consent enabled for applications', 'Restrict application consent'),
+        ('user-consent policy', 'Review user consent policy assignments'),
+        ('self-service permission', 'Review user consent policy assignments'),
+        ('self-consent', 'Review user consent policy assignments'),
+        ('mfa enrolled', 'Close multifactor authentication registration gaps'),
         ('application grants requiring review', 'Review application grants and permissions'),
         ('enrolled in mfa', 'Close multifactor authentication registration gaps'),
         ('role assignment schedules have no expiration', 'Reduce standing administrative access'),
@@ -297,12 +318,18 @@ def _sharing_setting_value(key, value):
             'internal': 'People in the organization', 'anonymousaccess': 'Anyone link',
         }
         names = {0: 'none', 1: 'direct', 2: 'internal', 3: 'anonymousaccess'}
+    elif key in {'FileAnonymousLinkType', 'FolderAnonymousLinkType'}:
+        enum_values = {'none': 'Not set', 'view': 'View only', 'edit': 'View and edit'}
+        names = {0: 'none', 1: 'view', 2: 'edit'}
     if enum_values is not None:
         return enum_values.get(names.get(number) if number is not None else text.lower(),
                                f'Unmapped value ({text})')
     if key == 'RequireAnonymousLinksExpireInDays':
         if number == 0:
             return 'No expiry requirement (0 days)'
+        if number == -1:
+            # Get-SPOTenant reports -1 when no expiry has ever been configured.
+            return 'No expiry requirement (not set)'
         if number is not None and 1 <= number <= 730:
             return f'{number} day' + ('' if number == 1 else 's')
         return f'Unmapped value ({text})'
@@ -318,16 +345,94 @@ def _sharing_setting_value(key, value):
     return f'Unmapped value ({text})'
 
 
-def _settings(bundle):
+SHARING_SETTING_LABELS = {
+    'SharingCapability': 'SharePoint external sharing', 'OneDriveSharingCapability': 'OneDrive external sharing',
+    'DefaultSharingLinkType': 'Default sharing link', 'RequireAcceptingAccountMatchInvitedAccount': 'Require invited account match',
+    'PreventExternalUsersFromResharing': 'Prevent guests from sharing again',
+    'ExternalUserExpirationRequired': 'Require guest access expiry',
+    'LegacyAuthProtocolsEnabled': 'Legacy authentication protocols',
+    'RequireAnonymousLinksExpireInDays': 'Anyone link expiry',
+    'FileAnonymousLinkType': 'Anyone link permission (files)',
+    'FolderAnonymousLinkType': 'Anyone link permission (folders)',
+}
+SHARING_FINDINGS = {'sharepoint.sharing.permissive_anonymous_defaults', 'sharepoint.sharing.anyone_enabled',
+                    'sharepoint.sharing.organization_default'}
+SETTING_STATES = {'change': 'Change', 'review': 'Review', 'ok': 'Meets recommendation'}
+
+
+def _sharing_check(key, value, anyone):
+    """Recommended value and state for one displayed setting.
+
+    Recommendations narrow who a new link reaches, which narrows what Copilot can
+    surface. They describe configuration only, never who has access today.
+    """
+    recommended, state = _sharing_recommendation(key, value, anyone)
+    if value == 'Not reported' or value.startswith('Unmapped value'):
+        state = 'review'
+    return recommended, state
+
+
+def _sharing_recommendation(key, value, anyone):
+    if key in {'SharingCapability', 'OneDriveSharingCapability'}:
+        return 'New and existing guests (no Anyone links), or stricter', 'change' if value.startswith('Anyone links') else 'ok'
+    if key == 'DefaultSharingLinkType':
+        return 'Specific people', 'ok' if value == 'Specific people' else 'review' if value == 'People in the organization' else 'change'
+    if key in {'RequireAcceptingAccountMatchInvitedAccount', 'PreventExternalUsersFromResharing', 'ExternalUserExpirationRequired'}:
+        return 'Enabled', 'ok' if value == 'Enabled' else 'change'
+    if key == 'LegacyAuthProtocolsEnabled':
+        return 'Disabled', 'ok' if value == 'Disabled' else 'change'
+    if key == 'RequireAnonymousLinksExpireInDays':
+        if not anyone:
+            return '30 days or fewer if Anyone links are allowed', 'ok'
+        days = re.match(r'(\d+) days?$', value)
+        return '30 days or fewer', 'change' if not days else 'review' if int(days.group(1)) > 30 else 'ok'
+    if key in {'FileAnonymousLinkType', 'FolderAnonymousLinkType'}:
+        return 'View only', 'change' if anyone and value == 'View and edit' else 'ok'
+    return 'See Microsoft guidance', 'review'
+
+
+def _sharing_review(bundle):
     settings = (bundle.get('sharepoint_governance') or {}).get('settings') or {}
-    labels = {'SharingCapability': 'SharePoint external sharing', 'OneDriveSharingCapability': 'OneDrive external sharing',
-              'DefaultSharingLinkType': 'Default sharing link', 'RequireAcceptingAccountMatchInvitedAccount': 'Require invited account match',
-              'PreventExternalUsersFromResharing': 'Prevent guests from sharing again',
-              'ExternalUserExpirationRequired': 'Require guest access expiry',
-              'LegacyAuthProtocolsEnabled': 'Legacy authentication protocols',
-              'RequireAnonymousLinksExpireInDays': 'Anyone link expiry'}
-    rows = [{'label': label, 'value': _sharing_setting_value(key, settings[key])} for key, label in labels.items() if key in settings]
-    return '<h3>Tenant sharing settings</h3><p>Configuration describes permitted behavior; it does not establish who currently has access to each file.</p>' + table(rows, [('Setting', 'label'), ('Observed value', 'value')]) if rows else ''
+    values = {key: _sharing_setting_value(key, settings[key]) for key in SHARING_SETTING_LABELS if key in settings}
+    anyone = any(values.get(key, '').startswith('Anyone links') for key in ('SharingCapability', 'OneDriveSharingCapability'))
+    rows = []
+    for key, value in values.items():
+        recommended, state = _sharing_check(key, value, anyone)
+        rows.append({'label': SHARING_SETTING_LABELS[key], 'value': value, 'recommended': recommended, 'state': state})
+    order = {'change': 0, 'review': 1, 'ok': 2}
+    return sorted(rows, key=lambda row: order[row['state']])
+
+
+def _sharing_table(rows, caption=''):
+    body = ''.join(f'<tr class="setting-row" data-state="{row["state"]}"><td>{prose(row["label"])}</td><td>{prose(row["value"])}</td>'
+                   f'<td data-label="Recommended">{prose(row["recommended"])}</td>'
+                   f'<td><span class="setting-status" data-state="{row["state"]}">{SETTING_STATES[row["state"]]}</span></td></tr>'
+                   for row in rows)
+    return (f'<div class="table-scroll"><table class="settings-table"><caption>{escape(caption)}</caption><thead><tr><th scope="col">Setting</th>'
+            f'<th scope="col">Current value</th><th scope="col">Recommended</th><th scope="col">Status</th></tr></thead><tbody>{body}</tbody></table></div>')
+
+
+def _sharing_changes(bundle):
+    """Settings to change, shown inside the sharing action card."""
+    rows = [row for row in _sharing_review(bundle) if row['state'] != 'ok']
+    if not rows:
+        return ''
+    changes = sum(row['state'] == 'change' for row in rows)
+    return (f'<div class="settings-change"><p class="callout-label">Settings to change ({changes})</p>{_sharing_table(rows)}'
+            '<p class="qualification">SharePoint admin center &gt; Policies &gt; Sharing. Review sites that need an exception before lowering the tenant level; '
+            'a site cannot be more permissive than the tenant.</p></div>')
+
+
+def _settings(bundle):
+    rows = _sharing_review(bundle)
+    if not rows:
+        return ''
+    changes = sum(row['state'] == 'change' for row in rows)
+    summary = (f'<p class="settings-summary" data-state="change"><strong>{changes} setting{"s" if changes != 1 else ""} '
+               f'should be changed</strong> to reduce who new sharing links reach.</p>' if changes else
+               '<p class="settings-summary" data-state="ok"><strong>Collected settings meet the recommended values.</strong></p>')
+    return ('<h3>Tenant sharing settings</h3>' + summary + _sharing_table(rows)
+            + '<p class="qualification">Configuration describes permitted behavior; it does not establish who currently has access to each file.</p>')
 
 
 def _license_context(bundle):
@@ -454,9 +559,10 @@ def _authentication_methods(bundle):
       <p class="qualification">See Authentication Coverage, Authentication Methods, MFA Preferences and MFA Populations in the workbook for counts and qualifications. Method registration alone does not approve a rollout stage.</p></div>'''
 
 
-def _portal_captures(bundle, domain_id):
-    """Display reviewed portal captures alongside their topic, without scoring screenshots."""
-    captures = [row for row in (bundle.get('portal_review') or {}).get('captures', []) if row.get('domain_id') == domain_id]
+def _portal_captures(bundle, domain_id=None):
+    """Display all supplied captures, or a requested topic, without scoring screenshots."""
+    captures = [row for row in (bundle.get('portal_review') or {}).get('captures', [])
+                if domain_id is None or row.get('domain_id') == domain_id]
     panels = []
     for capture in captures:
         limitations = capture.get('limitations') or ''
@@ -468,7 +574,7 @@ def _portal_captures(bundle, domain_id):
             if not re.fullmatch(r'data:image/(?:png|jpeg);base64,[A-Za-z0-9+/=\r\n]+', uri):
                 continue
             alt = escape(f'{capture.get("title", "Admin center capture")}, page {index}', quote=True)
-            images.append(f'<figure><img src="{uri}" alt="{alt}"><figcaption>Page {index} · {prose(capture.get("source_name") or capture.get("source_file"))}</figcaption></figure>')
+            images.append(f'<figure id="portal-{slug(capture.get("id"))}-page-{index}"><img src="{uri}" alt="{alt}"><figcaption>Page {index} · {prose(capture.get("source_name") or capture.get("source_file"))}</figcaption></figure>')
         pdf = str(capture.get('source_data_uri') or '')
         download = (f'<a class="button button-secondary" href="{pdf}" download="{escape(str(capture.get("source_name") or "portal-capture.pdf"), quote=True)}">Download original PDF</a>'
                     if re.fullmatch(r'data:application/pdf;base64,[A-Za-z0-9+/=\r\n]+', pdf) else '')
@@ -488,6 +594,39 @@ def _portal_captures(bundle, domain_id):
     return ''.join(panels)
 
 
+def _pdf_report_highlights(bundle):
+    from .portal_insights import report_highlights
+    review = bundle.get('portal_review') or {}
+    rows = report_highlights(review)
+    if not rows:
+        return ''
+    groups = []
+    for capture in review.get('captures') or []:
+        cards = []
+        for row in rows:
+            if row['capture_id'] != capture.get('id'):
+                continue
+            anchor = 'portal-' + slug(row['capture_id'])
+            page = row['page']
+            if page and page <= len(capture.get('previews') or []):
+                anchor += '-page-' + str(page)
+            label = 'Source page ' + str(page) if page else 'Original capture'
+            cards.append('<article class="pdf-highlight"><h4>' + prose(row['topic']) + '</h4>'
+                         '<blockquote>' + escape(row['excerpt']) + '</blockquote>'
+                         '<p class="pdf-follow-up"><strong>Follow-up.</strong> ' + prose(row['follow_up']) + '</p>'
+                         '<a href="#' + anchor + '">' + label + '</a></article>')
+        dates = 'Captured ' + str(capture.get('captured_at') or 'date unavailable')
+        dates += ' · Report refreshed ' + str(capture.get('report_date') or 'not verified')
+        groups.append('<div class="pdf-report-group"><h3>' + prose(capture.get('title')) + '</h3>'
+                      '<p class="qualification">' + prose(dates) + '</p><div class="pdf-highlight-grid">'
+                      + ''.join(cards) + '</div></div>')
+    return ('<section id="pdf-report-highlights"><h2>PDF report highlights</h2>'
+            '<p class="section-description">Details from the supplied admin-center reports. Excerpts retain the source wording and numbers; '
+            'check OCR and dashboard reading order against the linked page. Their reporting windows and populations may differ from collected metrics. '
+            'These excerpts inform review and do not independently pass or fail a readiness control.</p>'
+            + ''.join(groups) + '</section>')
+
+
 def _collected_admin_context(bundle, area):
     context = bundle.get('copilot_admin_review') or {}
     if not context:
@@ -505,7 +644,8 @@ def _collected_admin_context(bundle, area):
     if area == 'data_protection' and dlp.get('rows'):
         content += '<h3>Copilot-specific DLP policies</h3><p>Modes and configured actions come from the policy and rule data. Names alone do not prove targeting. Review scope, conditions and exclusions before relying on a policy for the pilot.</p>'
         content += table(dlp['rows'], [('Policy', 'Policy'), ('Mode', 'Mode'), ('Evidence date', 'Evidence date'), ('Target evidence', 'Target evidence'), ('Scope', 'Scope'), ('Configured action', 'Action')], mobile_labels=True)
-    return '<details class="domain-evidence admin-review"><summary>Collected Copilot configuration and activity</summary><div class="guide-body"><p>Available values come from collected data and do not require a PDF export. Missing details include the next step. ' + prose(context.get('qualification')) + '</p>' + content + '</div></details>'
+    title = 'Collected Copilot prompt activity' if area == 'adoption' else 'Collected Copilot configuration and activity'
+    return '<details class="domain-evidence admin-review"><summary>' + title + '</summary><div class="guide-body"><p>Available values come from collected data and do not require a PDF export. Missing details include the next step. ' + prose(context.get('qualification')) + '</p>' + content + '</div></details>'
 
 
 def _mode_label(mode):
@@ -593,12 +733,15 @@ def context_has_collection(bundle):
     return bool(context.get('collected_at'))
 
 
-def render_customer_report(result, bundle, tenant_name, workbook_path=None, summary_path=None):
+def render_customer_report(result, bundle, tenant_name, workbook_path=None, summary_path=None, technical_workbook_path=None):
+    from .report_presentation import baseline_panel, coverage_panels, decision_groups, domain_tiles, short_text
     actions = result['actions']
-    domains = result['domains']
+    domains = result.get('assessment_domains') or result['domains']
     counts = result['counts']
     workbook_name = Path(workbook_path).name if workbook_path else ''
     workbook_url = quote(workbook_name) if workbook_name else ''
+    technical_name = Path(technical_workbook_path).name if technical_workbook_path else ''
+    technical_url = quote(technical_name) if technical_name else ''
     def evidence_link(row):
         key = row.get('RecommendationId') or row.get('FindingKey') or row.get('Feature')
         return f'<a href="#evidence-{slug(key)}">Evidence and qualifications</a>'
@@ -609,17 +752,56 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None, summ
             status = row.get('InvestigationStatus') if not row.get('InvestigationCount') else ''
             return (f'<p class="evidence-link">{prose(status)}</p>' if status else '') + note
         try:
-            count = int(row.get('InvestigationCount') or 0)
+            count = int(row.get('AssessmentEvidenceCount', row.get('InvestigationCount')) or 0)
         except (TypeError, ValueError):
             return note
-        location = str(row.get('InvestigationRange') or '')
+        location = str(row.get('AssessmentEvidenceRange', row.get('InvestigationRange')) or '')
+        technical_locations = row.get('TechnicalEvidenceRanges') or []
+        full_link = ('<p class="evidence-link"><a href="' + escape(technical_url + '#' + quote(technical_locations[0], safe='!:$'))
+                     + '">Full source records (technical workbook)</a></p>') if technical_url and technical_locations else ''
         if count <= 0 and not location:
             status = row.get('InvestigationStatus')
-            return (f'<p class="evidence-link">{prose(status)}</p>' if status else '') + note
+            return (f'<p class="evidence-link">{prose(status)}</p>' if status else '') + full_link + note
         target = workbook_url + ('#' + quote(location, safe='!:$') if location else '')
-        label = (f'{count} item{"s" if count != 1 else ""} to review in workbook' if count > 0
+        label = (f'{count} supporting record{"s" if count != 1 else ""} in workbook' if count > 0
                  else str(row.get('InvestigationSummary') or row.get('InvestigationStatus') or 'Supporting context') + ' in workbook')
-        return f'<p class="evidence-link"><a href="{escape(target)}">{prose(label)}</a></p>' + note
+        return f'<p class="evidence-link"><a href="{escape(target)}">{prose(label)}</a></p>' + full_link + note
+    model_findings = {item['finding_id']: item for item in (bundle.get('finding_evidence') or {}).get('findings', [])}
+    evidence_folder = bundle.get('html_evidence_folder') or ''
+    def evidence_summary(row):
+        item = model_findings.get(row.get('RecommendationId'))
+        if not item:
+            return ''
+        evidence = item['evidence']
+        text = f"{evidence['record_count']} {evidence['record_unit']}"
+        if evidence['affected_entity_count'] is not None:
+            text += f" ({evidence['affected_entity_count']} {evidence['entity_unit']})"
+        if evidence['context_record_count']:
+            text += f" · {evidence['context_record_count']} supporting context records"
+        return text + f" · {evidence['kind'].replace('_', ' ')} · {evidence['availability'].replace('_', ' ')}"
+    def technical_evidence(row):
+        # Aggregate counts only; named records stay in the workbooks and optional evidence pages.
+        item = model_findings.get(row.get('RecommendationId'))
+        if not item:
+            return ''
+        from .html_evidence_pages import page_name
+        summary = 'Technical evidence: ' + evidence_summary(row)
+        line = (f'<p class="evidence-link"><a href="{escape(quote(evidence_folder + "/" + page_name(item["finding_id"]), safe="/"))}">'
+                f'{prose(summary)}</a></p>' if evidence_folder else f'<p class="evidence-link">{prose(summary)}</p>')
+        if item['evidence']['count_relation']:
+            line += f'<p class="qualification">{prose(item["evidence"]["count_relation"])}</p>'
+        detail = item.get('recommendation_detail') or {}
+        if detail.get('guidance_status') != 'verified':
+            return line
+        prerequisites = detail.get('prerequisites') or {}
+        facts = [('Where to configure', detail.get('where')), ('Roles', '; '.join(prerequisites.get('roles') or [])),
+                 ('Licensing', '; '.join(prerequisites.get('licensing') or [])), ('How to verify', detail.get('verify'))]
+        links = ' · '.join(f'<a href="{escape(link["url"], quote=True)}">{prose(link.get("title"))}</a>'
+                           for link in detail.get('links') or [] if link.get('url'))
+        return (line + '<details class="technical-steps"><summary>Technical steps</summary>' +
+                ''.join(f'<p><strong>{escape(label)}.</strong> {prose(value)}</p>' for label, value in facts if value) +
+                (f'<p class="qualification">Microsoft documentation (verified {prose(detail.get("verified_on"))}): {links}</p>' if links else '') +
+                '</details>')
     def record(row, with_action=False):
         description = _observation(row, bundle)
         support = row.get('Evidence') if row.get('Evidence') != description else ''
@@ -629,18 +811,23 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None, summ
         return f'''<article class="finding"><div class="eyebrow">{prose(status)} · {prose(_date_text(row))}</div>
           <h4>{prose(_heading(row))}</h4><p>{prose(description)}</p>{('<p>' + prose(support) + '</p>') if support else ''}
           {('<p><strong>What to do.</strong> ' + prose(_action_text(row)) + '</p>') if with_action else ''}
-          {investigation_link(row) if row.get('Recommendation') else ''}
+          {investigation_link(row) if row.get('Recommendation') else ''}{technical_evidence(row)}
           {('<p class="qualification">' + prose(qualification) + '</p>') if qualification else ''}
           <p class="evidence-link">{evidence_link(row)}</p></article>'''
 
     action_html = []
+    sharing_changes = _sharing_changes(bundle)
     for index, row in enumerate(actions, 1):
         guide = guide_for(row)
         guidance_link = (f'<p class="evidence-link"><a href="#report-guide-{guide}">How to obtain the reports</a> · <a href="#report-handoff">How to return the evidence</a></p>' if guide else '')
-        action_html.append(f'''<article class="action" data-priority="{slug(row.get('Priority'))}" id="action-{index}"><div class="action-number">{index:02d}</div><details class="action-detail"{' open' if index <= 3 else ''}><summary>
+        step_label = 'Fix' if row.get('ActionType') == 'Remediation' else 'Next step'
+        settings_html = sharing_changes if row.get('FindingKey') in SHARING_FINDINGS else ''
+        action_html.append(f'''<article class="action" data-priority="{slug(row.get('Priority'))}" id="action-{index}"><div class="action-number">{index:02d}</div><details class="action-detail"><summary>
           <div class="action-tags"><span class="priority-badge" data-priority="{slug(row.get('Priority'))}">{prose(row.get('Priority') or 'Review')} priority</span>{('<span class="action-kind">' + prose(row.get('PilotImpact')) + '</span>') if row.get('PilotImpact') else ''}<span class="action-kind">{prose(row.get('ActionType'))}</span><span class="action-domain">{prose(row.get('Domain'))}</span></div>
-          <h3>{prose(_heading(row))}</h3></summary><div class="action-body"><p><strong>What we found.</strong> {prose(_observation(row, bundle))}</p>
-          <p><strong>What to do.</strong> {prose(_action_text(row))}</p>{investigation_link(row)}
+          <h3>{prose(_heading(row))}</h3><p class="action-preview"><span class="preview-label" data-kind="issue">Issue</span>{prose(short_text(_observation(row,bundle)))}</p>
+          <p class="action-preview"><span class="preview-label" data-kind="fix">{step_label}</span>{prose(short_text(_action_text(row)))}</p><span class="detail-prompt">Details, next step and supporting logs</span></summary><div class="action-body">
+          <div class="callout callout-found" data-priority="{slug(row.get('Priority'))}"><p><strong>What we found.</strong> {prose(_observation(row, bundle))}</p>{settings_html}</div>
+          <div class="callout callout-fix"><p><strong>What to do.</strong> {prose(_action_text(row))}</p></div>{investigation_link(row)}{technical_evidence(row)}
           <div class="action-meta"><p><strong>Responsible role</strong><br>{prose(row.get('OwnerRole'))}</p>
           <p><strong>Rollout stage</strong><br>{prose(row.get('ReadinessStage'))}</p></div>
           <p><strong>Evidence of completion.</strong> {prose(_completion(row))}</p>{guidance_link}
@@ -652,9 +839,10 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None, summ
     for domain_index, domain in enumerate(domains, 1):
         rows = domain.get('customer_findings', domain.get('findings')) or []
         # Findings are already selected and qualified by the shared model.
-        findings_html = '<details class="domain-evidence"><summary>Evidence observations and qualifications (' + str(len(rows)) + ')</summary>' + ''.join(
-            record(row, with_action=bool(row.get('Recommendation')) and row.get('RecommendationId') not in action_numbers)
-            for row in rows) + '</details>' if rows else ''
+        # Actions are described once. Domain sections link to those cards.
+        other_rows = [row for row in rows if row.get('RecommendationId') not in action_numbers]
+        findings_html = '<details class="domain-evidence"><summary>Supporting observations (' + str(len(other_rows)) + ')</summary>' + ''.join(
+            record(row, with_action=bool(row.get('Recommendation'))) for row in other_rows) + '</details>' if other_rows else ''
         links = [f'<a href="#action-{action_numbers[r.get("RecommendationId")]}">Action {action_numbers[r.get("RecommendationId")]}</a>'
                  for r in domain.get('actions', []) if r.get('RecommendationId') in action_numbers]
         extra = ''
@@ -662,24 +850,28 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None, summ
             extra = _authentication_methods(bundle)
         if domain['id'] == 'content':
             extra = _settings(bundle) + _lifecycle(bundle)
-        if domain['id'] == 'data_protection':
-            extra = _purview_policy_table(bundle, workbook_url)
-        if domain['id'] == 'licensing':
-            extra = _readiness_export(bundle) + _license_context(bundle)
+        if domain['id'] in {'data_protection','classification'}:
+            extra = _purview_policy_table(bundle, technical_url or workbook_url)
+        if domain['id'] in {'licensing','scope'}:
+            extra = _readiness_export(bundle) + _license_context(bundle) + _adoption_report(result)
         if domain['id'] in {'agents', 'external_ai'}:
             extra = _scoped_products(bundle)
-        if domain['id'] == 'adoption':
-            extra = _adoption_report(result)
+        if domain['id'] in {'adoption','scope'}:
+            if domain['id'] == 'adoption': extra = _adoption_report(result)
             extra += '<h3>What the pilot should prove</h3><p>Select a small group with a defined work task, accountable content owners, and approved access. The readiness checks are tenant-wide, so the group can be chosen after this assessment. Agree how the group will judge output quality and time saved.</p><h3>How to decide whether to expand</h3><p>Review actual Copilot activity, task quality, and user feedback before expanding. Familiarity with Teams, email, or Office can guide pilot selection; it does not measure Copilot use.</p>'
-        extra += _collected_admin_context(bundle, domain['id'])
-        extra += _portal_captures(bundle, domain['id'])
-        summary = re.sub(r'(?<![.!?]) (?=No legacy authentication sign-ins)', '. ', str(domain.get('summary') or ''))
-        domain_html.append(f'''<section class="domain" data-state="{slug(domain.get('status'))}" id="domain-{escape(domain['id'])}"><div class="section-title"><div class="domain-heading"><span class="domain-index">{domain_index:02d}</span><h2>{prose(domain['title'])}</h2></div><span class="badge" data-state="{slug(domain.get('status'))}">{prose(domain.get('status'))}</span></div>
-          <p class="lead">{prose(summary)}</p><p><strong>Why it matters.</strong> {prose(domain.get('why_it_matters'))}</p>
-          {findings_html}{extra}<div class="next"><strong>What to do.</strong> {', '.join(links) if links else 'Maintain the observed controls and confirm their scope before the next rollout stage.'}</div></section>''')
+        context_id = {'classification':'data_protection','scope':'licensing'}.get(domain['id'],domain['id'])
+        extra += _collected_admin_context(bundle, context_id)
+        if domain['id'] == 'scope':
+            # The nine-domain layout includes licensing and adoption in Scope.
+            # Keep the separate paid-user prompt aggregates visible there too.
+            extra += _collected_admin_context(bundle, 'adoption')
+        relevant = ''.join(f'<li><a href="#action-{action_numbers[r.get("RecommendationId")]}">{prose(_heading(r))}</a> <span class="muted">{prose(r.get("ActionType"))}</span></li>' for r in domain.get('actions',[]) if r.get('RecommendationId') in action_numbers)
+        extra = '<details class="domain-context"><summary>Collected settings, metrics and report context</summary>'+extra+'</details>' if extra else ''
+        domain_html.append(f'''<details class="domain domain-panel" data-state="{slug(domain.get('status'))}" id="domain-{escape(domain['id'])}"><summary><span class="domain-index">{domain_index:02d}</span><h2>{prose(domain['title'])}</h2><span class="badge" data-state="{slug(domain.get('status'))}">{prose(domain.get('status'))}</span></summary>
+          {('<ul class="domain-action-links">'+relevant+'</ul>') if relevant else '<p>No action-plan items in this area. Collection and owner reviews still determine coverage.</p>'}{findings_html}{extra}<p><a href="#coverage-{escape(domain['id'])}">Collection coverage and outstanding catalog reviews</a></p></details>''')
 
     strength_rows = result.get('strengths') or []
-    strengths = ''.join(f'<li>{prose(r.get("Observation") or r.get("Strength"))} <span class="muted">({prose(_date_text(r))})</span></li>' for r in strength_rows[:4])
+    strengths = ''.join(f'<li>{prose(short_text(r.get("Observation") or r.get("Strength")))} <span class="muted">({prose(_date_text(r))})</span></li>' for r in strength_rows[:4])
     if not strengths:
         strengths = '<li>No current safeguard has enough dated, scoped evidence to be described as verified. Dated positive observations remain in the relevant assessment areas.</li>'
     concerns = [r for r in actions if r.get('ActionType') != 'Evidence'][:3] or actions[:3]
@@ -688,35 +880,32 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None, summ
         ('remediation', 'Remediation actions', 'Address observed conditions'),
         ('confirmation', 'Findings to confirm', 'Check current status and scope'),
         ('evidence_gaps', 'Evidence checks', 'Close unanswered questions'),
-        ('strengths', 'Verified strengths', 'Maintain supported safeguards')))
-    chart_rows = []
-    maximum = max([d.get('action_count', 0) for d in domains] + [1])
-    for domain in domains:
-        breakdown = {kind: sum(row.get('ActionType') == action_type for row in domain.get('actions', []))
-                     for kind, action_type in (('remediation', 'Remediation'), ('confirmation', 'Confirmation'), ('evidence_gaps', 'Evidence'))}
-        segments = ''.join(f'<span class="bar-segment" data-kind="{kind}" style="width:{100 * value / maximum:.2f}%"></span>'
-                           for kind, value in breakdown.items() if value)
-        description = f"{breakdown['remediation']} remediation, {breakdown['confirmation']} confirmation, {breakdown['evidence_gaps']} evidence checks"
-        chart_rows.append(f'''<div class="bar-row"><div><a href="#domain-{escape(domain['id'])}">{prose(domain['title'])}</a><span class="bar-status">{prose(domain.get('status'))}</span></div>
-          <span class="bar-track" aria-hidden="true">{segments}</span><b>{domain.get('action_count', 0)}<span class="sr-only"> actions: {description}</span></b></div>''')
-    chart = ''.join(chart_rows)
-
+        ('strengths', 'Supported observations', 'Configuration or observed results')))
     all_records = result.get('recommendations') or []
     evidence_rows = []
     for row in all_records:
         key = row.get('RecommendationId') or row.get('FindingKey') or row.get('Feature')
-        location = row.get('InvestigationRange') or row.get('EvidenceSheet')
+        location = row.get('AssessmentEvidenceRange', row.get('InvestigationRange') or row.get('EvidenceSheet'))
         tabs = prose(location or row.get('InvestigationStatus') or 'Supporting location not supplied')
         if workbook_url and location and re.fullmatch(r"'((?:[^']|'')+)'![A-Z]+[1-9][0-9]*:[A-Z]+[1-9][0-9]*", str(location)):
             tabs = '<a href="' + escape(workbook_url + '#' + quote(str(location), safe='!:$')) + '">' + tabs + '</a>'
-        evidence_rows.append(f'<tr id="evidence-{slug(key)}"><td>{prose(key)}</td><td>{prose(row.get("OriginalFeature") or row.get("Feature"))}</td><td>{prose(_date_text(row))}</td><td>{prose(row.get("EvidenceBasis"))}{("<br>" + prose(row.get("Qualification"))) if row.get("Qualification") else ""}</td><td>{tabs}</td></tr>')
+        evidence_note = ('Inventory or licensing context; full qualifications are retained in the Findings Register.'
+                         if row.get('Disposition')=='Reference' else row.get('EvidenceBasis'))
+        detail_note = '' if row.get('Disposition')=='Reference' else row.get('Qualification')
+        technical_cell = '<span class="muted">Not exported</span>'
+        if row.get('RecommendationId') in model_findings:
+            from .html_evidence_pages import page_name
+            summary = prose(evidence_summary(row))
+            technical_cell = (f'<a href="{escape(quote(evidence_folder + "/" + page_name(row["RecommendationId"]), safe="/"))}">{summary}</a>'
+                              if evidence_folder else summary)
+        evidence_rows.append(f'<tr id="evidence-{slug(key)}"><td>{prose(key)}</td><td>{prose(_heading(row))}</td><td>{prose(_date_text(row))}</td><td>{prose(evidence_note)}{("<br>" + prose(detail_note)) if detail_note else ""}</td><td>{tabs}</td><td>{technical_cell}</td></tr>')
     # Some curated strengths arrive independently of the recommendation register.
     seen_ids = {r.get('RecommendationId') or r.get('FindingKey') or r.get('Feature') for r in all_records}
     for row in strength_rows + (result.get('historical_strengths') or []):
         key = row.get('RecommendationId') or row.get('FindingKey') or row.get('Feature')
         if key not in seen_ids:
             seen_ids.add(key)
-            evidence_rows.append(f'<tr id="evidence-{slug(key)}"><td>{prose(key)}</td><td>{prose(_heading(row))}</td><td>{prose(_date_text(row))}</td><td>{prose(row.get("Qualification"))}</td><td>{prose(row.get("InvestigationRange") or row.get("EvidenceSheet") or "Supporting location not supplied")}</td></tr>')
+            evidence_rows.append(f'<tr id="evidence-{slug(key)}"><td>{prose(key)}</td><td>{prose(_heading(row))}</td><td>{prose(_date_text(row))}</td><td>{prose(row.get("Qualification"))}</td><td>{prose(row.get("InvestigationRange") or row.get("EvidenceSheet") or "Supporting location not supplied")}</td><td><span class="muted">Not exported</span></td></tr>')
     source_rows = [r for source in (bundle.get('data_exposure') or {}).get('sources', {}).values() for r in source.get('reports', [])]
     sources = table(source_rows, [('Source file', 'source_file'), ('Report type', 'report_type'), ('Workload', 'workload'), ('Original date', 'report_date'), ('Date basis', 'date_basis'), ('Selection', 'status'), ('Rows', 'records_read'), ('Freshness', 'freshness')])
     collection_rows = []
@@ -738,7 +927,7 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None, summ
             identity_labels.append('assessment application (' + ('certificate' if identity.get('credential_type') == 'certificate' else 'client secret')
                                    + ', application permissions only)')
         elif identity.get('type') == 'user':
-            identity_labels.append('signed-in administrator ' + str(identity.get('upn') or '') + ' (delegated, enrichment only)')
+            identity_labels.append('signed-in administrator (delegated, enrichment only)')
     if identity_labels:
         identity_note = ('<p>Access used for this assessment: ' + prose('; '.join(identity_labels))
                          + '. Each source below records which identity read it.</p>')
@@ -760,7 +949,8 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None, summ
       <pre class="operator-command"><code>.\\.venv\\Scripts\\python.exe main.py --mode offline --collection-input "&lt;saved collection.json&gt;" --reports-dir "&lt;exports folder&gt;"</code></pre>
       <p>Check the imported source reports and remaining evidence in the rebuilt report. A successful rebuild does not mean every export format or evidence requirement was satisfied.</p>''' if report_guides else ''
     technical = f'''<details class="appendix-panel" id="engineer-appendix"><summary>Technical appendix and evidence workbook</summary>
-      <p>{('<a href="' + workbook_url + '">Download ' + escape(workbook_name) + '</a>') if workbook_url else 'The workbook contains the complete evidence register.'}</p>
+      <p>{('<a href="' + workbook_url + '">Download ' + escape(workbook_name) + '</a>') if workbook_url else 'The workbook contains the complete evidence register.'}
+      {('<a href="' + technical_url + '">Download ' + escape(technical_name) + '</a>') if technical_url else ''}</p>
       <p>Evaluation date: {prose(result.get('evaluation_date'))}. Methodology: {prose(result.get('methodology_version'))}. Evidence schema: {prose(result.get('evidence_schema_version'))}.</p>
       <p>Original tenant collection: {prose(context.get('collected_at'))}. Report execution: {prose(context.get('mode') or 'Evidence supplied directly')}.</p>
       <p>Collection permission profile: {prose(context.get('permission_profile') or 'unrecorded')}.</p>
@@ -771,7 +961,8 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None, summ
       {('<p>Historical workbook: ' + prose(prior.get('source_file')) + '. Original report date: <strong>' + prose(prior.get('generated_at')) + '</strong>. The complete original register and source mapping are preserved in the Prior workbook tabs.</p>') if prior else ''}
       {('<h3>Source collection results</h3><p>These are the source states retained with the tenant collection. An unsuccessful read cannot establish a zero tenant count.</p>' + collection_table) if collection_rows else ''}
       <h3>Imported source reports and dates</h3>{sources}<h3>Evidence references</h3>
-      <div class="table-scroll"><table><thead><tr><th>Reference</th><th>Finding</th><th>Original date</th><th>Evidence and qualifications</th><th>Workbook tab</th></tr></thead><tbody>{''.join(evidence_rows)}</tbody></table></div></details>'''
+      {('<p>Named supporting records are on the <a href="' + escape(quote(evidence_folder + '/index.html', safe='/')) + '">linked technical evidence pages</a>. Keep that folder with this report and the workbook; share it only with authorized technical reviewers.</p>') if evidence_folder and model_findings else ''}
+      <div class="table-scroll"><table><thead><tr><th>Reference</th><th>Finding</th><th>Original date</th><th>Evidence and qualifications</th><th>Workbook tab</th><th>Technical evidence</th></tr></thead><tbody>{''.join(evidence_rows)}</tbody></table></div></details>'''
 
     gaps = result.get('coverage') or []
     gap_items = []
@@ -785,7 +976,7 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None, summ
     scope = 'Microsoft 365 Copilot'
     if any(d['id'] == 'agents' for d in domains):
         scope += '; agents'
-    if any(d['id'] == 'external_ai' for d in domains):
+    if any(d['id'] == 'external_ai' for d in result.get('domains', [])):
         scope += '; external AI'
     period = result.get('evidence_period') or {}
     if isinstance(period, dict):
@@ -803,24 +994,40 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None, summ
     adoption_note = ('<p class="qualification">The supplied reports show existing Copilot use. This stage identifies what is verified for the next rollout decision.</p>' if progress and observed_use else '')
     portal_count = len((bundle.get('portal_review') or {}).get('captures') or [])
     portal_links = ' · '.join(f'<a href="#portal-{slug(capture.get("id"))}">{prose(capture.get("title"))}</a>'
-                            for capture in (bundle.get('portal_review') or {}).get('captures', [])
-                            if capture.get('domain_id') in {domain['id'] for domain in domains})
+                            for capture in (bundle.get('portal_review') or {}).get('captures', []))
     portal_intro = ('<p class="qualification">Admin-center captures: ' + portal_links + '</p>') if portal_count else ''
+    # Capture topics include licensing/adoption/data_protection from the portal
+    # schema. They are independent of the nine assessment domain IDs. Render
+    # every capture once here so a renamed, excluded or absent domain cannot
+    # silently drop a PDF, its extracted text, previews or original download.
+    portal_section = ('<section id="admin-pages"><h2>Imported admin-center pages</h2>'
+                      '<p class="section-description">' + str(portal_count) + ' captures supplied for this assessment. '
+                      'Open a page below for source excerpts, extracted text, previews and the original PDF. '
+                      'Capture dates and reporting windows remain separate from the saved collection date. '
+                      'These pages provide context and do not independently pass or fail a readiness control.</p>'
+                      + _portal_captures(bundle) + '</section>') if portal_count else ''
+    portal_nav = '<a href="#pdf-report-highlights">PDF highlights</a><a href="#admin-pages">Admin pages</a>' if portal_count else ''
+    pdf_highlights = _pdf_report_highlights(bundle)
     decision_state = 'ready' if decision in {'Ready for a controlled pilot', 'Ready for broader adoption'} else 'blocked' if decision == 'Not ready for pilot' else 'unknown'
-    workbook_button = f'<a class="button button-primary" href="{workbook_url}">Evidence workbook <span aria-hidden="true">↗</span></a>' if workbook_url else ''
+    workbook_button = f'<a class="button button-primary" href="{workbook_url}">Assessment workbook <span aria-hidden="true">↗</span></a>' if workbook_url else ''
+    if technical_url:
+        workbook_button += f'<a class="button" href="{technical_url}">Technical evidence workbook <span aria-hidden="true">↗</span></a>'
     summary_name = Path(summary_path).name if summary_path else ''
     if summary_name:
         workbook_button = f'<a class="button button-secondary" href="{quote(summary_name)}">One-page summary</a>' + workbook_button
-    return f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{escape(str(tenant_name or 'Tenant'))} — Copilot readiness</title><style>{REPORT_CSS}</style></head><body>
+    catalog_html = coverage_panels(result, table)
+    executive_html = '<section id="executive-readiness"><h2>Owner decisions and operational reviews</h2><p class="section-description">Agree scope, accountable owners and applicable requirements. Configuration alone cannot confirm tested protection. Expand an area for its outstanding decisions.</p>' + decision_groups(result) + '</section>'
+    return f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{escape(str(tenant_name or 'Tenant'))} — AI Readiness and M365 Hardening</title><style>{REPORT_CSS}</style></head><body>
       <a class="skip-link" href="#executive">Skip to assessment</a>
-      <header class="report-header"><div class="brand"><span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span><span></span></span><div>MICROSOFT 365 COPILOT<span class="brand-subtitle">Readiness assessment</span></div></div><div class="header-meta"><strong>{escape(str(tenant_name or 'Tenant assessment'))}</strong><span>Executive briefing · {prose(result.get('evaluation_date'))}</span></div></header>
-      <nav class="report-nav" aria-label="Report sections"><div class="nav-links"><a href="#executive">Overview</a><a href="#action-plan">Action plan</a><a href="#readiness-domains">Areas</a><a href="#rollout">Rollout</a><a href="#getting-started">Getting started</a><a href="#remaining-evidence">Open checks</a><a href="#engineer-appendix">Evidence</a></div><div class="nav-tools">{workbook_button}<button class="button button-secondary" id="print-report" type="button" hidden>Print report</button></div></nav>
+      <header class="report-header"><div class="brand"><span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span><span></span></span><div>AI READINESS<span class="brand-subtitle">Microsoft 365 hardening</span></div></div><div class="header-meta"><strong>{escape(str(tenant_name or 'Tenant assessment'))}</strong><span>Executive briefing · {prose(result.get('evaluation_date'))}</span></div></header>
+      <nav class="report-nav" aria-label="Report sections"><div class="nav-links"><a href="#executive">Overview</a><a href="#action-plan">Action plan</a><a href="#readiness-domains">Areas</a>{portal_nav}<a href="#rollout">Rollout</a><a href="#getting-started">Getting started</a><a href="#remaining-evidence">Open checks</a><a href="#engineer-appendix">Evidence</a></div><div class="nav-tools">{workbook_button}<button class="button button-secondary" id="print-report" type="button" hidden>Print report</button></div></nav>
       <main><section class="executive" id="executive"><div class="hero-grid"><div class="hero-main"><div class="hero-kicker">YOUR ROLLOUT READINESS</div><div class="decision-label" data-state="{decision_state}">{prose(decision_badge)}</div>
       <h1>{prose(headline)}</h1><p class="hero-copy">{prose(result.get('rationale'))}</p>{adoption_note}</div><aside class="hero-aside" aria-label="Assessment scope and dates"><div class="hero-kicker">ASSESSMENT SCOPE</div><h2>{prose(scope)}</h2><div class="hero-meta"><dl><div><dt>Evaluation date</dt><dd>{prose(result.get('evaluation_date'))}</dd></div><div><dt>Evidence period</dt><dd>{prose(period_text)}</dd></div><div><dt>Open actions</dt><dd>{len(actions)} to resolve or verify</dd></div></dl></div></aside></div>
-      {_progress_timeline(result)}<div class="stats">{cards}</div><div class="executive-brief two-column"><div class="brief-card"><div class="eyebrow">WHERE TO START</div><h2>First actions</h2><ol>{first_actions or '<li>Confirm the pilot scope and maintain the assessed controls.</li>'}</ol></div><div class="brief-card strengths-card"><div class="eyebrow">WHAT IS WORKING</div><h2>Observed strengths</h2><ul>{strengths}</ul></div></div></section>{_progress_requirements(result)}
-      <section id="action-plan"><div class="section-title"><div class="section-heading"><span class="section-index">01</span><div><div class="eyebrow">PRIORITIES AND ACCOUNTABILITY</div><h2>Prioritized action plan</h2></div></div><span class="badge">{len(actions)} actions</span></div><p class="section-description">Start with the highest-priority conditions. Remediation actions address observed issues. Confirmation actions check whether earlier or limited findings still apply. Evidence checks need a report, validation or owner decision.</p>{''.join(action_html) or '<p>No outstanding actions were identified.</p>'}</section>
-      <section id="readiness-domains"><div class="section-heading"><span class="section-index">02</span><div><div class="eyebrow">THE ASSESSMENT AT A GLANCE</div><h2>Readiness by assessment area</h2></div></div><p class="section-description">Open actions by assessment area. Counts reflect the action plan and workbook; they describe the work remaining.</p>{portal_intro}<div class="chart-legend"><span><i class="legend-dot" data-kind="remediation" aria-hidden="true"></i>Remediation</span><span><i class="legend-dot" data-kind="confirmation" aria-hidden="true"></i>Confirmation</span><span><i class="legend-dot" data-kind="evidence_gaps" aria-hidden="true"></i>Evidence checks</span></div><div class="chart" aria-label="Actions by assessment area">{chart}</div></section>{''.join(domain_html)}
-      <section id="rollout"><div class="section-heading"><span class="section-index">03</span><div><div class="eyebrow">FROM ASSESSMENT TO PILOT</div><h2>Conditions for the next rollout stage</h2></div></div><div class="phase-grid"><div class="phase"><span class="phase-number">1</span><h3>Clear the blockers</h3><p>Fix the conditions marked “Blocks pilot” and confirm the checks the assessment could not read. They apply tenant-wide, so they protect whichever group runs the pilot.</p></div><div class="phase"><span class="phase-number">2</span><h3>Choose and run the pilot</h3><p>Pick a bounded group with clear work tasks, agree success measures with the business sponsor, assign licenses through a group, and record the security owner's decision against the action plan.</p></div><div class="phase"><span class="phase-number">3</span><h3>Before expanding</h3><p>Close the high-priority conditions, verify access to the intended content, and demonstrate that the agreed controls cover the larger group. Review actual Copilot usage and task outcomes with the business sponsor.</p></div></div><p class="qualification">Adoption opportunities guide the value of a pilot. They do not establish that security controls are effective.</p></section>
-      {_getting_started(result, action_numbers)}
-      <section id="remaining-evidence"><div class="section-heading"><span class="section-index">05</span><div><div class="eyebrow">COMPLETE THE PICTURE</div><h2>Remaining evidence and decisions</h2></div></div><p class="section-description">{prose(gap_intro)}</p><ul class="gap-list">{gap_html or '<li>No required evidence gaps remain for the assessed scope.</li>'}</ul>{report_guides}</section>{technical}</main>
-      <footer class="report-footer"><strong>Microsoft 365 Copilot readiness</strong><span>{escape(str(tenant_name or 'Tenant'))} · Evaluation {prose(result.get('evaluation_date'))}</span></footer><script>{REPORT_SCRIPT}</script></body></html>'''
+      {_progress_timeline(result)}<div class="stats">{cards}</div><div class="executive-brief two-column"><div class="brief-card"><div class="eyebrow">WHERE TO START</div><h2>First actions</h2><ol>{first_actions or '<li>Confirm the pilot scope and maintain the assessed controls.</li>'}</ol></div><div class="brief-card strengths-card"><div class="eyebrow">WHAT IS WORKING</div><h2>Supported observations</h2><ul>{strengths}</ul></div></div></section>{baseline_panel(result)}{pdf_highlights}
+      <section id="readiness-domains"><div class="section-heading"><span class="section-index">01</span><div><div class="eyebrow">THE ASSESSMENT AT A GLANCE</div><h2>Readiness by assessment area</h2></div></div><p class="section-description">Open actions by assessment area. Counts reflect the action plan and workbook; they describe the work remaining.</p>{portal_intro}{domain_tiles(result)}</section>
+      <section id="action-plan"><div class="section-title"><div class="section-heading"><span class="section-index">02</span><div><div class="eyebrow">PRIORITIES AND ACCOUNTABILITY</div><h2>Prioritized action plan</h2></div></div><span class="badge">{len(actions)} actions</span></div><p class="section-description">Start with the highest-priority conditions. Remediation actions address observed issues. Confirmation actions check whether earlier or limited findings still apply. Evidence checks need a report, validation or owner decision.</p>{''.join(action_html) or '<p>No outstanding actions were identified.</p>'}</section>
+{''.join(domain_html)}{portal_section}
+      <section id="rollout"><div class="section-heading"><span class="section-index">03</span><div><div class="eyebrow">FROM ASSESSMENT TO PILOT</div><h2>Conditions for the next rollout stage</h2></div></div><div class="phase-grid"><div class="phase"><span class="phase-number">1</span><h3>Clear the blockers</h3><p>Fix the conditions marked “Blocks pilot” and confirm unresolved scope, configuration and operational checks. Record their supporting population and exclusions before pilot approval.</p></div><div class="phase"><span class="phase-number">2</span><h3>Choose and run the pilot</h3><p>Pick a bounded group with clear work tasks, agree success measures with the business sponsor, assign licenses through a group, and record the security owner's decision against the action plan.</p></div><div class="phase"><span class="phase-number">3</span><h3>Before expanding</h3><p>Close the high-priority conditions, verify access to the intended content, and demonstrate that the agreed controls cover the larger group. Review actual Copilot usage and task outcomes with the business sponsor.</p></div></div><p class="qualification">Adoption opportunities guide the value of a pilot. They do not establish that security controls are effective.</p></section>
+      {executive_html}<details class="appendix-panel"><summary>Rollout requirements and the first 90 days</summary>{_progress_requirements(result)}{_getting_started(result, action_numbers)}</details>
+      <details class="appendix-panel" id="remaining-evidence"><summary>Outstanding evidence: what owners should return</summary><div class="section-heading"><span class="section-index">05</span><div><div class="eyebrow">COMPLETE THE PICTURE</div><h2>Remaining evidence and decisions</h2></div></div><p class="section-description">{prose(gap_intro)}</p><ul class="gap-list">{gap_html or '<li>No required evidence gaps remain for the assessed scope.</li>'}</ul>{report_guides}</details>{catalog_html}{technical}</main>
+      <footer class="report-footer"><strong>AI Readiness and M365 Hardening</strong><span>{escape(str(tenant_name or 'Tenant'))} · Evaluation {prose(result.get('evaluation_date'))}</span></footer><script>{REPORT_SCRIPT}</script></body></html>'''

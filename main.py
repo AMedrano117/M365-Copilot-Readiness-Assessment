@@ -18,7 +18,7 @@ if __name__ == "__main__":
     # Parse command-line arguments
     args = parse_arguments(TENANT_ID, SERVICES)
     configure_console(verbose=args.verbose, color=args.color)
-    section('M365 COPILOT READINESS')
+    section('AI READINESS AND M365 HARDENING')
     status('Mode: offline — saved evidence and local exports.' if args.offline else
            'Mode: live — tenant evidence collection.')
     detail(f'Started {get_timestamp()}')
@@ -97,6 +97,7 @@ if __name__ == "__main__":
                 interactive_auth=interactive_auth,
                 open_html_report=open_html_report,
                 report_format=report_format,
+                extra_exports=args.extra_exports,
                 sam_report_paths=sam_report_paths,
                 dspm_report_paths=dspm_report_paths,
                 include_user_usage_detail=include_user_usage_detail,
@@ -111,6 +112,7 @@ if __name__ == "__main__":
                 snapshot_json=snapshot_json,
                 baseline=baseline,
                 save_collection_path=args.save_collection,
+                customer_name=args.customer_name,
                 reports_dirs=args.reports_dir,
                 copilot_readiness_export=args.copilot_readiness_export,
                 evaluation_date=args.evaluation_date,

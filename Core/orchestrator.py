@@ -164,10 +164,10 @@ async def orchestrate(
     report_format='excel',
     sam_report_paths=None,
     dspm_report_paths=None,
-    include_user_usage_detail=False,
+    include_user_usage_detail=True,
     copilot_dashboard_export=None,
     power_platform_inventory=None,
-    preview_collectors='none',
+    preview_collectors='auto',
     sharepoint_admin_url=None,
     legacy_power_platform_collector=False,
     check_connections=False,
@@ -187,6 +187,8 @@ async def orchestrate(
     delegated='auto',
     interactive_tenant_confirmation=False,
     show_progress=True,
+    customer_name=None,
+    extra_exports=None,
 ):
     """Orchestrate gathering of service information and service plans.
     
@@ -399,6 +401,7 @@ async def orchestrate(
         checkpoint = CollectionCheckpoint(
             save_collection_path, service_config=service_config,
             tenant_id=tenant_id, tenant_name=tenant_name,
+            customer_name=customer_name,
             enabled_collectors=enabled_collectors, connection_results=connection_results,
             evaluation_date=evaluation_date,
             auth_plan=auth_plan,
@@ -562,12 +565,16 @@ async def orchestrate(
             diagnostics=payload['package'].get('diagnostics', []),
             collection_input=saved,
         )
+        from .export_paths import new_deliverables_directory
         output = render_with_failure_receipt(
             process_and_print_all_information, receipt=receipt,
             **results,
             tenant_name=tenant_name,
+            customer_name=customer_name,
+            output_dir=new_deliverables_directory(receipt['folder']),
             open_html_report=open_html_report,
             report_format=report_format,
+            extra_exports=extra_exports,
             sam_report_paths=packaged_inputs.get('sam_report', []),
             dspm_report_paths=packaged_inputs.get('dspm_report', []),
             data_exposure_enabled=(run_m365 or run_purview),

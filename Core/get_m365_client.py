@@ -10,7 +10,7 @@ import csv
 import io
 from azure.core.exceptions import HttpResponseError
 from .spinner import get_timestamp, _stdout_lock
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from .collector_registry import source_allowed
 
 
@@ -28,9 +28,9 @@ def _parse_csv_report(report_data):
 
 async def get_m365_client(
     graph_client,
-    include_user_usage_detail=False,
+    include_user_usage_detail=True,
     copilot_dashboard_export=None,
-    preview_collectors="none",
+    preview_collectors="auto",
     permission_profile="standard",
 ):
     """
@@ -142,7 +142,7 @@ async def get_m365_client(
         tasks = {
             'users': graph_client.get_collection(
                 "/v1.0/users",
-                params={'$select': 'id,displayName,userPrincipalName,assignedLicenses,accountEnabled', '$top': '999'},
+                params={'$select': 'id,displayName,userPrincipalName,userType,assignedLicenses,accountEnabled', '$top': '999'},
             ),
             'external_connections': graph_client.get_collection(
                 "/v1.0/external/connections", params={'$top': '999'}
@@ -173,7 +173,8 @@ async def get_m365_client(
         if source_allowed('report_settings', permission_profile):
             from .report_privacy import collect_report_settings
             tasks['report_settings'] = collect_report_settings(graph_client)
-        if preview_collectors in {'copilot-audit', 'all'} and source_allowed('copilot_audit', permission_profile):
+        from .collector_registry import supplemental_enabled
+        if supplemental_enabled(preview_collectors, 'copilot-audit', permission_profile) and source_allowed('copilot_audit', permission_profile):
             from .copilot_audit import collect_copilot_interaction_audit
             tasks['copilot_interaction_audit'] = collect_copilot_interaction_audit(
                 graph_client, include_user_detail=include_user_usage_detail)
@@ -181,7 +182,7 @@ async def get_m365_client(
         tasks['ai_usage'] = collect_ai_usage(
             include_user_detail=include_user_usage_detail,
             copilot_dashboard_export=copilot_dashboard_export,
-            preview_collectors=preview_collectors,
+            preview_collectors='none' if permission_profile == 'restricted' else preview_collectors,
         )
         
         # Execute all API calls in parallel; elapsed time is not a completion percentage.
@@ -208,11 +209,8 @@ async def get_m365_client(
                 }
                 continue
             if isinstance(response, dict) and 'value' in response:
-                client.collection_status[source_name] = {
-                    key: response.get(key) for key in (
-                        'availability_status', 'records_collected', 'pages_collected', 'truncated', 'reason'
-                    )
-                }
+                client.collection_status[source_name] = {key:value for key,value in response.items() if key!='value'}
+                client.collection_status[source_name].update(response.get('_collection_metadata',{}) or {})
                 if not client.collection_status[source_name].get('availability_status'):
                     client.collection_status[source_name]['availability_status'] = (
                         'partial' if response.get('truncated') or response.get('@odata.nextLink')
@@ -294,6 +292,16 @@ async def get_m365_client(
         # Parse CSV and extract key metrics for Exchange/Outlook observations
         def record_csv_rows(source_name, rows):
             rows = rows or []
+            client.assessment_datasets = getattr(client, 'assessment_datasets', {})
+            endpoints={'email_activity':"getEmailActivityUserDetail(period='D30')",
+                'teams_activity':"getTeamsUserActivityUserDetail(period='D30')",'sharepoint_usage':"getSharePointSiteUsageDetail(period='D30')",
+                'onedrive_usage':"getOneDriveUsageAccountDetail(period='D30')",'office_activations':'getOffice365ActivationsUserDetail',
+                'active_users':"getOffice365ActiveUserDetail(period='D30')"}
+            client.assessment_datasets[source_name] = [{'records':rows, 'source':{'availability_status':'available','complete':True,
+                'scope':'Returned usage report rows','refresh_date':next((row.get('Report Refresh Date') for row in rows if row.get('Report Refresh Date')), ''),
+                'source_api':'https://graph.microsoft.com/v1.0/reports/'+endpoints[source_name],
+                'collected_at':datetime.now(timezone.utc).isoformat(),'period':'D30' if source_name!='office_activations' else 'Snapshot',
+                'evidence_level':'observed_operation'}}]
             status = client.collection_status.setdefault(source_name, {})
             status.update({
                 'availability_status': 'available',
@@ -409,7 +417,9 @@ async def get_m365_client(
                     'total_files': total_files,
                     'total_page_views': total_page_views,
                     'avg_files_per_site': round(total_files / total_sites_in_report, 1) if total_sites_in_report > 0 else 0,
-                    'site_activity_rate': round((active_sites / total_sites_in_report * 100), 1) if total_sites_in_report > 0 else 0
+                    'site_activity_rate': round((active_sites / total_sites_in_report * 100), 1) if total_sites_in_report > 0 else None,
+                    'percentage_basis':{'numerator':active_sites,'denominator':total_sites_in_report or None,
+                        'population':'Returned SharePoint sites with page-view activity','scope':'Returned report rows','window':report_period}
                 }
             else:
                 client.sharepoint_summary = {'available': False, 'error': 'No data in report'}
@@ -444,7 +454,9 @@ async def get_m365_client(
                     'report_period': report_period,
                     'total_accounts': total_accounts,
                     'active_accounts': active_accounts,
-                    'adoption_rate': round((active_accounts / total_accounts * 100), 1) if total_accounts > 0 else 0,
+                    'adoption_rate': round((active_accounts / total_accounts * 100), 1) if total_accounts > 0 else None,
+                    'percentage_basis':{'numerator':active_accounts,'denominator':total_accounts or None,
+                        'population':'Returned OneDrive accounts with activity or stored files','scope':'Returned report rows','window':report_period},
                     'total_files': total_files,
                     'storage_used_gb': storage_used_gb,
                     'avg_files_per_user': round(total_files / active_accounts, 1) if active_accounts > 0 else 0
@@ -467,8 +479,10 @@ async def get_m365_client(
                 windows_activations = 0
                 mac_activations = 0
                 mobile_activations = 0
+                desktop_activations = 0
                 
                 for row in parsed_rows:
+                    desktop_activations += int(int(row.get('Windows',0) or 0)>0 or int(row.get('Mac',0) or 0)>0)
                     if int(row.get('Windows', 0) or 0) > 0:
                         windows_activations += 1
                     if int(row.get('Mac', 0) or 0) > 0:
@@ -484,7 +498,9 @@ async def get_m365_client(
                     'windows_users': windows_activations,
                     'mac_users': mac_activations,
                     'mobile_users': mobile_activations,
-                    'desktop_adoption_rate': round(((windows_activations + mac_activations) / total_users_with_activations * 100), 1) if total_users_with_activations > 0 else 0
+                    'desktop_adoption_rate': round((desktop_activations / total_users_with_activations * 100), 1) if total_users_with_activations > 0 else None,
+                    'percentage_basis':{'numerator':desktop_activations,'denominator':total_users_with_activations or None,
+                        'population':'Returned users with Windows or Mac activation','scope':'Returned report rows','window':'Activation snapshot'}
                 }
             else:
                 client.activations_summary = {'available': False, 'error': 'No data in report'}

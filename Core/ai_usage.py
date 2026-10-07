@@ -327,12 +327,16 @@ def _normalize_copilot_period(payload, period):
                     round(app_active * 100 / app_enabled, 1)
                     if app_enabled and app_active is not None else None
                 ),
+                'percentage_basis':{'numerator':app_active,'denominator':app_enabled or None,
+                    'population':display_name+' enabled users','scope':'Returned Copilot product usage','window':period},
             }
     return {
         "period": period,
         "enabled_users": enabled,
         "active_users": active,
         "active_rate": round(active * 100 / enabled, 1) if enabled and active is not None else None,
+        'percentage_basis':{'numerator':active,'denominator':enabled or None,
+            'population':'Enabled paid Microsoft 365 Copilot users','scope':'Returned Copilot usage report','window':period},
         "unused_licenses": max(enabled - active, 0) if enabled is not None and active is not None else None,
         "total_prompts": _optional_integer(record, "totalPromptsSubmitted", "promptsSubmitted"),
         "average_prompts": _optional_number(record, "averagePromptsSubmitted", "averagePromptsSubmittedPerUser"),
@@ -374,7 +378,7 @@ def _latest_refresh_date(payloads):
     return max(values) if values else ""
 
 
-async def collect_copilot_usage(client, include_user_detail=False):
+async def collect_copilot_usage(client, include_user_detail=True):
     evidence = _base_evidence("Microsoft Graph Microsoft 365 Copilot usage reports", "D7/D28/D90/D180")
     summary_paths = [
         "/v1.0/copilot/reports/getMicrosoft365CopilotUserCountSummary(period='{}',version='v2')".format(period)
@@ -456,7 +460,7 @@ async def collect_copilot_usage(client, include_user_detail=False):
         "Deployed" if evidence["available"] else "Unknown"
     )
 
-    # Aggregate v2 engagement on every run; retain identities only on explicit opt-in.
+    # Aggregate engagement and retain user evidence by default for investigation.
     detail_payload, detail_error = await _get_report_payload(
         client, "/v1.0/copilot/reports/getMicrosoft365CopilotUsageUserDetail(period='D28',version='v2')",
     )
@@ -685,6 +689,8 @@ async def collect_license_coverage(client):
             if eligible and coverage_complete else None
         ),
         "coverage_population": "enabled users with recognized qualifying Microsoft 365 workload/base plans (tenant-derived eligibility estimate)",
+        'percentage_basis':{'numerator':copilot_licensed_eligible,'denominator':eligible if coverage_complete and eligible else None,
+            'population':'Enabled users with recognized qualifying base plans','scope':'Returned user and subscription inventories','window':'Current licensing snapshot'},
         "license_detection_basis": "assigned paid Microsoft 365 Copilot SKU or service-plan identity; includes qualifying Business offers and bundles, excludes Chat-only plans",
         "subscription_catalog_available": catalog_valid and not catalog_error,
         "unresolved_assigned_sku_count": len(unresolved_sku_ids),
@@ -700,6 +706,8 @@ async def collect_license_coverage(client):
     from .copilot_admin_review import subscription_capacity
     evidence['copilot_subscription_capacity'] = subscription_capacity(
         catalog_rows, paid_sku_ids, complete=catalog_valid and not catalog_error)
+    evidence['subscription_records'] = catalog_rows
+    evidence['user_records'] = _value_rows(payload)
     return evidence
 
 
@@ -812,75 +820,76 @@ def load_copilot_dashboard_export(path):
 
 
 async def collect_shadow_ai_usage(client):
+    """Retain stream/app/entity evidence, qualifying overlap and beta coverage."""
     evidence = _base_evidence("Microsoft Defender for Cloud Apps discovery (Microsoft Graph beta)", "P30D")
-    streams_payload, error = await _get_json(
-        client, "/beta/security/dataDiscovery/cloudAppDiscovery/uploadedStreams"
-    )
-    streams = _value_rows(streams_payload)
-    if streams_payload is None:
-        evidence["availability_status"] = "unavailable"
-        evidence["reason"] = error
-        return evidence
+    semaphore = asyncio.Semaphore(4)
+    async def pages(path):
+        rows, count, errors = [], 0, []
+        while path and count < 100:
+            if path.startswith('http'):
+                from urllib.parse import urlsplit
+                target = urlsplit(path)
+                if target.scheme != 'https' or target.netloc.lower() != 'graph.microsoft.com' or not target.path.startswith('/beta/security/dataDiscovery/'):
+                    errors.append('Unsupported pagination origin or resource')
+                    break
+            async with semaphore:
+                payload, error = await _get_json(client, path)
+            if payload is None:
+                errors.append(error or "No response")
+                break
+            rows.extend(_value_rows(payload)); count += 1
+            path = payload.get("@odata.nextLink") or payload.get("nextLink")
+        if path and count >= 100: errors.append("Pagination safety limit reached")
+        return rows, count, errors
+    streams, page_count, errors = await pages("/beta/security/dataDiscovery/cloudAppDiscovery/uploadedStreams")
+    evidence.update(streams=streams, evidence_quality="preview", collected_at=datetime.now(timezone.utc).isoformat(),
+                    scope="Returned Cloud Discovery streams; unmanaged devices and uncovered networks are not visible")
     if not streams:
-        evidence["availability_status"] = "unavailable"
-        evidence["reason"] = (
-            "Cloud Discovery has no uploaded or continuous data stream. Enable Defender for "
-            "Endpoint forwarding, a Cloud Discovery log source, or Global Secure Access Shadow AI discovery, then rerun."
-        )
+        evidence.update(availability_status="unavailable", reason=('; '.join(errors) + '. ' if errors else '') +
+            'No usable discovery stream was returned; AI usage is unknown. Confirm discovery configuration, licensing and supported log sources with the owner.', partial_errors=errors)
         return evidence
-
-    results = await asyncio.gather(*[
-        _get_json(
-            client,
-            "/beta/security/dataDiscovery/cloudAppDiscovery/uploadedStreams/{}/aggregatedAppsDetails(period=duration'P30D')".format(stream.get("id")),
-        ) for stream in streams if stream.get("id")
-    ])
-    apps = []
-    errors = []
-    for payload, request_error in results:
-        if payload is None:
-            if request_error:
-                errors.append(request_error)
-            continue
-        for row in _value_rows(payload):
-            category = str(row.get("category", "") or "")
-            name = str(row.get("displayName", row.get("name", "")) or "")
-            searchable = "{} {}".format(category, name).lower()
-            if "generative ai" not in searchable and not any(
-                marker in searchable for marker in ("chatgpt", "openai", "claude", "anthropic", "cursor", "deepseek", "gemini")
-            ):
-                continue
-            apps.append({
-                "display_name": name or "Unknown AI application",
-                "category": category or "Generative AI",
-                "risk_rating": row.get("riskScore", row.get("riskRating")),
-                "active_users": row.get("userCount", row.get("activeUsers")),
-                "traffic_bytes": _integer(row, "uploadNetworkTrafficInBytes")
-                + _integer(row, "downloadNetworkTrafficInBytes"),
-                "last_seen": row.get("lastSeenDateTime", row.get("lastSeen", "")),
-            })
-    last_seen = [str(app["last_seen"])[:10] for app in apps if _parse_date(app.get("last_seen"))]
-    stream_dates = []
+    apps, catalog, entities = [], [], []
+    markers = {"public chat":("chatgpt","openai","claude","anthropic","gemini","deepseek","cursor"),
+               "writing assistant":("grammarly","quillbot","jasper","writesonic"),
+               "meeting tool":("otter","fireflies","fathom","read.ai"),
+               "file analysis":("chatpdf","humata","askyourpdf"),
+               "automation":("zapier","make.com","n8n")}
     for stream in streams:
-        for key in ("lastUpdatedDateTime", "lastDataReceivedDateTime", "lastUploadDateTime"):
-            if _parse_date(stream.get(key)):
-                stream_dates.append(str(stream[key])[:10])
-    evidence.update({
-        "available": True,
-        "availability_status": "partial" if errors else "available",
-        "reason": "" if apps else "Cloud Discovery is available; no generative AI applications were returned",
-        "applications": apps,
-        "application_count": len(apps),
-        "refresh_date": max(last_seen + stream_dates) if (last_seen or stream_dates) else "",
-        "partial_errors": errors,
-        "records_collected": len(apps),
-        "pages_collected": 1 + len(results),
-        "truncated": False,
-    })
-    return _set_freshness(evidence, 7)
+        if not stream.get("id"): continue
+        base="/beta/security/dataDiscovery/cloudAppDiscovery/uploadedStreams/{}/aggregatedAppsDetails(period=duration'P30D')".format(stream["id"])
+        records, count, failures=await pages(base);page_count+=count;errors.extend(failures)
+        for row in records:
+            catalog.append(dict(row, StreamId=stream["id"]))
+            name=str(row.get("displayName",row.get("name","")) or "")
+            category=str(row.get("category") or "")
+            searchable=(name+" "+category).lower()
+            kind=next((kind for kind,words in markers.items() if any(word in searchable for word in words)),None)
+            if kind is None and "generative ai" not in searchable: continue
+            app=dict(row, display_name=name or "Unknown application", category=category or "Unclassified",
+                     service_type=kind or "generative AI", classification="Candidate classification; verify actual AI use",
+                     stream_id=stream["id"], risk_rating=row.get("riskScore",row.get("riskRating")),
+                     active_users=row.get("userCount",row.get("activeUsers")),
+                     traffic_bytes=_integer(row,"uploadNetworkTrafficInBytes")+_integer(row,"downloadNetworkTrafficInBytes"),
+                     last_seen=row.get("lastSeenDateTime",row.get("lastSeen","")))
+            apps.append(app)
+            if row.get("id"):
+                for entity in ("users","name","ipAddress"):
+                    detail, count, failures=await pages(base+"/"+str(row["id"])+"/"+entity)
+                    page_count+=count
+                    errors.extend(f"{entity} detail: {failure}" for failure in failures)
+                    entities.extend({"StreamId":stream["id"],"ApplicationId":row["id"],"EntityType":entity,"Record":item} for item in detail)
+    dates=[str(app['last_seen'])[:10] for app in apps if _parse_date(app.get('last_seen'))]
+    evidence.update(available=True, availability_status="partial" if errors else "available", complete=not errors,
+        reason="Returned streams contain no classified AI candidates; this does not establish absent tenant-wide usage." if not apps else "",
+        applications=apps, discovered_app_records=catalog, entity_records=entities,
+        application_count=len({app.get('id') or app['display_name'] for app in apps}),
+        refresh_date=max(dates) if dates else "", partial_errors=errors, records_collected=len(apps),
+        pages_collected=page_count, truncated=any('limit reached' in error for error in errors),
+        overlap_qualification="Applications and users may appear in multiple streams. Stream counts are not summed as unique users or devices.")
+    return _set_freshness(evidence,7)
 
 
-async def collect_ai_usage(include_user_detail=False, copilot_dashboard_export=None, preview_collectors="none"):
+async def collect_ai_usage(include_user_detail=True, copilot_dashboard_export=None, preview_collectors="auto"):
     # Offline CSV parsing does not require the Graph/Azure or HTTP dependencies.
     import httpx
     from .get_graph_client import get_shared_credential
@@ -898,7 +907,7 @@ async def collect_ai_usage(include_user_detail=False, copilot_dashboard_export=N
             collect_m365_app_readiness(client),
             collect_license_coverage(client),
         )
-        if preview_collectors in {"shadow-ai", "all"}:
+        if preview_collectors in {"auto", "shadow-ai", "all"}:
             shadow_ai = await collect_shadow_ai_usage(client)
         else:
             shadow_ai = _base_evidence("Microsoft Defender for Cloud Apps discovery (preview)", "P30D")

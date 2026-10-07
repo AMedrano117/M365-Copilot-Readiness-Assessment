@@ -263,7 +263,7 @@ class RestrictedOrchestrationTests(unittest.IsolatedAsyncioTestCase):
         result = await orchestrate(TENANT_ID, ['M365', 'Entra', 'Defender', 'Purview'], permission_profile='restricted')
         self.assertIsNone(result)
         self.assertEqual(self.pipelines.call_args.kwargs['permission_profile'], 'restricted')
-        saved_path = next(Path('output/collections').glob('*.json'))
+        saved_path = next(Path('Reports').rglob('collection.json'))
         saved = load_collection(saved_path)
         self.assertEqual(saved['assessment_settings']['permission_profile'], 'restricted')
         self.assertNotIn('Purview', saved['enabled_collectors'])
@@ -279,7 +279,7 @@ class RestrictedOrchestrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.setup.call_args.kwargs['collect_licenses'])
         self.pipelines.assert_not_called()
         self.render.assert_not_called()
-        self.assertFalse(Path('output/collections').exists())
+        self.assertFalse(Path('Reports').exists())
 
     async def test_excess_blocks_license_and_tenant_context_reads(self):
         from Core.orchestrator import orchestrate

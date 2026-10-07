@@ -17,7 +17,7 @@ AVAILABLE = {"available": True, "availability_status": "available", "truncated":
 
 def policy(name, state="enabled", users=("All",), apps=("All",), grant=("mfa",), clients=("all",), groups=()):
     return {"displayName": name, "state": state,
-            "conditions": {"users": {"includeUsers": list(users), "includeGroups": list(groups), "excludeUsers": ["breakglass"]},
+            "conditions": {"users": {"includeUsers": list(users), "includeGroups": list(groups), "excludeUsers": []},
                            "applications": {"includeApplications": list(apps)}, "clientAppTypes": list(clients)},
             "grantControls": {"builtInControls": list(grant)}}
 
@@ -51,7 +51,7 @@ class ConditionalAccessTests(unittest.TestCase):
         self.assertEqual(row["Disposition"], "Assurance")
         self.assertTrue(row["BaselineCheck"])
         self.assertEqual(row["ControlId"], "IDENTITY.AUTH")
-        self.assertIn("1 excluded user or group assignment", row["Observation"])
+        self.assertNotIn("excluded user or group assignment", row["Observation"])
 
     def test_missing_legacy_block_is_a_medium_condition(self):
         [row] = assess_identity_baseline(entra([policy("MFA all users")]))
@@ -174,7 +174,7 @@ class VerdictAndSummaryTests(unittest.TestCase):
         retention = next(row for row in result["actions"] if row.get("ControlId") == "DATA.RETENTION")
         self.assertEqual(retention["PilotImpact"], "Fix before broad rollout")
         statuses = {row["control_id"]: row["status"] for row in result["controls"]}
-        self.assertEqual(statuses["DATA.DLP"], "Observed")
+        self.assertEqual(statuses["DATA.DLP"], "Not established")
         self.assertEqual(statuses["DATA.PUBLISHING"], "Observed")
         html = render_pilot_summary(result, bundle, "Contoso", "report.html", "workbook.xlsx")
         self.assertIn("<h1>Not ready for a pilot yet</h1>", html)
