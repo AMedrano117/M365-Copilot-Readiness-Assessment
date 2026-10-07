@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import time
+from copy import deepcopy
 from datetime import date, datetime, timezone
 from enum import Enum
 from os import name as _platform_name
@@ -116,6 +117,19 @@ def save_collection(path=None, *, tenant_id, tenant_name, service_results,
     payload['methodology_version'] = METHODOLOGY_VERSION
     payload['assessment_version'] = ASSESSMENT_VERSION
     payload['evaluation_date'] = evaluation_day(evaluation_date)
+    from .assessment_identity import new_identity, incomplete_identity
+    previous_identity = (_checkpoint_package or {}).get('identity')
+    if previous_identity:
+        payload['identity'] = deepcopy(previous_identity)
+    else:
+        try:
+            payload['identity'] = new_identity(tenant_id, methodology_version=METHODOLOGY_VERSION,
+                                               evaluated_at=payload['evaluation_date'])
+        except ValueError:
+            # Legacy saves with unverified tenant labels remain usable and unbound.
+            payload['identity'] = incomplete_identity()
+        if _checkpoint_package is not None:
+            _checkpoint_package['identity'] = deepcopy(payload['identity'])
     payload['assessment_settings'] = {key: value for key, value in (assessment_settings or {}).items()
                                       if key in SETTING_KEYS}
     encoded = _encode(payload)
@@ -265,6 +279,7 @@ def collection_context(payload=None, source_file=None, evaluation_date=None, mod
     if payload and payload.get('has_tenant_collection') is False:
         source_name = ''
     return {"mode": mode, "source_file": source_name,
+            "identity": deepcopy((payload or {}).get('identity')),
             "customer_name": (payload or {}).get('customer_name'),
             "collected_at": timestamp, "age_days": age,
             "evaluation_date": evaluated,

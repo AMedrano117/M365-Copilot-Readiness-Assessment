@@ -25,7 +25,24 @@ def plain_data(value):
 
 def write_assessment_result(path, result):
     """Write a data-only, sanitized snapshot of the current runtime result."""
+    from .assessment_references import require_valid_assessment
+    snapshot = plain_data(result)
+    snapshot['identity_validation'] = require_valid_assessment(snapshot)
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(plain_data(result), ensure_ascii=False, indent=2, allow_nan=False) + '\n', encoding='utf-8')
+    target.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2, allow_nan=False) + '\n', encoding='utf-8')
     return str(target)
+
+
+def read_assessment_result(path):
+    """Load the shared result directly; legacy state never implies continuity."""
+    from .assessment_identity import incomplete_identity
+    from .assessment_references import require_valid_assessment
+    with Path(path).open(encoding='utf-8-sig') as handle:
+        result = json.load(handle)
+    if not isinstance(result, dict):
+        raise ValueError('Assessment snapshot must contain a shared-result object.')
+    if 'identity' not in result:
+        result['identity'] = incomplete_identity('legacy')
+    result['identity_validation'] = require_valid_assessment(result)
+    return result

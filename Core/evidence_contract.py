@@ -112,8 +112,11 @@ def normalize_observation(source, *, evaluation_date=None, expected_tenant_id=No
     row["qualification"] = " ".join(row["qualifications"])
     row["evidence_id"] = row.get("evidence_id") or "EV-" + stable_id({
         key: value for key, value in row.items()
-        if key not in {"age_days", "freshness", "qualifications", "qualification", "selection"}
+        if key not in {"age_days", "freshness", "qualifications", "qualification", "selection", "source_observed_at"}
     })
+    # Add after the compatibility EV hash. Selection still uses the existing date.
+    original = source.get('source_observed_at') or source.get('observed_at')
+    row['source_observed_at'] = original.isoformat() if hasattr(original, 'isoformat') else original or ''
     return row
 
 

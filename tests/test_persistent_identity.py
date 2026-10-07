@@ -64,6 +64,41 @@ def graph():
 
 
 class PersistentIdentityTests(unittest.TestCase):
+    def test_bound_compatibility_locators_and_selected_support(self):
+        identity, references = api()
+        meta=metadata()
+        raw={'id':'fictional-native','flag':False,'value':0}
+        source={'provider':'microsoft','workload':'entra','collected_at':STAMP,
+                'availability_status':'available','complete':True,'population':'pilot users','scope':'tenant'}
+        rec={'RecommendationId':'ENT-001','Provider':'microsoft','ControlId':'IDENTITY.MFA',
+             'FindingKey':'identity.mfa','Population':'pilot users','EvidenceScope':'tenant',
+             'RecommendationCatalogNamespace':'approved-catalog','RecommendationCatalogKey':'enforcement',
+             'CustomerActionKey':'work-item-1','InvestigationEvidence':{'kind':'records','records':[raw]},
+             'Observation':'Fictional statement','Recommendation':'Review fictional configuration'}
+        result={'tenant_id':TENANT,'methodology_version':'4','evaluation_date':'2026-09-10',
+                'recommendations':[rec], 'controls':[{'control_id':'IDENTITY.MFA'}], 'evidence':[]}
+        bundle={'collection_context':{'identity':meta},'assessment_sources':{'auth_methods':[{'source':source,'records':[raw]}]}}
+        before=copy.deepcopy((result,bundle))
+        identity.attach_identity(result,bundle)
+        self.assertEqual(bundle,before[1])
+        self.assertEqual(result['recommendations'],before[0]['recommendations'])
+        namespaces={row['Namespace'] for row in result['identity']['Aliases']}
+        self.assertTrue({'SRC','EVD','DET','native:auth_methods'} <= namespaces)
+        types={row['Type'] for row in result['identity']['Entities']}
+        self.assertTrue({'finding','action','recommendation_catalog','support','native_record','capture','dataset','evidence_record'} <= types)
+        self.assertEqual(references.validate_assessment_references(result),[])
+        for row in result['identity']['Aliases']:
+            self.assertIsNotNone(references.resolve_alias(result,row))
+
+    def test_row_compatibility_alias_is_explicitly_unresolved_when_unscoped(self):
+        identity, _=api()
+        result={'tenant_id':TENANT,'recommendations':[{'RecommendationId':'ENT-001','InvestigationEvidence':
+            {'kind':'records','records':[{'flag':False}]}}]}
+        identity.attach_identity(result,{'collection_context':{'identity':metadata()}})
+        rows=[row for row in result['identity']['Aliases'] if row['Namespace']=='ROW']
+        self.assertTrue(rows)
+        self.assertTrue(all(row['Value'].startswith('ROW-') and row['TargetId'] is None for row in rows))
+
     def test_new_shared_result_contains_execution_ids(self):
         from Core.assessment_result import build_assessment_result
         meta = metadata()
@@ -161,6 +196,74 @@ class PersistentIdentityTests(unittest.TestCase):
             registry.add(dict(first, IdentityKey='two'))
         self.assertEqual(registry.entities, [first])
 
+    def test_hash_collision_compares_boundaries_and_is_fatal(self):
+        identity, _ = api()
+        registry=identity.IdentityRegistry(); meta=metadata()
+        with patch.object(identity,'digest',return_value='a'*64):
+            registry.add(identity.entity('control',meta,{'namespace':'m365-readiness','control_id':'IDENTITY.MFA'}))
+            with self.assertRaises(identity.IdentityCollisionError):
+                registry.add(identity.entity('control',meta,{'namespace':'m365-readiness','control_id':'DATA.DLP'}))
+
+    def test_dangling_boundary_capture_is_detected(self):
+        identity, references=api(); result=graph()
+        old=next(row for row in result['identity']['Entities'] if row['Type']=='capture')
+        result['identity']['Entities'].remove(old)
+        self.assertIn('dangling_reference',{row['code'] for row in references.validate_assessment_references(result)})
+
+    def test_undeclared_control_obligation_is_detected(self):
+        _, references=api(); result=graph()
+        result['identity']['Entities']=[row for row in result['identity']['Entities'] if row['Type']!='control']
+        self.assertIn('dangling_reference',{row['code'] for row in references.validate_assessment_references(result)})
+
+    def test_missing_shape_returns_structured_diagnostics(self):
+        _, references=api(); result=graph(); result['identity']['Entities']={}
+        self.assertIn('invalid_shape',{row['code'] for row in references.validate_assessment_references(result)})
+
+    def test_malformed_boundary_returns_diagnostics_without_deleting_record(self):
+        _, references=api(); result=graph(); result['identity']['Entities'][0]['Boundary']=['invalid']
+        before=copy.deepcopy(result)
+        self.assertIn('missing_scope',{row['code'] for row in references.validate_assessment_references(result)})
+        self.assertEqual(result,before)
+
+    def test_two_engagements_in_same_environment_are_not_grouped(self):
+        first=metadata(); second=metadata()
+        self.assertEqual(first['PrimaryEnvironmentId'],second['PrimaryEnvironmentId'])
+        self.assertNotEqual(first['AssessmentId'],second['AssessmentId'])
+
+    def test_repeated_shared_build_and_live_offline_preserve_ids(self):
+        from Core.assessment_result import build_assessment_result
+        seed=metadata(); bundle={'collection_context':{'identity':seed,'mode':'live'}}
+        first=build_assessment_result([],bundle,evaluation_date='2026-09-10',expected_tenant_id=TENANT)
+        bundle['collection_context']['mode']='offline'
+        second=build_assessment_result([],bundle,evaluation_date='2026-09-10',expected_tenant_id=TENANT)
+        self.assertEqual(first['identity'],second['identity'])
+        self.assertEqual(first['identity']['RunId'],seed['RunId'])
+
+    def test_provider_and_scoped_finding_boundaries_are_material(self):
+        identity,_=api(); key=boundaries(metadata())['finding']
+        for field in ('provider','population','resource_scope','environment_id','condition_key'):
+            with self.subTest(field=field):
+                self.assertNotEqual(identity.semantic_id('finding',**key),
+                    identity.semantic_id('finding',**dict(key,**{field:'different'})))
+
+    def test_declared_foreign_source_tenant_blocks_publication(self):
+        identity,references=api(); result={'tenant_id':TENANT,'recommendations':[]}
+        bundle={'collection_context':{'identity':metadata()},'assessment_sources':{'users':[{'records':[{'id':'fictional'}],
+            'source':{'provider':'microsoft','workload':'entra','tenant_id':OTHER,'collected_at':STAMP}}]}}
+        identity.attach_identity(result,bundle)
+        self.assertIn('cross_environment',{row['code'] for row in result['identity_validation']})
+        with self.assertRaises(ValueError):
+            references.require_valid_assessment(result)
+
+    def test_retained_file_identity_does_not_require_dataset_provider(self):
+        identity,_=api(); result={'tenant_id':TENANT,'recommendations':[]}
+        bundle={'collection_context':{'identity':metadata()},'assessment_sources':{'legacy':[{'records':[],
+            'source':{'source_file':'fictional.json','source_hash':'a'*64,'tenant_id':TENANT}}]}}
+        identity.attach_identity(result,bundle)
+        aliases=[row for row in result['identity']['Aliases'] if row['Namespace']=='source_file']
+        self.assertEqual(len(aliases),1)
+        self.assertTrue(aliases[0]['TargetId'].startswith('PFL-'))
+
     def test_duplicate_observations_are_not_merged(self):
         from Core.assessment_result import build_assessment_result
         meta = metadata()
@@ -247,6 +350,33 @@ for name,code,mutation in [
 
 
 class IdentitySerializationTests(unittest.TestCase):
+    def test_snapshot_render_replay_preserves_identity_and_compatibility(self):
+        import test_offline_report as offline_tests
+        from synthetic_package_fixture import create_synthetic_package
+        from Core.offline_collection import load_collection
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)
+            collection=Path(create_synthetic_package(root/'inputs',active_incident=True))
+            original=collection.read_bytes()
+            first_path=root/'first.json'; second_path=root/'second.json'
+            runner=offline_tests.OfflineReportTests()
+            first_html=runner.run_cli(['--collection-input',str(collection),'--evaluation-date','2026-09-15',
+                '--snapshot-json',str(first_path),'--extra-exports','evidence-pages'],root)
+            package=load_collection(collection)['package_directory']
+            second_html=runner.run_cli(['--collection-input',str(Path(package)/'rebuild.json'),
+                '--snapshot-json',str(second_path),'--extra-exports','evidence-pages'],root)
+            first=json.loads(first_path.read_text(encoding='utf-8'))
+            second=json.loads(second_path.read_text(encoding='utf-8'))
+            self.assertEqual(first['identity'],second['identity'])
+            self.assertEqual(first['counts'],second['counts'])
+            self.assertEqual([row['RecommendationId'] for row in first['recommendations']],
+                             [row['RecommendationId'] for row in second['recommendations']])
+            self.assertTrue(first['identity']['AssessmentId'])
+            self.assertTrue(first['identity']['RunId'])
+            self.assertEqual(collection.read_bytes(),original)
+            runner.assertLocalHtmlLinksExist(first_html.parent)
+            runner.assertLocalHtmlLinksExist(second_html.parent)
+
     def test_round_trip_repeated_serialization(self):
         from Core.assessment_serialization import write_assessment_result, read_assessment_result
         result = graph()
@@ -333,9 +463,9 @@ class IdentitySerializationTests(unittest.TestCase):
         from types import SimpleNamespace
         meta=metadata()
         with tempfile.TemporaryDirectory() as folder:
-            args=SimpleNamespace(evaluation_date='2026-09-10')
-            save_rebuild_recipe(folder,args,tenant_id=TENANT,tenant_name='Fictional',identity=meta)
-            loaded=load_rebuild_recipe(Path(folder)/'rebuild.json')
+            args=SimpleNamespace(evaluation_date='2026-09-10', report_format='both')
+            recipe=save_rebuild_recipe(folder,args,tenant_id=TENANT,tenant_name='Fictional',identity=meta)
+            loaded=load_rebuild_recipe(Path(folder)/'rebuild.json',recipe)
             self.assertEqual(loaded['identity'],meta)
 
 

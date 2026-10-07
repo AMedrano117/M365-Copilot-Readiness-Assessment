@@ -1022,4 +1022,5 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
     result['operational_results'] = operation
     result['device_reconciliation'] = devices
     from .assessment_catalog import attach_catalog
-    return attach_catalog(result, bundle)
+    from .assessment_identity import attach_identity
+    return attach_identity(attach_catalog(result, bundle), bundle)
