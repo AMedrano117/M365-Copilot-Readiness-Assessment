@@ -351,9 +351,10 @@ def attach_identity(result, bundle):
     meta['Entities'].extend(registry.entities)
     meta['Entities'].extend(deepcopy(bundle.get('identity_entities') or []))
     meta['Aliases'].extend(aliases + deepcopy(bundle.get('identity_aliases') or []))
-    meta['References'].extend(refs + deepcopy(bundle.get('identity_references') or []))
-    # Shared control/source references may recur; aliases may not be quietly collapsed.
-    meta['References'] = [json.loads(key) for key in sorted({json.dumps(row,sort_keys=True) for row in meta['References']})]
+    # Intern generated relationships only. Explicit declarations, including
+    # duplicate invalid records, must remain available to validation/review.
+    meta['References'].extend(json.loads(key) for key in sorted({json.dumps(row,sort_keys=True) for row in refs}))
+    meta['References'].extend(deepcopy(bundle.get('identity_references') or []))
     result['identity'] = meta
     result['identity_validation'] = validate_assessment_references(result)
     return result

@@ -45,6 +45,10 @@ def validate_assessment_references(result):
                 if normalized in {'findinguid','dashboardpackage','dashboardidentity','dashboardschemaversion',
                                   'dashboardjsonpath','dashboardjsonfolder','appbuilderfolder','dashboardwrapper'}:
                     report('retired_identity',key,'Retired output identities are prohibited.')
+                if normalized in {'namespace','type','targettype'} and isinstance(item,str):
+                    concept=re.sub('[^a-z0-9]','',item.lower())
+                    if concept=='findinguid' or concept.startswith(('dashboardpackage','dashboardidentity','dashboardwrapper','appbuilder')):
+                        report('retired_identity',item,'Retired identity namespaces and types are prohibited.')
                 retired(item)
         elif isinstance(value,list):
             for item in value:

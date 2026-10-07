@@ -264,6 +264,14 @@ class PersistentIdentityTests(unittest.TestCase):
         self.assertEqual(len(aliases),1)
         self.assertTrue(aliases[0]['TargetId'].startswith('PFL-'))
 
+    def test_builder_retains_duplicate_invalid_reference_declarations(self):
+        identity,_=api(); result=graph(); meta=result['identity']
+        invalid=dict(meta['References'][0],TargetId='PEV-missing')
+        identity.attach_identity(result,{'collection_context':{'identity':meta},
+            'identity_entities':meta['Entities'],'identity_references':[invalid,copy.deepcopy(invalid)]})
+        self.assertEqual(sum(row['TargetId']=='PEV-missing' for row in result['identity']['References']),2)
+        self.assertIn('dangling_reference',{row['code'] for row in result['identity_validation']})
+
     def test_duplicate_observations_are_not_merged(self):
         from Core.assessment_result import build_assessment_result
         meta = metadata()
@@ -343,6 +351,7 @@ for name,code,mutation in [
     ('dangling_alias','dangling_alias',lambda r:r['identity']['Aliases'][0].update(TargetId='PFI-missing')),
     ('retired_uid','retired_identity',lambda r:r['recommendations'][0].update(finding_uid='FND-old')),
     ('retired_package','retired_identity',lambda r:r.update(dashboard_package={'id':'old'})),
+    ('retired_alias_namespace','retired_identity',lambda r:r['identity']['Aliases'][0].update(Namespace='finding_uid')),
     ('boundary_tamper','identity_mismatch',lambda r:r['identity']['Entities'][0]['Boundary'].update(control_id='DATA.DLP')),
     ('invalid_metadata','missing_scope',lambda r:r['identity'].update(RunId=None)),
 ]:
