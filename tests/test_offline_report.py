@@ -18,7 +18,7 @@ from Core.offline_collection import (
     empty_service_results, load_collection, save_collection, refresh_saved_freshness,
 )
 from Core.portal_report_import import route_portal_reports, validate_report_tenants
-from Core.export_paths import APP_BUILDER_FOLDER, BUILDS_FOLDER, EVIDENCE_FOLDER, JSON_ARCHIVE_STEM, JSON_FOLDER, SUMMARY_STEM, customer_reports_directory
+from Core.export_paths import BUILDS_FOLDER, EVIDENCE_FOLDER, SUMMARY_STEM, customer_reports_directory
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -201,35 +201,14 @@ class OfflineReportTests(unittest.TestCase):
                 assessment.close()
                 technical.close()
 
-    def test_extra_exports_are_independent_and_have_no_missing_html_targets(self):
-        from Core.dashboard_package import read_dashboard_package
+    def test_evidence_pages_have_no_missing_html_targets(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             collection = self.saved(root / 'collection.json')
-            for selected, folder in (('evidence-pages', EVIDENCE_FOLDER), ('app-builder', APP_BUILDER_FOLDER),
-                                     ('dashboard-json', JSON_FOLDER)):
-                with self.subTest(selected=selected):
-                    html = self.run_cli(['--collection-input', str(collection), '--extra-exports', selected], root)
-                    self.assertEqual({path.name for path in html.parent.iterdir() if path.is_dir()}, {folder})
-                    self.assertLocalHtmlLinksExist(html.parent)
-                    archives = list(html.parent.glob('Dashboard JSON*.zip'))
-                    self.assertEqual(len(archives), int(selected == 'dashboard-json'))
-                    if selected == 'app-builder':
-                        overview = json.loads((html.parent / folder / '01-overview.json').read_text(encoding='utf-8'))
-                        self.assertIsNone(overview['deliverables']['evidence_pages'])
-                        self.assertIsNone(overview['deliverables']['dashboard_json'])
-                        for target in overview['deliverables'].values():
-                            if target:
-                                self.assertTrue((html.parent / target).is_file(), target)
-                    if selected == 'dashboard-json':
-                        index = html.parent / JSON_FOLDER / 'index.json'
-                        dashboard = read_dashboard_package(index)
-                        self.assertNotIn('evidence_pages', dashboard['deliverables'])
-                        self.assertNotIn('app_builder', dashboard['deliverables'])
-                        for target in dashboard['deliverables'].values():
-                            if target:
-                                self.assertTrue((index.parent / target).is_file(), target)
-
+            html = self.run_cli(['--collection-input', str(collection), '--extra-exports', 'evidence-pages'], root)
+            self.assertEqual({path.name for path in html.parent.iterdir() if path.is_dir()}, {EVIDENCE_FOLDER})
+            self.assertLocalHtmlLinksExist(html.parent)
+            self.assertFalse(list(html.parent.glob('*.zip')))
     def test_single_snapshot_does_not_enable_extra_packages(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -238,12 +217,10 @@ class OfflineReportTests(unittest.TestCase):
             html = self.run_cli(['--collection-input', str(collection), '--snapshot-json', str(snapshot)], root)
             self.assertTrue(snapshot.is_file())
             self.assertFalse(any(path.is_dir() for path in html.parent.iterdir()))
-            dashboard = json.loads(snapshot.read_text(encoding='utf-8'))
-            self.assertNotIn('evidence_pages', dashboard['deliverables'])
-            self.assertNotIn('app_builder', dashboard['deliverables'])
-            for target in dashboard['deliverables'].values():
-                if target:
-                    self.assertTrue((snapshot.parent / target).is_file(), target)
+            result = json.loads(snapshot.read_text(encoding='utf-8'))
+            self.assertIn('controls', result)
+            self.assertIn('domains', result)
+            self.assertNotIn('deliverables', result)
 
     def assertNotEstablished(self, text, message):
         # The headline states the verdict; replayed or partial evidence must not reach a pilot verdict.
@@ -263,7 +240,6 @@ class OfflineReportTests(unittest.TestCase):
             self.assertNotIn('must-not-open', text)
 
     def test_customer_package_replays_from_another_directory_without_duplicate_exports(self):
-        from Core.dashboard_package import read_dashboard_package
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -282,7 +258,7 @@ class OfflineReportTests(unittest.TestCase):
             runner = root / 'separate working directory'
             runner.mkdir()
             arguments = ['--mode', 'offline', '--collection-input', str(collection),
-                         '--evaluation-date', '2026-09-15', '--extra-exports', 'dashboard-json']
+                         '--evaluation-date', '2026-09-15']
             first = self.run_cli(arguments, runner)
             second = self.run_cli(arguments, runner)
             self.assertNotEqual(first.parent, second.parent)
@@ -297,13 +273,7 @@ class OfflineReportTests(unittest.TestCase):
                                  for line in (package / 'operator-log.jsonl').read_text(encoding='utf-8').splitlines()]
                 own_receipt = next(paths for paths in receipt_paths if report.relative_to(package).as_posix() in paths)
                 self.assertEqual(len(own_receipt), len(set(own_receipt)))
-                self.assertEqual(len(list(report.parent.glob(JSON_ARCHIVE_STEM + '*.zip'))), 1)
-                index_path = report.parent / JSON_FOLDER / 'index.json'
-                dashboard = read_dashboard_package(index_path)
-                self.assertEqual(dashboard['deliverable_path_base'], 'index_directory')
-                for target in dashboard['deliverables'].values():
-                    if target:
-                        self.assertTrue((index_path.parent / target).is_file(), target)
+                self.assertFalse(list(report.parent.glob('*.zip')))
                 body = report.read_text(encoding='utf-8')
                 self.assertIn('href="' + report.with_suffix('.xlsx').name.replace(' ', '%20') + '"', body)
                 self.assertNotIn(str(root), body)
@@ -327,7 +297,6 @@ class OfflineReportTests(unittest.TestCase):
 
     def test_complete_synthetic_build_fits_repository_paths_and_preserves_links_on_rebuild(self):
         import zipfile
-        from Core.dashboard_package import read_dashboard_package
         from tests.synthetic_package_fixture import create_synthetic_package
 
         with tempfile.TemporaryDirectory() as directory:
@@ -352,7 +321,7 @@ class OfflineReportTests(unittest.TestCase):
             self.assertLessEqual(len(collection.parent.parent.name.encode('utf-16-le')) // 2, 32)
             original = collection.read_bytes()
             args = ['--mode', 'offline', '--collection-input', str(collection), '--evaluation-date', '2026-09-15',
-                    '--extra-exports', 'evidence-pages', 'app-builder', 'dashboard-json']
+                    '--extra-exports', 'evidence-pages']
             first = self.run_cli(args, root)
             preserved = {path: path.read_bytes() for path in first.parent.rglob('*') if path.is_file()}
             second = self.run_cli(args, root)
@@ -362,11 +331,7 @@ class OfflineReportTests(unittest.TestCase):
             for path, data in preserved.items():
                 self.assertEqual(path.read_bytes(), data, path)
             for report in (first, second):
-                self.assertTrue((report.parent / APP_BUILDER_FOLDER / '03-manifest.json').is_file())
                 self.assertTrue((report.parent / EVIDENCE_FOLDER / 'index.html').is_file())
-                index = report.parent / JSON_FOLDER / 'index.json'
-                dashboard = read_dashboard_package(index)
-                self.assertIn(long_id, [row['RecommendationId'] for row in dashboard['recommendations']])
                 for path in report.parent.rglob('*'):
                     if not path.is_file():
                         continue
@@ -382,11 +347,6 @@ class OfflineReportTests(unittest.TestCase):
                                 continue
                             target = (path.parent / unquote(uri.path)).resolve()
                             self.assertTrue(target.is_file(), f'{path.name}: {href}')
-                with zipfile.ZipFile(next(report.parent.glob(JSON_ARCHIVE_STEM + '*.zip'))) as archive:
-                    self.assertIsNone(archive.testzip())
-                    for path in index.parent.rglob('*.json'):
-                        self.assertEqual(archive.read(path.relative_to(index.parent).as_posix()), path.read_bytes())
-
     def test_portal_only_without_a_name_uses_each_tenant_id_for_organization(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -418,7 +378,7 @@ class OfflineReportTests(unittest.TestCase):
                 self.run_cli(['--mode', 'offline', '--collection-input', str(collection),
                               '--reports-dir', str(reports), '--evaluation-date', '2026-09-15',
                               '--snapshot-json', str(snapshot)], directory)
-                snapshots.append(json.loads(snapshot.read_text(encoding='utf-8'))['assessment_result'])
+                snapshots.append(json.loads(snapshot.read_text(encoding='utf-8')))
             self.assertEqual(snapshots[0], snapshots[1])
             self.assertEqual(collection.read_bytes(), original)
             package = Path(load_collection(collection)['package_directory'])

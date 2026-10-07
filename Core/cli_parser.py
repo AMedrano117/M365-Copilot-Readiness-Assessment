@@ -104,8 +104,8 @@ Examples:
         help='Recommendation export format: excel=Excel primary with CSV fallback if needed, csv=CSV only, both=generate both Excel and CSV'
     )
     parser.add_argument('--extra-exports', nargs='+', default=[],
-                        choices=['evidence-pages', 'app-builder', 'dashboard-json'],
-                        help='Optional exports for this run. By default, write the HTML report, readiness summary and Excel workbooks only. Select evidence-pages, app-builder, dashboard-json, or several together.')
+                        choices=['evidence-pages'],
+                        help='Optional exports for this run. By default, write the HTML report, readiness summary and Excel workbooks only. Select evidence-pages for linked HTML evidence pages.')
     parser.add_argument(
         '--sam-report',
         action='append',
@@ -209,7 +209,7 @@ Examples:
         type=str,
         default=None,
         metavar='PATH',
-        help='Also write a complete single-file dashboard JSON to PATH. Use --extra-exports dashboard-json for a split JSON folder and ZIP.'
+        help='Also write the existing shared assessment result as a single JSON file to PATH.'
     )
     parser.add_argument(
         '--baseline',

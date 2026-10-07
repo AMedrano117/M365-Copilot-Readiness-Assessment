@@ -19,7 +19,7 @@ The same `--reports-dir` option works in live mode. The tool prepares PDFs befor
 - The importer stages `portal-review.json`, page previews, original copies and an import log in `.cache/portal-reviews/<run>/`. The console prints the JSON location. The assessment package preserves the JSON and required assets for offline replay.
 - **PDF report highlights** appears near the top of the HTML, with visible source excerpts, follow-up, dates and links to specific captured pages. The executive summary includes selected highlights from each supplied report. Expand **Admin pages** for full extracted text, page previews and original PDF downloads.
 - Both workbooks include a visible **PDF Highlights** sheet with the same excerpts and source-page links. The assessment workbook places it after **Coverage**; the technical workbook retains **Portal Review** and **PDF Extracted Text** as well.
-- Dashboard JSON retains all excerpts in `portal_report_highlights`, with a `portal_reports` catalog entry point and selected highlights in its summary. App Builder writes optional `04-pdf-highlights*.json` context files and lists them in the overview and upload sets.
+- The shared evidence model retains all dated excerpts as supporting context for the HTML Evidence Portal and workbook. These excerpts do not establish control results or measured populations.
 - Source hashes deduplicate identical PDFs. Rebuilding the saved package restores its JSON and assets without repeating OCR or needing the original reports folder.
 - Unreadable or password-protected PDFs are skipped with a warning. If OCR is unavailable, readable previews and originals are still included, with an explicit text-extraction limitation.
 

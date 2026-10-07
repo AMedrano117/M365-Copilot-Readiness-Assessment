@@ -403,41 +403,11 @@ def render_with_failure_receipt(processor, *, receipt, **arguments):
 
 
 def _retain_snapshot(source, report_directory):
-    """Keep explicit snapshots portable when their original links use another base."""
+    """Retain a shared-result snapshot without changing its contents."""
     destination = report_directory / source.name
     if destination.exists():
         destination = report_directory / (source.stem + '-snapshot-' + uuid4().hex[:8] + source.suffix)
     shutil.copy2(source, destination)
-    try:
-        snapshot = json.loads(source.read_text(encoding='utf-8-sig'))
-    except (ValueError, OSError):
-        return
-    if not isinstance(snapshot, dict) or snapshot.get('format') != 'm365-readiness-assessment' \
-            or snapshot.get('deliverable_path_base') != 'index_directory' \
-            or not isinstance(snapshot.get('deliverables'), dict):
-        return
-    import os
-    from urllib.parse import urlsplit
-    from urllib.request import url2pathname
-    rebased = {}
-    for key, reference in snapshot['deliverables'].items():
-        if not isinstance(reference, str) or not reference:
-            rebased[key] = reference
-            continue
-        uri = urlsplit(reference)
-        if uri.scheme == 'file':
-            target = Path(url2pathname(('//' + uri.netloc if uri.netloc else '') + uri.path))
-        elif uri.scheme:
-            rebased[key] = reference
-            continue
-        else:
-            target = (source.parent / reference).resolve()
-        try:
-            rebased[key] = Path(os.path.relpath(target, destination.parent)).as_posix()
-        except ValueError:
-            rebased[key] = target.as_uri()
-    snapshot['deliverables'] = rebased
-    destination.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2, allow_nan=False) + '\n', encoding='utf-8')
 
 
 def record_package_run(folder, *, mode, tenant_id, collected_at, evaluation_date,
@@ -454,7 +424,7 @@ def record_package_run(folder, *, mode, tenant_id, collected_at, evaluation_date
     delivered = []
     report_directory = outputs.get('report_directory') if isinstance(outputs, dict) else None
     retained_directory = None
-    from .export_paths import BUILDS_FOLDER, JSON_FOLDER, new_deliverables_directory
+    from .export_paths import BUILDS_FOLDER, new_deliverables_directory
     if isinstance(report_directory, (str, Path)):
         candidate = Path(report_directory).resolve()
         deliverables_roots = [(folder / name).resolve() for name in (BUILDS_FOLDER, 'deliverables')]
@@ -481,33 +451,9 @@ def record_package_run(folder, *, mode, tenant_id, collected_at, evaluation_date
                 run_id = copied_directory.name
             return copied_directory / relative
         copied_sources = set()
-        json_folder = outputs.get('json_folder_path')
         output_bundle = outputs.get('evidence_bundle')
-        if not json_folder and isinstance(output_bundle, dict):
-            json_folder = output_bundle.get('dashboard_json_folder')
-        if isinstance(json_folder, (str, Path)) and Path(json_folder).is_dir():
-            source_folder = Path(json_folder).resolve()
-            source_report_directory = (Path(report_directory).resolve()
-                                       if isinstance(report_directory, (str, Path)) else None)
-            if source_report_directory is not None and source_folder.is_relative_to(source_report_directory):
-                relative_folder = source_folder.relative_to(source_report_directory)
-            elif re.fullmatch(re.escape(JSON_FOLDER) + r'(?: \([1-9]\d*\))?', source_folder.name):
-                relative_folder = Path(source_folder.name)
-            else:
-                relative_folder = Path('json') / source_folder.name
-            destination_folder = copied_destination(relative_folder)
-            # Enumerate before copying so the complete relative tree is retained.
-            # The index and finding pages contain links to these nested files.
-            for source in sorted(source_folder.rglob('*')):
-                if not source.is_file() or not source.resolve().is_relative_to(source_folder):
-                    continue
-                destination = destination_folder / source.relative_to(source_folder)
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(source, destination)
-                copied_sources.add(source.resolve())
-                delivered.append(destination.relative_to(folder).as_posix())
-        # Evidence pages and App Builder files sit beside the copied HTML so its relative links work.
-        for key, bundle_key in (('html_evidence_folder_path', 'html_evidence_folder_path'), ('app_builder_folder_path', 'app_builder_folder')):
+        # Companion evidence pages sit beside the copied HTML for relative links.
+        for key, bundle_key in (('html_evidence_folder_path', 'html_evidence_folder_path'),):
             companion = outputs.get(key) or (output_bundle.get(bundle_key) if isinstance(output_bundle, dict) else None)
             if not isinstance(companion, (str, Path)) or not Path(companion).is_dir():
                 continue
@@ -522,12 +468,9 @@ def record_package_run(folder, *, mode, tenant_id, collected_at, evaluation_date
                 copied_sources.add(source.resolve())
                 delivered.append(destination.relative_to(folder).as_posix())
         output_paths = dict(outputs)
-        if not output_paths.get('json_archive_path') and isinstance(output_bundle, dict):
-            output_paths['json_archive_path'] = output_bundle.get('dashboard_json_archive_path')
         if not output_paths.get('technical_excel_path') and isinstance(output_bundle, dict):
             output_paths['technical_excel_path'] = output_bundle.get('technical_excel_path')
-        for key in ('summary_html_path', 'html_path', 'excel_path', 'technical_excel_path', 'csv_path', 'json_path',
-                    'json_archive_path', 'snapshot_path'):
+        for key in ('summary_html_path', 'html_path', 'excel_path', 'technical_excel_path', 'csv_path', 'snapshot_path'):
             value = output_paths.get(key)
             if not isinstance(value, (str, Path)) or not Path(value).is_file():
                 continue

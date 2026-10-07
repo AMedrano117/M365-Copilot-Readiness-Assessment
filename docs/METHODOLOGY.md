@@ -306,7 +306,7 @@ extensibility evidence cannot raise or lower the security and governance readine
 - One tenant condition should produce one action, even when several licenses expose it.
 - Status and priority must agree.
 - Recommendations must identify the observed condition, affected scope, next action, and evidence.
-- Exact objects belong in the engineer workbook, the linked technical evidence pages and the App Builder files; the customer HTML report remains decision-oriented and aggregate-only.
+- Exact objects belong in the engineer workbook and the linked technical evidence pages; the customer HTML report remains decision-oriented and aggregate-only.
 - Record counts and affected-entity counts are separate measures with stated units. Evidence is labelled as observed events, entity records, configuration, supporting context or aggregate-only, with its availability (complete, partial, unavailable, not retained, absent, historical or planning).
 - Legacy-authentication evidence uses the retained sign-in events matched by the existing client-type rule. Outcomes come from `status.errorCode` and `conditionalAccessStatus`: Succeeded (0, Conditional Access not failed), Blocked (Conditional Access failure or AADSTS 53000–53003; 50053 sign-in protection), Failed (other codes) or Unknown. The client type does not establish the exact protocol or a successful bypass. Microsoft-listed legacy client types that the rule does not match (for example MAPI over HTTP) are reported as a limitation, not added to the finding.
 - Marketing language, invented percentages, and unsupported causal claims are not acceptable

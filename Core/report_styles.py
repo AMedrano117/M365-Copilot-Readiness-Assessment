@@ -1,4 +1,4 @@
-"""Embedded styles for the portable customer assessment dashboard."""
+"""Embedded styles for the portable customer assessment report."""
 
 REPORT_CSS = r'''
 :root {

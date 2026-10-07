@@ -173,39 +173,19 @@ class PortalInsightsTests(unittest.TestCase):
                 for book in books:
                     book.close()
 
-    def test_json_package_and_app_builder_preserve_all_pdf_context_as_context(self):
+    def test_shared_evidence_selection_preserves_all_pdf_context_as_context(self):
         from Core.assessment_result import build_assessment_result
-        from Core.dashboard_export import build_dashboard_export
-        from Core.dashboard_package import read_dashboard_package, write_dashboard_package
+        from Core.evidence_selection import build_evidence_selection
         from Core.finding_evidence import build_finding_evidence
-        from Core.app_builder_export import write_app_builder_export
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            bundle = {'portal_review': fixture(root / 'review')}
+            bundle = {'portal_review': fixture(Path(directory) / 'review')}
             result = build_assessment_result([], bundle, expected_tenant_id=TENANT, evaluation_date='2026-09-15')
-            payload = build_dashboard_export(result, bundle, tenant_name='Fictional customer')
+            selected = build_evidence_selection(result, bundle, tenant_name='Fictional customer')
             rows = report_highlights(bundle['portal_review'])
-            self.assertEqual(payload['portal_report_highlights'], rows)
-            path = write_dashboard_package(root / 'JSON', payload)
-            restored = read_dashboard_package(path)
-            self.assertEqual(restored['portal_report_highlights'], rows)
-            index = json.loads(Path(path).read_text(encoding='utf-8'))
-            self.assertEqual(index['entry_points']['portal_reports'], 'portal/index.json')
-            summary = json.loads((root / 'JSON/summary.json').read_text(encoding='utf-8'))
-            self.assertEqual(summary['portal_reports']['highlight_count'], 20)
-            self.assertEqual(len(summary['portal_reports']['highlights']), 8)
-            model = build_finding_evidence(payload)
-            output = write_app_builder_export(model, root / 'App Builder')
-            overview = json.loads((root / 'App Builder/01-overview.json').read_text(encoding='utf-8'))
-            files = overview['portal_report_context']['files']
-            retained = []
-            for filename in files:
-                retained.extend(json.loads((root / 'App Builder' / filename).read_text(encoding='utf-8'))['highlights'])
-            self.assertEqual(retained, rows)
-            self.assertEqual(overview['assessment_counts'], result['counts'])
-            for upload in output['upload_sets'].values():
-                self.assertTrue(set(files) <= set(upload['supporting_context']))
-
+            self.assertEqual(selected['portal_report_highlights'], rows)
+            model = build_finding_evidence(selected)
+            self.assertEqual(model['portal_report_highlights'], rows)
+            self.assertEqual(model['counts'], result['counts'])
     def test_reviewed_note_is_inert_in_excel_and_links_to_capture_metadata(self):
         from Core.export_recommendations import export_to_excel
         from Core.workbook_layout import technical_workbook_path

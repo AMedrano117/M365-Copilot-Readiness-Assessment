@@ -620,7 +620,7 @@ async def get_entra_client(graph_client, tenant_id=None, preview_collectors='aut
                         'truncated': bool(_task_result.get('truncated')),
                         'reason': _reason,
                     }
-                    # Named dashboard records need the original request and
+                    # Named evidence records need the original request and
                     # collection dates, not just the aggregate fetch outcome.
                     # Keep only evidence metadata, never headers or transport
                     # objects, alongside every completed or partial request.

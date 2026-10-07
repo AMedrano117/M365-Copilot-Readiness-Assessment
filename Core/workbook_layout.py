@@ -318,12 +318,12 @@ def _coverage(result, bundle):
 def split_workbook_layout(source_workbook, result, bundle, assessment_path, technical_path, *, tenant_name=None):
     """Project the compact workbook and retain every source row in a visible companion."""
     from openpyxl import Workbook
-    from .dashboard_export import build_dashboard_export
+    from .evidence_selection import build_evidence_selection
     from .finding_evidence import build_finding_evidence
     from .customer_report import _heading
     from .workbook_navigation import apply_workbook_navigation
-    dashboard = build_dashboard_export(result, bundle, tenant_name=tenant_name)
-    model = bundle.get('finding_evidence') or build_finding_evidence(dashboard)
+    selection = build_evidence_selection(result, bundle, tenant_name=tenant_name)
+    model = bundle.get('finding_evidence') or build_finding_evidence(selection)
     model_findings = {item['finding_id']: item for item in model['findings']}
     finding_rows = {row['RecommendationId']: row for row in result['recommendations']}
     assessment, technical = Workbook(), Workbook()
@@ -382,7 +382,7 @@ def split_workbook_layout(source_workbook, result, bundle, assessment_path, tech
             for number in range(2, sheet.max_row + 1):
                 identifier = sheet.cell(number, headers['Evidence Record ID']).value
                 evidence_targets[identifier] = (sheet.title, number)
-    evidence_records = {record['record_id']: record for record in dashboard.get('evidence_records') or []}
+    evidence_records = {record['record_id']: record for record in selection.get('evidence_records') or []}
     derived = []
     for identifier, record in evidence_records.items():
         raw = record.get('raw')
@@ -411,7 +411,7 @@ def split_workbook_layout(source_workbook, result, bundle, assessment_path, tech
                                                   'evidence_ids': identifiers,
                                                   'evidence_id': next(iter(identifiers), record.get('detail_record_id'))})
     # Older/imported bundles can retain selected worksheet rows without their
-    # native assessment_sources object. The dashboard deliberately cannot infer
+    # native assessment_sources object. The selection deliberately cannot infer
     # missing native events. Retain those existing selected rows here, with their
     # worksheet provenance, without relabelling them as a recollected raw API.
     from .raw_evidence import KEY_SOURCES

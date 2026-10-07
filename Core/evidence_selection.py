@@ -1,40 +1,22 @@
-"""Portable assessment JSON with addressable native rows and finding detail.
+"""Shared selection and lineage of retained native evidence for Excel and HTML.
 
-This is an export of the shared assessment, not a second evaluation. Native
-records retain their JSON types and source dates; derived worklists are labelled.
+Source, native-row and detail identifiers preserve the existing compatibility
+algorithm. This is an internal evidence model, not an assessment output contract.
 """
 
-from collections import Counter
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from hashlib import sha256
 import json
-from pathlib import Path
 import re
 
-from .dashboard_records import expand_finding_records
+from .evidence_records import expand_finding_records
 from .customer_report import _heading
 from .raw_evidence import KEY_SOURCES, safe_record
 from .portal_insights import report_highlights
 
 
-DASHBOARD_SCHEMA_VERSION = '1.0.0'
-
-
-def _plain(value):
-    if isinstance(value, Mapping):
-        return safe_record({str(key): _plain(item) for key, item in value.items()})
-    if isinstance(value, (list, tuple)):
-        return [_plain(item) for item in value]
-    if hasattr(value, 'isoformat'):
-        return value.isoformat()
-    if isinstance(value, float) and (value != value or abs(value) == float('inf')):
-        return str(value)
-    if value is None or isinstance(value, (str, bool, int, float)):
-        return value
-    if hasattr(value, 'value'):
-        return _plain(value.value)
-    return str(value)
+from .assessment_serialization import plain_data as _plain
 
 
 def _fingerprint(value):
@@ -275,8 +257,8 @@ def _availability(names, sources):
     return 'unavailable'
 
 
-def build_dashboard_export(result, bundle, *, tenant_name=None, generated_at=None):
-    """Return a standalone, immutable projection of one shared assessment result."""
+def build_evidence_selection(result, bundle, *, tenant_name=None, generated_at=None):
+    """Select retained evidence without evaluating controls or changing the shared result."""
     sources = _plain(bundle.get('assessment_sources') or {})
     tenant_id = result.get('tenant_id') or bundle.get('expected_tenant_id')
     registry = _Registry(tenant_id, sources)
@@ -344,7 +326,7 @@ def build_dashboard_export(result, bundle, *, tenant_name=None, generated_at=Non
                     'record_limitations': list(dict.fromkeys(str(value) for value in limitations if value)),
                     'record_reconciliation': reconciliation, 'evidence_record_ids': evidence_ids})
         enriched.append(row)
-        finding = {'finding_id': identifier, 'finding_uid': _id('FND-', tenant_id, identifier),
+        finding = {'finding_id': identifier,
                    'title': _heading(row), 'domain_id': row.get('AssessmentDomainId') or row.get('DomainId'), 'control_id': row.get('ControlId'),
                    'service': row.get('Service'), 'disposition': row.get('Disposition'), 'priority': row.get('Priority'),
                    'observation': row.get('Observation'), 'recommendation': row.get('Recommendation'),
@@ -355,41 +337,14 @@ def build_dashboard_export(result, bundle, *, tenant_name=None, generated_at=Non
         finding.update({key: row[key] for key in ('records', 'record_count', 'record_status', 'record_type', 'record_selection',
                                                  'record_limitations', 'record_reconciliation', 'evidence_record_ids')})
         findings.append(finding)
-    indexed = {row['RecommendationId']: row for row in enriched}
-    assessment = _plain(result)
-    assessment['recommendations'] = enriched
-    for key in ('actions', 'customer_findings'):
-        if key in assessment:
-            assessment[key] = [indexed.get(row.get('RecommendationId'), row) for row in assessment[key]]
-    payload = {'format': 'm365-readiness-assessment', 'dashboard_schema_version': DASHBOARD_SCHEMA_VERSION,
-               'evidence_schema_version': result.get('evidence_schema_version', '1.1.0'),
-               'methodology_version': result.get('methodology_version'),
-               'assessment_version': (bundle.get('run_manifest') or {}).get('assessment_version'),
-               'tenant_id': tenant_id, 'tenant_name': tenant_name, 'tenant': tenant_name,
-               'evaluation_date': result.get('evaluation_date'),
-               'generated_at': generated_at or datetime.now(timezone.utc).isoformat(),
-               'decision': result.get('decision'), 'rationale': result.get('rationale'), 'counts': result.get('counts') or {},
-               'findings': findings, 'recommendations': enriched, 'assessment_result': assessment,
-               'sources': registry.sources, 'evidence_records': registry.evidence,
-               'control_results': result.get('control_results') or bundle.get('control_results') or [],
-               'conclusions': bundle.get('conclusions') or {}, 'collection_coverage': bundle.get('source_statuses') or {},
-               'integrity': bundle.get('integrity') or {},
-               'portal_report_highlights': report_highlights(bundle.get('portal_review')),
-               'export_counts': {'findings': len(findings), 'sources': len(registry.sources),
-                                 'evidence_records': len(registry.evidence),
-                                 'detail_records': sum(row['record_count'] for row in enriched),
-                                 'record_statuses': dict(Counter(row['record_status'] for row in enriched))},
-               'record_contract': {'source_record_index': 'zero-based within one dataset occurrence',
-                                   'joins': 'findings.records.evidence_record_ids -> evidence_records.record_id -> sources.dataset_id',
-                                   'missing_fields': 'null with field_status reason',
-                                   'privacy': 'Named user and device details included; credentials and prompt/response content excluded.'}}
-    return _plain(payload)
-
-
-def write_dashboard_export(path, payload):
-    target = Path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    with target.open('w', encoding='utf-8') as handle:
-        json.dump(_plain(payload), handle, ensure_ascii=False, indent=2, allow_nan=False)
-        handle.write('\n')
-    return str(target)
+    return _plain({
+        'tenant_id': tenant_id, 'tenant_name': tenant_name,
+        'evaluation_date': result.get('evaluation_date'),
+        'generated_at': generated_at or datetime.now(timezone.utc).isoformat(),
+        'methodology_version': result.get('methodology_version'),
+        'decision': result.get('decision'), 'rationale': result.get('rationale'),
+        'counts': result.get('counts') or {}, 'findings': findings,
+        'recommendations': enriched, 'sources': registry.sources,
+        'evidence_records': registry.evidence,
+        'portal_report_highlights': report_highlights(bundle.get('portal_review')),
+    })

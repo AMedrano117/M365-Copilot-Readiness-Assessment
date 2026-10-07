@@ -27,7 +27,7 @@ class WorkbookEvidenceTests(unittest.TestCase):
         bundle['assessment_result'] = result
         prepare_investigation_details(bundle, result)
         _, model = build(result['recommendations'], bundle['assessment_sources'])
-        add_evidence_sheets(bundle, result, model, html_folder='report_evidence', app_builder_files={})
+        add_evidence_sheets(bundle, result, model, html_folder='report_evidence')
         cwd = os.getcwd()
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)

@@ -265,7 +265,7 @@ def recommendation_detail(finding):
 
 
 def attach_technical_guidance(payload):
-    """Add recommendation_detail to every dashboard finding from its full source row."""
+    """Add recommendation_detail to every selected finding from its full source row."""
     rows = {row.get('RecommendationId'): row for row in payload.get('recommendations') or []}
     for finding in payload.get('findings') or []:
         row = rows.get(finding.get('finding_id')) or {}

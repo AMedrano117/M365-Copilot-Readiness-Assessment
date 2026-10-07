@@ -3,8 +3,8 @@
 import copy
 import unittest
 
-from Core.dashboard_export import build_dashboard_export, evidence_record_ids
-from Core.dashboard_records import expand_finding_records
+from Core.evidence_selection import build_evidence_selection, evidence_record_ids
+from Core.evidence_records import expand_finding_records
 from Core.evidence_layer import SHEET_DEFINITIONS
 from Core.finding_evidence import DATASET_KINDS, EVIDENCE_KINDS, build_finding_evidence, concern_for, rows_for_finding
 from Core.raw_evidence import KEY_SOURCES
@@ -43,7 +43,7 @@ def legacy_finding(identifier='ENT-018', **attributes):
 def build(rows, sources):
     result = {'tenant_id': TENANT, 'evaluation_date': '2026-09-30', 'recommendations': rows, 'actions': rows,
               'decision': 'Not ready', 'counts': {}}
-    payload = attach_technical_guidance(build_dashboard_export(result, {'assessment_sources': sources, 'sheets': {}},
+    payload = attach_technical_guidance(build_evidence_selection(result, {'assessment_sources': sources, 'sheets': {}},
                                                                tenant_name='Fictional', generated_at='2026-09-30T00:00:00Z'))
     return payload, build_finding_evidence(payload)
 
@@ -179,7 +179,7 @@ class SharedIdentifierTests(unittest.TestCase):
         result = {'tenant_id': TENANT, 'recommendations': []}
         prepare_raw_details(bundle, result)
         raw_ids = [row['Evidence Record ID'] for row in bundle['sheets']['raw_source.signin_logs']['rows']]
-        payload = build_dashboard_export(result, {'assessment_sources': copy.deepcopy(sources)})
+        payload = build_evidence_selection(result, {'assessment_sources': copy.deepcopy(sources)})
         self.assertEqual(raw_ids, [entry['record_id'] for entry in payload['evidence_records']])
         self.assertEqual(raw_ids, list(evidence_record_ids(sources, TENANT).values()))
 

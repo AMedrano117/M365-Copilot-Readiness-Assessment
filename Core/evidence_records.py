@@ -1,4 +1,4 @@
-"""Named finding records for dashboard drill-down, without invented identities.
+"""Named finding records for evidence drill-down, without invented identities.
 
 The normalized fields supplement retained source rows.  Missing values are null,
 and every contributing source row has a zero-based locator in assessment_sources.

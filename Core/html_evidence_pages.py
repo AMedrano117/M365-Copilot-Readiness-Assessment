@@ -63,8 +63,8 @@ def _document(title, body, tenant):
             f'<header><div class="muted">{escape(str(tenant or "Tenant"))} · Technical evidence</div><h1>{escape(title)}</h1>'
             '<p class="banner">Confidential technical evidence. These pages contain named users, applications, devices and IP addresses. '
             'Share them only with authorized technical reviewers; the main report remains aggregate-only.</p></header>'
-            f'<main>{body}</main><footer class="muted">Generated from the shared assessment result. Identifiers match the workbook, '
-            'dashboard JSON and App Builder files.</footer></body></html>\n')
+            f'<main>{body}</main><footer class="muted">Generated from the shared assessment result. Identifiers match '
+            'the technical evidence workbook.</footer></body></html>\n')
 
 
 def _pager(names, current):
@@ -103,14 +103,13 @@ def _fix(detail):
             '</div>' + (f'<h3>Microsoft documentation</h3><ul>{links}</ul>' if links else '') + '</section>')
 
 
-def write_html_evidence_pages(model, folder, *, report_name=None, page_rows=PAGE_ROWS, workbook_name=None, app_builder_files=None, technical_workbook_name=None):
+def write_html_evidence_pages(model, folder, *, report_name=None, page_rows=PAGE_ROWS, workbook_name=None, technical_workbook_name=None):
     """Write index, per-finding and shared-context pages; return the page map and row counts."""
     folder = Path(folder)
     if folder.exists() and any(folder.iterdir()):
         raise FileExistsError(f'Evidence page folder is not empty: {folder}')
     folder.mkdir(parents=True, exist_ok=True)
     tenant = model.get('tenant_name')
-    app_builder_files = app_builder_files or {}
     pages, rows_written = {}, {}
     context_pages = {}
     for table_id, table in model['tables'].items():
@@ -151,8 +150,7 @@ def write_html_evidence_pages(model, folder, *, report_name=None, page_rows=PAGE
             facts.append(('Workbook worklist', f"{evidence['worklist_count']} {evidence['worklist_unit'] or ''}".strip()))
         workbook = finding.get('workbook') or {}
         locations = [('Evidence workbook', workbook.get('evidence_range')),
-                     ('Workbook detail', workbook.get('investigation_range')),
-                     ('App Builder files', ', '.join(app_builder_files.get(finding['finding_id'], [])) or None)]
+                     ('Workbook detail', workbook.get('investigation_range'))]
         notes = list(evidence['limitations'])
         if evidence['count_relation']:
             notes.insert(0, evidence['count_relation'])

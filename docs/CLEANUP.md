@@ -105,7 +105,7 @@ The script runs offline, lists the saved assessment artifacts it found, and asks
 | `output/collections/` | Legacy saved live collections and custom companion package folders |
 | `output/assessments/` | Legacy offline assessment package folders |
 | `output/portal-reviews/` | Legacy imported PDF review folders, previews and generated review manifests |
-| `Reports/` | Customer folders containing portable assessments, inputs and each build's reports, `Evidence/` pages, `App Builder/` files and `json/` packages; also legacy flat reports |
+| `Reports/` | Customer folders containing portable assessments, inputs and each build's reports, `Evidence/` pages and explicitly requested shared-result snapshots; also legacy flat reports |
 | `.cache/purview/` | Purview evidence cache files and subfolders |
 | `.cache/sharepoint_dag/` | Downloaded SharePoint DAG evidence files and subfolders |
 | `.cache/portal-reviews/` | Imported PDF staging folders, page previews and generated review manifests |

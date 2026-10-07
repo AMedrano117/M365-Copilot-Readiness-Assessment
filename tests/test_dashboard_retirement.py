@@ -37,6 +37,7 @@ class DashboardRetirementTests(unittest.TestCase):
     def test_excel_html_and_evidence_pages_work_with_retired_modules_blocked(self):
         from openpyxl import load_workbook
         from Core.workbook_layout import technical_workbook_path
+        from tools.validate_offline_report import _evidence_page_issues
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             collection = Path(create_synthetic_package(root / 'inputs', active_incident=True))
@@ -51,6 +52,8 @@ class DashboardRetirementTests(unittest.TestCase):
                 workbook = load_workbook(path, read_only=True)
                 try:
                     self.assertTrue(workbook.sheetnames)
+                    if path == technical_workbook_path(html.with_suffix('.xlsx')):
+                        self.assertEqual(_evidence_page_issues(html, html.read_text(encoding='utf-8'), workbook), [])
                 finally:
                     workbook.close()
             self.assertTrue((html.parent / 'Evidence' / 'index.html').is_file())
@@ -73,6 +76,24 @@ class DashboardRetirementTests(unittest.TestCase):
                 self.assertNotIn(key, result)
             self.assertEqual(result['counts']['actions'], len(result['actions']))
             self.assertNotIn('finding_uid', json.dumps(result))
+
+    def test_shared_serialization_is_independent_read_only_and_sanitized(self):
+        from Core.assessment_serialization import write_assessment_result
+        result = {'counts': {'actions': 0}, 'recommendations': [], 'enabled': False,
+                  'unknown': None, 'label': 'Fictional José',
+                  'nested': {'access_token': 'fictional-token', 'source_hash': 'retained-hash'}}
+        original = copy.deepcopy(result)
+        with tempfile.TemporaryDirectory() as temporary:
+            destination = Path(temporary) / 'result.json'
+            with patch('Core.evidence_selection.build_evidence_selection', side_effect=AssertionError('Projection invoked')):
+                write_assessment_result(destination, result)
+            saved = json.loads(destination.read_text(encoding='utf-8'))
+        self.assertEqual(result, original)
+        self.assertEqual(saved['counts'], {'actions': 0})
+        self.assertIs(saved['enabled'], False)
+        self.assertIsNone(saved['unknown'])
+        self.assertEqual(saved['label'], 'Fictional José')
+        self.assertEqual(saved['nested'], {'source_hash': 'retained-hash'})
 
     def test_moved_package_replays_without_original_inputs_and_preserves_hashes(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -99,6 +120,9 @@ class DashboardRetirementTests(unittest.TestCase):
         result = {'tenant_id': TENANT, 'evaluation_date': '2026-09-30', 'recommendations': [legacy_finding()]}
         selected = build_evidence_selection(result, {'assessment_sources': sources})
         ids = evidence_record_ids(sources, TENANT)
+        compatibility = evidence_record_ids({'demo': [{'records': [{'id': 'fictional', 'zero': 0, 'flag': False, 'unknown': None}], 'source': {'complete': True}}]}, 'fictional-tenant')
+        self.assertEqual(compatibility[('demo', 0, 0)], 'EVD-acb5cfdad0852eab8d95e312')
+
         self.assertEqual(set(ids.values()), {row['record_id'] for row in selected['evidence_records']})
         for record in selected['findings'][0]['records']:
             self.assertTrue(record['evidence_record_ids'])

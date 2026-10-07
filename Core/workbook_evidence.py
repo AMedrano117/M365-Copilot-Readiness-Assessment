@@ -1,6 +1,6 @@
 """Workbook evidence sheets and technical recommendations from the shared finding-evidence model.
 
-Evidence sheets contain exactly the rows exported to App Builder and the HTML evidence
+Evidence sheets contain exactly the rows selected for the HTML evidence
 pages. Each finding's rows form one contiguous block per table; the ranges are stored on the
 finding, so the existing range-validated hyperlinks and sheet splitting apply to it.
 """
@@ -27,7 +27,7 @@ def _title(base, used):
     return title
 
 
-def add_evidence_sheets(bundle, result, model, *, html_folder=None, app_builder_files=None):
+def add_evidence_sheets(bundle, result, model, *, html_folder=None):
     """Add selected-record evidence sheets to the workbook model and annotate result rows."""
     from .investigation_details import _ref
     from .html_evidence_pages import page_name
@@ -74,8 +74,7 @@ def add_evidence_sheets(bundle, result, model, *, html_folder=None, app_builder_
                     'DetailRecords': evidence['record_count'], 'RecordUnit': evidence['record_unit'],
                     'AffectedEntities': evidence['affected_entity_count'], 'EntityUnit': evidence['entity_unit'],
                     'ContextRecords': evidence['context_record_count'],
-                    'TechnicalGuidance': finding.get('recommendation_detail') or {},
-                    'AppBuilderFiles': '; '.join((app_builder_files or {}).get(finding['finding_id'], []))})
+                    'TechnicalGuidance': finding.get('recommendation_detail') or {}})
     # Page paths include the build's file stem, so they stay out of the shared assessment result.
     bundle['technical_evidence_pages'] = {finding['finding_id']: f"{html_folder}/{page_name(finding['finding_id'])}"
                                           for finding in model['findings']} if html_folder else {}

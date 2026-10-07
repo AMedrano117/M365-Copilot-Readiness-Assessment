@@ -8,9 +8,6 @@ from pathlib import Path
 REPORT_STEM = 'AI Readiness and M365 Hardening'
 SUMMARY_STEM = 'Readiness Summary'
 EVIDENCE_FOLDER = 'Evidence'
-APP_BUILDER_FOLDER = 'App Builder'
-JSON_FOLDER = 'JSON'
-JSON_ARCHIVE_STEM = 'Dashboard JSON'
 BUILDS_FOLDER = 'Builds'
 
 

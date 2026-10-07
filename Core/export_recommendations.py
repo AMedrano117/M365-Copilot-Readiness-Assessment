@@ -516,10 +516,10 @@ def export_to_excel(recommendations, filename=None, tenant_name=None, evidence_b
         evidence_bundle['assessment_result'] = result
     prepare_investigation_details(evidence_bundle, result)
     if not evidence_bundle.get('finding_evidence'):
-        from .dashboard_export import build_dashboard_export
+        from .evidence_selection import build_evidence_selection
         from .finding_evidence import build_finding_evidence
         from .workbook_evidence import add_evidence_sheets
-        model = build_finding_evidence(build_dashboard_export(result, evidence_bundle, tenant_name=tenant_name))
+        model = build_finding_evidence(build_evidence_selection(result, evidence_bundle, tenant_name=tenant_name))
         evidence_bundle['finding_evidence'] = model
         add_evidence_sheets(evidence_bundle, result, model)
     from .raw_evidence import MAX_DATA_ROWS, split_evidence_sheets
@@ -839,7 +839,7 @@ def export_to_excel(recommendations, filename=None, tenant_name=None, evidence_b
                     or next(iter(row.get('RawEvidenceRanges') or []), '') or row.get('EvidenceAvailability'),
                 'Evidence record ranges':row.get('EvidenceRecordsRanges',[]),
                 'Technical fix':(row.get('TechnicalGuidance') or {}).get('guidance_status'),
-                'Technical evidence page':(evidence_bundle.get('technical_evidence_pages') or {}).get(row.get('RecommendationId')), 'App Builder files':row.get('AppBuilderFiles')}
+                'Technical evidence page':(evidence_bundle.get('technical_evidence_pages') or {}).get(row.get('RecommendationId'))}
                if 'EvidenceKind' in row else {})}
             for row in sorted(result['recommendations'],key=lambda item:(
                 {'Action':0,'Coverage':1,'Assurance':2,'Opportunity':3,'Reference':4}.get(item.get('Disposition'),5),
@@ -1133,14 +1133,11 @@ def print_recommendations_summary(
         pages = sum(max(len(capture.get('extracted_pages') or []), len(capture.get('previews') or []))
                     for capture in captures)
         status(f'Admin-center captures: {len(captures)} captures, {pages} pages. Open Admin pages in the HTML report.')
-    if html_path or excel_path or csv_path or (evidence_bundle or {}).get('dashboard_json_path'):
+    if html_path or excel_path or csv_path:
         section('OUTPUT FILES')
         summary_path = (evidence_bundle or {}).get('summary_html_path')
         for label, path in (('Summary', summary_path), ('HTML', html_path), ('Assessment workbook', excel_path),
                             ('Technical evidence workbook', (evidence_bundle or {}).get('technical_excel_path')), ('CSV', csv_path),
-                            ('Technical evidence pages', (evidence_bundle or {}).get('html_evidence_index')),
-                            ('App Builder upload guide', (evidence_bundle or {}).get('app_builder_guide')),
-                            ('JSON upload (ZIP)', (evidence_bundle or {}).get('dashboard_json_archive_path')),
-                            ('JSON index', (evidence_bundle or {}).get('dashboard_json_path'))):
+                            ('Technical evidence pages', (evidence_bundle or {}).get('html_evidence_index'))):
             if path:
                 print(f"{label}: {style(display_path(path), 'path')}")

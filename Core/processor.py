@@ -509,21 +509,18 @@ def process_and_print_all_information(m365_result, entra_info,
         evidence_bundle['integrity'] = run_integrity_checks(all_recommendations, evidence_bundle)
 
         from pathlib import Path
-        from .app_builder_export import write_app_builder_export
-        from .dashboard_export import build_dashboard_export, write_dashboard_export
-        from .dashboard_package import write_dashboard_archive, write_dashboard_package
+        from .evidence_selection import build_evidence_selection
+        from .assessment_serialization import write_assessment_result
         from .export_recommendations import build_report_filename
         from .finding_evidence import build_finding_evidence
         from .html_evidence_pages import write_html_evidence_pages
         from .technical_guidance import attach_technical_guidance
         from .workbook_evidence import add_evidence_sheets, sync_workbook_locations
         from .export_paths import (new_assessment_directory, new_deliverables_directory, report_directory, report_file_stem,
-                                  SUMMARY_STEM, EVIDENCE_FOLDER, APP_BUILDER_FOLDER, JSON_FOLDER, JSON_ARCHIVE_STEM)
+                                  SUMMARY_STEM, EVIDENCE_FOLDER)
         from .workbook_layout import technical_workbook_path
         extra_exports = set(extra_exports or ())
         include_evidence_pages = 'evidence-pages' in extra_exports
-        include_app_builder = 'app-builder' in extra_exports
-        include_dashboard_json = 'dashboard-json' in extra_exports
         if output_dir is None:
             package_directory = new_assessment_directory(customer_name=customer_name,
                 tenant_name=report_tenant_name, tenant_id=expected_tenant_id)
@@ -533,53 +530,30 @@ def process_and_print_all_information(m365_result, entra_info,
                                 tenant_id=expected_tenant_id)
         base_stem = Path(build_report_filename('json', **filename_context)).stem
         summary_stem = report_file_stem(SUMMARY_STEM, **filename_context)
-        archive_stem = report_file_stem(JSON_ARCHIVE_STEM, **filename_context)
         suffix, number = '', 1
         while True:
             report_stem = base_stem + suffix
             summary_name = summary_stem + suffix + '.html'
             evidence_folder_name = EVIDENCE_FOLDER + suffix
-            app_builder_folder_name = APP_BUILDER_FOLDER + suffix
-            json_folder = reports_root / (JSON_FOLDER + suffix)
-            archive_name = archive_stem + suffix + '.zip'
             destinations = [
                 reports_root / f'{report_stem}.html', reports_root / f'{report_stem}.xlsx', reports_root / f'{report_stem}.csv',
                 technical_workbook_path(reports_root / f'{report_stem}.xlsx'),
                 reports_root / summary_name]
             if include_evidence_pages:
                 destinations.append(reports_root / evidence_folder_name)
-            if include_app_builder:
-                destinations.append(reports_root / app_builder_folder_name)
-            if include_dashboard_json:
-                destinations.extend((json_folder, reports_root / archive_name))
             if not any(path.exists() for path in destinations):
                 break
             number += 1
             suffix = f' ({number})'
-        # The shared finding-evidence model is built once, before any deliverable,
-        # so App Builder, workbook and HTML show the same rows, IDs and counts.
-        dashboard = attach_technical_guidance(build_dashboard_export(assessment_result, evidence_bundle,
+        # Retained deliverables share the same native rows, IDs and counts.
+        selection = attach_technical_guidance(build_evidence_selection(assessment_result, evidence_bundle,
             tenant_name=report_tenant_name, generated_at=evidence_bundle['run_manifest']['generated_at']))
-        finding_model = build_finding_evidence(dashboard)
+        finding_model = build_finding_evidence(selection)
         evidence_bundle['finding_evidence'] = finding_model
         if include_evidence_pages:
             evidence_bundle['html_evidence_folder'] = evidence_folder_name
-        app_builder_files = {}
-        if include_app_builder:
-            app_builder = write_app_builder_export(
-                finding_model, reports_root / app_builder_folder_name,
-                deliverables={'html': f'{report_stem}.html', 'summary_html': summary_name,
-                              'workbook': f'{report_stem}.xlsx' if report_format in {'excel', 'both'} else None,
-                              'technical_workbook': technical_workbook_path(reports_root / f'{report_stem}.xlsx').name if report_format in {'excel', 'both'} else None,
-                              'evidence_pages': f'{evidence_folder_name}/index.html' if include_evidence_pages else None,
-                              'dashboard_json': f'{json_folder.name}/index.json' if include_dashboard_json else None})
-            evidence_bundle['app_builder_folder'] = app_builder['folder']
-            evidence_bundle['app_builder_guide'] = app_builder['guide']
-            app_builder_files = {key: value['required'] + value['context']
-                                 for key, value in app_builder['finding_files'].items()}
         add_evidence_sheets(evidence_bundle, assessment_result, finding_model,
-                            html_folder=evidence_folder_name if include_evidence_pages else None,
-                            app_builder_files=app_builder_files)
+                            html_folder=evidence_folder_name if include_evidence_pages else None)
         csv_path, excel_path = export_tabular_reports(
             all_recommendations,
             report_tenant_name,
@@ -589,25 +563,12 @@ def process_and_print_all_information(m365_result, entra_info,
             output_dir=reports_root,
         )
         sync_workbook_locations(assessment_result, finding_model)
-        # The dashboard projection precedes layout so evidence IDs are shared.
-        # Add presentation destinations afterwards without rebuilding records or
-        # changing the original investigation/raw/lineage range fields.
-        workbook_rows = {row.get('RecommendationId'): row for row in assessment_result['recommendations']}
-        layout_fields = ('AssessmentEvidenceRange', 'AssessmentEvidenceRanges', 'AssessmentEvidenceCount',
-                         'AssessmentAffected', 'TechnicalEvidenceRanges')
-        for rows in [dashboard.get('recommendations') or [],
-                     *(dashboard.get('assessment_result', {}).get(key) or [] for key in
-                       ('recommendations', 'actions', 'customer_findings'))]:
-            for row in rows:
-                actual = workbook_rows.get(row.get('RecommendationId')) or {}
-                row.update({key: actual[key] for key in layout_fields if key in actual})
         technical_excel_path = evidence_bundle.get('technical_excel_path') if excel_path else None
         if include_evidence_pages:
             evidence_pages = write_html_evidence_pages(
                 finding_model, reports_root / evidence_folder_name, report_name=f'{report_stem}.html',
                 workbook_name=Path(excel_path).name if excel_path else None,
-                technical_workbook_name=Path(technical_excel_path).name if technical_excel_path else None,
-                app_builder_files=app_builder_files)
+                technical_workbook_name=Path(technical_excel_path).name if technical_excel_path else None)
             evidence_bundle['html_evidence_folder_path'] = evidence_pages['folder']
             evidence_bundle['html_evidence_index'] = evidence_pages['index']
         html_path = export_to_html(
@@ -620,45 +581,10 @@ def process_and_print_all_information(m365_result, entra_info,
             output_dir=reports_root,
             summary_filename=summary_name,
         )
-        dashboard['deliverables'] = {key: Path(path).name if path else None for key, path in
-                                    {'html': html_path, 'summary_html': evidence_bundle.get('summary_html_path'),
-                                     'workbook': excel_path, 'technical_workbook': technical_excel_path, 'csv': csv_path}.items()}
-        if include_evidence_pages:
-            dashboard['deliverables']['evidence_pages'] = f'{evidence_folder_name}/index.html'
-        if include_app_builder:
-            dashboard['deliverables']['app_builder'] = f'{app_builder_folder_name}/00-upload-guide.md'
-        dashboard['deliverable_path_base'] = 'report_directory'
-        if include_dashboard_json:
-            package_dashboard = dict(dashboard)
-            package_dashboard['deliverables'] = {key: '../' + name if name else None
-                                                 for key, name in dashboard['deliverables'].items()}
-            package_dashboard['deliverable_path_base'] = 'index_directory'
-            json_path = write_dashboard_package(json_folder, package_dashboard)
-            json_archive_path = write_dashboard_archive(
-                json_path, reports_root / archive_name)
-            evidence_bundle['dashboard_json_path'] = json_path
-            evidence_bundle['dashboard_json_folder'] = str(json_folder)
-            evidence_bundle['dashboard_json_archive_path'] = json_archive_path
         if snapshot_json:
-            # A caller-selected snapshot can live anywhere. Its links are based
-            # on its own location, rather than assuming a flat Reports folder.
-            import os
-            snapshot_dashboard = dict(dashboard)
-            snapshot_parent = Path(snapshot_json).resolve().parent
-            def snapshot_link(name):
-                if not name:
-                    return None
-                target = (reports_root / name).resolve()
-                try:
-                    return Path(os.path.relpath(target, snapshot_parent)).as_posix()
-                except ValueError:  # Different Windows drives have no relative path.
-                    return target.as_uri()
-            snapshot_dashboard['deliverables'] = {key: snapshot_link(name)
-                for key, name in dashboard['deliverables'].items()}
-            snapshot_dashboard['deliverable_path_base'] = 'index_directory'
-            snapshot_path = write_dashboard_export(snapshot_json, snapshot_dashboard)
+            snapshot_path = write_assessment_result(snapshot_json, assessment_result)
             from .console_reporting import detail_path
-            detail_path('Snapshot JSON', snapshot_path)
+            detail_path('Shared assessment JSON', snapshot_path)
         print_recommendations_summary(
             all_recommendations,
             csv_path,
@@ -685,9 +611,5 @@ def process_and_print_all_information(m365_result, entra_info,
             'excel_path': excel_path if all_recommendations else None,
             'technical_excel_path': technical_excel_path if all_recommendations else None,
             'csv_path': csv_path if all_recommendations else None,
-            'json_path': (evidence_bundle or {}).get('dashboard_json_path'),
-            'json_folder_path': (evidence_bundle or {}).get('dashboard_json_folder'),
-            'json_archive_path': (evidence_bundle or {}).get('dashboard_json_archive_path'),
             'html_evidence_folder_path': (evidence_bundle or {}).get('html_evidence_folder_path'),
-            'app_builder_folder_path': (evidence_bundle or {}).get('app_builder_folder'),
             'evidence_bundle': evidence_bundle}

@@ -1,15 +1,14 @@
-"""One finding-evidence model shared by the App Builder files, HTML evidence pages and workbook.
+"""One finding-evidence model shared by HTML evidence pages and Excel.
 
-It is built from the dashboard export, the shared projection of the assessment result,
-so every deliverable shows the same findings, DET-/EVD-/SRC- identifiers, record counts
-and units. These are pure functions: no files, tenant access or documentation lookups.
+The shared evidence selection preserves native rows, detail references, counts
+and units. These pure functions perform no collection or control evaluation.
 """
 
 from collections import Counter, OrderedDict
 import json
 import re
 
-from .dashboard_export import _source_names, evidence_keys
+from .evidence_selection import _source_names, evidence_keys
 
 MODEL_SCHEMA_VERSION = '1.0.0'
 
@@ -358,7 +357,7 @@ def build_finding_evidence(payload):
             'evidence_record_ids': list(finding.get('evidence_record_ids') or []),
             'tables': [], 'context_tables': [], 'context_record_count': 0,
         }
-        model = {key: finding.get(key) for key in ('finding_id', 'finding_uid', 'finding_key', 'finding_fingerprint', 'title',
+        model = {key: finding.get(key) for key in ('finding_id', 'finding_key', 'finding_fingerprint', 'title',
                                                    'priority', 'disposition', 'readiness_effect', 'domain_id', 'control_id',
                                                    'service', 'owner_role', 'observed_at', 'evidence_level',
                                                    'operational_result', 'historical', 'recommendation_detail')}

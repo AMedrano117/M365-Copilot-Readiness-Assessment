@@ -4,27 +4,17 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from Core.export_paths import APP_BUILDER_FOLDER, EVIDENCE_FOLDER
-from tools.build_app_builder_export import default_app_builder_folder
+from Core.export_paths import EVIDENCE_FOLDER
 from tools.validate_offline_report import _companion_folders, _report_paths
 
 
 class ExportToolPathTests(unittest.TestCase):
-    def test_app_builder_default_detects_compact_and_legacy_json_layouts(self):
-        self.assertEqual(default_app_builder_folder(Path('Builds/1/JSON/index.json')),
-                         Path('Builds/1/App Builder'))
-        self.assertEqual(default_app_builder_folder(Path('Builds/1/JSON (2)/index.json')),
-                         Path('Builds/1/App Builder (2)'))
-        self.assertEqual(default_app_builder_folder(Path('deliverables/run/json/old-report/index.json')),
-                         Path('deliverables/run/old-report_app_builder'))
 
     def test_validation_companions_support_both_layouts(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            for name in (APP_BUILDER_FOLDER, EVIDENCE_FOLDER, 'old_app_builder', 'old_evidence'):
+            for name in (EVIDENCE_FOLDER, 'old_evidence'):
                 (root / name).mkdir()
-            self.assertEqual(_companion_folders(root, APP_BUILDER_FOLDER, '*_app_builder'),
-                             sorted([root / APP_BUILDER_FOLDER, root / 'old_app_builder']))
             self.assertEqual(_companion_folders(root, EVIDENCE_FOLDER, '*_evidence'),
                              sorted([root / EVIDENCE_FOLDER, root / 'old_evidence']))
 

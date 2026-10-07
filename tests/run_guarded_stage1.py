@@ -2,7 +2,7 @@
 
 python -B tests/run_guarded_stage1.py --strict --regression
 python -B tests/run_guarded_stage1.py --strict test_stage1_semantics
-python -B tests/run_guarded_stage1.py --allow-temp test_dashboard_package
+python -B tests/run_guarded_stage1.py --allow-temp test_assessment_package
 
 Temporary writes are confined to one new OS-temp directory. Subprocesses and
 external sockets remain blocked. Tests are never automatically skipped.

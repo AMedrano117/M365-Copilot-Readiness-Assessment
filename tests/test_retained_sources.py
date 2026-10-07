@@ -18,7 +18,7 @@ def empty_client(**attributes):
                            compliance_policies=[], managed_devices=[], **attributes)
 
 
-class DashboardRetainedSourceTests(unittest.TestCase):
+class RetainedSourceTests(unittest.TestCase):
     def test_role_and_risk_sources_retain_nested_records_original_dates_and_partial_status(self):
         original = '2026-09-28T12:00:00Z'
         client = SimpleNamespace(

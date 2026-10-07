@@ -44,7 +44,7 @@ def prepare_raw_details(bundle, result):
     from .workbook_evidence import RESERVED_TITLES
     used.update(title.casefold() for title in RESERVED_TITLES)
     ranges = {}
-    from .dashboard_export import evidence_record_ids
+    from .evidence_selection import evidence_record_ids
     identifiers = evidence_record_ids(bundle.get('assessment_sources', {}),
                                       result.get('tenant_id') or bundle.get('expected_tenant_id'))
     for name, datasets in bundle.get('assessment_sources', {}).items():
@@ -62,7 +62,7 @@ def prepare_raw_details(bundle, result):
                     record = {'value':record}
                 # Put the actual log fields first. Full nested records and source
                 # metadata remain available at the right of the worksheet. The
-                # evidence ID matches the JSON, HTML and App Builder exports.
+                # evidence ID matches the technical workbook and HTML evidence pages.
                 records.append({**record, 'Evidence Record ID':identifiers.get((name, dataset_index, position-1), ''),
                                 'Source dataset':name, 'Source record':position,
                                 'Source metadata':source, 'Raw record':record})
