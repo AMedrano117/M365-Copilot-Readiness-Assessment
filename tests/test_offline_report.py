@@ -32,15 +32,19 @@ class OfflineReportTests(unittest.TestCase):
         return path
 
     def saved(self, path, collected_at=None):
+        collected_at = collected_at or datetime.now(timezone.utc).isoformat()
         results = empty_service_results()
         results['m365_result'] = [{'_client': SimpleNamespace(
             available=True, users_summary={'total': 3},
-            external_connections=[], collection_status={},
+            external_connections=[], collection_status={'fictional_control': {
+                'availability_status': 'available', 'complete': True, 'scope': 'Three fictional users',
+                'collected_at': collected_at, 'source_file': 'collection.json'}},
             client_secret='DO_NOT_SAVE_SECRET', access_token='DO_NOT_SAVE_TOKEN',
         ), 'licenses': []}, [{
             'Service': 'M365', 'Feature': 'Saved control finding',
             'Observation': 'Evidence from the original collection.', 'Recommendation': 'Review this control.',
             'Status': 'Attention Required', 'Priority': 'Medium', 'Disposition': 'Action',
+            'EvidenceSource': 'm365_fictional_control',
         }]]
         save_collection(path, tenant_id='11111111-1111-1111-1111-111111111111',
                         tenant_name='Example tenant', service_results=results, collected_at=collected_at)

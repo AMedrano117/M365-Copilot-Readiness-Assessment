@@ -23,7 +23,8 @@ def state(status="available"):
 
 def assessment(rows, client=None):
     return build_assessment_result(rows, {"collection_context": {"collected_at": DAY},
-        "source_statuses": {"defender_" + key: value for key, value in getattr(client, "collection_status", {}).items()}},
+        "source_statuses": {"defender_" + key: dict(value, source_file='fictional-defender.json')
+                            for key, value in getattr(client, "collection_status", {}).items()}},
         evaluation_date=DAY, expected_tenant_id=TENANT)
 
 

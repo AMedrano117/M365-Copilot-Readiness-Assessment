@@ -153,7 +153,11 @@ class M365BaselineTests(unittest.TestCase):
 
 class VerdictAndSummaryTests(unittest.TestCase):
     def build(self, rows):
-        bundle = {"collection_context": {"mode": "offline", "collected_at": "2026-09-20"}}
+        state = {'availability_status': 'available', 'complete': True, 'tenant_id': TENANT,
+                 'collected_at': '2026-09-20', 'source_file': 'fictional-baseline.json', 'scope': 'Assessed tenant'}
+        bundle = {"collection_context": {"mode": "offline", "collected_at": "2026-09-20"},
+                  'source_statuses': {row['EvidenceSource']: dict(state) for row in rows if row.get('EvidenceSource')}}
+        bundle['source_statuses']['external_connections'] = dict(state)
         return build_assessment_result(rows, bundle, evaluation_date="2026-09-23", expected_tenant_id=TENANT), bundle
 
     def baseline_rows(self):

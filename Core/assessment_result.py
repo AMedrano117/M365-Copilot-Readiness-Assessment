@@ -12,6 +12,7 @@ from .evidence_contract import (
     EVIDENCE_SCHEMA_VERSION, RECONCILIATION_VERSION, evaluation_day,
     normalize_observation, parse_date, reconcile_observations, stable_id,
 )
+from .source_evidence import envelope_availability, envelope_complete, envelope_flag, resolve_source
 
 
 DOMAINS = (
@@ -128,50 +129,59 @@ def _provenance(row, bundle, expected_tenant_id):
     service = str(row.get("Service") or "").lower()
     states = bundle.get("source_statuses") or {}
     keys = [key.strip() for key in str(row.get("EvidenceKey") or "").split(";") if key.strip()]
-    source = states.get(row.get("EvidenceSource"), {})
-    for key, state in states.items():
-        if source:
-            break
-        if not isinstance(state, dict):
-            continue
-        if any(key == item or key.removeprefix(service + "_") == item.removesuffix("_detail") for item in keys):
-            source = state
-            break
-    if not source:
-        source = next((state for key, state in states.items() if isinstance(state, dict)
-                       and key.startswith(service + "_") and state.get("source_type") == "purview_cache"), {})
+    # Explicit source names are authoritative. Never substitute another cache
+    # or a similarly named detail sheet for a missing/ambiguous dataset.
+    local_states = row.get('collection_status') or {}
+    source_name = row.get('EvidenceSource')
+    if source_name:
+        source, association = resolve_source(states, source_name, service)
+        local_source, local_association = resolve_source(local_states, source_name, service)
+        if local_association != 'missing':
+            if association == 'missing':
+                source, association = local_source, local_association
+            elif local_association != 'matched' or local_source != source:
+                source, association = {}, 'ambiguous'
+    elif isinstance((row.get('InvestigationEvidence') or {}).get('source'), dict):
+        source = row['InvestigationEvidence']['source']
+        association = 'matched'
+    else:
+        from .raw_evidence import KEY_SOURCES
+        candidates = set()
+        for key in keys:
+            candidates.update(KEY_SOURCES.get(key, ()))
+        matches = [resolve_source(states, key, service) for key in sorted(candidates)]
+        present = [(state, outcome) for state, outcome in matches if outcome != 'missing']
+        source, association = present[0] if len(present) == 1 else ({}, 'ambiguous' if present else 'missing')
+    # Imported observations may carry their own retained export locator. This
+    # is an explicit source declaration, not inheritance from the report run.
+    if association == 'missing' and not source_name and row.get('SourceFile') and row.get('SourceType') in {'portal_export', 'operator_attestation'}:
+        source = {'availability_status': row.get('SourceAvailability', 'partial' if row.get('EvidenceComplete') is False else 'unknown'),
+                  'complete': row.get('EvidenceComplete', False), 'source_file': row['SourceFile']}
+        association = 'matched'
+    matched = association == 'matched'
+    qualifications = [] if matched else [f'Source association is {association}; confirm the retained dataset for this observation.']
     # Service caches carry their own timestamp; the report build does not refresh it.
     date = row.get("ObservationDate") or row.get("ObservedAt") or row.get("ReportDate") or source.get("collected_at") or source.get("refresh_date")
     source_type = row.get("SourceType") or source.get("source_type") or "tenant_collection"
-    source_file = row.get("SourceFile") or source.get("source_file") or context.get("source_file", "")
-    if not date and source_type not in {"purview_cache", "portal_export", "prior_assessment"}:
+    source_file = row.get("SourceFile") or source.get("source_file") or source.get('source_api') or (context.get("source_file", "") if matched else '')
+    if matched and not date and source_type not in {"purview_cache", "portal_export", "prior_assessment"}:
         date = context.get("collected_at")
     # A row emitted by an imported portal report must use its report date, not the
     # date of an unrelated directory collection.
-    exposure = bundle.get("data_exposure") or {}
     if service == "data exposure":
         source_type = "portal_export"
         date = row.get("ObservationDate") or row.get("ReportDate")
-        evidence_dates = []
-        for detail in (exposure.get("details") or []):
-            if isinstance(detail, dict):
-                candidate = detail.get("report_date") or detail.get("Report Date")
-                if parse_date(candidate):
-                    evidence_dates.append(str(candidate))
-        if not date and len(set(evidence_dates)) == 1:
-            date = evidence_dates[0]
     return {
         "observed_at": date or "", "source_type": source_type, "source_file": source_file,
-        "tenant_id": row.get("TenantId") or source.get("tenant_id") or expected_tenant_id or "",
-        "scope": row.get("EvidenceScope") or source.get("scope") or (
-            "Tenant configuration returned by Purview" if source_type == "purview_cache" else
-            "Assessed tenant collection" if context.get("collected_at") else ""),
-        "complete": row.get("EvidenceComplete", source.get("complete", not source.get("truncated", False))) and source.get("availability_status", "available") == "available",
-        "truncated": source.get("truncated", False), "source_schema": source.get("schema_version", ""),
+        "tenant_id": row.get("TenantId") or source.get("tenant_id") or (context.get('tenant_id') or expected_tenant_id or '' if matched else ''),
+        "scope": row.get("EvidenceScope") or source.get("scope") or '',
+        "availability": envelope_availability(source) if matched else 'unknown',
+        "complete": matched and envelope_complete(source) and ('EvidenceComplete' not in row or envelope_flag(row['EvidenceComplete']) is True),
+        "truncated": envelope_flag(source.get("truncated")) is True, "source_schema": source.get("schema_version", ""),
         "source_hash": row.get("SourceHash") or source.get("source_hash", ""),
         **({"max_age_days": row['EvidenceMaxAgeDays']} if row.get('EvidenceMaxAgeDays') else {}),
-        **({"qualifications": ["Report date confirmed by the operator; the original export is retained unchanged."]}
-           if row.get("EvidenceDateBasis") == "Operator-confirmed report date" else {}),
+        "qualifications": qualifications + (["Report date confirmed by the operator; the original export is retained unchanged."]
+           if row.get("EvidenceDateBasis") == "Operator-confirmed report date" else []),
         # Removed before the evidence ID is computed; provenance never changes IDs.
         "_source_state": source,
     }
@@ -219,16 +229,18 @@ def _qualify_record(original, bundle, day, expected_tenant_id, *, historical=Fal
         **meta, "domain_id": domain, "control_id": row.get("ControlId", ""),
         'evidence_level':row.get('EvidenceLevel', 'policy_enforcement' if row.get('BaselineCheck') else 'configuration'),
         "metric_id": metric, "value": None if gap else row.get("Observation", ""),
-        "unit": "control observation", "availability": "unknown" if gap else "available",
+        "unit": "control observation", "availability": "unknown" if gap else meta['availability'],
         "historical_conclusion": historical,
     }, evaluation_date=day, expected_tenant_id=expected_tenant_id)
     status = "gap" if gap else "historical" if historical else "supported" if fact["freshness"] == "current" else fact["freshness"]
     if status == "supported" and (not fact["complete"] or not fact["scope"] or not fact["tenant_id"]
+                                  or not fact['source_file'] or fact['availability'] != 'available'
                                   or row.get("EvidenceBasis") == "License signal"):
         status = "limited"
     qualification = fact["qualification"]
     if (status == "limited" and not gap and row.get("Disposition") == "Action" and fact["source_type"] == "portal_export"
-            and fact["freshness"] == "current" and fact["scope"] and fact["tenant_id"] and not fact["complete"]):
+            and fact["freshness"] == "current" and fact["scope"] and fact["tenant_id"] and not fact["complete"]
+            and fact['source_file'] and fact['availability'] in {'available', 'partial'} and fact['value'] is not None):
         # A current Microsoft export that measures a condition (for example
         # 957 permissions granted to Everyone except external users) proves the
         # condition exists, even if the export may omit some objects.
@@ -272,7 +284,8 @@ def _finding_identity(row):
 def _deduplicate_records(records):
     grouped = defaultdict(list)
     for row in records:
-        grouped[(_finding_identity(row), str(row.get("EvidenceScope") or ""))].append(row)
+        grouped[(_finding_identity(row), str(row.get("EvidenceScope") or ""),
+                 stable_id([row.get(key) for key in ('Population', 'Provider', 'Product', 'Tier', 'ObservationWindow')]))].append(row)
     selected, archived = [], []
     priority_rank = {"High": 0, "Medium": 1, "Low": 2}
     for group in grouped.values():
@@ -281,7 +294,7 @@ def _deduplicate_records(records):
         candidates = [row for row in supported if row.get("ObservationDate") == latest] or [row for row in group if row["Historical"] != "Yes"] or group
         winner = min(candidates, key=lambda row: (priority_rank.get(row.get("Priority"), 3), row.get("Feature", "")))
         winner = dict(winner)
-        if len({(row.get("Disposition"), row.get("Observation")) for row in candidates}) > 1 and supported:
+        if len({(row.get("Disposition"), row.get("Observation"), row.get('control_result')) for row in candidates}) > 1 and supported:
             winner["EvidenceStatus"] = "conflict"
             winner["Disposition"] = "Action"
             winner["Qualification"] = "Comparable observations for the same date disagree. Confirm the condition before relying on it."
@@ -780,7 +793,8 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
                 matching.append(gap)
         supported = [row for row in matching if _supports_question(row, control)]
         known_facts = [row for row in explicit if row.get("control_id") == control and row.get("control_result") in {"pass", "fail"} and row["selection"] == "selected"
-                       and row["freshness"] == "current" and row["complete"] and row["tenant_id"] and row["scope"]]
+                       and row["freshness"] == "current" and row["complete"] and row["tenant_id"] and row["scope"]
+                       and (row.get('source_file') or row.get('source_api') or row.get('evidence_reference'))]
         if control in operation:
             known_facts = [row for row in known_facts if row.get('control_result')=='fail' or
                            row.get('evidence_level')=='observed_operation' and operation[control]['result']=='pass']
@@ -792,7 +806,8 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
             matching.append(gap)
         controls.append({
             "control_id": control, "title": title, "domain_id": domain,
-            "status": "Action required" if any(row.get("Disposition") == "Action" for row in supported) or any(row.get("control_result") == "fail" for row in known_facts)
+            "status": "Not established" if any(row.get('control_id') == control and row['selection'] == 'conflict' for row in explicit) or any(row.get('EvidenceStatus') == 'conflict' for row in matching)
+                      else "Action required" if any(row.get("Disposition") == "Action" for row in supported) or any(row.get("control_result") == "fail" for row in known_facts)
                       else "Observed" if supported or known_facts else "Not established",
             "security_gate": security_gate,
             'configuration_result': 'supported' if any(row.get('Disposition')=='Assurance' and row.get('EvidenceStatus')=='supported' for row in matching) else 'not_established',

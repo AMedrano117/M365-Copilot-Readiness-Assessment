@@ -181,7 +181,7 @@ class FindingDeduplicationTests(unittest.TestCase):
                       "License active but DISABLED", "Enable it.", "High", "Success",
                       "purview.customer_lockbox.state"),
             self._rec("Purview", "Customer Lockbox (Enterprise)",
-                      "License active but feature is DISABLED", "Enable it.", "Medium",
+                      "License active but DISABLED", "Enable it.", "Medium",
                       "Success", "purview.customer_lockbox.state"),
         ])
         self.assertEqual(len(merged), 1, "one condition must produce one card")
@@ -231,8 +231,8 @@ class FindingDeduplicationTests(unittest.TestCase):
             new_recommendation("Purview", "A", "obs", "act", "L", "https://e",
                                priority="High", status="Action Required",
                                finding_key="k", evidence_key="purview_policy_detail"),
-            new_recommendation("Purview", "B", "obs2", "act2", "L", "https://e",
-                               priority="Low", status="Success",
+            new_recommendation("Purview", "B", "obs", "act", "L", "https://e",
+                               priority="Low", status="Action Required",
                                finding_key="k", evidence_key="app_access_detail"),
         ])
         self.assertEqual(len(merged), 1)

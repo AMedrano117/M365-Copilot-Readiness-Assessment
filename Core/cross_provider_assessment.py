@@ -309,7 +309,7 @@ def assess_provider_and_use_cases(profile, provider_evidence, foundation_decisio
             if item.get("can_invoke_tools") or item.get("can_write"):
                 applicable_controls.append("ACTIONS-001")
             applicable_controls = list(dict.fromkeys(applicable_controls))
-            foundation_ok = foundation_decision in {"Ready for a controlled pilot", "Controlled pilot with conditions"}
+            foundation_ok = foundation_decision in {"Ready for a controlled pilot", "Controlled pilot with conditions", "Ready for broader adoption"}
             ready = bool(complete and foundation_ok and provider_result and provider_result["Approval Status"] == "Approved")
             use_cases.append({"Use Case": item.get("name", "Unnamed use case"), "Business Owner": item.get("business_owner", ""), "Provider": provider, "Product / Tier": f"{product} / {tier}".strip(" /"), "Applicable Controls": "; ".join(applicable_controls), "Readiness": "Ready for controlled pilot" if ready else "Not ready", "Reason": "Foundation, provider review, and required profile fields are satisfied." if ready else "Foundation, provider approval, or required use-case evidence is incomplete."})
 

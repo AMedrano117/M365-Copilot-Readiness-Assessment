@@ -151,9 +151,20 @@ def context_validation(profile):
     return errors
 
 
-def collect_assessment_sources(clients, *, collected_at='', data_exposure=None, profile=None):
+def collect_assessment_sources(clients, *, collected_at='', data_exposure=None, profile=None, recommendations=None):
     """Copy source rows, never transport objects, into the shared evidence bundle."""
     sources = defaultdict(list)
+    # Legacy feature queries now retain the same records/source dataset shape
+    # as collectors. Identical references on multiple cards are copied once.
+    from .evidence_contract import stable_id
+    seen = set()
+    for row in recommendations or []:
+        for name, datasets in (row.get('assessment_datasets') or {}).items():
+            for dataset in datasets:
+                identity = (name, stable_id(dataset))
+                if identity not in seen:
+                    sources[name].append(deepcopy(dataset))
+                    seen.add(identity)
     configuration = {'users','sites','external_connections','auth_methods','managed_devices','compliance_policies',
                      'role_assignments','role_definitions','role_assignment_schedules','role_eligibility_schedules',
                      'guest_users','cross_tenant_access_policy','security_defaults',

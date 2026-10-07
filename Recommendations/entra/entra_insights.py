@@ -2,6 +2,7 @@
 Entra Insights - Pre-computed identity & security metrics from Entra client
 Similar to pp_insights and defender_insights patterns
 """
+from Core.source_evidence import source_is_complete
 
 def extract_entra_insights_from_client(entra_client):
     """
@@ -258,7 +259,12 @@ def extract_entra_insights_from_client(entra_client):
         },
         'access_review_metrics': {
             'total_active_reviews': access_review_summary.get('active_reviews', 0),
-            'total_definitions': access_review_summary.get('total_definitions', 0),
+            # Absence requires a completed inventory; a failed/partial query's
+            # legacy summary zero is not a measured absence of review definitions.
+            'total_definitions': (access_review_summary.get('total_definitions')
+                if access_review_summary.get('total_definitions') != 0 or
+                    source_is_complete(entra_client, 'access_reviews')
+                else None),
             'group_reviews': access_review_summary.get('group_membership_reviews', 0),
             'role_reviews': access_review_summary.get('role_assignment_reviews', 0),
             'guest_reviews': access_review_summary.get('guest_user_reviews', 0),

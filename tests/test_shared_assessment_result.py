@@ -182,7 +182,9 @@ class SharedAssessmentTests(unittest.TestCase):
     def test_comparable_latest_condition_resolves_earlier_finding(self):
         prior = {"tenant_id": TENANT, "recommendations": [rec(EvidenceScope="Assessed tenant collection")]}
         current = rec(Disposition="Assurance", Status="Success", Recommendation="", Observation="Authentication baseline is enforced.")
-        result = self.result([current], bundle(prior_report=prior))
+        state = {'availability_status': 'available', 'complete': True, 'scope': 'Assessed tenant collection',
+                 'tenant_id': TENANT, 'collected_at': '2026-09-10', 'source_file': 'fictional-authentication.json'}
+        result = self.result([current], bundle(prior_report=prior, source_statuses={'auth_methods': state}))
         matching = [row for row in result["recommendations"] if row.get("FindingKey") == "identity.authentication"]
         self.assertEqual(len(matching), 1)
         self.assertEqual(matching[0]["Disposition"], "Assurance")
@@ -247,7 +249,10 @@ class SharedAssessmentTests(unittest.TestCase):
     def test_current_risky_user_action_and_milestone_use_specific_review_title(self):
         row = rec(RecommendationId="ENT-013", Feature="Microsoft Entra ID P2", FindingKey="", ControlId="IDENTITY-001",
                   EvidenceKey="identity_risk_detail", Observation="7 risky users detected in the tenant (0 high-risk, 7 medium-risk)")
-        result = self.result([row])
+        state = {'availability_status': 'available', 'complete': True, 'scope': 'Returned risky users',
+                 'tenant_id': TENANT, 'collected_at': '2026-09-10', 'source_file': 'fictional-risk.json'}
+        row['EvidenceSource'] = 'risky_users'
+        result = self.result([row], bundle(source_statuses={'risky_users': state}))
         action = next(item for item in result["actions"] if item["RecommendationId"] == "ENT-013")
         self.assertEqual(action["Feature"], "Review and remediate risky user accounts")
         self.assertEqual(action["OriginalFeature"], "Microsoft Entra ID P2")

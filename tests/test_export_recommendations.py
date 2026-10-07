@@ -501,6 +501,9 @@ class ExportRecommendationsTests(unittest.TestCase):
         output = io.StringIO()
         bundle = self._sample_evidence_bundle()
         bundle["verified_strengths"] = [{"Area": "Data loss prevention", "TenantId": "11111111-1111-1111-1111-111111111111", "Strength": "DLP rules are enabled.", "Evidence": "Four rules were returned."}]
+        bundle['verified_strengths'][0]['EvidenceSource'] = 'fictional_rules'
+        bundle['source_statuses'] = {'fictional_rules': {'availability_status': 'available', 'complete': True,
+            'scope': 'Returned fictional rules', 'source_file': 'fictional-rules.json'}}
         recommendations = self._sample_recommendations()
         html = Path(export_to_html(recommendations, evidence_bundle=bundle)).read_text(encoding="utf-8")
         expected = bundle["assessment_result"]["counts"]["strengths"]

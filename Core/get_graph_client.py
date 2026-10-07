@@ -16,6 +16,7 @@ import io
 import logging
 import os
 import re
+from contextvars import ContextVar
 from datetime import datetime, timezone
 
 import httpx
@@ -27,6 +28,8 @@ logging.getLogger("azure.identity").setLevel(logging.ERROR)
 
 GRAPH_SCOPE = "https://graph.microsoft.com/.default"
 GRAPH_BASE_URL = "https://graph.microsoft.com"
+LEGACY_COLLECTION_EVIDENCE = ContextVar('legacy_collection_evidence', default=None)
+LEGACY_COLLECTION_PATHS = {'users', 'groups', 'sites', 'organization', 'external/connections', 'subscribedSkus'}
 
 
 def _load_env(env_path=None):
@@ -140,6 +143,18 @@ class _Endpoint:
 
     async def get(self, request_configuration=None):
         path = "/v1.0/" + "/".join(self._segments)
+        if '/'.join(self._segments) in LEGACY_COLLECTION_PATHS:
+            envelope = await self._client.get_collection(path)
+            metadata = {key: value for key, value in envelope.items() if key != 'value'}
+            metadata['scope'] = 'Returned records from ' + metadata['source_api']
+            metadata['collected_at'] = metadata['collection_started_at']
+            capture = LEGACY_COLLECTION_EVIDENCE.get()
+            if capture is not None:
+                name = 'legacy_graph.' + '.'.join(self._segments)
+                capture.setdefault(name, []).append({'records': envelope['value'], 'source': metadata})
+            if envelope['availability_status'] == 'unavailable':
+                raise GraphRequestError(envelope.get('status_code', 0), envelope.get('reason', 'Collection unavailable'))
+            return _model({'value': envelope['value'], '_collection_metadata': metadata})
         payload = await self._client.get_json(path)
         return _model(payload)
 
@@ -223,11 +238,11 @@ class GraphRestClient:
             while next_path and pages < max_pages:
                 requests.append({'url':absolute(next_path), 'params':dict(next_params or {})})
                 payload = await self.get_json(next_path, params=next_params, headers=headers)
+                if not isinstance(payload, dict) or not isinstance(payload.get('value'), list):
+                    raise GraphRequestError(0, 'Collection response does not contain a value array')
                 pages += 1
-                page_items = payload.get("value", []) if isinstance(payload, dict) else []
-                if isinstance(page_items, list):
-                    items.extend(page_items)
-                next_path = payload.get("@odata.nextLink") if isinstance(payload, dict) else None
+                items.extend(payload['value'])
+                next_path = payload.get("@odata.nextLink")
                 next_params = None
             truncated = bool(next_path)
             return {
@@ -238,6 +253,7 @@ class GraphRestClient:
                 "records_collected": len(items),
                 "pages_collected": pages,
                 "truncated": truncated,
+                "complete": not truncated,
                 "reason": "Pagination safety limit reached" if truncated else "",
             }
         except (GraphRequestError, httpx.TransportError) as exc:
@@ -249,6 +265,7 @@ class GraphRestClient:
                 "records_collected": len(items),
                 "pages_collected": pages,
                 "truncated": bool(pages),
+                "complete": False,
                 "status_code": getattr(exc, "status_code", 0),
                 "reason": str(exc),
                 "error": str(exc),

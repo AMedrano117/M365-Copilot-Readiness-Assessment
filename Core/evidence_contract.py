@@ -18,7 +18,7 @@ EVIDENCE_SCHEMA_VERSION = "1.1.0"
 RECONCILIATION_VERSION = "1.0.0"
 AVAILABILITY_STATES = frozenset({
     "available", "missing", "not_requested", "inaccessible", "unsupported",
-    "empty", "unknown", "partial", "unavailable", "not_applicable",
+    "empty", "unknown", "partial", "unavailable", "not_applicable", "failed", "unlicensed",
 })
 
 
@@ -70,7 +70,7 @@ def normalize_observation(source, *, evaluation_date=None, expected_tenant_id=No
     age = (evaluation_day(evaluation_date) - observed).days if observed else None
     max_age = int(row.get("max_age_days", 35))
     freshness = "unknown" if age is None else "future" if age < 0 else "stale" if age > max_age else "current"
-    complete = row.get("complete") is True and not row.get("truncated", False) and availability != "partial"
+    complete = row.get("complete") is True and not row.get("truncated", False) and availability == "available"
     qualifiers = list(row.get("qualifications") or [])
     if row.get('unit')=='%' and value is not None:
         numerator,denominator=row.get('numerator'),row.get('denominator')
@@ -125,10 +125,13 @@ def compatibility_key(row):
     """
     scope = row.get("scope") or {"unknown_source": row.get("source_file") or row.get("evidence_id")}
     tenant = row.get("tenant_id") or {"unknown_source": row.get("source_file") or row.get("evidence_id")}
-    return stable_id([tenant, row.get("control_id"), row.get("metric_id"),
+    dimensions = [tenant, row.get("control_id"), row.get("metric_id"),
                       row.get("metric_definition"), scope, row.get("population"),
                       row.get("affected_objects"), row.get("unit"),
-                      row.get("reporting_basis"), row.get("window"), row.get('evidence_level', 'unknown')])
+                      row.get("reporting_basis"), row.get("window"), row.get('evidence_level', 'unknown')]
+    if any(row.get(key) for key in ('provider', 'product', 'tier')):
+        dimensions.append([row.get(key, '') for key in ('provider', 'product', 'tier')])
+    return stable_id(dimensions)
 
 
 def _comparison_value(value):
@@ -168,19 +171,24 @@ def reconcile_observations(observations, *, evaluation_date=None, expected_tenan
         dated = [row for row in pool if row["observed_at"]]
         latest = max((row["observed_at"] for row in dated), default="")
         finalists = [row for row in pool if not row["observed_at"] or row["observed_at"] == latest]
-        values = {_comparison_value(row["value"]) for row in finalists}
+        values = {(_comparison_value(row["value"]), row.get('control_result')) for row in finalists}
         if len(values) > 1:
             for row in group:
                 row["selection"] = "conflict" if row in finalists else "superseded"
                 if row in finalists:
                     row["qualification"] = (row["qualification"] + " Compatible sources disagree; confirm the value before use.").strip()
             continue
-        winner = min(finalists, key=lambda row: (not bool(row["observed_at"]), row["source_file"], row["evidence_id"]))
+        winner = min(finalists, key=lambda row: (not bool(row["observed_at"]), row["source_file"], row["evidence_id"], stable_id(row)))
         for row in group:
             if row is winner:
                 row["selection"] = "selected"
             elif (_comparison_value(row["value"]) == _comparison_value(winner["value"]) and row["observed_at"] == winner["observed_at"]
-                  and row["availability"] == winner["availability"] and row["complete"] == winner["complete"]):
+                  and row["availability"] == winner["availability"] and row["complete"] == winner["complete"]
+                  and row.get('control_result') == winner.get('control_result')
+                  and row['qualifications'] == winner['qualifications']
+                  and row.get('numerator') == winner.get('numerator')
+                  and row.get('denominator') == winner.get('denominator')
+                  and row['truncated'] == winner['truncated']):
                 row["selection"] = "duplicate"
                 row["selected_evidence_id"] = winner["evidence_id"]
             else:
@@ -188,4 +196,4 @@ def reconcile_observations(observations, *, evaluation_date=None, expected_tenan
                 row["selected_evidence_id"] = winner["evidence_id"]
                 if not row["complete"] and winner["complete"]:
                     row["qualification"] = (row["qualification"] + " A complete comparable source was retained.").strip()
-    return sorted(rows, key=lambda row: (row["domain_id"], row["metric_id"], compatibility_key(row), row["observed_at"], row["evidence_id"]))
+    return sorted(rows, key=lambda row: (row["domain_id"], row["metric_id"], compatibility_key(row), row["observed_at"], row["evidence_id"], stable_id(row)))

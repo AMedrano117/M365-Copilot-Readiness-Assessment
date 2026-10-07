@@ -92,9 +92,9 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
     # ========================================
     if entra_insights and status == "Success":
         review_metrics = entra_insights.get('access_review_metrics', {})
-        total_reviews = review_metrics.get('total_reviews', 0)
-        active_reviews = review_metrics.get('active_reviews', 0)
-        admin_role_reviews = review_metrics.get('admin_role_reviews', 0)
+        total_reviews = review_metrics.get('total_definitions', review_metrics.get('total_reviews'))
+        active_reviews = review_metrics.get('total_active_reviews', review_metrics.get('active_reviews', 0))
+        admin_role_reviews = review_metrics.get('role_reviews', review_metrics.get('admin_role_reviews', 0))
         
         # No access reviews configured
         if total_reviews == 0:
@@ -112,7 +112,7 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
             ))
         
         # Access reviews configured
-        else:
+        elif total_reviews is not None and total_reviews > 0:
             review_details = f"{total_reviews} access review definition(s) configured"
             if active_reviews > 0:
                 review_details += f", {active_reviews} currently active"
@@ -224,4 +224,8 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
                 status=status
             ))
     
+    for row in observations:
+        if 'access review' in str(row.get('Observation', '')).lower() and 'is active in' not in row.get('Observation', ''):
+            row.setdefault('EvidenceSource', 'access_reviews')
+            row.setdefault('EvidenceKey', 'access_review_detail')
     return observations

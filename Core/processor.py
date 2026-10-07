@@ -438,7 +438,8 @@ def process_and_print_all_information(m365_result, entra_info,
         from .assessment_catalog import collect_assessment_sources
         evidence_bundle['assessment_sources'] = collect_assessment_sources(
             [m365_client, entra_client, defender_client, purview_client],
-            collected_at=(collection_context or {}).get('collected_at', ''), data_exposure=data_exposure_info, profile=profile)
+            collected_at=(collection_context or {}).get('collected_at', ''), data_exposure=data_exposure_info, profile=profile,
+            recommendations=all_recommendations)
         from .assessment_result import build_assessment_result
         from .expanded_findings import expanded_findings
         all_recommendations.extend(expanded_findings(evidence_bundle, profile=profile,

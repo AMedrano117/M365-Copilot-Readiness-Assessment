@@ -11,6 +11,7 @@ from .assessment_model import enrich_assessment_records
 from .copilot_readiness_import import FLAG_COLUMNS
 from .signin_evidence import LEGACY_SIGNIN_COUNT as _LEGACY_SIGNIN_COUNT
 from .signin_evidence import is_legacy_signin_finding as _legacy_signin_finding
+from .evidence_contract import stable_id
 
 
 SHEET_DEFINITIONS = OrderedDict([
@@ -396,6 +397,14 @@ def deduplicate_findings(recommendations):
                 str(recommendation.get("Observation", "") or "").strip(),
                 str(recommendation.get("Recommendation", "") or "").strip(),
             )
+        # Presentation priority cannot discard material differences before the
+        # shared result builder has a chance to reconcile them.
+        semantic_fields = ('Observation', 'Disposition', 'control_result', 'ControlId',
+                           'EvidenceSource', 'ObservationDate', 'EvidenceScope', 'EvidenceComplete',
+                           'Population', 'Provider', 'Product', 'Tier', 'ObservationWindow',
+                           'SourceType', 'SourceFile', 'Qualification', 'SourceAvailability',
+                           'EvidenceDateBasis', 'EvidenceLevel')
+        key = (*key, stable_id([recommendation.get(field) for field in semantic_fields]))
         groups.setdefault(key, []).append(recommendation)
 
     merged = []

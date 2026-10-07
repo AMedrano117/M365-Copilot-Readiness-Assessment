@@ -151,6 +151,15 @@ class ReviewSchemaTests(unittest.TestCase):
 class ReadinessProgressTests(unittest.TestCase):
     def build(self, profile=None, records=None, extra=None):
         evidence = {"assessment_profile": profile or {}, "collection_context": {"mode": "offline", "collected_at": "2026-09-10"}}
+        # These fixtures model known, retained evidence. Missing provenance is
+        # tested separately in Stage 1 rather than supplied by runtime defaults.
+        records = [dict(row) for row in records or []]
+        evidence['source_statuses'] = {}
+        for row in records:
+            source_name = row.setdefault('EvidenceSource', 'fictional.' + row.get('FindingKey', 'review'))
+            evidence['source_statuses'][source_name] = {'availability_status': 'available', 'complete': True,
+                'tenant_id': TENANT, 'scope': row.get('EvidenceScope', ''), 'collected_at': '2026-09-10',
+                'source_file': 'fictional-reviewed-records.json'}
         evidence.update(extra or {})
         return build_assessment_result(records or [], evidence, evaluation_date=DAY, expected_tenant_id=TENANT)
 

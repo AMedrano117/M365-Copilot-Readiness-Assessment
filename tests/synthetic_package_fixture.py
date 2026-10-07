@@ -32,6 +32,7 @@ def _attach_synthetic_source_objects(results):
                    'OneDriveSharingCapability': 'Disabled', 'DefaultSharingLinkType': 'Direct'}},
         'sites': {'available': True, 'items': [{'Title': 'Fictional pilot',
                   'Url': 'https://synthetic.sharepoint.com/sites/pilot', 'SharingCapability': 'Disabled'}]},
+        'collection_status': {'sharepoint_tenant_settings': _source_state(1), 'sharepoint_site_settings': _source_state(1)},
     }
     registrations = [
         {'id': f'fictional-user-{index}', 'isMfaRegistered': True, 'isMfaCapable': True,
@@ -275,6 +276,13 @@ def create_synthetic_package(directory, *, active_incident=False, evidence_drill
                           'DomainId': domain, 'EvidenceKey': evidence_key, 'FindingKey': 'synthetic.' + finding_key,
                           'ObservationDate': '2026-09-14', 'EvidenceScope': 'All 150 fictional pilot users, one SharePoint site and one OneDrive location',
                           'TenantId': SYNTHETIC_TENANT, 'EvidenceComplete': True}
+        if finding_key == 'admin_role':
+            recommendation['EvidenceSource'] = 'role_assignment_schedules'
+        elif finding_key == 'tenant_sharing':
+            recommendation['EvidenceSource'] = 'sharepoint_tenant_settings'
+        elif finding_key in {'permissions_snapshot', 'lifecycle'}:
+            recommendation.update(SourceType='portal_export', SourceAvailability='available',
+                SourceFile='permissions.csv' if finding_key == 'permissions_snapshot' else 'lifecycle.csv')
         if finding_key == 'endpoint':
             recommendation.update(ControlId='ENDPOINT.POSTURE', EvidenceBasis='Reviewed endpoint baseline')
         if service_key == 'm365_result':
