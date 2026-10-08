@@ -1,5 +1,9 @@
 # Persistent identity and semantic references
 
+The [scope reconciliation stage](SCOPE_RECONCILIATION.md) documents the reproduced
+POB/PFI collisions, narrow boundary extensions, compatibility aliases and source
+occurrence validation.
+
 [Documentation index](README.md) | [Supported outputs](OUTPUTS.md) | [Methodology](METHODOLOGY.md)
 
 Identity schema `1.0.0` is an additive internal boundary. The current methodology,

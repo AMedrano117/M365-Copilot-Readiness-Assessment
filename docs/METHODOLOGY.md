@@ -40,7 +40,7 @@ registration alone cannot support a phishing-resistant assurance.
 
 ## Shared evidence contract and reconciliation
 
-Evidence schema `1.1.0` and reconciliation version `1.0.0` describe normalized facts independently
+Evidence schema `1.1.0` and reconciliation version `2.0.0` describe normalized facts independently
 of collection or rendering. Each fact retains tenant, domain/control/metric identity, definition,
 population/scope, affected objects, value/unit, numerator/denominator, reporting window/basis,
 original date, source type/file/schema/hash, completeness/truncation, freshness, selection state
@@ -56,8 +56,10 @@ Reconciliation follows these rules:
 1. Compare sources only when tenant, metric definition, scope/population, affected objects,
    unit, reporting basis, evidence level and window match. Unknown tenant/scope stays specific to its source.
 2. Prefer complete evidence over a newer incomplete comparable snapshot. Within suitable
-   comparable sources, use the latest dated observation.
-3. Keep different values for the same date, or dates that cannot be ordered, as conflicts with
+   comparable sources, use the latest orderable observation timestamp; date-only
+   sources cannot establish ordering within their day.
+3. Keep different values for the same capture instant (or date for date-only sources),
+   or captures that cannot be ordered, as conflicts with
    a confirmation action. Do not silently choose the most favorable result.
 4. Retain repeated snapshots as duplicates or superseded evidence; never add them together.
 5. Qualify undated, stale and future-dated facts. Apply the same support and freshness rules to
@@ -69,6 +71,11 @@ Portal importers also retain per-file schema and selection diagnostics. The supp
 adapters feed one assessment result, from which the report, action register, domain counts and
 workbook derive. [The compatibility matrix](PORTAL_REPORTS_AND_OFFLINE.md#sample-compatibility-matrix)
 states which schemas have real-export validation and which have only documented/synthetic tests.
+
+The additive [scope reconciliation model](SCOPE_RECONCILIATION.md) records exact
+groups, original occurrences, supporting observations, conflicts and qualified
+legacy boundaries. Scoped finding membership retains material customer decisions
+and closure requirements; display IDs remain navigation aliases.
 
 ## Historical evidence and portable replay
 

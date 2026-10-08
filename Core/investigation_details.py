@@ -398,8 +398,9 @@ def prepare_investigation_details(bundle, result):
                     value.update(fields)
                     value['EvidenceSheet'] = fields['InvestigationRange'] or ''
                 else:
-                    for child in list(value.values()):
-                        apply(child)
+                    for field, child in list(value.items()):
+                        if field not in {'reconciliation','identity','identity_validation','SourceOccurrences','FindingMembership','evidence'}:
+                            apply(child)
             else:
                 for child in value:
                     apply(child)

@@ -143,6 +143,25 @@ def _source_names(finding):
 
 
 def _from_declared(finding, registry):
+    occurrences = finding.get('SourceOccurrences') or []
+    declarations = [row for row in occurrences if isinstance(row.get('InvestigationEvidence'), dict)]
+    if declarations:
+        details = [_from_declared({key:value for key,value in row.items() if key!='SourceOccurrences'}, registry)
+                   for row in declarations]
+        details = [detail for detail in details if detail is not None]
+        if details:
+            records, seen = [], set()
+            for detail in details:
+                for record in detail.get('records') or []:
+                    marker = _fingerprint([record['fields'],record.get('source_refs')])
+                    if marker not in seen:
+                        records.append(record); seen.add(marker)
+            states=sorted({detail.get('status') or detail.get('record_type') for detail in details})
+            return {'records':records,'record_type':'selected_records',
+                    'selection':'Selected records from every retained finding declaration.',
+                    'limitations':list(dict.fromkeys(value for detail in details for value in detail.get('limitations') or [])),
+                    'reconciliation':{'source_declaration_count':len(declarations),'source_declaration_states':states},
+                    **({'status':states[0] if len(states)==1 and states[0] in {'absence','unavailable','planning'} else 'unavailable'} if not records else {})}
     declaration = finding.get('InvestigationEvidence')
     if not isinstance(declaration, dict):
         return None
@@ -282,6 +301,19 @@ def build_evidence_selection(result, bundle, *, tenant_name=None, generated_at=N
             if not specialized:
                 detail = _generic(row, bundle, registry)
         records = _plain(detail.get('records') or [])
+        # Native adapters keep their existing subsets. Additional explicit
+        # declarations remain support, rather than disappearing behind an adapter.
+        if row.get('SourceOccurrences'):
+            declarations = _from_declared(row, registry)
+            if declarations:
+                seen = {_fingerprint([record['fields'],record.get('source_refs')]) for record in records}
+                covered_refs = {_fingerprint(ref) for record in records for ref in record.get('source_refs') or []}
+                for record in declarations.get('records') or []:
+                    marker = _fingerprint([record['fields'],record.get('source_refs')])
+                    refs=record.get('source_refs') or []
+                    if marker not in seen and not (refs and all(_fingerprint(ref) in covered_refs for ref in refs)):
+                        records.append(record); seen.add(marker)
+                detail.setdefault('limitations',[]).extend(declarations.get('limitations') or [])
         registry.link(records)
         for occurrence, record in enumerate(records):
             original_id = record['record_id']
@@ -338,13 +370,26 @@ def build_evidence_selection(result, bundle, *, tenant_name=None, generated_at=N
         finding.update({key: row[key] for key in ('records', 'record_count', 'record_status', 'record_type', 'record_selection',
                                                  'record_limitations', 'record_reconciliation', 'evidence_record_ids')})
         findings.append(finding)
+    selected_ids = {identifier for row in findings for identifier in row['evidence_record_ids']}
+    source_boundaries = {row['dataset_id']: (row['dataset'],row['source'].get('tenant_id') or tenant_id,
+        row['source'].get('provider'),row['source'].get('workload'),
+        _fingerprint([row['source'].get('population'),row['source'].get('scope')]))
+        if row['source'].get('provider') and row['source'].get('workload') else (row['dataset_id'],)
+        for row in registry.sources}
+    unique_native = {(source_boundaries[row['dataset_id']],str(row['source_record_id'])) for row in registry.evidence
+                     if row['record_id'] in selected_ids and isinstance(row.get('source_record_id'), (str,int))}
+    evidence_counts = dict(result.get('counts') or {})
+    evidence_counts.update(support_relationships=sum(len(row['evidence_record_ids']) for row in findings),
+        unique_evidence_records=len(selected_ids), unique_native_records=len(unique_native),
+        unique_entity_count=None,
+        qualification='Dataset-scoped native record counts are distinct from affected entities; shared support is counted once, overlap across datasets is not inferred.')
     return _plain({
         'tenant_id': tenant_id, 'tenant_name': tenant_name,
         'evaluation_date': result.get('evaluation_date'),
         'generated_at': generated_at or datetime.now(timezone.utc).isoformat(),
         'methodology_version': result.get('methodology_version'),
         'decision': result.get('decision'), 'rationale': result.get('rationale'),
-        'counts': result.get('counts') or {}, 'findings': findings,
+        'counts': result.get('counts') or {}, 'evidence_counts': evidence_counts, 'findings': findings,
         'recommendations': enriched, 'sources': registry.sources,
         'evidence_records': registry.evidence,
         'portal_report_highlights': report_highlights(bundle.get('portal_review')),
