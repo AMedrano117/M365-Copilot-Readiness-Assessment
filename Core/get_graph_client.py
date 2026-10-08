@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 import httpx
 from azure.identity import CertificateCredential, ClientSecretCredential
 from .http_retry import RequestRetryError, request_with_retry
+from .graph_collection import collection_page
 
 
 logging.getLogger("azure.identity").setLevel(logging.ERROR)
@@ -224,6 +225,7 @@ class GraphRestClient:
         """Read all pages and return records plus structured evidence status."""
         items = []
         pages = 0
+        partial = False
         next_path = path
         next_params = params
         started = datetime.now(timezone.utc).isoformat()
@@ -238,13 +240,16 @@ class GraphRestClient:
             while next_path and pages < max_pages:
                 requests.append({'url':absolute(next_path), 'params':dict(next_params or {})})
                 payload = await self.get_json(next_path, params=next_params, headers=headers)
-                if not isinstance(payload, dict) or not isinstance(payload.get('value'), list):
-                    raise GraphRequestError(0, 'Collection response does not contain a value array')
+                try:
+                    values, continuation, page_partial = collection_page(payload)
+                except ValueError as exc:
+                    raise GraphRequestError(0, str(exc)) from exc
                 pages += 1
-                items.extend(payload['value'])
-                next_path = payload.get("@odata.nextLink")
+                items.extend(values)
+                partial = partial or page_partial
+                next_path = continuation
                 next_params = None
-            truncated = bool(next_path)
+            truncated = bool(next_path or partial)
             return {
                 **provenance(),
                 "available": True,
@@ -254,9 +259,9 @@ class GraphRestClient:
                 "pages_collected": pages,
                 "truncated": truncated,
                 "complete": not truncated,
-                "reason": "Pagination safety limit reached" if truncated else "",
+                "reason": "Pagination safety limit reached" if next_path else "Collection response explicitly marked partial" if partial else "",
             }
-        except (GraphRequestError, httpx.TransportError) as exc:
+        except (GraphRequestError, httpx.TransportError, ValueError) as exc:
             return {
                 **provenance(),
                 "available": bool(pages),

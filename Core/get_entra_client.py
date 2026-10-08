@@ -9,6 +9,7 @@ from . import console_reporting as console
 import asyncio
 from .collector_registry import source_allowed
 from .http_retry import get_with_retry
+from .graph_collection import collection_page
 from .signin_evidence import is_legacy_signin, LEGACY_CLASSIFICATION_RULE
 import base64
 import httpx
@@ -166,6 +167,7 @@ async def _fetch_graph_collection_via_http(path, params=None, max_pages=100, hea
     next_url = path
     next_params = params
     pages = 0
+    partial = False
 
     try:
         while next_url and pages < max_pages:
@@ -174,6 +176,7 @@ async def _fetch_graph_collection_via_http(path, params=None, max_pages=100, hea
                 return {
                     **request_metadata(),
                     'available': False,
+                    'complete': False,
                     'availability_status': 'partial' if pages else 'unavailable',
                     'status_code': response.status_code,
                     'error': _graph_error_detail(response),
@@ -185,28 +188,28 @@ async def _fetch_graph_collection_via_http(path, params=None, max_pages=100, hea
 
             response.raise_for_status()
             data = response.json()
-            values = data.get('value', []) if isinstance(data, dict) else []
-            if isinstance(values, list):
-                results.extend(values)
-
-            next_url = data.get('@odata.nextLink') if isinstance(data, dict) else None
+            values, next_url, page_partial = collection_page(data)
+            results.extend(values)
+            partial = partial or page_partial
             next_params = None
             pages += 1
 
         return {
             **request_metadata(),
             'available': True,
-            'availability_status': 'partial' if next_url else 'available',
-            'truncated': bool(next_url),
+            'complete': not (next_url or partial),
+            'availability_status': 'partial' if next_url or partial else 'available',
+            'truncated': bool(next_url or partial),
             'value': results,
             'records_collected': len(results),
             'pages_collected': pages,
-            'reason': 'Pagination safety limit reached' if next_url else '',
+            'reason': 'Pagination safety limit reached' if next_url else 'Source marked partial' if partial else '',
         }
     except Exception as exc:
         return {
             **request_metadata(),
             'available': False,
+            'complete': False,
             'availability_status': 'partial' if pages else 'unavailable',
             'status_code': getattr(exc, 'status_code', None),
             'error': str(exc),
@@ -648,8 +651,8 @@ async def get_entra_client(graph_client, tenant_id=None, preview_collectors='aut
                     }
         
         # Keep the exact sign-in request beside its saved outcome. The existing
-        # query has a lower timestamp bound only; collection completion is not
-        # an upper server filter and must not be represented as one.
+        # query records its exact server-side lower and upper timestamp bounds;
+        # collection completion timestamps describe a separate execution period.
         signin_path, signin_params, _ = collection_requests['signin_logs']
         signin_result = phase1_results.get('signin_logs')
         signin_result = signin_result if isinstance(signin_result, dict) else {}
