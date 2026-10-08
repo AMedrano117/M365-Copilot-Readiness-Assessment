@@ -174,7 +174,8 @@ remain future work. Snapshot replay cannot recreate raw records that were not sa
 
 ResolvedByCurrentEvidence is not formal customer acceptance. ClosedByRemediation,
 AcceptedRisk, ApprovedException and NoLongerApplicable require accountable authority,
-rationale, scope, date/review date and supporting artifacts in a later governance pass.
+rationale, scope, date/review date and supporting artifacts through the separate
+[explicit governance workflow](ASSESSMENT_GOVERNANCE.md). They never replace delta states.
 Existing imported fields stay separate. Provider/population equivalence, metric adapter
 expansion, finer coverage mapping, control-version governance, target-schema migration,
 renderer consolidation and broader presentation improvements remain deferred.

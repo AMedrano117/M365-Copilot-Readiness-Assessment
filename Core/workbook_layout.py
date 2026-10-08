@@ -676,6 +676,7 @@ def split_workbook_layout(source_workbook, result, bundle, assessment_path, tech
         {'Action': 0, 'Coverage': 1, 'Assurance': 2, 'Opportunity': 3, 'Reference': 4}.get(row.get('Disposition'), 5),
         {'Critical': 0, 'High': 1, 'Medium': 2, 'Low': 3}.get(row.get('Priority'), 4), _heading(row)))
     findings = []
+    from .governance_presentation import treatment_fields
     for row in ordered:
         affected = _affected(row, selected.get(row['RecommendationId'], []), model_findings.get(row['RecommendationId']))
         row['AssessmentAffected'] = affected
@@ -685,7 +686,9 @@ def split_workbook_layout(source_workbook, result, bundle, assessment_path, tech
                         row.get('Recommendation'), affected, affected + ' ›' if row['AssessmentEvidenceRange'] else
                         row.get('InvestigationStatus') or 'Evidence unavailable', row.get('ObservationDate'),
                         row.get('OwnerRole'), 'Open', None))))
-    register = _write(assessment, 'Findings', findings, FINDING_COLUMNS)
+        findings[-1].update(treatment_fields(result,row))
+    governance_columns=tuple(dict.fromkeys(key for finding in findings for key in finding if key not in FINDING_COLUMNS))
+    register = _write(assessment, 'Findings', findings, FINDING_COLUMNS+governance_columns)
     for number, row in enumerate(ordered, 2):
         _cell_link(register, number, 'Evidence', '#' + row['AssessmentEvidenceRange'] if row['AssessmentEvidenceRange'] else None)
     action_rows = []
@@ -699,12 +702,13 @@ def split_workbook_layout(source_workbook, result, bundle, assessment_path, tech
                             'Recommended Action': row.get('Recommendation'), 'Affected': row.get('AssessmentAffected'),
                             'Evidence': row.get('AssessmentEvidenceRange') or row.get('InvestigationStatus'),
                             'Responsible Role': row.get('OwnerRole'), 'Rollout Stage': row.get('ReadinessStage'),
-                            'Target Date': None, 'Status': 'Open', 'Completion Evidence': row.get('CompletionEvidence'),
+                            'Target Date': None, 'Status': action.get('ActionStatus','Open'), 'Completion Evidence': row.get('CompletionEvidence'),
                             'Observed': row.get('ObservationDate'),
                             'Qualification': ' '.join(_text(row.get(key)) for key in ('Qualification', 'InvestigationQualification') if row.get(key)),
                             'Investigation Details': (row.get('InvestigationSummary') or row.get('InvestigationStatus'))
                             if row.get('InvestigationCount') else ': '.join(dict.fromkeys(_text(row.get(key)) for key in
                             ('InvestigationStatus', 'InvestigationSummary') if row.get(key)))})
+        action_rows[-1].update(treatment_fields(result,row))
     actions = _write(assessment, 'Action Plan', action_rows or [{'What We Found': 'No deployment actions were identified from the evidence collected.',
                                                                'Recommended Action': 'Continue monitoring the tenant as conditions and intended AI use cases change.'}])
     for number, action in enumerate(result.get('actions') or [], 2):
@@ -807,6 +811,12 @@ def split_workbook_layout(source_workbook, result, bundle, assessment_path, tech
             _write(book,'Reassessment',summary_rows(result),('Item','Value'))
             _write(book,'Lifecycle Records',detail_rows(result),
                    None if result['lifecycle']['Records'] else ('EntityId','EntityType','State'))
+    from .governance_presentation import summary_rows as governance_summary,detail_rows as governance_detail,audit_rows as governance_audit
+    if governance_summary(result):
+        for book in (assessment,technical):
+            _write(book,'Governance',governance_summary(result),('Item','Value'))
+            _write(book,'Decision Register',governance_detail(result),None if governance_detail(result) else ('DecisionId','DecisionType','WorkflowState'))
+        _write(technical,'Decision Audit',governance_audit(result),None if governance_audit(result) else ('EventId','DecisionId','Operation'))
     previous = _rows(source_workbook['Integrity Checks']) if 'Integrity Checks' in source_workbook else []
     for book in (assessment, technical):
         if 'Integrity Checks' in book:

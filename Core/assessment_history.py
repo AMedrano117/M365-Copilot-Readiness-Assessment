@@ -143,6 +143,17 @@ def validate_history(value):
         raise ValueError('Assessment history has multiple or inconsistent Initial runs.')
     if runs and value.get('InitialRunId') and not initial:
         raise ValueError('Reserved Initial run must complete before history continuation.')
+    if 'Governance' in value or 'GovernanceReferences' in value:
+        from .governance_contract import locator, time
+        revisions=value.get('GovernanceReferences')
+        if not isinstance(revisions,list) or not revisions or value.get('Governance')!=revisions[-1]:
+            raise ValueError('Assessment history governance reference revisions do not reconcile.')
+        for reference in revisions:
+            if (not isinstance(reference,dict) or reference.get('SchemaVersion')!='1.0.0'
+                    or reference.get('ValidationStatus')!='validated' or not isinstance(reference.get('Summary'),dict)
+                    or not isinstance(reference.get('Integrity'),str) or len(reference['Integrity'])!=64):
+                raise ValueError('Assessment history governance reference is invalid.')
+            locator(reference.get('DecisionLogLocator'));time(reference.get('AsOf'))
     return value
 
 

@@ -154,7 +154,7 @@ def split_evidence_sheets(bundle, result, max_rows=MAX_DATA_ROWS):
             return
         for key,item in list(value.items()):
             if key in {'reconciliation','identity','identity_validation','SourceOccurrences','FindingMembership','evidence',
-                       'lifecycle','lifecycle_diagnostics','run_context'}:
+                       'lifecycle','lifecycle_diagnostics','run_context','governance','governance_diagnostics'}:
                 continue  # Semantic declarations and original locators are immutable.
             if key=='rows':
                 for row in item: visit(row)

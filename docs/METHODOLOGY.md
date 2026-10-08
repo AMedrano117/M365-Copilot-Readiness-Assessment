@@ -31,7 +31,8 @@ execution, semantic boundaries and typed compatibility aliases. Its diagnostics
 do not alter readiness, evidence precedence or closure rules. Reassessment
 classification and explicit baseline selection are described in
 [Assessment runs](ASSESSMENT_RUNS.md). [Evidence-derived deltas](ASSESSMENT_DELTAS.md)
-retain comparison qualifications separately from readiness; formal closure remains deferred.
+retain comparison qualifications separately from readiness. [Explicit governance](ASSESSMENT_GOVERNANCE.md)
+records human closure, risk, exception and applicability decisions without changing those conclusions.
 
 Authentication registration and preference are descriptive evidence, separate from enforced
 authentication strength or methods used at sign-in. The [MFA method breakdown](MFA_METHODS.md)
