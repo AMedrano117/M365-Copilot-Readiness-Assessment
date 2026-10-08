@@ -207,7 +207,8 @@ python main.py `
 
 - `--assessment-profile` supplies proposed products, tiers, users, use cases, data boundaries, actions, human approvals, and outcome measures.
 - `--provider-evidence` supplies the product-and-tier review register. It is stale after 90 days by default; change `PROVIDER_EVIDENCE_MAX_AGE_DAYS` if required.
-- `--baseline` compares stable finding fingerprints with a prior workbook or snapshot.
+- `--baseline` retains a prior workbook or snapshot as unresolved comparison context;
+  fingerprints and disappeared rows cannot establish lifecycle transitions.
 - Explicit `--run-type Initial|Reassessment|Standalone` and `--replay-snapshot` workflows
   preserve assessment identity and require selected baseline-run identity for reassessment.
   They record comparability and evidence-derived deltas; `--delta-mode disabled`

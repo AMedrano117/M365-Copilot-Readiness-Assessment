@@ -216,7 +216,7 @@ Examples:
         type=str,
         default=None,
         metavar='PATH',
-        help='Prior assessment workbook or snapshot JSON used to classify improvement since the baseline.'
+        help='Prior workbook or snapshot retained as unresolved historical comparison context. Use explicit Reassessment for evidence-derived delta states.'
     )
     parser.add_argument(
         '--purview-auth-mode',

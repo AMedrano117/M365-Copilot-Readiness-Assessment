@@ -81,6 +81,31 @@ class DeltaCliTests(unittest.TestCase):
             with self.subTest(options=options),self.assertRaises(SystemExit):parse(*options)
 
 
+class DeltaLegacyTests(unittest.TestCase):
+    def test_legacy_missing_and_rank_changed_findings_remain_unresolved(self):
+        from Core.cross_provider_assessment import compare_baseline,METHODOLOGY_VERSION
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'legacy.json'
+            path.write_text(json.dumps({'methodology_version':METHODOLOGY_VERSION,'recommendations':[
+                {'FindingFingerprint':'same','RecommendationId':'OLD-1','Disposition':'Action'},
+                {'FindingFingerprint':'missing','RecommendationId':'OLD-2','Disposition':'Action'}]}),encoding='utf-8')
+            result_=compare_baseline([{'FindingFingerprint':'same','Disposition':'Assurance'},
+                {'FindingFingerprint':'new','Disposition':'Action'}],[],path)
+            self.assertFalse(result_['comparable'])
+            self.assertTrue(all(row['Classification']=='Indeterminate' for row in result_['rows']))
+            self.assertTrue(all(row['Reason'] for row in result_['rows']))
+
+    def test_legacy_fingerprint_collisions_retain_all_occurrences(self):
+        from Core.cross_provider_assessment import compare_baseline,METHODOLOGY_VERSION
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'legacy.json'
+            rows=[{'FindingFingerprint':'collision','RecommendationId':f'OLD-{n}'} for n in range(2)]
+            path.write_text(json.dumps({'methodology_version':METHODOLOGY_VERSION,'recommendations':rows}),encoding='utf-8')
+            compared=compare_baseline(rows,[],path)
+            self.assertEqual(len(compared['rows']),4)
+            self.assertEqual({r['Origin'] for r in compared['rows']},{'Current','Baseline'})
+
+
 class DeltaRendererTests(unittest.TestCase):
     def test_technical_fields_and_long_values_are_preserved(self):
         from Core.lifecycle_presentation import detail_rows
