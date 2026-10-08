@@ -106,4 +106,3 @@ class RunRendererTests(unittest.TestCase):
                 values = [str(cell.value) for row in book['Run Manifest'] for cell in row]
                 self.assertIn(seed['RunId'], values)
             self.assertNotIn('Improved', str(context))
-

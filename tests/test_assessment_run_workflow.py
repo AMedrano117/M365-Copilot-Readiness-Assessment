@@ -342,4 +342,3 @@ class ComparabilityTests(unittest.TestCase):
         coverage = recorded_coverage(current)
         self.assertEqual(coverage['source:blocked_source']['state'],'inaccessible')
         self.assertFalse(coverage['source:blocked_source']['complete'])
-
