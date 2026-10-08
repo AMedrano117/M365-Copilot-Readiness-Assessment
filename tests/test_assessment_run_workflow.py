@@ -16,7 +16,11 @@ def result(identity):
     meta = copy.deepcopy(identity)
     meta['Entities'] = [entity('control', meta, {'namespace':'m365-readiness', 'control_id':'IDENTITY.MFA'})]
     return {'tenant_id':TENANT, 'identity':meta, 'recommendations':[], 'actions':[],
-        'control_results':[], 'evidence':[], 'run_context':copy.deepcopy(meta['RunContext']),
+        'control_results':[{'ControlId':'IDENTITY.MFA','Status':'Pass'}],
+        'evidence':[{'control_id':'IDENTITY.MFA','metric_id':'enforcement','provider':'microsoft',
+            'population':'all users','scope':'tenant','unit':'count','value':0,'availability':'available',
+            'complete':True,'evidence_level':'policy_enforcement','window':'snapshot','selection':'selected'}],
+        'run_context':copy.deepcopy(meta['RunContext']),
         'reconciliation':{'state':'legacy','reason':'Synthetic graph without source occurrences.'},
         'run_boundaries':{'purpose':'readiness', 'scope':'tenant-wide', 'providers':['microsoft'],
             'population_definitions':['all users'], 'resource_scopes':['tenant']},
@@ -233,4 +237,58 @@ class ComparabilityTests(unittest.TestCase):
         current['identity']['Aliases'] = [{'Value':'old','TargetType':'finding','TargetId':None}]
         self.assertTrue(any(item['Eligibility']=='unresolved legacy metadata'
                             for item in evaluate_comparability(current, baseline)['Items']))
+
+    def test_observation_identity_changes_across_runs_but_semantic_boundaries_match(self):
+        from Core.assessment_identity import entity
+        from Core.run_comparability import evaluate_comparability
+        current, baseline = self.pair()
+        boundary = dict(assessment_id=current['identity']['AssessmentId'],
+            environment_id=current['identity']['PrimaryEnvironmentId'],provider='microsoft',
+            control_id='IDENTITY.MFA',metric_id='enforcement',population='all users',
+            resource_scope='tenant',window='snapshot',evidence_level='policy_enforcement',unit='count')
+        for snapshot, capture in [(current,'PCP-current'),(baseline,'PCP-baseline')]:
+            snapshot['identity']['Entities'].append(entity('observation',snapshot['identity'],
+                {**boundary,'run_id':snapshot['identity']['RunId'],'capture_id':capture}))
+        comparison = evaluate_comparability(current, baseline)
+        observation = next(item for item in comparison['Items'] if item['Type']=='observation')
+        self.assertEqual(observation['Eligibility'], 'eligible')
+        self.assertNotEqual(observation['CurrentId'], observation['BaselineId'])
+
+    def test_missing_evidence_conflict_and_not_established_are_not_eligible(self):
+        from Core.run_comparability import evaluate_comparability
+        for change in ('missing','conflict','not_established'):
+            current, baseline = self.pair()
+            if change=='missing':
+                current['evidence'] = []
+            elif change=='conflict':
+                current['evidence'][0]['selection'] = 'conflict'
+            else:
+                current['control_results'][0]['Status'] = 'Not established'
+            comparison = evaluate_comparability(current, baseline)
+            self.assertNotEqual(comparison['Items'][0]['Eligibility'], 'eligible', change)
+
+    def test_metric_definition_and_window_matrix_prevents_direct_comparison(self):
+        from Core.run_comparability import evaluate_comparability
+        for field in ('unit','population','scope','provider','window','metric_definition','population_definition'):
+            current, baseline = self.pair()
+            current['evidence'][0][field] = 'changed'
+            comparison = evaluate_comparability(current, baseline)
+            self.assertNotEqual(comparison['Items'][0]['Eligibility'], 'eligible', field)
+            self.assertTrue(comparison['Items'][0]['Reasons'])
+
+    def test_unresolved_versions_and_evidence_level_changes_are_explicit(self):
+        from Core.run_comparability import evaluate_comparability
+        current, baseline = self.pair()
+        current['evidence'][0]['evidence_level'] = 'configuration'
+        self.assertEqual(evaluate_comparability(current, baseline)['Items'][0]['Eligibility'],
+                         'eligible with qualifications')
+        current, baseline = self.pair()
+        current['identity']['MethodologyVersion'] = None
+        self.assertNotEqual(evaluate_comparability(current, baseline)['Outcome'], 'Comparable')
+
+    def test_different_environment_is_not_comparable(self):
+        from Core.run_comparability import evaluate_comparability
+        current, baseline = self.pair()
+        current['identity']['PrimaryEnvironmentId'] = 'ENV-foreign'
+        self.assertEqual(evaluate_comparability(current, baseline)['Outcome'], 'NotComparable')
 
