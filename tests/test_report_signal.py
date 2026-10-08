@@ -188,7 +188,7 @@ class FindingDeduplicationTests(unittest.TestCase):
         self.assertEqual(merged[0]["Priority"], "High", "the more severe framing must win")
         self.assertIn("Customer Lockbox (Enterprise)", merged[0]["AlsoLicensedVia"])
 
-    def test_identical_text_collapses_without_a_key(self):
+    def test_identical_text_without_grouping_authority_remains_independent(self):
         from Core.evidence_layer import deduplicate_findings
 
         observation = "Insider Risk Management is active in SPE E5, monitoring for exfiltration"
@@ -196,7 +196,7 @@ class FindingDeduplicationTests(unittest.TestCase):
             self._rec("Purview", "Insider Risk Management (Base)", observation),
             self._rec("Purview", "Insider Risk Management", observation),
         ])
-        self.assertEqual(len(merged), 1)
+        self.assertEqual(len(merged), 2)
 
     def test_distinct_findings_are_never_merged(self):
         from Core.evidence_layer import deduplicate_findings

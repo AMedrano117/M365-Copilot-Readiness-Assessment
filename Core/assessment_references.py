@@ -34,7 +34,8 @@ def resolve_alias(result, query):
 
 
 def validate_assessment_references(result):
-    diagnostics = []
+    from .reconciliation_validation import validate_reconciliation
+    diagnostics = validate_reconciliation(result)
     def report(code, subject, message, severity='error'):
         diagnostics.append(dict(severity=severity,code=code,subject=str(subject or 'identity'),message=message))
 

@@ -15,7 +15,7 @@ import json
 
 
 EVIDENCE_SCHEMA_VERSION = "1.1.0"
-RECONCILIATION_VERSION = "1.0.0"
+RECONCILIATION_VERSION = "2.0.0"
 AVAILABILITY_STATES = frozenset({
     "available", "missing", "not_requested", "inaccessible", "unsupported",
     "empty", "unknown", "partial", "unavailable", "not_applicable", "failed", "unlicensed",
@@ -114,27 +114,15 @@ def normalize_observation(source, *, evaluation_date=None, expected_tenant_id=No
         key: value for key, value in row.items()
         if key not in {"age_days", "freshness", "qualifications", "qualification", "selection", "source_observed_at"}
     })
-    # Add after the compatibility EV hash. Selection still uses the existing date.
+    # Preserve the source timestamp after computing the compatibility EV hash.
     original = source.get('source_observed_at') or source.get('observed_at')
     row['source_observed_at'] = original.isoformat() if hasattr(original, 'isoformat') else original or ''
     return row
 
 
 def compatibility_key(row):
-    """Only equal metric definitions, populations, units and windows are comparable.
-
-    Unknown population or tenant is deliberately source-local: an undated export
-    cannot silently replace a known whole-tenant collection.
-    """
-    scope = row.get("scope") or {"unknown_source": row.get("source_file") or row.get("evidence_id")}
-    tenant = row.get("tenant_id") or {"unknown_source": row.get("source_file") or row.get("evidence_id")}
-    dimensions = [tenant, row.get("control_id"), row.get("metric_id"),
-                      row.get("metric_definition"), scope, row.get("population"),
-                      row.get("affected_objects"), row.get("unit"),
-                      row.get("reporting_basis"), row.get("window"), row.get('evidence_level', 'unknown')]
-    if any(row.get(key) for key in ('provider', 'product', 'tier')):
-        dimensions.append([row.get(key, '') for key in ('provider', 'product', 'tier')])
-    return stable_id(dimensions)
+    from .observation_reconciliation import comparison_key
+    return comparison_key(row)
 
 
 def _comparison_value(value):
@@ -151,52 +139,7 @@ def _comparison_value(value):
 
 
 def reconcile_observations(observations, *, evaluation_date=None, expected_tenant_id=None):
-    """Retain every source and select one suitable fact per compatible question.
-
-    Complete evidence outranks a newer partial snapshot. Different values for the
-    same date (or for dates that cannot be ordered) remain explicit conflicts.
-    Repeated exports are duplicates, never totals to be added together.
-    """
-    rows = [normalize_observation(row, evaluation_date=evaluation_date,
-                                  expected_tenant_id=expected_tenant_id) for row in observations]
-    groups = defaultdict(list)
-    for row in rows:
-        groups[compatibility_key(row)].append(row)
-    for group in groups.values():
-        candidates = [row for row in group if row["availability"] in {"available", "partial"}
-                      and row["value"] is not None and row["freshness"] != "future"]
-        if not candidates:
-            for row in group:
-                row["selection"] = "unavailable"
-            continue
-        complete = [row for row in candidates if row["complete"]]
-        pool = complete or candidates
-        dated = [row for row in pool if row["observed_at"]]
-        latest = max((row["observed_at"] for row in dated), default="")
-        finalists = [row for row in pool if not row["observed_at"] or row["observed_at"] == latest]
-        values = {(_comparison_value(row["value"]), row.get('control_result')) for row in finalists}
-        if len(values) > 1:
-            for row in group:
-                row["selection"] = "conflict" if row in finalists else "superseded"
-                if row in finalists:
-                    row["qualification"] = (row["qualification"] + " Compatible sources disagree; confirm the value before use.").strip()
-            continue
-        winner = min(finalists, key=lambda row: (not bool(row["observed_at"]), row["source_file"], row["evidence_id"], stable_id(row)))
-        for row in group:
-            if row is winner:
-                row["selection"] = "selected"
-            elif (_comparison_value(row["value"]) == _comparison_value(winner["value"]) and row["observed_at"] == winner["observed_at"]
-                  and row["availability"] == winner["availability"] and row["complete"] == winner["complete"]
-                  and row.get('control_result') == winner.get('control_result')
-                  and row['qualifications'] == winner['qualifications']
-                  and row.get('numerator') == winner.get('numerator')
-                  and row.get('denominator') == winner.get('denominator')
-                  and row['truncated'] == winner['truncated']):
-                row["selection"] = "duplicate"
-                row["selected_evidence_id"] = winner["evidence_id"]
-            else:
-                row["selection"] = "superseded"
-                row["selected_evidence_id"] = winner["evidence_id"]
-                if not row["complete"] and winner["complete"]:
-                    row["qualification"] = (row["qualification"] + " A complete comparable source was retained.").strip()
-    return sorted(rows, key=lambda row: (row["domain_id"], row["metric_id"], compatibility_key(row), row["observed_at"], row["evidence_id"], stable_id(row)))
+    """Compatibility view of the shared engine, retaining every source occurrence."""
+    from .observation_reconciliation import reconcile_evidence
+    return reconcile_evidence(observations, evaluation_date=evaluation_date,
+        expected_tenant_id=expected_tenant_id)['rows']

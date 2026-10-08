@@ -31,8 +31,9 @@ REQUIRED = {
     'support': ('finding_id','evidence_id','selection_role','selector_version'),
 }
 OPTIONAL = {
-    'observation': ('native_record_id','metric_definition','product','tier','reporting_basis','unit'),
-    'finding': ('product','tier','affected_resource_ids'),
+    'observation': ('native_record_id','metric_definition','product','tier','reporting_basis','unit','semantic_variant'),
+    'finding': ('product','tier','affected_resource_ids','population_definition','control_definition_version',
+                'applicability','rollout_stage','customer_decision','closure_evidence','closure_requirements'),
     'dataset': ('population','resource_scope','product','tier'),
 }
 
@@ -211,6 +212,19 @@ def attach_identity(result, bundle):
             alias(code,'control_id','control',target)
 
     evidence_ids = {}
+    observation_targets = {}
+    reconciled_targets = {}
+    observation_states = {}
+    generated_observations = {}
+    observation_variants = {}
+    # Reproduced legacy POB boundaries omit conclusions. Extend only boundaries
+    # that actually collide; unique legacy IDs keep their original algorithm.
+    from .observation_reconciliation import semantic_payload, key as comparison_digest
+    for row in result.get('evidence',[]):
+        base = {field: row.get(field) for field in ('provider','control_id','metric_id','population','scope',
+            'window','evidence_level','metric_definition','product','tier','reporting_basis','unit',
+            'native_id','source_schema','source_hash','source_type','source_observed_at')}
+        observation_variants.setdefault(digest(base),set()).add(comparison_digest(semantic_payload(row)))
     for row in result.get('evidence',[]):
         target = None
         file_id = retained_file(row,row.get('evidence_id') or 'shared-result')
@@ -226,9 +240,23 @@ def attach_identity(result, bundle):
                 key = {field:row.get(field) for field in ('provider','control_id','metric_id','population','window','evidence_level','metric_definition','product','tier','reporting_basis','unit')}
                 key.update(assessment_id=meta['AssessmentId'],run_id=meta['RunId'],environment_id=meta['PrimaryEnvironmentId'],
                            resource_scope=row.get('scope'),capture_id=capture,native_record_id=native)
-                # Observations are not interned: duplicate factual declarations remain visible to validation.
+                base = {field: row.get(field) for field in ('provider','control_id','metric_id','population','scope',
+                    'window','evidence_level','metric_definition','product','tier','reporting_basis','unit',
+                    'native_id','source_schema','source_hash','source_type','source_observed_at')}
+                if len(observation_variants[digest(base)]) > 1:
+                    key['semantic_variant'] = comparison_digest(semantic_payload(row))
                 observation = entity('observation',meta,key)
-                meta['Entities'].append(observation)
+                if observation['Id'] not in generated_observations:
+                    generated_observations[observation['Id']]=observation
+                    observation['SourceOccurrences']=[]
+                    meta['Entities'].append(observation)
+                generated_observations[observation['Id']]['SourceOccurrences'].append({
+                    'EvidenceId':row.get('evidence_id'),'OccurrenceId':row.get('source_occurrence_id'),
+                    'CaptureId':capture,'NativeRecordId':native,'SourceFile':row.get('source_file')})
+                observation_targets.setdefault(row.get('evidence_id'),set()).add(observation['Id'])
+                if row.get('reconciled_observation_id'):
+                    reconciled_targets.setdefault(row['reconciled_observation_id'],set()).add(observation['Id'])
+                observation_states.setdefault(row.get('evidence_id'),set()).add(row.get('selection'))
                 if control_ids.get(row.get('control_id')):
                     refs.append(reference(observation['Id'],'control',control_ids[row['control_id']],'control',meta))
                 target = add('evidence_record',dict(capture_id=capture,
@@ -283,7 +311,10 @@ def attach_identity(result, bundle):
             try:
                 finding = add('finding',dict(assessment_id=meta['AssessmentId'],environment_id=meta['PrimaryEnvironmentId'],
                     provider=row.get('Provider'),control_id=row.get('ControlId'),condition_key=row.get('FindingKey'),
-                    population=row.get('Population'),resource_scope=row.get('EvidenceScope'),product=row.get('Product'),tier=row.get('Tier')))
+                    population=row.get('Population'),resource_scope=row.get('EvidenceScope'),product=row.get('Product'),tier=row.get('Tier'),
+                    population_definition=row.get('PopulationDefinition'),control_definition_version=row.get('ControlDefinitionVersion'),
+                    applicability=row.get('Applicability'),rollout_stage=row.get('RolloutStage'),
+                    customer_decision=row.get('CustomerDecision'),closure_evidence=row.get('ClosureEvidence'),closure_requirements=row.get('ClosureRequirements')))
             except MissingIdentityInputs:
                 pass
             if row.get('RecommendationCatalogKey') and row.get('RecommendationCatalogNamespace'):
@@ -294,17 +325,35 @@ def attach_identity(result, bundle):
             alias(row.get('RecommendationId'),namespace,kind,target)
         finding_targets.setdefault(row.get('RecommendationId'),set()).add(finding)
         if finding:
+            canonical_issue=None
+            for issue in (result.get('reconciliation') or {}).get('findings',[]):
+                if issue.get('recommendation_id')==row.get('RecommendationId'):
+                    issue['persistent_finding_id']=finding
+                    canonical_issue=issue
+                    for identifier in issue.get('observation_ids') or []:
+                        for observation_id in reconciled_targets.get(identifier,[]):
+                            refs.append(reference(finding,'observation',observation_id,'observation',meta))
+            for legacy_id in row.get('CompatibilityRecommendationIds') or []:
+                if legacy_id != row.get('RecommendationId'):
+                    alias(legacy_id,'RecommendationId:issue','finding',finding,artifact=row['RecommendationId'])
+        if finding:
             if control_ids.get(row.get('ControlId')):
                 refs.append(reference(finding,'control',control_ids[row['ControlId']],'control',meta))
-            declared_evidence = row.get('EvidenceIds') or [row.get('EvidenceId')]
+            declared_evidence = row.get('EvidenceIds') or [row.get('EvidenceId'),*(row.get('RelatedEvidenceIds') or [])]
             if isinstance(declared_evidence,str):
                 declared_evidence=[declared_evidence]
             for legacy in declared_evidence:
+                if not canonical_issue:
+                    for observation_id in observation_targets.get(legacy,[]):
+                        refs.append(reference(finding,'observation',observation_id,'observation',meta))
                 matches = evidence_ids.get(legacy,set()) - {None}
                 if len(matches)==1 and None not in evidence_ids.get(legacy,set()):
                     evidence = next(iter(matches))
                     refs.append(reference(finding,'evidence',evidence,'evidence_record',meta))
-                    support = add('support',dict(finding_id=finding,evidence_id=evidence,selection_role='legacy-selected',selector_version='1'))
+                    states=observation_states.get(legacy,set())
+                    role='conflict-support' if 'conflict' in states else 'retained-support' if legacy!=row.get('EvidenceId') else 'legacy-selected'
+                    support = add('support',dict(finding_id=finding,evidence_id=evidence,selection_role=role,selector_version='1'),
+                                  SelectionStates=sorted(state for state in states if state))
                     refs.extend([reference(support,'finding',finding,'finding',meta),reference(support,'evidence',evidence,'evidence_record',meta)])
             for owner in (catalog,action):
                 if owner:
@@ -350,11 +399,36 @@ def attach_identity(result, bundle):
     # Explicit producer declarations are validated, never deduplicated or repaired.
     meta['Entities'].extend(registry.entities)
     meta['Entities'].extend(deepcopy(bundle.get('identity_entities') or []))
-    meta['Aliases'].extend(aliases + deepcopy(bundle.get('identity_aliases') or []))
+    # Intern generated aliases only. An old EV locator can address more than one
+    # semantic record after enrichment: retain its candidates without first-match
+    # resolution. Explicit producer aliases remain untouched for validation.
+    alias_groups={}
+    for row in aliases:
+        context=tuple(encoded_value for encoded_value in (row.get(field) for field in
+            ('Value','Namespace','TargetType','AssessmentId','OriginRunId','OriginArtifact')))
+        alias_groups.setdefault(context,[]).append(row)
+    for rows in alias_groups.values():
+        targets={row.get('TargetId') for row in rows}
+        declared=deepcopy(rows[0])
+        if len(targets)>1:
+            declared['TargetId']=None
+            declared['CandidateTargetIds']=sorted(target for target in targets if target)
+            declared['CompatibilityReason']='Legacy locator has multiple semantic targets; resolve using source occurrence context.'
+        if declared.get('CandidateTargetIds') and result.get('reconciliation'):
+            result['reconciliation']['diagnostics'].append({'code':'ambiguous_compatibility_locator',
+                'severity':'compatibility_warning','legacy_id':declared['Value'],
+                'namespace':declared['Namespace'],'candidate_ids':declared['CandidateTargetIds'],
+                'reason':declared['CompatibilityReason']})
+        meta['Aliases'].append(declared)
+    meta['Aliases'].extend(deepcopy(bundle.get('identity_aliases') or []))
     # Intern generated relationships only. Explicit declarations, including
     # duplicate invalid records, must remain available to validation/review.
     meta['References'].extend(json.loads(key) for key in sorted({json.dumps(row,sort_keys=True) for row in refs}))
     meta['References'].extend(deepcopy(bundle.get('identity_references') or []))
     result['identity'] = meta
+    if result.get('reconciliation'):
+        for observation in result['reconciliation'].get('observations',[]):
+            observation['persistent_observation_ids']=sorted(reconciled_targets.get(observation['id'],[]))
+        result['reconciliation']['diagnostics'].sort(key=lambda row:json.dumps(row,sort_keys=True))
     result['identity_validation'] = validate_assessment_references(result)
     return result

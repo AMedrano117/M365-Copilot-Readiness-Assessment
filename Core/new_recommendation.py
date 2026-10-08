@@ -90,8 +90,8 @@ def new_recommendation(
         finding_key: Optional stable identifier for the underlying tenant condition, e.g.
             "purview.ediscovery.no_cases". Several licences can surface the same condition -
             eDiscovery cases are checked by three different service plans - and without a shared
-            key each emits its own card for one issue. Cards sharing a key are collapsed to the
-            highest-severity one, which lists the contributing licences.
+            key each emits its own card for one issue. A key permits scoped grouping only
+            when material customer boundaries match; all source declarations remain retained.
         evidence_key: Optional evidence bucket identifier for engineer follow-up drill-down.
             Multiple workbook tabs may be supplied as a semicolon-delimited string.
         evidence_summary: Optional short note explaining the follow-up detail available

@@ -10,6 +10,24 @@ def rec(**changes):
 
 
 class SafeFindingDeduplicationTests(unittest.TestCase):
+    def test_new_configuration_pass_cannot_hide_separate_operational_failure(self):
+        from Core.finding_reconciliation import group_findings
+        base=rec(EvidenceStatus='supported',Historical='No',EvidenceComplete=True)
+        rows=[dict(base,EvidenceLevel='configuration',ObservationDate=DAY,Disposition='Assurance',control_result='pass',EvidenceId='EV-config'),
+              dict(base,EvidenceLevel='observed_operation',ObservationDate='2026-09-09',Disposition='Action',control_result='fail',EvidenceId='EV-operation')]
+        selected,_,_=group_findings(rows)
+        self.assertEqual(selected[0]['Disposition'],'Action')
+        self.assertEqual(selected[0]['EvidenceId'],'EV-operation')
+        self.assertEqual(set(selected[0]['RelatedEvidenceIds']),{'EV-config','EV-operation'})
+
+    def test_explicit_measurements_native_ids_and_quality_cannot_be_discarded_early(self):
+        from Core.evidence_layer import deduplicate_findings
+        base=rec()
+        for field in ('MeasuredValue','NativeRecordId','SourceCaptureId','EvidenceTruncated','SourceHash'):
+            with self.subTest(field=field):
+                rows=[dict(base,**{field:'first'}),dict(base,**{field:'second'})]
+                self.assertEqual(len(deduplicate_findings(rows)),2)
+
     def test_material_customer_boundaries_remain_separate(self):
         from Core.evidence_layer import deduplicate_findings
         base=rec()
@@ -28,7 +46,7 @@ class SafeFindingDeduplicationTests(unittest.TestCase):
         before=copy.deepcopy(rows)
         merged=deduplicate_findings(rows)
         self.assertEqual(rows,before)
-        declarations=[r['InvestigationEvidence'] for r in merged[0]['SourceOccurrences']]
+        declarations=[member['InvestigationEvidence'] for row in merged for member in row.get('SourceOccurrences') or [row]]
         self.assertEqual({r['records'][0]['id'] for r in declarations},{'a','b'})
 
     def test_legacy_wording_without_authority_cannot_merge(self):
@@ -81,9 +99,9 @@ class SafeFindingDeduplicationTests(unittest.TestCase):
         model=build_evidence_selection({'tenant_id':TENANT,'recommendations':rows},
             {'assessment_sources':{'auth_methods':[{'source':{'provider':'microsoft','workload':'entra','scope':'tenant','population':'users','complete':True},'records':[raw]}]}})
         self.assertEqual(len(model['evidence_records']),1)
-        self.assertEqual(model['counts']['support_relationships'],2)
-        self.assertEqual(model['counts']['unique_native_records'],1)
-        self.assertEqual(model['counts']['unique_evidence_records'],1)
+        self.assertEqual(model['evidence_counts']['support_relationships'],2)
+        self.assertEqual(model['evidence_counts']['unique_native_records'],1)
+        self.assertEqual(model['evidence_counts']['unique_evidence_records'],1)
 
     def test_merged_declarations_are_selected_by_both_outputs(self):
         from Core.evidence_layer import deduplicate_findings

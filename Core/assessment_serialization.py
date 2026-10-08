@@ -27,6 +27,7 @@ def write_assessment_result(path, result):
     """Write a data-only, sanitized snapshot of the current runtime result."""
     from .assessment_references import require_valid_assessment
     snapshot = plain_data(result)
+    snapshot.setdefault('reconciliation', {'state':'legacy','reason':'Snapshot predates recorded semantic reconciliation; no equivalence inferred.'})
     snapshot['identity_validation'] = require_valid_assessment(snapshot)
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -44,5 +45,7 @@ def read_assessment_result(path):
         raise ValueError('Assessment snapshot must contain a shared-result object.')
     if 'identity' not in result:
         result['identity'] = incomplete_identity('legacy')
+    if 'reconciliation' not in result:
+        result['reconciliation'] = {'state':'legacy','reason':'Snapshot predates recorded semantic reconciliation; no equivalence inferred.'}
     result['identity_validation'] = require_valid_assessment(result)
     return result

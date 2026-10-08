@@ -232,6 +232,25 @@ def _qualify_record(original, bundle, day, expected_tenant_id, *, historical=Fal
         "unit": "control observation", "availability": "unknown" if gap else meta['availability'],
         "historical_conclusion": historical,
     }, evaluation_date=day, expected_tenant_id=expected_tenant_id)
+    # Preserve explicitly declared semantics after the historical EV hash. The
+    # legacy locator remains available even when its semantic context was sparse.
+    comparison_fields = {'Population':'population','Provider':'provider','Product':'product','Tier':'tier',
+        'ObservationWindow':'window','PopulationDefinition':'population_definition',
+        'ControlDefinitionVersion':'control_definition_version','Applicability':'applicability',
+        'RolloutStage':'rollout_stage','WindowStart':'window_start','WindowEnd':'window_end',
+        'AssessmentId':'AssessmentId','RunId':'RunId','PrimaryEnvironmentId':'PrimaryEnvironmentId',
+        'NativeRecordId':'native_id','SourceCaptureId':'capture_id',
+        'SourceWorkload':'source_workload','control_result':'control_result'}
+    for field, destination in comparison_fields.items():
+        if field in original:
+            fact[destination] = deepcopy(original[field])
+    if 'MeasuredValue' in original:
+        fact['semantic_measurement']=deepcopy(original['MeasuredValue'])
+    elif original.get('control_result') in {'pass','fail','not_assessed','not_applicable'}:
+        fact['semantic_measurement']=original['control_result']
+    else:
+        fact['metric_value_kind']='legacy_narrative'
+    row['SourceObservedAt'] = fact['source_observed_at']
     status = "gap" if gap else "historical" if historical else "supported" if fact["freshness"] == "current" else fact["freshness"]
     if status == "supported" and (not fact["complete"] or not fact["scope"] or not fact["tenant_id"]
                                   or not fact['source_file'] or fact['availability'] != 'available'
@@ -282,33 +301,8 @@ def _finding_identity(row):
 
 
 def _deduplicate_records(records):
-    grouped = defaultdict(list)
-    for row in records:
-        grouped[(_finding_identity(row), str(row.get("EvidenceScope") or ""),
-                 stable_id([row.get(key) for key in ('Population', 'Provider', 'Product', 'Tier', 'ObservationWindow')]))].append(row)
-    selected, archived = [], []
-    priority_rank = {"High": 0, "Medium": 1, "Low": 2}
-    for group in grouped.values():
-        supported = [row for row in group if row["EvidenceStatus"] == "supported"]
-        latest = max((row.get("ObservationDate", "") for row in supported), default="")
-        candidates = [row for row in supported if row.get("ObservationDate") == latest] or [row for row in group if row["Historical"] != "Yes"] or group
-        winner = min(candidates, key=lambda row: (priority_rank.get(row.get("Priority"), 3), row.get("Feature", "")))
-        winner = dict(winner)
-        if len({(row.get("Disposition"), row.get("Observation"), row.get('control_result')) for row in candidates}) > 1 and supported:
-            winner["EvidenceStatus"] = "conflict"
-            winner["Disposition"] = "Action"
-            winner["Qualification"] = "Comparable observations for the same date disagree. Confirm the condition before relying on it."
-        # Do not treat a broad domain/control match as proof a historical issue was fixed.
-        history = [row for row in group if row["Historical"] == "Yes"]
-        winner["RelatedEvidenceIds"] = list(dict.fromkeys(row["EvidenceId"] for row in group))
-        winner["HistoricalReferences"] = [{
-            "RecommendationId": row.get("OriginalRecommendationId", ""),
-            "ReportDate": row.get("PriorReportDate", ""), "SourceFile": row.get("SourceFile", ""),
-        } for row in history]
-        if history and supported:
-            winner["Qualification"] = (winner["Qualification"] + " The same condition appeared in an earlier assessment; the comparable current evidence is used here.").strip()
-        selected.append(winner)
-        archived.extend(dict(row, Selection="superseded") for row in group if row is not next((item for item in group if item["EvidenceId"] == winner["EvidenceId"]), None))
+    from .finding_reconciliation import group_findings
+    selected, archived, _ = group_findings(records)
     return selected, archived
 
 
@@ -843,13 +837,9 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
                 gap = _gap(question, day)
                 gap.update(EvidenceStatus="conflict", Qualification=fact["qualification"], EvidenceId=fact["evidence_id"])
                 records.append(gap)
-    used_ids = set()
-    for row in [*records, *optional_records]:
-        identifier = row.get("RecommendationId") or "REC-" + stable_id([_finding_identity(row), row.get("SourceType"), row.get("EvidenceScope")])[:10].upper()
-        if identifier in used_ids:
-            identifier += "-" + stable_id([row.get("SourceType"), row.get("EvidenceId")])[:5].upper()
-        row["RecommendationId"] = identifier
-        used_ids.add(identifier)
+    from .finding_reconciliation import allocate_display_ids
+    collision_diagnostics = allocate_display_ids([*records, *optional_records],
+        lambda row: "REC-" + stable_id([_finding_identity(row), row.get("SourceType"), row.get("EvidenceScope")])[:10].upper())
     actions = [_action(row) for row in records if row.get("Disposition") in {"Action", "Coverage"}]
     actions.sort(key=lambda row: ({"Critical": 0, "High": 1, "Medium": 2, "Low": 3}.get("Critical" if str(row.get("Status", "")).lower() == "critical" else row.get("Priority"), 4),
                                  {"Remediation": 0, "Confirmation": 1, "Evidence": 2}[row["ActionType"]], row["DomainId"], row["Feature"]))
@@ -1023,4 +1013,6 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
     result['device_reconciliation'] = devices
     from .assessment_catalog import attach_catalog
     from .assessment_identity import attach_identity
-    return attach_identity(attach_catalog(result, bundle), bundle)
+    from .finding_reconciliation import attach_reconciliation
+    result['_finding_diagnostics'] = collision_diagnostics
+    return attach_identity(attach_reconciliation(attach_catalog(result, bundle), bundle), bundle)

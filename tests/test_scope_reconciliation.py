@@ -17,12 +17,12 @@ def reconcile(rows):
 class ScopeReconciliationTests(unittest.TestCase):
     def test_exact_duplicates_preserve_occurrences_and_locators(self):
         rows = [fact(source_file='a.csv', capture_id='capture-a', native_id='native-a'),
-                fact(source_file='b.csv', capture_id='capture-b', native_id='native-b')]
+                fact(source_file='b.csv', capture_id='capture-b', native_id='native-a')]
         model = reconcile(rows)
         self.assertEqual(len(model['observations']), 1)
         self.assertEqual(len(model['occurrences']), 2)
         self.assertEqual(len(model['exact_duplicate_groups']), 1)
-        self.assertEqual({r['source']['native_id'] for r in model['occurrences']}, {'native-a', 'native-b'})
+        self.assertEqual({r['source']['native_id'] for r in model['occurrences']}, {'native-a'})
         self.assertEqual(len(model['rows']), 2)  # compatibility adapter retains source rows
         self.assertEqual(model, reconcile(list(reversed(rows))))
 
@@ -61,6 +61,21 @@ class ScopeReconciliationTests(unittest.TestCase):
     def test_date_only_cannot_order_intra_day_capture(self):
         model = reconcile([fact(value=1), fact(value=0, observed_at=DAY+'T14:00:00Z')])
         self.assertTrue(model['conflicts'])
+
+    def test_equivalent_offsets_and_dictionary_order_are_deterministic(self):
+        rows=[fact(observed_at=DAY+'T12:00:00+00:00'),fact(observed_at=DAY+'T07:00:00-05:00',source_file='other')]
+        model=reconcile(rows)
+        self.assertEqual(len(model['observations']),1)
+        reordered=[dict(reversed(list(row.items()))) for row in rows[::-1]]
+        self.assertEqual(model,reconcile(reordered))
+
+    def test_native_records_and_ratio_denominators_are_material(self):
+        self.assertEqual(len(reconcile([fact(native_id='object-a'),fact(native_id='object-b')])['observations']),2)
+        ratio=dict(unit='%',numerator=2,denominator=10,value=20)
+        model=reconcile([fact(**ratio),fact(**dict(ratio,numerator=4,denominator=20))])
+        self.assertEqual(len(model['observations']),2)
+        self.assertFalse(model['conflicts'])
+        self.assertEqual(sum(row['selection']=='selected' for row in model['rows']),2)
 
     def test_complete_outranks_partial_without_collapsing_it(self):
         model = reconcile([fact(value=0, observed_at='2026-09-09T12:00:00Z'),
@@ -105,7 +120,8 @@ class ScopeReconciliationTests(unittest.TestCase):
         from Core.assessment_result import build_assessment_result
         from Core.assessment_serialization import write_assessment_result, read_assessment_result
         result = build_assessment_result([], {'observations':[fact(),fact(source_file='other')]}, evaluation_date=DAY, expected_tenant_id=TENANT)
-        self.assertEqual(len(result['reconciliation']['observations']), 1)
+        self.assertEqual(len([row for row in result['reconciliation']['observations']
+                             if row['dimensions']['metric_id']=='permission_review']), 1)
         with tempfile.TemporaryDirectory() as directory:
             path=Path(directory)/'fictional.json'
             write_assessment_result(path,result)

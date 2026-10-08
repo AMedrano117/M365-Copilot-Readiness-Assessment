@@ -366,78 +366,9 @@ def _merge_rank(recommendation):
 
 
 def deduplicate_findings(recommendations):
-    """Collapse cards that describe the same tenant condition.
-
-    One condition often reaches the report several times because several licences grant the
-    control that was checked: eDiscovery cases are evaluated by three service plans, Customer
-    Lockbox by two, the risky OAuth apps by five. Each emitted its own card, so a reader saw one
-    issue as several - sometimes with different severities for the identical action.
-
-    Two passes:
-      1. Explicit - cards sharing a FindingKey are the same condition by construction.
-      2. Exact text - identical Service, Observation and Recommendation cannot be two findings.
-
-    The highest-severity card in a group survives and gains a "Also licensed via" note listing
-    the other contributing features, so nothing about licensing coverage is lost.
-    """
-    if not recommendations:
-        return recommendations
-
-    groups = OrderedDict()
-    for recommendation in recommendations:
-        finding_key = str(recommendation.get("FindingKey", "") or "").strip()
-        if finding_key:
-            # Finding keys identify tenant conditions, not producing modules.  Allow the same
-            # underlying condition to collapse when Entra and Defender both surface it.
-            key = ("finding", finding_key)
-        else:
-            key = (
-                "text",
-                recommendation.get("Service", ""),
-                str(recommendation.get("Observation", "") or "").strip(),
-                str(recommendation.get("Recommendation", "") or "").strip(),
-            )
-        # Presentation priority cannot discard material differences before the
-        # shared result builder has a chance to reconcile them.
-        semantic_fields = ('Observation', 'Disposition', 'control_result', 'ControlId',
-                           'EvidenceSource', 'ObservationDate', 'EvidenceScope', 'EvidenceComplete',
-                           'Population', 'Provider', 'Product', 'Tier', 'ObservationWindow',
-                           'SourceType', 'SourceFile', 'Qualification', 'SourceAvailability',
-                           'EvidenceDateBasis', 'EvidenceLevel')
-        key = (*key, stable_id([recommendation.get(field) for field in semantic_fields]))
-        groups.setdefault(key, []).append(recommendation)
-
-    merged = []
-    for members in groups.values():
-        if len(members) == 1:
-            merged.append(members[0])
-            continue
-
-        winner = dict(min(members, key=_merge_rank))
-        others = [
-            str(m.get("Feature", "") or "")
-            for m in members
-            if str(m.get("Feature", "") or "") != str(winner.get("Feature", "") or "")
-        ]
-        seen = []
-        for feature in others:
-            if feature and feature not in seen:
-                seen.append(feature)
-        if seen:
-            winner["AlsoLicensedVia"] = "; ".join(seen)
-
-        # Preserve every evidence bucket the group referenced.
-        evidence_keys = []
-        for member in members:
-            for key in _split_evidence_keys(member.get("EvidenceKey", "")):
-                if key not in evidence_keys:
-                    evidence_keys.append(key)
-        if evidence_keys:
-            winner["EvidenceKey"] = "; ".join(evidence_keys)
-
-        merged.append(winner)
-
-    return merged
+    """Constrain early grouping and retain all contributing source declarations."""
+    from .finding_reconciliation import group_findings
+    return group_findings(recommendations or [], early=True)[0]
 
 
 def assign_recommendation_ids(recommendations):
