@@ -560,6 +560,16 @@ class AuthenticationDeliverableTests(unittest.TestCase):
         self.assertFalse(row['AuthenticationSummary']['complete'])
         self.assertIn('incomplete', row['Observation'])
 
+    def test_technical_event_timestamp_keeps_all_returned_fractional_digits(self):
+        from Core.evidence_layer import _build_legacy_signin_sheet
+        raw = event(0, 'notApplied', 'IMAP')
+        for fraction in ('1234567', '0000007'):
+            with self.subTest(fraction=fraction):
+                raw['createdDateTime'] = DAY + 'T11:22:33.' + fraction + 'Z'
+                client = NS(signin_logs=[raw], collection_status={'signin_logs': source()})
+                row = _build_legacy_signin_sheet(client, [{'Service': 'Entra', 'FindingKey': 'entra.signins.legacy_auth'}])['rows'][0]
+                self.assertEqual(row['Created UTC'], raw['createdDateTime'])
+
     def test_new_legacy_counts_have_no_inferred_delta_direction_or_automatic_closure(self):
         from Core.delta_metrics import compare_metric
         from test_delta_metrics import fact

@@ -1594,7 +1594,13 @@ def _signin_utc(value):
         stamp = value if isinstance(value, datetime) else datetime.fromisoformat(str(value).replace('Z', '+00:00'))
         if stamp.tzinfo is None:
             return stamp.isoformat() + ' (timezone not recorded)'
-        return stamp.astimezone(timezone.utc).isoformat().replace('+00:00', 'Z')
+        rendered = stamp.astimezone(timezone.utc).isoformat().replace('+00:00', 'Z')
+        # Graph can return seven fractional digits; datetime parses only six.
+        # Timezone conversion changes the clock fields, not the fractional part.
+        fraction = re.search(r'\.(\d+)(?:Z|[+-]\d{2}:\d{2})$', value) if isinstance(value, str) else None
+        if fraction and len(fraction.group(1)) > 6:
+            rendered = re.sub(r'(?:\.\d+)?Z$', '.' + fraction.group(1) + 'Z', rendered)
+        return rendered
     except (TypeError, ValueError):
         return str(value) + ' (UTC not established)'
 
