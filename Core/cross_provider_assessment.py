@@ -398,25 +398,22 @@ def compare_baseline(current_recommendations, current_controls, baseline_path):
     old_version = str(baseline.get("methodology_version", baseline.get("run_manifest", {}).get("methodology_version", "")) or "")
     if old_version and old_version != METHODOLOGY_VERSION:
         return {"available": True, "status": "available", "comparable": False, "rows": [{"Classification": "Unable to compare", "Reason": f"Methodology changed from {old_version} to {METHODOLOGY_VERSION}."}], "filename": _safe_basename(baseline_path)}
-    old_rows = baseline.get("recommendations", []) or []
-    old = {str(row.get("FindingFingerprint", row.get("Finding Fingerprint", "")) or ""): row for row in old_rows if row.get("FindingFingerprint", row.get("Finding Fingerprint", ""))}
-    current = {str(row.get("FindingFingerprint", "") or ""): row for row in current_recommendations if row.get("FindingFingerprint")}
+    # Legacy files/fingerprints do not establish selected-run ownership, scoped
+    # coverage or metric direction. Keep every occurrence as unresolved context.
+    # Supported transitions belong to assessment_runs.complete_run exclusively.
+    reason = ("Legacy comparison lacks verified run continuity and comparable evidence coverage. "
+              "Use an explicit Reassessment with a selected baseline-run identity; no lifecycle state is inferred.")
     rows = []
-    for fingerprint, row in current.items():
-        prior = old.get(fingerprint)
-        if not prior:
-            classification = "New"
-        else:
-            old_status = str(prior.get("ControlStatus", prior.get("Disposition", ""))).lower()
-            new_status = str(row.get("ControlStatus", row.get("Disposition", ""))).lower()
-            old_rank = 2 if old_status in {"fail", "action"} else 1 if old_status in {"not_assessed", "coverage"} else 0
-            new_rank = 2 if new_status in {"fail", "action"} else 1 if new_status in {"not_assessed", "coverage"} else 0
-            classification = "Improved" if new_rank < old_rank else "Regressed" if new_rank > old_rank else "Persistent"
-        rows.append({"Finding Fingerprint": fingerprint, "Recommendation ID": row.get("RecommendationId", ""), "Control ID": row.get("ControlId", ""), "Classification": classification, "Feature": row.get("Feature", "")})
-    for fingerprint, row in old.items():
-        if fingerprint not in current:
-            rows.append({"Finding Fingerprint": fingerprint, "Recommendation ID": row.get("RecommendationId", ""), "Control ID": row.get("ControlId", ""), "Classification": "Resolved", "Feature": row.get("Feature", "")})
-    return {"available": True, "status": "available", "comparable": True, "rows": rows, "filename": _safe_basename(baseline_path)}
+    for origin, records in (("Current",current_recommendations),("Baseline",baseline.get("recommendations",[]) or [])):
+        for position, row in enumerate(records,1):
+            if not isinstance(row,dict):
+                continue
+            rows.append({"Finding Fingerprint":row.get("FindingFingerprint",row.get("Finding Fingerprint","")),
+                "Recommendation ID":row.get("RecommendationId",""),"Control ID":row.get("ControlId",""),
+                "Classification":"Indeterminate","Feature":row.get("Feature",""),
+                "Origin":origin,"Source row":position,"Reason":reason})
+    return {"available":True,"status":"available","comparable":False,"rows":rows,
+            "reason":reason,"filename":_safe_basename(baseline_path)}
 
 
 def write_snapshot(path, payload):

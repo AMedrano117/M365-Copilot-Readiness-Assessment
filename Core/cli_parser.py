@@ -216,7 +216,7 @@ Examples:
         type=str,
         default=None,
         metavar='PATH',
-        help='Prior assessment workbook or snapshot JSON used to classify improvement since the baseline.'
+        help='Prior workbook or snapshot retained as unresolved historical comparison context. Use explicit Reassessment for evidence-derived delta states.'
     )
     parser.add_argument(
         '--purview-auth-mode',
@@ -242,9 +242,13 @@ Examples:
     parser.add_argument('--assessment-purpose', help='Recorded assessment family/purpose; defaults to this tool or selected history.')
     parser.add_argument('--primary-environment-id', help='Optional ENV- identity to verify against the selected tenant GUID.')
     parser.add_argument('--render-output-dir', metavar='PATH', help='Parent for snapshot render artifacts; valid only with --replay-snapshot.')
+    parser.add_argument('--delta-mode',choices=['enabled','disabled'],
+        help='Reassessment delta calculation defaults to enabled. Explicit disabled records an omitted calculation; replay never recalculates.')
     if sum(value=='--run-type' or value.startswith('--run-type=') for value in sys.argv[1:])>1:
         parser.error('Select one explicit --run-type per execution.')
     args = parser.parse_args()
+    if args.delta_mode and args.run_type!='Reassessment':
+        parser.error('--delta-mode requires an explicit Reassessment run.')
     if args.run_type=='Reassessment' and not (args.assessment_id and args.baseline_run_id and args.assessment_history):
         parser.error('Reassessment requires --assessment-id, --baseline-run-id and --assessment-history.')
     if args.run_type!='Reassessment' and args.baseline_run_id:
@@ -257,7 +261,7 @@ Examples:
                                   args.assessment_purpose,args.primary_environment_id)):
         parser.error('Run ownership and history options require --run-type.')
     if args.run_type and args.baseline:
-        parser.error('--baseline is legacy change tracking; explicit run workflows use --baseline-run-id without deltas.')
+        parser.error('--baseline is legacy change tracking; explicit run workflows use --baseline-run-id.')
     if args.render_output_dir and not args.replay_snapshot:
         parser.error('--render-output-dir requires --replay-snapshot.')
     if args.replay_snapshot:

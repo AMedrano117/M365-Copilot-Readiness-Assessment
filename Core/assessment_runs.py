@@ -22,7 +22,7 @@ class RunExecution:
 
 def prepare_run(run_type, tenant_id, *, evaluated_at, history_path=None, assessment_id=None,
                 baseline_run_id=None, purpose=None, catalog_version=None, environment_id=None,
-                existing_identity=None, methodology_version=None):
+                existing_identity=None, methodology_version=None, delta_enabled=True):
     if run_type=='Replay':
         if not existing_identity:
             raise ValueError('Replay requires an existing persisted run identity.')
@@ -34,6 +34,10 @@ def prepare_run(run_type, tenant_id, *, evaluated_at, history_path=None, assessm
         return RunExecution(deepcopy(existing_identity),is_new=False)
     if run_type not in RUN_TYPES:
         raise ValueError('Invalid run type; choose Initial, Reassessment or Standalone.')
+    if type(delta_enabled) is not bool:
+        raise ValueError('Delta calculation requires an explicit boolean option.')
+    if run_type!='Reassessment' and delta_enabled is False:
+        raise ValueError('Disabling delta calculation requires Reassessment intent.')
     if run_type!='Reassessment' and baseline_run_id:
         raise ValueError('Initial and Standalone cannot select a baseline.')
     if run_type=='Initial' and assessment_id:
@@ -80,7 +84,8 @@ def prepare_run(run_type, tenant_id, *, evaluated_at, history_path=None, assessm
         'RunType','BaselineRunId','EvaluatedAt','CreatedAt','MethodologyVersion','CatalogVersion')}
     context.update(SchemaVersion=VERSION,IdentitySchemaVersion=seed['SchemaVersion'],
         ReconciliationVersion=RECONCILIATION_VERSION,Purpose=purpose,
-        HistoryReference=path.name if path else None,Comparability=not_evaluated())
+        HistoryReference=path.name if path else None,Comparability=not_evaluated(),
+        DeltaEnabled=delta_enabled if run_type=='Reassessment' else False)
     if baseline is not None:
         entry = next(row for row in history['Runs'] if row['RunId']==baseline_run_id)
         context['BaselineValidation'] = {key:entry[key] for key in
@@ -109,6 +114,10 @@ def complete_run(result, execution, package_path):
     context['Comparability'] = evaluate_comparability(result,execution.baseline)
     context['HistoryReference'] = Path(os.path.relpath(execution.history_path,package)).as_posix() if execution.history_path else None
     result['run_context'] = context
+    meta['RunContext'] = deepcopy(context)
+    from .assessment_delta import evaluate_delta
+    result['lifecycle'] = evaluate_delta(result,execution.baseline,enabled=context['DeltaEnabled'])
+    context['Comparability']['DeltaInterpretation'] = result['lifecycle']['Outcome']
     meta['RunContext'] = deepcopy(context)
     from .assessment_serialization import write_assessment_result
     from .assessment_references import require_valid_assessment
@@ -153,6 +162,8 @@ def validate_run_context(result):
     if meta.get('State')!='complete' or not context.get('AssessmentId') or not context.get('RunId') or not context.get('PrimaryEnvironmentId'):
         report('run_identity_missing','Explicit workflow requires verified assessment, run and environment identity.')
     mode, baseline = context.get('RunType'), context.get('BaselineRunId')
+    if 'DeltaEnabled' in context and (type(context['DeltaEnabled']) is not bool or mode!='Reassessment' and context['DeltaEnabled']):
+        report('delta_intent_invalid','Delta calculation requires enabled explicit Reassessment intent.')
     if mode not in RUN_TYPES:
         report('run_type_invalid','Initial, Reassessment and Standalone are the only semantic run types.')
     if mode=='Reassessment' and not baseline:

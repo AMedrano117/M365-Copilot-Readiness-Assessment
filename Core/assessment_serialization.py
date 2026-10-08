@@ -30,6 +30,8 @@ def write_assessment_result(path, result):
     snapshot.setdefault('reconciliation', {'state':'legacy','reason':'Snapshot predates recorded semantic reconciliation; no equivalence inferred.'})
     from .assessment_runs import validate_run_context
     snapshot['run_workflow_diagnostics'] = validate_run_context(snapshot)
+    from .lifecycle_validation import validate_lifecycle
+    snapshot['lifecycle_diagnostics'] = validate_lifecycle(snapshot)
     snapshot['identity_validation'] = require_valid_assessment(snapshot)
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -51,5 +53,7 @@ def read_assessment_result(path):
         result['reconciliation'] = {'state':'legacy','reason':'Snapshot predates recorded semantic reconciliation; no equivalence inferred.'}
     from .assessment_runs import validate_run_context
     result['run_workflow_diagnostics'] = validate_run_context(result)
+    from .lifecycle_validation import validate_lifecycle
+    result['lifecycle_diagnostics'] = validate_lifecycle(result)
     result['identity_validation'] = require_valid_assessment(result)
     return result

@@ -129,6 +129,15 @@ def validate_history(value):
             raise ValueError('History comparability outcome is invalid.')
         if entry['Comparability']['Outcome'] != 'Comparable' and not entry['Comparability'].get('Reasons'):
             raise ValueError('History comparability reasons are missing.')
+        if 'Lifecycle' in entry:
+            lifecycle=entry['Lifecycle']
+            if (not isinstance(lifecycle,dict) or lifecycle.get('BaselineRunId')!=baseline
+                    or lifecycle.get('ValidationOutcome')!='validated'
+                    or lifecycle.get('DetailedRecordsLocator')!=entry['SnapshotLocator']
+                    or not lifecycle.get('EngineVersion') or not lifecycle.get('MetricRuleVersion')
+                    or not isinstance(lifecycle.get('Summary'),dict) or type(lifecycle.get('Enabled')) is not bool
+                    or lifecycle.get('Outcome') not in {'Comparable','ComparableWithQualifications','NotComparable','NotEvaluated'}):
+                raise ValueError('History lifecycle metadata is invalid.')
         identifiers.add(identifier)
     if len(initial) > 1 or (initial and initial != [value.get('InitialRunId')]):
         raise ValueError('Assessment history has multiple or inconsistent Initial runs.')
@@ -224,6 +233,8 @@ def append_run(path, result, *, snapshot_path, package_path, expected_hash=None)
         from .assessment_serialization import plain_data
         if persisted['identity'] != plain_data(meta) or persisted.get('run_context') != plain_data(context):
             raise ValueError('Completed snapshot does not match the run being appended.')
+        if persisted.get('lifecycle')!=plain_data(result.get('lifecycle')):
+            raise ValueError('Completed snapshot lifecycle differs from the run being appended.')
         entry = {key:meta.get(key) for key in ('AssessmentId','RunId','PrimaryEnvironmentId',
             'RunType','BaselineRunId','CreatedAt','EvaluatedAt','MethodologyVersion','CatalogVersion')}
         entry.update(Sequence=len(history['Runs'])+1, Status='completed',
@@ -232,6 +243,11 @@ def append_run(path, result, *, snapshot_path, package_path, expected_hash=None)
             IdentitySchemaVersion=meta['SchemaVersion'],ReconciliationVersion=context['ReconciliationVersion'],
             Comparability=deepcopy(context['Comparability']), Purpose=context.get('Purpose'),
             RunBoundaries=deepcopy(result.get('run_boundaries',{})))
+        lifecycle=result.get('lifecycle')
+        if lifecycle:
+            entry['Lifecycle']={key:deepcopy(lifecycle.get(key)) for key in
+                ('EngineVersion','MetricRuleVersion','BaselineRunId','Enabled','Outcome','Summary','GeneratedAt')}
+            entry['Lifecycle'].update(ValidationOutcome='validated',DetailedRecordsLocator=entry['SnapshotLocator'])
         updated = deepcopy(history)
         updated['Runs'].append(entry)
         updated['UpdatedAt'] = timestamp()
