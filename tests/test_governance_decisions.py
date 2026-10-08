@@ -31,7 +31,7 @@ def fixture(kind='AcceptedRisk', target='finding'):
         'AssessmentId':meta['AssessmentId'], 'PrimaryEnvironmentId':meta['PrimaryEnvironmentId'],
         'Actors':{'approver':['risk-authority']}, 'Roles':{'risk-authority':{
             'DecisionTypes':['AcceptedRisk','ApprovedException','ClosedByRemediation','NoLongerApplicable'],
-            'Operations':['approve','activate','revoke','supersede','expire','reopen'],
+            'Operations':['approve','reject','activate','revoke','supersede','expire','reopen'],
             'AllowClosureOverride':True, 'AllowNoCompensatingControls':True}}}
     return result,record,policy
 
@@ -151,6 +151,7 @@ class DecisionTests(unittest.TestCase):
         r,d,p=fixture('ApprovedException');d['Population']='subset users';d['ResourceScope']='one site'
         with self.assertRaises(ValueError):create_draft(new_log(r),r,d,actor='operator',at=NOW)
         d['ParentPopulation']='pilot users';d['ParentResourceScope']='tenant'
+        d['EvidenceReferences'][0].update(Population='subset users',ResourceScope='one site')
         log=create_draft(new_log(r),r,d,actor='operator',at=NOW);key=log['Events'][0]['DecisionId']
         view=__import__('Core.governance',fromlist=['project']).project(advance(r,log,key,p),as_of=NOW)
         self.assertEqual(len(effective_for(view,d['TargetEntityId'],'subset users','one site')),1)
@@ -164,12 +165,10 @@ class DecisionTests(unittest.TestCase):
 
     def test_resolution_alone_and_missing_collection_create_no_decisions(self):
         from Core.governance import new_log,project
-        for state in ('ResolvedByCurrentEvidence','NotReassessed','Indeterminate','Reopened'):
-            for source in ('missing','unlicensed','not_requested','unavailable'):
-                with self.subTest(state=state,source=source):
-                    r,_,_=fixture();r['collection_coverage']={'source':{'state':source}}
-                    # No lifecycle mutation is needed to create an empty governance log.
-                    self.assertEqual(project(new_log(r),as_of=NOW)['Records'],[])
+        for source in ('missing','unlicensed','not_requested','unavailable'):
+            with self.subTest(source=source):
+                r,_,_=fixture();r['collection_coverage']={'source':{'state':source}}
+                self.assertEqual(project(new_log(r),as_of=NOW)['Records'],[])
 
     def test_technical_and_action_states_never_modified(self):
         from Core.governance import attach

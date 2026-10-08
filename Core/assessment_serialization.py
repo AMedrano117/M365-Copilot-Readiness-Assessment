@@ -32,6 +32,8 @@ def write_assessment_result(path, result):
     snapshot['run_workflow_diagnostics'] = validate_run_context(snapshot)
     from .lifecycle_validation import validate_lifecycle
     snapshot['lifecycle_diagnostics'] = validate_lifecycle(snapshot)
+    from .governance_validation import validate_governance
+    snapshot['governance_diagnostics'] = validate_governance(snapshot)
     snapshot['identity_validation'] = require_valid_assessment(snapshot)
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -55,5 +57,7 @@ def read_assessment_result(path):
     result['run_workflow_diagnostics'] = validate_run_context(result)
     from .lifecycle_validation import validate_lifecycle
     result['lifecycle_diagnostics'] = validate_lifecycle(result)
+    from .governance_validation import validate_governance
+    result['governance_diagnostics'] = validate_governance(result)
     result['identity_validation'] = require_valid_assessment(result)
     return result

@@ -36,6 +36,9 @@ def resolve_alias(result, query):
 def validate_assessment_references(result):
     from .reconciliation_validation import validate_reconciliation
     diagnostics = validate_reconciliation(result)
+    if 'governance' in result:
+        from .governance_validation import validate_governance
+        diagnostics.extend(validate_governance(result))
     if 'lifecycle' in result:
         from .lifecycle_validation import validate_lifecycle
         diagnostics.extend(validate_lifecycle(result))
