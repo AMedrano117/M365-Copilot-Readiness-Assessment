@@ -64,6 +64,19 @@ def lifecycle_pair(bound_condition=False):
 
 
 class SeparationTests(unittest.TestCase):
+    def test_customer_action_status_remains_visible_with_recorded_lifecycle(self):
+        from Core.governance import new_log,create_draft,attach
+        from Core.assessment_identity import typed_alias
+        current,_,d,p=lifecycle_pair(True);meta=current['identity']
+        action=next(r['Id'] for r in meta['Entities'] if r['Type']=='action')
+        meta['Aliases'].append(typed_alias('ENT-001','RecommendationId:action','action',meta,action,origin_artifact='shared-result'))
+        current['actions']=[{'RecommendationId':'ENT-001','ActionStatus':'Monitoring'}]
+        d.update(TargetEntityId=action,TargetEntityType='action',DecisionType='ApprovedException')
+        log=create_draft(new_log(current),current,d,actor='operator',at=NOW)
+        out=attach(current,log,as_of=NOW,locator='governance/decisions.json')
+        row=out['governance']['Records'][0]
+        self.assertIsNotNone(row['CurrentLifecycleState']);self.assertEqual(row['CustomerActionStatus'],'Monitoring')
+        self.assertEqual(current['actions'][0]['ActionStatus'],'Monitoring');self.assertEqual(row['WorkflowState'],'Open')
     def test_unreviewed_future_evidence_and_embedded_payloads_are_blocked(self):
         from Core.governance import new_log,create_draft,transition
         variants=[('ObservedAt','2027-01-01T00:00:00Z'),('ObservedOutcome',{'raw':'fictional embedded payload'}),('Exceptions',{'count':0})]

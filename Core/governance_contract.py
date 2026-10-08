@@ -286,6 +286,11 @@ def qualify_current(result, view):
         row['CurrentAssessmentStatus']=lifecycle.get('CurrentAssessmentStatus')
         row['CurrentLifecycleState']=lifecycle.get('State')
         row['CustomerActionStatus']=None
+        if present and target['Type']=='action':
+            aliases={a['Value'] for a in meta.get('Aliases',[]) if a.get('TargetId')==target['Id']
+                and a.get('Namespace') in {'RecommendationId:action','RecommendationId'}}
+            matching=[r for r in result.get('actions',[]) if r.get('RecommendationId') in aliases]
+            if len(matching)==1:row['CustomerActionStatus']=matching[0].get('ActionStatus')
         if present and not lifecycle:
             if target['Type']=='control':
                 matching=[r for r in result.get('control_results',[]) if (r.get('ControlId') or r.get('Control ID'))==target['Boundary']['control_id']]
@@ -296,7 +301,7 @@ def qualify_current(result, view):
                 aliases={a['Value'] for a in meta.get('Aliases',[]) if a.get('TargetId')==target['Id'] and a.get('Namespace') in {namespace,'RecommendationId'}}
                 matching=[r for r in result.get(section,[]) if r.get('RecommendationId') in aliases]
                 if len(matching)==1:
-                    if target['Type']=='action':row['CustomerActionStatus']=matching[0].get('ActionStatus',matching[0].get('Status'))
+                    if target['Type']=='action':row['CustomerActionStatus']=matching[0].get('ActionStatus')
                     else:row['CurrentAssessmentStatus']=matching[0].get('AssessmentStatus',matching[0].get('Status'))
         row['CurrentRunQualification']=('Target or scope is absent or changed; historical decision has no current effect.' if not compatible
             else 'Later evidence requires explicit closure review; no reopening event has been inferred.' if changed_closure else None)

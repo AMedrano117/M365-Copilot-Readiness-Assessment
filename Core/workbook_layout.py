@@ -702,7 +702,7 @@ def split_workbook_layout(source_workbook, result, bundle, assessment_path, tech
                             'Recommended Action': row.get('Recommendation'), 'Affected': row.get('AssessmentAffected'),
                             'Evidence': row.get('AssessmentEvidenceRange') or row.get('InvestigationStatus'),
                             'Responsible Role': row.get('OwnerRole'), 'Rollout Stage': row.get('ReadinessStage'),
-                            'Target Date': None, 'Status': 'Open', 'Completion Evidence': row.get('CompletionEvidence'),
+                            'Target Date': None, 'Status': action.get('ActionStatus','Open'), 'Completion Evidence': row.get('CompletionEvidence'),
                             'Observed': row.get('ObservationDate'),
                             'Qualification': ' '.join(_text(row.get(key)) for key in ('Qualification', 'InvestigationQualification') if row.get(key)),
                             'Investigation Details': (row.get('InvestigationSummary') or row.get('InvestigationStatus'))
