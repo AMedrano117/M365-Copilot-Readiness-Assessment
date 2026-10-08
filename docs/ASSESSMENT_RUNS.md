@@ -156,6 +156,8 @@ retirement and output tests. The Windows CI setup resolves TEMP/TMP to one physi
 path spelling; package fixture cleanup supports Python 3.10 without changing assertions.
 
 Evidence-derived states are documented in [Assessment deltas](ASSESSMENT_DELTAS.md).
-Formal closure, accepted risk, exceptions, automatic baseline convenience,
+Explicit formal closure, accepted risk, exceptions and applicability decisions are
+documented in [Assessment governance](ASSESSMENT_GOVERNANCE.md). They are separate
+events and never rewrite run conclusions. Automatic baseline convenience,
 target-schema migration and renderer consolidation remain deferred.
 Retired dashboard and App Builder outputs remain absent.

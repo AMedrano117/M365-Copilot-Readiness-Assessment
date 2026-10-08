@@ -29,6 +29,16 @@ class SerializationTests(unittest.TestCase):
         bad=json.loads(path.read_text());bad['Events'][0]['Actor']='changed';path.write_text(json.dumps(bad))
         with self.assertRaises(ValueError):read_log(path)
 
+    def test_failed_atomic_update_and_lock_preserve_existing_log(self):
+        from Core.governance_history import write_log
+        r,log,key,p=draft();path=self.root/'decisions.json';write_log(path,log);before=path.read_bytes();updated=advance(r,log,key,p)
+        with patch('Core.governance_history.atomic_write',side_effect=OSError('Synthetic disk failure')):
+            with self.assertRaises(OSError):write_log(path,updated,expected_hash=log['Integrity'])
+        self.assertEqual(path.read_bytes(),before);self.assertFalse(path.with_name(path.name+'.lock').exists())
+        lock=path.with_name(path.name+'.lock');lock.write_text('synthetic lock')
+        with self.assertRaises(ValueError):write_log(path,updated,expected_hash=log['Integrity'])
+        self.assertEqual(path.read_bytes(),before)
+
     def test_snapshot_preserves_separate_states_and_decision_history(self):
         from Core.governance import attach
         from Core.assessment_serialization import write_assessment_result,read_assessment_result
@@ -86,15 +96,22 @@ class RendererTests(unittest.TestCase):
         from Core.assessment_replay import render_snapshot
         from openpyxl import load_workbook
         with tempfile.TemporaryDirectory() as directory:
-            root=Path(directory);r,log,key,p=draft();out=attach(r,advance(r,log,key,p),as_of=NOW,locator='governance/decisions.json')
+            root=Path(directory);r,log,key,p=draft()
+            from Core.assessment_result import build_assessment_result
+            built=build_assessment_result([],{'collection_context':{'identity':r['identity']}},expected_tenant_id=r['tenant_id'],evaluation_date='2026-10-08')
+            built.update(r);r=built
+            out=attach(r,advance(r,log,key,p),as_of=NOW,locator='governance/decisions.json')
             source=root/'source.json';write_assessment_result(source,out);before=source.read_bytes()
             with patch('Core.governance.transition',side_effect=AssertionError('Renderer decision transition')):
-                outputs=render_snapshot(source,root/'outputs',snapshot_output=root/'copy.json')
+                with patch('Core.governance.create_draft',side_effect=AssertionError('Renderer draft creation')):
+                    outputs=render_snapshot(source,root/'outputs',snapshot_output=root/'copy.json')
             self.assertEqual(source.read_bytes(),before);self.assertEqual(read_assessment_result(root/'copy.json')['governance'],out['governance'])
             for name in ('excel_path','technical_excel_path'):
                 book=load_workbook(outputs[name]);self.addCleanup(book.close)
                 self.assertIn('Governance',book.sheetnames);self.assertIn('Decision Register',book.sheetnames)
                 self.assertEqual(book['Decision Register'].max_row,2)
+                if name=='technical_excel_path':self.assertIn('Decision Audit',book.sheetnames)
+                else:self.assertIn('Governance treatment',[cell.value for cell in book['Findings'][1]])
             for name in ('html_path','summary_html_path'):
                 text=Path(outputs[name]).read_text(encoding='utf-8');self.assertIn('Governance',text)
                 self.assertIn('Risk acceptance is not remediation',text)
@@ -138,3 +155,14 @@ class CliTests(unittest.TestCase):
     def test_unknown_bulk_approval_operation_rejected(self):
         from Core.governance_cli import main
         with self.assertRaises(SystemExit):main(['approve-all'])
+
+    def test_cli_default_denies_approval_and_original_snapshot_is_immutable(self):
+        from Core.governance_cli import main
+        from Core.assessment_serialization import write_assessment_result
+        from Core.governance_history import write_log
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);r,log,key,p=draft();log=advance(r,log,key,p,('submit',))
+            snapshot=root/'snapshot.json';write_assessment_result(snapshot,r);path=root/'log.json';write_log(path,log)
+            before=(snapshot.read_bytes(),path.read_bytes())
+            self.assertEqual(main(['approve','--snapshot',str(snapshot),'--log',str(path),'--at',NOW,'--actor','operator','--decision-id',key]),2)
+            self.assertEqual((snapshot.read_bytes(),path.read_bytes()),before)

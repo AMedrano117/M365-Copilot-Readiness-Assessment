@@ -11,6 +11,10 @@ linked HTML evidence pages. Keep companion files together so local links resolve
 
 ## Shared-result snapshots
 
+Explicit post-run decisions are documented in [Assessment governance](ASSESSMENT_GOVERNANCE.md).
+Validated governance overlays add separate decision registers and concise shared
+workbook/HTML summaries; original completed runs remain immutable.
+
 `--snapshot-json PATH` now serializes the existing shared assessment result directly.
 It includes recommendations, actions, domains, controls, evidence qualifications and
 counts. It does not migrate to the future schema in `assessment-templates/`.

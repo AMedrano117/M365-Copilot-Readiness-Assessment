@@ -13,7 +13,7 @@ RESERVED_TITLES = {'Start Here', 'Action Plan', 'Findings Register', 'Assessment
                    'Technical Recommendations', 'Recommendations', 'Evidence Index', 'Collection Coverage',
                    'Findings', 'Coverage', 'Configuration', 'Devices', 'Users & Identity', 'Apps & Consent',
                    'Sites & Sharing', 'Other Evidence', 'Findings Lineage', 'Raw Derived Records', 'PDF Highlights',
-                   'Control Results', 'Run Manifest', 'Integrity Checks'}
+                   'Control Results', 'Run Manifest', 'Integrity Checks', 'Governance', 'Decision Register', 'Decision Audit'}
 
 
 def _title(base, used):

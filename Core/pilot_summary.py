@@ -203,6 +203,7 @@ def render_pilot_summary(result, bundle, tenant_name, report_path=None, workbook
     tenant = escape(str(tenant_name or "Tenant"))
     run = result.get('run_context') or {}
     from .lifecycle_presentation import summary_html
+    from .governance_presentation import summary_html as governance_summary
     run_note = ('<p>Run type: ' + prose(run.get('RunType')) + '. Baseline comparability: '
                 + prose((run.get('Comparability') or {}).get('Outcome'))
                 + '. See the full report technical appendix for qualifications.</p>') if run else ''
@@ -211,6 +212,6 @@ def render_pilot_summary(result, bundle, tenant_name, report_path=None, workbook
 <header><div class="brand">MICROSOFT 365 COPILOT<span>Executive readiness summary</span></div><div class="meta"><strong>{tenant}</strong>Evaluated {prose(result.get("evaluation_date"))}</div></header>
 <main><section class="verdict" data-state="{state}" id="verdict"><div class="kicker">Pilot readiness</div><h1>{escape(headline)}</h1>
 <p>{prose(result.get("rationale"))}</p><p>Scope: {prose(executive.get('Scope') or 'Tenant-wide Microsoft 365 foundation')}. Evidence dates: {prose(period_text)}.</p><div class="scores">{scores}</div></section>
-{pdf_section}{"".join(sections)}{summary_html(result)}</main>
+{pdf_section}{"".join(sections)}{summary_html(result)}{governance_summary(result)}</main>
 <footer><p>{links}</p><p>Evidence period: {prose(period_text)}. Methodology {prose(result.get("methodology_version"))}: required checks distinguish configuration, policy enforcement, observed operation and dated owner reviews. Missing operational proof remains unresolved. The full report and workbook hold the evidence or precise collection gap behind every finding.</p></footer>
 {run_note}</div></body></html>'''

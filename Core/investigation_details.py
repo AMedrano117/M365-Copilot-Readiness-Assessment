@@ -400,7 +400,7 @@ def prepare_investigation_details(bundle, result):
                 else:
                     for field, child in list(value.items()):
                         if field not in {'reconciliation','identity','identity_validation','SourceOccurrences','FindingMembership','evidence',
-                                         'lifecycle','lifecycle_diagnostics','run_context'}:
+                                         'lifecycle','lifecycle_diagnostics','run_context','governance','governance_diagnostics'}:
                             apply(child)
             else:
                 for child in value:

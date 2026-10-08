@@ -25,6 +25,7 @@ Start with the [operator runbook](RUN.md) for the complete assessment workflow. 
 | Check which Copilot details are already collected | [Automatic Copilot collection](COPILOT_AUTOMATIC_COLLECTION.md) |
 | Understand MFA method strength and defaults | [MFA methods](MFA_METHODS.md) |
 | Record owner reviews and pilot outcomes | [Readiness milestones and reviews](READINESS_REVIEWS.md) |
+| Record explicit closure, risk, exception and applicability approvals | [Assessment governance](ASSESSMENT_GOVERNANCE.md) |
 | Understand evidence standards and assessment decisions | [Methodology](METHODOLOGY.md) |
 
 ## Project history

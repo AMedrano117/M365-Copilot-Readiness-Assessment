@@ -4,6 +4,10 @@ This read-only assessment reviews AI readiness and Microsoft 365 tenant hardenin
 
 **Start here:** [Operator runbook](docs/RUN.md) | [Customer checklist](docs/NEW_TENANT_CHECKLIST.md) | [All documentation](docs/README.md)
 
+Use [explicit assessment governance](docs/ASSESSMENT_GOVERNANCE.md) to record human
+closure, risk acceptance, exceptions and applicability decisions after a run.
+These decisions require configured authority and never change technical conclusions.
+
 The report produces three distinct conclusions:
 
 - Microsoft 365 foundation readiness.
