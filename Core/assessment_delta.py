@@ -93,14 +93,29 @@ def resolution_requirement_supported(boundary,changes):
     return any(requirements=={'MetricId':r['MetricId'],'Target':r['Rule']['Target']} for r in changes if r.get('Rule'))
 
 
+def _entity_facts(snapshot,entity):
+    rows=_facts(snapshot,entity)
+    if entity['Type']!='observation':return rows
+    occurrences=entity.get('SourceOccurrences')
+    if occurrences:
+        return [row for row in rows if any(row.get('evidence_id')==occurrence.get('EvidenceId') and
+            (not occurrence.get('OccurrenceId') or row.get('source_occurrence_id')==occurrence['OccurrenceId'])
+            for occurrence in occurrences)]
+    # Legacy native observations without occurrence links cannot borrow another
+    # native record's measurements just because the metric and population agree.
+    if entity['Boundary'].get('native_record_id') or len({row.get('native_id') for row in rows})>1:
+        return []
+    return rows
+
+
 def _metric_changes(baseline,current,old,new):
-    bf,cf=_facts(baseline,old or new),_facts(current,new or old)
+    bf,cf=_entity_facts(baseline,old or new),_entity_facts(current,new or old)
     # Retain changed-scope evidence as context, never as proof for the old scope.
     control=(new or old)['Boundary'].get('control_id')
-    if not cf and control:
+    if not cf and control and (new or old)['Type']!='observation':
         cf=[row for row in current.get('evidence',[]) if row.get('control_id')==control
             and row.get('selection') not in {'superseded','duplicate'}]
-    if not bf and control:
+    if not bf and control and (old or new)['Type']!='observation':
         bf=[row for row in baseline.get('evidence',[]) if row.get('control_id')==control
             and row.get('selection') not in {'superseded','duplicate'}]
     def index(rows):

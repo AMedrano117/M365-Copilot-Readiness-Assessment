@@ -28,7 +28,10 @@ Reassessment intent. The Python API accepts `prepare_run(..., delta_enabled=Fals
 Disabled runs still evaluate comparability, append history, and record the omission.
 Initial and Standalone persist NotEvaluated context and no classified records.
 Legacy execution does not acquire invented lifecycle states. Legacy `--baseline`
-remains a separate compatibility path; it cannot establish this lifecycle model.
+remains a separate compatibility path: `compare_baseline` reports Indeterminate
+context and retains every current/baseline occurrence, including colliding
+fingerprints. It does not infer New, direction or resolution. Changed methodology
+still reports Unable to compare. It cannot establish this lifecycle model.
 
 Replay consumes stored lifecycle records without calling the delta engine,
 minting UUIDs, appending history, selecting a new baseline, or refreshing evidence.
@@ -62,6 +65,9 @@ continuity. Existing POB cross-run eligibility preserves original capture IDs.
 PAC comparison requires its finding links; supported action states follow linked
 findings. Metrics retain their parent POB identity and explicit MetricId; their
 counts never add to finding counts.
+Observation measurements follow their retained SourceOccurrences. Equal metric
+names/populations cannot borrow measurements from a different native record;
+unresolved legacy native observations remain qualified rather than first-matched.
 
 Unique typed aliases can establish compatibility only when namespace, value,
 type, artifact, assessment and originating run are unambiguous, and material

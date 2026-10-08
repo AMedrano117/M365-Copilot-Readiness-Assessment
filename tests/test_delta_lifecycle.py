@@ -206,6 +206,25 @@ class LifecycleStateTests(unittest.TestCase):
                 self.assertEqual(next(r for r in delta['Records'] if r['EntityType']=='action')['State'],state)
                 self.assertEqual(next(r for r in delta['Records'] if r['EntityType']=='metric')['State'],state)
 
+    def test_observation_changes_use_their_own_source_occurrences(self):
+        from Core.assessment_identity import entity
+        b,c=pair()
+        for snap,values in [(b,(4,6)),(c,(2,9))]:
+            snap['evidence']=[]
+            for native,value in zip(('A','B'),values):
+                row=fact(value,'identity.policy_exceptions','count');row.update(evidence_level='policy_enforcement',
+                    native_id=native,evidence_id='EV-'+snap['identity']['RunId']+native,source_occurrence_id='occurrence-'+native)
+                snap['evidence'].append(row);seed=snap['identity']
+                observed=entity('observation',seed,dict(assessment_id=seed['AssessmentId'],run_id=seed['RunId'],
+                    environment_id=seed['PrimaryEnvironmentId'],provider='microsoft',control_id='IDENTITY.MFA',
+                    metric_id=row['metric_id'],population='all users',resource_scope='tenant',window='snapshot',
+                    capture_id='PCP-fiction',native_record_id='PNR-'+native,evidence_level='policy_enforcement'),
+                    SourceOccurrences=[{'EvidenceId':row['evidence_id'],'OccurrenceId':row['source_occurrence_id']}])
+                seed['Entities'].append(observed)
+        delta=compare(b,c);rows=[r for r in delta['Records'] if r['EntityType']=='observation']
+        self.assertEqual({r['EntityBoundary']['native_record_id']:r['State'] for r in rows},{'PNR-A':'Improved','PNR-B':'Regressed'})
+        self.assertEqual(len([r for r in delta['Records'] if r['EntityType']=='metric']),2)
+
 
 class LifecycleMatchingTests(unittest.TestCase):
     def test_different_pfi_does_not_match_display_id(self):
