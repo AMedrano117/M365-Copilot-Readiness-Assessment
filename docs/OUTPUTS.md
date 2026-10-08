@@ -43,8 +43,9 @@ JSON-compatible values while excluding sensitive fields.
 Existing `SRC-`, `EVD-`, `DET-` and source-row identifiers remain compatibility locators
 for evidence traceability. Their existing positional algorithms are preserved; they
 are not new persistent finding identities. The retired `FND-` finding UID is removed.
-Persistent identity, scope-aware reconciliation, renderer consolidation and storage
-streaming require separate work. Current evaluation meaning follows METHODOLOGY.md.
+Persistent identity and [scope-aware reconciliation](SCOPE_RECONCILIATION.md) are
+additive shared-result metadata. Renderer consolidation and storage streaming
+remain separate work. Current evaluation meaning follows METHODOLOGY.md.
 
 ## Reference audit
 
