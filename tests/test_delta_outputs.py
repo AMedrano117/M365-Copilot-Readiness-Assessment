@@ -1,6 +1,7 @@
 """Execution, portable snapshots, CLI, and shared renderer integration."""
 import copy
 import json
+import shutil
 from pathlib import Path
 import tempfile
 import unittest
@@ -55,9 +56,12 @@ class DeltaWorkflowTests(RunFixture):
             assessment_id=initial.identity['AssessmentId'],baseline_run_id=initial.identity['RunId'],catalog_version='catalog-1')
         current=result(run.identity);complete_run(current,run,self.root/'current')
         moved=self.root/'moved';moved.mkdir()
-        # Move individually named synthetic children, never a computed recursive tree.
+        # Relocate a copy of named synthetic children. Windows scanners can hold
+        # a directory rename open; copying also verifies original immutability.
         for name in ('initial','current','assessment-history.json','run-seeds'):
-            (self.root/name).rename(moved/name)
+            source=self.root/name
+            if source.is_dir():shutil.copytree(source,moved/name)
+            else:shutil.copy2(source,moved/name)
         restored=select_baseline(moved/'assessment-history.json',assessment_id=initial.identity['AssessmentId'],
             environment_id=initial.identity['PrimaryEnvironmentId'],baseline_run_id=run.identity['RunId'])
         self.assertEqual(restored['lifecycle'],current['lifecycle'])
