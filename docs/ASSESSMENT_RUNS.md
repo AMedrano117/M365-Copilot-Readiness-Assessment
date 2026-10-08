@@ -2,9 +2,10 @@
 
 [Documentation index](README.md) | [Methodology](METHODOLOGY.md) | [Persistent identity](PERSISTENT_IDENTITY.md)
 
-Stage A records run intent and comparison eligibility. It does not classify changes,
-calculate improvement, or resolve, close or reopen findings. Current methodology
-remains the readiness authority; the assessment templates remain future direction.
+Stage A records run intent and comparison eligibility. The additive
+[delta engine](ASSESSMENT_DELTAS.md) now calculates evidence-derived changes for
+explicit reassessments. Current methodology remains the readiness authority;
+the assessment templates remain future direction. Formal closure stays deferred.
 
 ## Execution and rendering
 
@@ -109,7 +110,7 @@ reassessments must finish comparability evaluation before publication.
 `Core/run_comparability.py::evaluate_comparability` is a pure deterministic
 function. It returns Comparable, ComparableWithQualifications, NotComparable,
 or NotEvaluated. Comparable is eligibility to compare, not evidence of improvement.
-NotComparable is publishable with reasons; it provides no delta interpretation.
+NotComparable is publishable with reasons; it blocks directional interpretation.
 
 Versions must match unless an explicit catalog mapping is supplied to the comparison
 API. No methodology or reconciliation-version compatibility is guessed. Catalog
@@ -154,6 +155,7 @@ by the three module names. Preserve all earlier semantic, identity, reconciliati
 retirement and output tests. The Windows CI setup resolves TEMP/TMP to one physical
 path spelling; package fixture cleanup supports Python 3.10 without changing assertions.
 
-Delta states, improvement/regression interpretation, lifecycle transitions, accepted
-risk, exceptions, automatic baseline convenience, target-schema migration and renderer
-consolidation remain deferred. Retired dashboard and App Builder outputs remain absent.
+Evidence-derived states are documented in [Assessment deltas](ASSESSMENT_DELTAS.md).
+Formal closure, accepted risk, exceptions, automatic baseline convenience,
+target-schema migration and renderer consolidation remain deferred.
+Retired dashboard and App Builder outputs remain absent.

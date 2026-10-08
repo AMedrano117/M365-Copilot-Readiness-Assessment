@@ -734,6 +734,7 @@ def context_has_collection(bundle):
 
 
 def render_customer_report(result, bundle, tenant_name, workbook_path=None, summary_path=None, technical_workbook_path=None):
+    from .lifecycle_presentation import summary_html,technical_html,finding_html
     from .report_presentation import baseline_panel, coverage_panels, decision_groups, domain_tiles, short_text
     actions = result['actions']
     domains = result.get('assessment_domains') or result['domains']
@@ -813,7 +814,7 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None, summ
           {('<p><strong>What to do.</strong> ' + prose(_action_text(row)) + '</p>') if with_action else ''}
           {investigation_link(row) if row.get('Recommendation') else ''}{technical_evidence(row)}
           {('<p class="qualification">' + prose(qualification) + '</p>') if qualification else ''}
-          <p class="evidence-link">{evidence_link(row)}</p></article>'''
+          <p class="evidence-link">{evidence_link(row)}</p>{finding_html(result,row)}</article>'''
 
     action_html = []
     sharing_changes = _sharing_changes(bundle)
@@ -832,7 +833,7 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None, summ
           <p><strong>Rollout stage</strong><br>{prose(row.get('ReadinessStage'))}</p></div>
           <p><strong>Evidence of completion.</strong> {prose(_completion(row))}</p>{guidance_link}
           <p class="qualification">{prose(_date_text(row))}{(' · ' + prose(row.get('Qualification'))) if row.get('Qualification') else ''}</p>
-          {evidence_link(row)}</div></details></article>''')
+          {evidence_link(row)}{finding_html(result,row)}</div></details></article>''')
 
     domain_html = []
     action_numbers = {r.get('RecommendationId'): i for i, r in enumerate(actions, 1)}
@@ -951,7 +952,7 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None, summ
     from .assessment_runs import run_context_rows
     run_note = '<dl>' + ''.join('<dt>' + prose(row['Item']) + '</dt><dd>' + prose(row['Value']) + '</dd>'
                                for row in run_context_rows(result)) + '</dl>'
-    technical = f'''<details class="appendix-panel" id="engineer-appendix"><summary>Technical appendix and evidence workbook</summary>
+    technical = technical_html(result) + f'''<details class="appendix-panel" id="engineer-appendix"><summary>Technical appendix and evidence workbook</summary>
       <p>{('<a href="' + workbook_url + '">Download ' + escape(workbook_name) + '</a>') if workbook_url else 'The workbook contains the complete evidence register.'}
       {('<a href="' + technical_url + '">Download ' + escape(technical_name) + '</a>') if technical_url else ''}</p>
       <p>Evaluation date: {prose(result.get('evaluation_date'))}. Methodology: {prose(result.get('methodology_version'))}. Evidence schema: {prose(result.get('evidence_schema_version'))}.</p>
@@ -1020,7 +1021,7 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None, summ
     if summary_name:
         workbook_button = f'<a class="button button-secondary" href="{quote(summary_name)}">One-page summary</a>' + workbook_button
     catalog_html = coverage_panels(result, table)
-    executive_html = '<section id="executive-readiness"><h2>Owner decisions and operational reviews</h2><p class="section-description">Agree scope, accountable owners and applicable requirements. Configuration alone cannot confirm tested protection. Expand an area for its outstanding decisions.</p>' + decision_groups(result) + '</section>'
+    executive_html = summary_html(result) + '<section id="executive-readiness"><h2>Owner decisions and operational reviews</h2><p class="section-description">Agree scope, accountable owners and applicable requirements. Configuration alone cannot confirm tested protection. Expand an area for its outstanding decisions.</p>' + decision_groups(result) + '</section>'
     return f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{escape(str(tenant_name or 'Tenant'))} — AI Readiness and M365 Hardening</title><style>{REPORT_CSS}</style></head><body>
       <a class="skip-link" href="#executive">Skip to assessment</a>
       <header class="report-header"><div class="brand"><span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span><span></span></span><div>AI READINESS<span class="brand-subtitle">Microsoft 365 hardening</span></div></div><div class="header-meta"><strong>{escape(str(tenant_name or 'Tenant assessment'))}</strong><span>Executive briefing · {prose(result.get('evaluation_date'))}</span></div></header>

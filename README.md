@@ -210,7 +210,9 @@ python main.py `
 - `--baseline` compares stable finding fingerprints with a prior workbook or snapshot.
 - Explicit `--run-type Initial|Reassessment|Standalone` and `--replay-snapshot` workflows
   preserve assessment identity and require selected baseline-run identity for reassessment.
-  They record comparability without deltas. See [Assessment runs](docs/ASSESSMENT_RUNS.md).
+  They record comparability and evidence-derived deltas; `--delta-mode disabled`
+  explicitly omits reassessment classifications. See [Assessment runs](docs/ASSESSMENT_RUNS.md)
+  and [Assessment deltas](docs/ASSESSMENT_DELTAS.md).
 - `--snapshot-json PATH` writes the existing shared assessment result as one JSON file. `--extra-exports evidence-pages` adds linked HTML evidence pages. See [Supported outputs](docs/OUTPUTS.md).
 
 ## Outputs

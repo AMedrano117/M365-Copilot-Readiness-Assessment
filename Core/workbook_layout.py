@@ -801,6 +801,12 @@ def split_workbook_layout(source_workbook, result, bundle, assessment_path, tech
             book.remove(book['Run Manifest'])
         _write(book, 'Run Manifest', manifest_rows, ('Item', 'Value'))
     bundle.setdefault('run_manifest', {})['rows'] = manifest_rows
+    if result.get('lifecycle'):
+        from .lifecycle_presentation import summary_rows,detail_rows
+        for book in (assessment,technical):
+            _write(book,'Reassessment',summary_rows(result),('Item','Value'))
+            _write(book,'Lifecycle Records',detail_rows(result),
+                   None if result['lifecycle']['Records'] else ('EntityId','EntityType','State'))
     previous = _rows(source_workbook['Integrity Checks']) if 'Integrity Checks' in source_workbook else []
     for book in (assessment, technical):
         if 'Integrity Checks' in book:
