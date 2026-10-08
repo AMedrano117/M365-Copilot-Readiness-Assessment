@@ -130,6 +130,23 @@ role grant permitting overrides. Control resolution alone does not close an
 unproven finding. Missing-current targets must be reviewed using their retained
 semantic run; this stage does not invent a new target from a disappearance.
 
+Every `ClosureOverride=true` record requires this complete justification, even
+when the target is already `ResolvedByCurrentEvidence`. Use `ClosureOverride=false`
+for normal evidence-supported closure; override-only residual risk, conditions
+and review date are not required on that path. The flag must be a Boolean.
+Required `ResidualRisk` and `ValidationResult` statements must be nonblank strings;
+Booleans, numbers, nulls and collections are rejected without string conversion.
+New draft and amendment inputs trim surrounding whitespace in these two fields.
+Retained event text and hashes are not normalized during replay.
+
+Incomplete drafts remain available for inspection and amendment, but submission,
+approval and activation enforce the complete requirements. Previously accepted
+invalid closure overrides produce blocking semantic diagnostics during replay,
+snapshot loading, serialization and rendering. No invalid history is silently
+repaired or rewritten. Retain such history for explicit review; this correction
+does not provide a migration or repair mechanism for invalid historical approvals.
+Policy configuration does not authenticate the supplied actor.
+
 Risk acceptance requires a risk owner, rationale, residual risk, supporting
 evidence, exact scope, conditions and review or expiration. Exceptions additionally
 record explicit parent population/scope when excluding a subset of a finding;
