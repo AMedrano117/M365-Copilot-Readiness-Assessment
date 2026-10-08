@@ -11,7 +11,7 @@ STATES=frozenset({'New','Continuing','Unchanged','Changed','Improved','Regressed
 GOVERNANCE=frozenset({'ClosedByRemediation','AcceptedRisk','ApprovedException','NoLongerApplicable'})
 ENTITY_TYPES=frozenset({'control','finding','observation','action','metric'})
 BOUNDARY_FIELDS=('provider','control_id','population','population_definition','resource_scope','product','tier',
-    'control_definition_version','applicability','rollout_stage','customer_decision','closure_evidence','closure_requirements')
+    'affected_resource_ids','control_definition_version','applicability','rollout_stage','customer_decision','closure_evidence','closure_requirements')
 NOTICE=('Comparisons use the explicitly selected baseline. Changed populations or scopes may qualify results. '
     'Missing current evidence does not indicate improvement. ResolvedByCurrentEvidence is evidence of resolution, '
     'not formal customer acceptance. Formal closure, accepted risk and exceptions require separate decisions. '

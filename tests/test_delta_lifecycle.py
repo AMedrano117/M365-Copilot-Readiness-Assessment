@@ -234,3 +234,14 @@ class LifecycleMatchingTests(unittest.TestCase):
             with self.subTest(field=field):
                 b,c=pair(); c['identity'][field]=value
                 self.assertEqual(finding_record(compare(b,c))['State'],'NotComparable')
+        from Core.assessment_identity import entity
+        for field,value in [('resource_scope','pilot'),('population','administrators'),('affected_resource_ids',['resource-fiction'])]:
+            with self.subTest(boundary=field):
+                b,c=pair();old=next(e for e in c['identity']['Entities'] if e['Type']=='finding')
+                changed=entity('finding',c['identity'],dict(old['Boundary'],**{field:value}))
+                c['identity']['Entities']=[changed if e['Type']=='finding' else e for e in c['identity']['Entities']]
+                for snap,id_ in [(b,old['Id']),(c,changed['Id'])]:
+                    snap['identity']['Aliases']=[dict(Value='stable-issue',Namespace='external:issue',TargetType='finding',
+                        AssessmentId=snap['identity']['AssessmentId'],OriginRunId=snap['identity']['RunId'],OriginArtifact='register',TargetId=id_)]
+                c['evidence'][0]['value']=2
+                self.assertTrue(all(r['State']=='Indeterminate' for r in compare(b,c)['Records'] if r['EntityType']=='finding'))
