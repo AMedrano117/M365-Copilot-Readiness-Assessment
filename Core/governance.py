@@ -165,6 +165,12 @@ def require_log(log):
 
 
 def _append(log,result,key,op,actor,at,data,policy=None,current_evidence=None):
+    data=deepcopy(data)
+    if op in {'draft','amend'}:
+        # Normalize only new textual inputs. Replaying retained events must never
+        # rewrite their statements or hashes; invalid draft values remain visible.
+        for field in ('ResidualRisk','ValidationResult'):
+            if isinstance(data.get(field),str):data[field]=data[field].strip()
     records=_replay(log);prior=records.get(key,{})
     candidate=deepcopy(data) if op=='draft' else dict(prior,**data) if op=='amend' else prior
     if op=='reopen' and current_evidence is not None:candidate=dict(candidate,EvidenceReferences=current_evidence)

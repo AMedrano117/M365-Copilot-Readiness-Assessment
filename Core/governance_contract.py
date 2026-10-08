@@ -30,6 +30,13 @@ def fail(code, message):
     raise GovernanceError(code, message)
 
 
+def required_statement(value, field, code):
+    """Require actual text; never turn a truthy object into a reviewed narrative."""
+    if not isinstance(value,str) or not value.strip():
+        fail(code,field+' requires a meaningful textual statement.')
+    return value.strip()
+
+
 def time(value):
     try:
         parsed = datetime.fromisoformat(str(value).replace('Z','+00:00'))
@@ -226,16 +233,23 @@ def validate_record(record,ctx,*,complete=False,require_closure_support=True):
     if kind in {'AcceptedRisk','ApprovedException'}:
         if not record.get('ReviewAt') and not record.get('ExpirationAt'):fail('governance_review_date','Risk and exception decisions require review or expiration.')
         if not isinstance(record.get('Conditions'),list) or not record['Conditions']:fail('governance_conditions','Risk and exception conditions must be explicit.')
-    if kind=='AcceptedRisk' and not record.get('ResidualRisk'):fail('governance_risk','Known residual risk is required.')
+    if kind=='AcceptedRisk':required_statement(record.get('ResidualRisk'),'ResidualRisk','governance_risk')
     if kind=='NoLongerApplicable' and not record.get('ApplicabilityRule'):fail('governance_applicability','Applicability requires an explicit methodology or business rule.')
     if kind=='ClosedByRemediation':
-        if record.get('ClosureCriteriaEvaluated') is not True or not record.get('ValidationResult'):
+        required_statement(record.get('ValidationResult'),'ValidationResult','governance_closure')
+        if record.get('ClosureCriteriaEvaluated') is not True:
             fail('governance_closure','Closure requires evaluated criteria and an explicit validation result.')
+        override=record.get('ClosureOverride',False)
+        if not isinstance(override,bool):
+            fail('governance_closure_support','ClosureOverride must be an explicit Boolean.')
+        if override:
+            required_statement(record.get('ResidualRisk'),'ResidualRisk','governance_closure_support')
+            if not record.get('Conditions') or not record.get('ReviewAt'):
+                fail('governance_closure_support','Every conditional closure override requires conditions and a review date.')
         states=[ctx['Lifecycle'].get(key,{}) for key in [target['Id']]+[r['Id'] for r in ctx.get('LinkedFindings',[])]]
         resolved=bool(states) and all(s.get('State')=='ResolvedByCurrentEvidence' for s in states)
-        if not resolved and require_closure_support:
-            if record.get('ClosureOverride') is not True or any(not record.get(f) for f in ('ResidualRisk','Conditions','ReviewAt')):
-                fail('governance_closure_support','Closure requires evidence-derived resolution or an explicit conditional override.')
+        if not resolved and require_closure_support and not override:
+            fail('governance_closure_support','Closure requires evidence-derived resolution or an explicit conditional override.')
 
 
 def scope_key(record):
