@@ -6,6 +6,13 @@ from pathlib import Path
 
 
 def run_offline_report(args):
+    if getattr(args, 'replay_snapshot', None):
+        from .assessment_replay import render_snapshot
+        render_snapshot(args.replay_snapshot,
+            args.render_output_dir or Path(args.replay_snapshot).resolve().parent / 'Rendered',
+            tenant_name=args.tenant_name, report_format=args.report_format,
+            snapshot_output=args.snapshot_json,extra_exports=getattr(args,'extra_exports',None))
+        return 0
     from .processor import process_and_print_all_information
 
     if not (args.collection_input or args.sam_report or args.dspm_report or args.reports_dir
@@ -15,6 +22,19 @@ def run_offline_report(args):
     payload = load_collection(args.collection_input) if args.collection_input else None
     from .assessment_package import restore_arguments, record_package_run, save_rebuild_recipe, render_with_failure_receipt, new_offline_package
     args = restore_arguments(args, payload)
+    explicit_type = getattr(args, 'run_type', None)
+    if (payload or {}).get('completed_run_snapshot') and not explicit_type:
+        from .assessment_package import INPUT_KEYS
+        changed_options = {'--' + key.replace('_','-') for key in INPUT_KEYS} | {'--evaluation-date'}
+        if changed_options & getattr(args, '_provided_options', set()):
+            raise ValueError('Adding evidence or changing evaluation date requires an explicit new --run-type; use snapshot replay for rendering.')
+        from .assessment_replay import render_snapshot
+        outputs = render_snapshot(payload['completed_run_snapshot'], payload['package_directory'],
+                                  tenant_name=args.tenant_name or payload.get('tenant_name'), report_format=args.report_format,
+                                  snapshot_output=args.snapshot_json,extra_exports=getattr(args,'extra_exports',None))
+        record_package_run(payload['package_directory'], mode='snapshot render', tenant_id=payload.get('tenant_id'),
+            collected_at=payload.get('collected_at'), evaluation_date=payload.get('evaluation_date'), outputs=outputs)
+        return 0
     if args.snapshot_json:
         target = Path(args.snapshot_json).resolve()
         protected = {Path(args.collection_input).resolve()} if args.collection_input else set()
@@ -74,6 +94,28 @@ def run_offline_report(args):
                 evidence.pop(field, None)
     refresh_saved_freshness(results, args.evaluation_date)
     context = collection_context(payload, args.collection_input, args.evaluation_date)
+    run_execution = None
+    package_directory = None
+    if explicit_type:
+        from .assessment_runs import prepare_run
+        package_directory = new_offline_package((payload or {}).get('tenant_name') or args.tenant_name,
+            customer_name=getattr(args, 'customer_name', None), tenant_id=expected_tenant_id)
+        run_execution = prepare_run(explicit_type, expected_tenant_id, evaluated_at=context['evaluation_date'],
+            history_path=getattr(args,'assessment_history',None) or
+                (Path(package_directory) / 'assessment-history.json' if explicit_type=='Initial' else None),
+            assessment_id=getattr(args,'assessment_id',None),baseline_run_id=getattr(args,'baseline_run_id',None),
+            purpose=getattr(args,'assessment_purpose',None),environment_id=getattr(args,'primary_environment_id',None))
+        context['identity'] = run_execution.identity
+        if payload and payload.get('package_directory') and (Path(payload['package_directory']) / 'collection.json').is_file():
+            # Retain raw evidence and its immutable input manifest for the new
+            # execution. Prior semantic snapshots and render artifacts stay out.
+            import shutil
+            shutil.copytree(payload['package_directory'], package_directory, dirs_exist_ok=True,
+                ignore=shutil.ignore_patterns('Builds','Rebuilds','deliverables','assessment-results',
+                    'assessment-run.json','run-seed.json','assessment-history.json','run-seeds','rebuild.json','operator-log.jsonl'))
+    else:
+        from .console_reporting import status
+        status('Legacy run intent is unclassified; no Initial run or baseline-run identity is inferred.', 'warning')
     if not context.get('identity'):
         from .assessment_identity import new_identity, incomplete_identity
         from .cross_provider_assessment import METHODOLOGY_VERSION
@@ -115,7 +157,7 @@ def run_offline_report(args):
     known_tenant_name = (payload or {}).get("tenant_name") or args.tenant_name or (prior or {}).get('tenant_name')
     tenant_name = known_tenant_name or "Portal export review"
     from .export_paths import new_deliverables_directory
-    package_directory = (payload or {}).get('package_directory') or new_offline_package(
+    package_directory = package_directory or (payload or {}).get('package_directory') or new_offline_package(
         known_tenant_name, customer_name=getattr(args, 'customer_name', None), tenant_id=expected_tenant_id)
     receipt = dict(
         folder=package_directory, mode='offline', tenant_id=expected_tenant_id,
@@ -143,6 +185,7 @@ def run_offline_report(args):
         offline_power_platform_inventory=args.power_platform_inventory,
         include_user_usage_detail=args.include_user_usage_detail,
         portal_review=getattr(args, 'portal_review', None),
+        run_execution=run_execution,
     )
     if isinstance(result, dict):
         expected_tenant_id = expected_tenant_id or (result.get('evidence_bundle') or {}).get('expected_tenant_id')

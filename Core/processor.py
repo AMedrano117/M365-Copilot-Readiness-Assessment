@@ -145,7 +145,7 @@ def process_and_print_all_information(m365_result, entra_info,
                                       expected_tenant_id=None, offline_copilot_dashboard_export=None,
                                       offline_power_platform_inventory=None, include_user_usage_detail=True,
                                       prior_report=None, portal_review=None, output_dir=None, customer_name=None,
-                                      extra_exports=None):
+                                      extra_exports=None, run_execution=None):
     """Process all service information and generate recommendations."""
     # Unpack M365 results
     (m365_info, m365_recommendations) = m365_result
@@ -446,6 +446,12 @@ def process_and_print_all_information(m365_result, entra_info,
             evaluation_date=evaluation_date,tenant_id=expected_tenant_id))
         assessment_result = build_assessment_result(all_recommendations, evidence_bundle,
             evaluation_date=evaluation_date, expected_tenant_id=expected_tenant_id)
+        if run_execution is not None:
+            from pathlib import Path
+            from .assessment_runs import complete_run
+            from .run_comparability import collection_state_summary
+            assessment_result['collection_source_states'] = collection_state_summary(evidence_bundle)
+            complete_run(assessment_result, run_execution, Path(output_dir).resolve().parent.parent)
         from .assessment_references import require_valid_assessment
         assessment_result['identity_validation'] = require_valid_assessment(assessment_result)
         evidence_bundle['assessment_result'] = assessment_result
@@ -507,7 +513,7 @@ def process_and_print_all_information(m365_result, entra_info,
                     'Item': source['source_type'],
                     'Value': f"{source['source_file']}; original source date: {source.get('reported_at') or 'Unknown'}",
                 })
-        evidence_bundle['baseline_comparison'] = compare_baseline(all_recommendations, control_results, baseline)
+        evidence_bundle['baseline_comparison'] = compare_baseline(all_recommendations, control_results, baseline) if run_execution is None else {'rows':[]}
         evidence_bundle['integrity'] = run_integrity_checks(all_recommendations, evidence_bundle)
 
         from pathlib import Path

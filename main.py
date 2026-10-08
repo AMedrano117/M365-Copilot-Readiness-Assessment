@@ -124,6 +124,9 @@ if __name__ == "__main__":
                 delegated=args.delegated,
                 interactive_tenant_confirmation=sys.stdin.isatty() and sys.stdout.isatty(),
                 show_progress=not getattr(args, 'no_progress', False),
+                run_type=args.run_type, assessment_id=args.assessment_id,
+                baseline_run_id=args.baseline_run_id, assessment_history=args.assessment_history,
+                assessment_purpose=args.assessment_purpose, primary_environment_id=args.primary_environment_id,
             )
         )
         if isinstance(exit_code, int) and exit_code:

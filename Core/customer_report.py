@@ -948,10 +948,14 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None, summ
     operator_handoff = '''<h3>Rebuild with additional exports</h3><p>From the assessment repository, replace both placeholder paths with the saved collection and the folder containing this tenant’s completed exports. The collection can be the portable package’s collection.json. Existing packaged evidence and settings are restored automatically.</p>
       <pre class="operator-command"><code>.\\.venv\\Scripts\\python.exe main.py --mode offline --collection-input "&lt;saved collection.json&gt;" --reports-dir "&lt;exports folder&gt;"</code></pre>
       <p>Check the imported source reports and remaining evidence in the rebuilt report. A successful rebuild does not mean every export format or evidence requirement was satisfied.</p>''' if report_guides else ''
+    from .assessment_runs import run_context_rows
+    run_note = '<dl>' + ''.join('<dt>' + prose(row['Item']) + '</dt><dd>' + prose(row['Value']) + '</dd>'
+                               for row in run_context_rows(result)) + '</dl>'
     technical = f'''<details class="appendix-panel" id="engineer-appendix"><summary>Technical appendix and evidence workbook</summary>
       <p>{('<a href="' + workbook_url + '">Download ' + escape(workbook_name) + '</a>') if workbook_url else 'The workbook contains the complete evidence register.'}
       {('<a href="' + technical_url + '">Download ' + escape(technical_name) + '</a>') if technical_url else ''}</p>
       <p>Evaluation date: {prose(result.get('evaluation_date'))}. Methodology: {prose(result.get('methodology_version'))}. Evidence schema: {prose(result.get('evidence_schema_version'))}.</p>
+      {run_note}
       <p>Original tenant collection: {prose(context.get('collected_at'))}. Report execution: {prose(context.get('mode') or 'Evidence supplied directly')}.</p>
       <p>Collection permission profile: {prose(context.get('permission_profile') or 'unrecorded')}.</p>
       {identity_note}

@@ -85,7 +85,7 @@ def save_collection(path=None, *, tenant_id, tenant_name, service_results,
                     enabled_collectors=None, connection_results=None, collected_at=None,
                     assessment_settings=None, supplemental_inputs=None, evaluation_date=None,
                     collection_progress=None, _checkpoint_package=None, auth_plan=None,
-                    customer_name=None):
+                    customer_name=None, identity=None, package_directory=None):
     """Save one collection in its customer assessment folder by default."""
     results = {key: service_results[key] for key in SERVICE_KEYS}
     # The legacy Power Platform collector attaches evidence to its HTTP transport.
@@ -118,7 +118,7 @@ def save_collection(path=None, *, tenant_id, tenant_name, service_results,
     payload['assessment_version'] = ASSESSMENT_VERSION
     payload['evaluation_date'] = evaluation_day(evaluation_date)
     from .assessment_identity import new_identity, incomplete_identity
-    previous_identity = (_checkpoint_package or {}).get('identity')
+    previous_identity = (_checkpoint_package or {}).get('identity') or identity
     if previous_identity:
         payload['identity'] = deepcopy(previous_identity)
     else:
@@ -156,10 +156,10 @@ def save_collection(path=None, *, tenant_id, tenant_name, service_results,
         return str(target.resolve())
     # Preserve the collected facts even if copying a supplemental file fails.
     _write_collection_json(target, encoded)
-    package_folder = target.with_name(target.stem + '_package') if path else target.parent
+    package_folder = Path(package_directory) if package_directory else (target.with_name(target.stem + '_package') if path else target.parent)
     # A custom save destination may be reused; preserve its earlier original files
     # and deliverables by giving the new package a distinct companion directory.
-    if path and package_folder.exists():
+    if path and package_folder.exists() and not package_directory:
         package_folder = target.with_name(target.stem + '_package_' + uuid4().hex[:8])
     try:
         manifest, references = package_inputs(package_folder, supplemental_inputs)

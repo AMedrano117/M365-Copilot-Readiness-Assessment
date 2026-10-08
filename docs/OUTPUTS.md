@@ -47,6 +47,10 @@ Persistent identity and [scope-aware reconciliation](SCOPE_RECONCILIATION.md) ar
 additive shared-result metadata. Renderer consolidation and storage streaming
 remain separate work. Current evaluation meaning follows METHODOLOGY.md.
 
+Explicit assessment runs add shared run context, completed semantic snapshots,
+portable history and comparison eligibility without delta interpretation. See
+[Assessment runs](ASSESSMENT_RUNS.md) for CLI, package replay and compatibility.
+
 ## Reference audit
 
 These are all remaining runtime and documentation occurrences of the retired term,

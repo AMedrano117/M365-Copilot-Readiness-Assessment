@@ -44,7 +44,9 @@ class AssessmentPackageTests(unittest.TestCase):
         return Path(path)
 
     def test_default_collection_has_one_copy_and_customer_name_survives_moving_package(self):
-        directory = self.enterContext(tempfile.TemporaryDirectory())
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        directory = temporary.name
         root = Path(directory).resolve()
         original = Path.cwd()
         self.addCleanup(os.chdir, original)

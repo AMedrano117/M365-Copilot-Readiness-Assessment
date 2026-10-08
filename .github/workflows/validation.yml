@@ -41,6 +41,14 @@ jobs:
         run: ./tests/Test-PowerShellSyntax.ps1
       - name: Check documentation links
         run: python tools/check_docs.py
+      - name: Normalize Windows temporary directory
+        run: |
+          # Hosted Windows exposes TEMP as RUNNER~1 while Path.resolve expands it.
+          # Give fixtures and generated artifacts the same physical path spelling.
+          $assessmentTempRoot = python -c "import tempfile; from pathlib import Path; print(Path(tempfile.gettempdir()).resolve())"
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve the test temporary directory.' }
+          "TEMP=$assessmentTempRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "TMP=$assessmentTempRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Run regression tests with synthetic evidence and mocked tenant access
         run: python -m unittest discover -s tests
       - name: Generate and audit synthetic HTML and workbook
