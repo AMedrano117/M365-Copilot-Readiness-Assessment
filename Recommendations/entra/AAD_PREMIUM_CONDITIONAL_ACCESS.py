@@ -71,7 +71,7 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
                 service="Entra",
                 feature=feature_name,
                 observation="No Conditional Access policies configured, leaving Copilot accessible from any device, location, or risk level",
-                recommendation="Create baseline Conditional Access policies for Microsoft 365 apps to protect Copilot: 1) Require MFA for all cloud apps, 2) Block legacy authentication that bypasses modern security, 3) Require compliant or hybrid-joined devices for Copilot access, 4) Block access from high-risk locations. Start with report-only mode, monitor for 2 weeks, then enforce. Without CA policies, compromised credentials can access Copilot to exfiltrate data.",
+                recommendation="Confirm the intended authentication boundary, Security Defaults and documented provider requirements. Review MFA and legacy-blocking policies, targeting and exclusions, then test observed outcomes before enforcement. An empty policy inventory does not establish successful access or data exposure.",
                 link_text="CA Policies for Copilot",
                 link_url="https://learn.microsoft.com/entra/identity/conditional-access/concept-conditional-access-cloud-apps",
                 priority="High",

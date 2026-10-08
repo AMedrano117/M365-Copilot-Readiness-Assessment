@@ -221,8 +221,9 @@ class LegacyAndControlTests(unittest.TestCase):
         self.assertEqual(summary['total'], 2)
         self.assertFalse(summary['no_success_observed'])
         self.assertTrue(signin_evidence.legacy_event_summary([dataset(records[1:])])['no_success_observed'])
-        for state in ({'complete': False, 'availability_status': 'partial'},
-                      {'scope': ''}, {'window_start': ''}):
+        for state in ({'complete': False, 'availability_status': 'partial'}, {'available': False},
+                      {'scope': ''}, {'window_start': ''}, {'window_start': 'invalid'},
+                      {'window_start': '2026-10-09T00:00:00Z'}, {'window_start': '2026-10-01'}):
             self.assertFalse(signin_evidence.legacy_event_summary([dataset([] , **state)])['no_success_observed'])
         self.assertFalse(signin_evidence.legacy_event_summary([dataset([]), dataset([], complete=False)])['no_success_observed'])
         detail = _legacy_signins({'signin_logs': [dataset(records + records)]}, {})
@@ -356,6 +357,221 @@ class AuthenticationOutputTests(unittest.TestCase):
             rows = get_recommendation('AAD_PREMIUM', entra_insights={'available': True,
                                       'ca_metrics': {}, 'mfa_metrics': {}, 'signin_metrics': {}})
         self.assertFalse(any('leaving Copilot access unprotected' in r['Observation'] for r in rows))
+
+
+class CollectionFailureTests(unittest.IsolatedAsyncioTestCase):
+    async def test_partial_marker_and_page_cap_never_complete_zero(self):
+        client = GraphRestClient(NS())
+        self.addAsyncCleanup(client.aclose)
+        for marker in ({'complete': False}, {'truncated': True}, {'@odata.partial': True},
+                       {'availability_status': 'partial'}, {'@odata.nextLink': 'https://graph.microsoft.com/v1.0/users?next=opaque'}):
+            with self.subTest(marker=marker), patch.object(client, 'get_json', AsyncMock(return_value={'value': [], **marker})):
+                result = await client.get_collection('/users', max_pages=1)
+                self.assertFalse(result['complete'])
+                self.assertEqual(result['availability_status'], 'partial')
+                self.assertEqual(result['pages_collected'], 1)
+
+    async def test_invalid_json_and_later_http_failure_retain_records(self):
+        client = GraphRestClient(NS())
+        self.addAsyncCleanup(client.aclose)
+        first = {'value': [event()], '@odata.nextLink': 'https://graph.microsoft.com/v1.0/users?next=opaque'}
+        from Core.get_graph_client import GraphRequestError
+        for error in (ValueError('Invalid JSON'), GraphRequestError(403, 'Fictional denied page')):
+            with self.subTest(error=type(error).__name__), patch.object(client, 'get_json', AsyncMock(side_effect=[first, error])):
+                result = await client.get_collection('/users', params={'$top': '9'})
+                self.assertEqual(result['value'], [event()])
+                self.assertEqual(result['availability_status'], 'partial')
+                self.assertFalse(result['complete'])
+                self.assertEqual(result['request_params'], {'$top': '9'})
+                self.assertEqual(result['page_requests'][1]['params'], {})
+
+
+class AuthenticationBoundaryTests(unittest.TestCase):
+    def test_tenant_mismatch_and_future_events_cannot_determine_current_control(self):
+        bundle = {'assessment_sources': {'signin_logs': [dataset([event(0, 'notApplied', 'IMAP')], tenant_id='other')]}}
+        out = operational_results(bundle, {}, evaluation_date=DAY, tenant_id=TENANT)[0]['IDENTITY.AUTH']
+        self.assertEqual(out['result'], 'unknown')
+        future = event(0, 'notApplied', 'IMAP'); future['createdDateTime'] = '2027-01-01T00:00:00Z'
+        self.assertEqual(operation([future])['result'], 'unknown')
+
+    def test_conflicting_event_requires_confirmation_and_no_tenant_pass(self):
+        self.assertEqual(operation([event(0, 'failure', 'IMAP')])['result'], 'conflict')
+
+    def test_partial_secondary_window_blocks_review_pass_and_preserves_failed_window(self):
+        from test_methodology_v4 import operational_profile
+        bundle = {'assessment_sources': {'signin_logs': [dataset([event()]), dataset([], complete=False, availability_status='unavailable')]}}
+        out = operational_results(bundle, operational_profile(day=DAY), evaluation_date=DAY, tenant_id=TENANT)[0]['IDENTITY.AUTH']
+        self.assertEqual(out['result'], 'unknown')
+        self.assertIn('review', out['reason'])
+        self.assertFalse(signin_evidence.legacy_event_summary(bundle['assessment_sources']['signin_logs'])['no_success_observed'])
+
+    def test_successful_legacy_conflicts_with_favorable_review_and_keeps_source(self):
+        from test_methodology_v4 import operational_profile
+        bundle = {'assessment_sources': {'signin_logs': [dataset([event(0, 'notApplied', 'IMAP')])]}}
+        out = operational_results(bundle, operational_profile(day=DAY), evaluation_date=DAY, tenant_id=TENANT)[0]['IDENTITY.AUTH']
+        self.assertEqual(out['result'], 'conflict')
+        self.assertIn('successful legacy', out['reason'])
+        self.assertTrue(any(row.get('AuthenticationSource') == source() for row in out['records']))
+
+    def test_interactive_and_noninteractive_occurrences_are_not_deduplicated(self):
+        records = [event(0, 'notApplied', 'IMAP', isInteractive=value) for value in (True, False)]
+        summary = signin_evidence.legacy_event_summary([dataset(records)])
+        self.assertEqual(summary['counts']['Success'], 2)
+        self.assertEqual(len(_legacy_signins({'signin_logs': [dataset(records)]}, {})['records']), 2)
+
+    def test_sdk_aliases_have_identical_semantics_and_preserve_step_context(self):
+        raw = NS(client_app_used='IMAP', status=NS(error_code='0'), conditional_access_status='notApplied',
+                 authentication_details=[NS(succeeded=True, authentication_method='FIDO2 security key',
+                    authentication_step_requirement='primaryAuthentication')])
+        out = signin_record(raw)
+        self.assertEqual(out['NormalizedSignInOutcome'], 'Success')
+        self.assertEqual(out['MFASatisfaction'], 'strong_primary')
+        self.assertEqual(out['authentication_details'][0]['authentication_method'], 'FIDO2 security key')
+
+    def test_sdk_enum_failure_cannot_become_success_during_plain_conversion(self):
+        from enum import Enum
+        class Access(Enum):
+            FAILURE = 'failure'
+        raw = NS(client_app_used='IMAP', status=NS(error_code=0), conditional_access_status=Access.FAILURE)
+        self.assertEqual(signin_record(raw)['NormalizedSignInOutcome'], 'Unknown')
+        self.assertEqual(signin_record(raw)['conditional_access_status'], 'failure')
+
+    def test_single_factor_result_is_separate_from_observed_mfa_satisfaction(self):
+        raw = event(authenticationRequirement='singleFactorAuthentication', authenticationDetails=[MFA_STEP])
+        out = signin_record(raw)
+        self.assertEqual(out['MFARequirement'], 'not_required')
+        self.assertEqual(out['MFASatisfaction'], 'observed_success')
+        self.assertEqual(operation([raw])['result'], 'unknown')
+
+    def test_disabled_join_and_supplemental_conflict_share_all_population_consumers(self):
+        from Core.authentication_methods import authentication_method_report
+        records = [{'id': 'disabled', 'isMfaRegistered': False}, {'id': 'guest', 'isMfaRegistered': False, 'userType': 'guest'}]
+        users = [{'id': 'disabled', 'accountEnabled': False}]
+        supplemental = [dataset([{'id': 'guest', 'isMfaRegistered': True, 'userType': 'guest'}])]
+        client = NS(auth_methods_registration=records, users=users, collection_status={'auth_methods': source()},
+                    assessment_datasets={'auth_methods': supplemental})
+        report = authentication_method_report(client)
+        self.assertEqual(report['registration_population']['counts']['ExcludedWithReason'], 1)
+        self.assertEqual(report['registration_population']['counts']['Conflicting'], 1)
+        self.assertEqual(build_mfa_registration_investigation(client)['rows'], [])
+        sources = {'auth_methods': [dataset(records)] + supplemental, 'users': [dataset(users)]}
+        self.assertEqual(_mfa(sources)['records'], [])
+
+
+class AuthenticationDeliverableTests(unittest.TestCase):
+    def fixture(self, client=None):
+        from Core.evidence_layer import build_evidence_bundle
+        records = [event(0, 'notApplied', 'IMAP', userPrincipalName='fiction-private@example.invalid',
+                         authenticationDetails=[MFA_STEP]), event(53003, 'failure', 'IMAP'),
+                   event(50126, 'notApplied', 'IMAP'), event(50076, 'failure', 'IMAP'), event(None, 'unknown', 'IMAP')]
+        client = client or NS(signin_logs=records, collection_status={'signin_logs': source(), 'auth_methods': source()},
+                    auth_methods_registration=[{'id': 'a', 'isMfaRegistered': True}, {'id': 'b', 'isMfaRegistered': False}, {'id': 'c'}])
+        old = {'Service': 'Entra', 'Feature': 'Legacy sign-ins', 'FindingKey': 'entra.signins.legacy_auth',
+               'Observation': '5 legacy authentication sign-ins detected', 'Status': 'Action Required', 'Disposition': 'Action'}
+        rows = qualify_saved_recommendations([old], 'Entra', client)
+        bundle = build_evidence_bundle(rows, ({}, []), {'_client': client}, {}, {}, {}, {},
+                  collection_context={'source_file': 'fiction.json', 'collected_at': DAY, 'tenant_id': TENANT})
+        from Core.assessment_catalog import collect_assessment_sources
+        bundle['assessment_sources'] = collect_assessment_sources([client], collected_at=DAY)
+        bundle['evaluation_date'] = DAY
+        result = build_assessment_result(bundle['recommendations'], bundle, evaluation_date=DAY, expected_tenant_id=TENANT)
+        bundle['assessment_result'] = result
+        return result, bundle, client
+
+    def test_shared_layers_render_with_qualified_counts_and_no_identities(self):
+        from Core.customer_report import render_customer_report
+        from Core.pilot_summary import render_pilot_summary
+        result, bundle, _ = self.fixture()
+        before = copy.deepcopy(result)
+        for html in (render_customer_report(result, bundle, 'Fictional organization'),
+                     render_pilot_summary(result, bundle, 'Fictional organization')):
+            for text in ('MFA registration', 'MFA enforcement', 'Observed authentication', 'BlockedByConditionalAccess', 'InterruptedOrChallenged'):
+                self.assertIn(text, html)
+            self.assertNotIn('fiction-private@example.invalid', html)
+            self.assertNotIn('leaving Copilot access unprotected', html)
+            self.assertNotIn('authenticationStepResultDetail', html)
+        self.assertEqual(result, before)
+        self.assertNotIn('governance', result)
+        self.assertNotIn('ClosedByRemediation', str(result))
+
+    def test_excel_retains_normalized_outcomes_timestamps_and_event_ids(self):
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+        from Core.export_recommendations import export_to_excel
+        from tests.workbook_test_helpers import load_workbook_pair
+        result, bundle, _ = self.fixture()
+        with TemporaryDirectory() as folder:
+            filename = export_to_excel(result['recommendations'], filename='fiction.xlsx', evidence_bundle=bundle, output_dir=folder)
+            workbook = load_workbook_pair(filename)
+            try:
+                values = list(workbook.technical['Legacy Sign-In Detail'].values)
+                columns = {name: index for index, name in enumerate(values[0])}
+                self.assertEqual({row[columns['Sign-In Result']] for row in values[1:]}, set(signin_evidence.NORMALIZED_SIGNIN_OUTCOMES))
+                self.assertEqual(values[1][columns['Sign-In ID']], 'fiction-event')
+                self.assertIn('11:22:33.456', values[1][columns['Created UTC']])
+                self.assertTrue(all(row[columns['Source File']] == 'fiction.json' for row in values[1:]))
+                self.assertIn('Authentication Details (raw)', columns)
+            finally:
+                workbook.close()
+
+    def test_snapshot_and_replay_preserve_raw_normalized_findings_and_population(self):
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+        from Core.assessment_serialization import write_assessment_result, read_assessment_result
+        result, bundle, client = self.fixture()
+        repeated, _, _ = self.fixture(_decode(_encode(client)))
+        self.assertEqual(result['recommendations'], repeated['recommendations'])
+        self.assertEqual(result['authentication_assessment'], repeated['authentication_assessment'])
+        self.assertEqual(result['operational_results'], repeated['operational_results'])
+        with TemporaryDirectory() as folder:
+            path = Path(folder) / 'snapshot.json'
+            write_assessment_result(path, result)
+            baseline_bytes = path.read_bytes()
+            snapshot = read_assessment_result(path)
+            row = snapshot['operational_results']['IDENTITY.AUTH']['records'][0]
+            self.assertEqual(row['status']['errorCode'], 0)
+            self.assertEqual(row['NormalizedSignInOutcome'], 'Success')
+            self.assertEqual(row['authenticationDetails'], [MFA_STEP])
+            self.assertEqual(snapshot['authentication_assessment'], result['authentication_assessment'])
+            self.fixture(client)
+            self.assertEqual(path.read_bytes(), baseline_bytes)
+
+    def test_optional_html_evidence_uses_normalized_counts(self):
+        from Core.finding_evidence import build_finding_evidence
+        result, bundle, _ = self.fixture()
+        from Core.evidence_selection import build_evidence_selection
+        model = build_finding_evidence(build_evidence_selection(result, bundle))
+        legacy = [row for row in model['findings'] if row['evidence']['record_type'] == 'legacy_signin_event']
+        self.assertTrue(legacy)
+        for row in legacy:
+            outcomes = row['evidence']['normalized_outcome_counts']
+            self.assertEqual(sum(outcomes.values()), row['evidence']['record_count'])
+            self.assertEqual(outcomes['InterruptedOrChallenged'], 1)
+
+    def test_supplemental_events_and_failed_windows_reconcile_workbook_and_finding(self):
+        from Core.evidence_layer import _build_legacy_signin_sheet
+        client = NS(signin_logs=[event(0, 'notApplied', 'IMAP')], collection_status={'signin_logs': source()},
+                    assessment_datasets={'signin_logs': [dataset([event(53003, 'failure', 'IMAP')]), dataset([], complete=False, availability_status='unavailable')]})
+        old = {'Service': 'Entra', 'Observation': '1 legacy authentication sign-in detected', 'Status': 'Action Required'}
+        row = qualify_saved_recommendations([old], 'Entra', client)[0]
+        sheet = _build_legacy_signin_sheet(client, [row])
+        self.assertEqual(row['AuthenticationSummary']['total'], len(sheet['rows']))
+        self.assertEqual(len(sheet['rows']), 2)
+        self.assertFalse(row['AuthenticationSummary']['complete'])
+        self.assertIn('incomplete', row['Observation'])
+
+    def test_new_legacy_counts_have_no_inferred_delta_direction_or_automatic_closure(self):
+        from Core.delta_metrics import compare_metric
+        from test_delta_metrics import fact
+        before = fact(4, 'identity.successful_legacy_events', 'events')
+        after = fact(0, 'identity.successful_legacy_events', 'events')
+        baseline = copy.deepcopy(before)
+        for complete, availability in ((True, 'available'), (False, 'partial'), (False, 'unavailable')):
+            after.update(complete=complete, availability=availability)
+            delta = compare_metric(before, after)
+            self.assertNotIn(delta['State'], {'Improved', 'Regressed', 'ResolvedByCurrentEvidence', 'ClosedByRemediation'})
+            self.assertFalse(delta['ResolutionSupported'])
+        self.assertEqual(before, baseline)
 
 
 if __name__ == '__main__':

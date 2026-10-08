@@ -102,7 +102,16 @@ def extract_entra_insights_from_client(entra_client):
     
     # Extract from pre-computed summaries (no API calls - already cached!)
     ca_summary = getattr(entra_client, 'ca_summary', {})
-    auth_summary = getattr(entra_client, 'auth_summary', {})
+    auth_summary = getattr(entra_client, 'auth_summary', {}) or {}
+    from Core.authentication_methods import authentication_method_report, legacy_registration_summary, registration_records
+    registration = authentication_method_report(entra_client)
+    if getattr(entra_client, 'auth_methods_registration', None) is not None or registration_records(entra_client):
+        auth_summary = legacy_registration_summary(registration_records(entra_client))
+        auth_summary.update(registration_population=registration['registration_population'],
+                            total_users=registration['total_users'],
+                            mfa_registered=registration['metrics'].get('mfa_registered', 0),
+                            mfa_registered_known=registration['metrics'].get('mfa_registered_known', 0),
+                            mfa_registration_rate=registration['registration_population']['percentage'])
     risk_summary = getattr(entra_client, 'risk_summary', {})
     pim_summary = getattr(entra_client, 'pim_summary', {})
     access_review_summary = getattr(entra_client, 'access_review_summary', {})
@@ -286,6 +295,7 @@ def extract_entra_insights_from_client(entra_client):
             'block_legacy_auth': ca_summary.get('block_legacy_auth', 0)
         },
         'mfa_metrics': {
+            'registration_population': auth_summary.get('registration_population'),
             'total_users': auth_summary.get('total_users', 0),
             'mfa_enabled_users': auth_summary.get('mfa_registered', 0),
             'mfa_capable_users': auth_summary.get('mfa_capable', 0),

@@ -1022,7 +1022,8 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None, summ
     if summary_name:
         workbook_button = f'<a class="button button-secondary" href="{quote(summary_name)}">One-page summary</a>' + workbook_button
     catalog_html = coverage_panels(result, table)
-    executive_html = summary_html(result) + governance_summary(result) + '<section id="executive-readiness"><h2>Owner decisions and operational reviews</h2><p class="section-description">Agree scope, accountable owners and applicable requirements. Configuration alone cannot confirm tested protection. Expand an area for its outstanding decisions.</p>' + decision_groups(result) + '</section>'
+    from .authentication_presentation import authentication_summary_html
+    executive_html = summary_html(result) + authentication_summary_html(result) + governance_summary(result) + '<section id="executive-readiness"><h2>Owner decisions and operational reviews</h2><p class="section-description">Agree scope, accountable owners and applicable requirements. Configuration alone cannot confirm tested protection. Expand an area for its outstanding decisions.</p>' + decision_groups(result) + '</section>'
     return f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{escape(str(tenant_name or 'Tenant'))} — AI Readiness and M365 Hardening</title><style>{REPORT_CSS}</style></head><body>
       <a class="skip-link" href="#executive">Skip to assessment</a>
       <header class="report-header"><div class="brand"><span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span><span></span></span><div>AI READINESS<span class="brand-subtitle">Microsoft 365 hardening</span></div></div><div class="header-meta"><strong>{escape(str(tenant_name or 'Tenant assessment'))}</strong><span>Executive briefing · {prose(result.get('evaluation_date'))}</span></div></header>

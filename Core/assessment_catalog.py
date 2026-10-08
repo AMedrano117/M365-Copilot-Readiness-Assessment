@@ -203,7 +203,7 @@ def collect_assessment_sources(clients, *, collected_at='', data_exposure=None, 
             sources[name].extend(deepcopy(datasets))
         for name, attr in attributes.items():
             value = getattr(client, attr, None)
-            if value is None or name in (getattr(client, 'assessment_datasets', {}) or {}):
+            if value is None or (name not in {'signin_logs', 'auth_methods'} and name in (getattr(client, 'assessment_datasets', {}) or {})):
                 continue
             value = plain(value)
             rows = value if isinstance(value, list) else value.get('policies', value.get('labels', [value])) if isinstance(value, dict) else []

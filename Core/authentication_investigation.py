@@ -7,7 +7,7 @@ flags never become an inferred registration failure.
 
 from datetime import date, datetime
 
-from .authentication_methods import FIELDS, _get, summarize_registrations
+from .authentication_methods import _get, authentication_method_report, reconcile_registration_population, registration_records
 
 
 SOURCE_API = 'https://graph.microsoft.com/v1.0/reports/authenticationMethods/userRegistrationDetails'
@@ -32,32 +32,23 @@ def build_mfa_registration_investigation(client):
     remain separate, with their original source position available to reviewers.
     """
     raw = _get(client, 'auth_methods_registration')
-    records = list(raw) if isinstance(raw, (list, tuple)) else []
+    records = registration_records(client)
     states = _get(client, 'collection_status') or {}
     state = states.get('auth_methods', {}) if isinstance(states, dict) else {}
     state = state if isinstance(state, dict) else {}
-    report = summarize_registrations(records, state)
-    unique, conflicts = {}, set()
-    for number, record in enumerate(records, 1):
-        key = _get(record, 'id') or _get(record, 'userPrincipalName') or ('anonymous', number - 1)
-        normalized = {field: _get(record, field) for field in FIELDS}
-        if key in unique:
-            previous = unique[key]
-            previous['positions'].append(number)
-            if normalized != previous['normalized']:
-                conflicts.add(key)
-        else:
-            unique[key] = {'normalized': normalized, 'record': record, 'positions': [number]}
-
+    report = authentication_method_report(client)
+    population = reconcile_registration_population(records, users=getattr(client, 'users', None))
+    conflicts = population['counts']['Conflicting']
     total = report['total_users']
     registered = report['metrics'].get('mfa_registered', 0)
-    unknown = total - report['metrics'].get('mfa_registered_known', 0)
-    matched = total - registered - unknown
+    unknown = population['counts']['Unknown'] + population['counts']['Conflicting']
+    excluded = population['counts']['ExcludedWithReason']
+    matched = population['counts']['ExplicitlyNotRegistered']
     source_state = report['source_state']
     source_api = state.get('source_api') or SOURCE_API
     rows = []
-    for key, entry in unique.items():
-        if key in conflicts or entry['normalized']['isMfaRegistered'] is not False:
+    for entry in population['entries']:
+        if entry['state'] != 'ExplicitlyNotRegistered':
             continue
         record = entry['record']
         rows.append({
@@ -65,6 +56,7 @@ def build_mfa_registration_investigation(client):
             'User Principal Name': _cell(_get(record, 'userPrincipalName')),
             'User Display Name': _cell(_get(record, 'userDisplayName')),
             'User Type': _cell(_get(record, 'userType')),
+            'Account Enabled': _cell(_get(record, 'accountEnabled')),
             'Is Admin': _cell(_get(record, 'isAdmin')),
             'MFA Registered': False,
             'MFA Capable': _cell(_get(record, 'isMfaCapable')),
@@ -82,13 +74,13 @@ def build_mfa_registration_investigation(client):
 
     reconciliation = (
         f'{matched} users explicitly not MFA registered + {registered} registered + '
-        f'{unknown} unknown = {total} users in {len(records)} returned registration records. '
+        f'{unknown} unknown/conflicting + {excluded} excluded with reason = {total} users in {len(records)} returned registration records. '
         f'{len(rows)} investigation rows reconcile to the explicit false flags.'
     )
     if len(records) != total:
         reconciliation += (
             f" Repeated ID/UPN records are consolidated using the aggregate report's fields; "
-            f'{len(conflicts)} users with conflicting snapshots count as unknown and are excluded.'
+            f'{conflicts} users with conflicting snapshots count as unknown and are excluded.'
         )
     summary = _get(client, 'auth_summary') or {}
     if isinstance(summary, dict):
@@ -119,7 +111,7 @@ def build_mfa_registration_investigation(client):
 
     details = [
         reconciliation,
-        'Selection: isMfaRegistered is the boolean false. True, missing, non-boolean and conflicting registration flags are excluded. Names are never used to consolidate users.',
+        'Selection: isMfaRegistered is the boolean false. True, missing, non-boolean, conflicting and documented disabled-account exclusions are excluded. Names are never used to consolidate users.',
         'Scope: users returned by the registration report, including members and guests. Confirm account scope and exceptions before arranging registration; registration does not establish Conditional Access enforcement.',
         'Last Updated UTC is the report update timestamp, not the method registration date or last sign-in. This is a registration snapshot, not a sign-in collection window.',
         'Pagination and truncation are copied from collection_status.auth_methods when retained. Missing metadata is unknown, including for older saved collections; no live lookup is performed.',
@@ -129,7 +121,8 @@ def build_mfa_registration_investigation(client):
         details.append(unavailable)
     return {
         'rows': rows, 'matched_count': matched, 'unknown_count': unknown,
-        'total_count': total, 'registered_count': registered,
+        'total_count': total, 'registered_count': registered, 'excluded_count': excluded,
+        'registration_population': {key: value for key, value in population.items() if key != 'entries'},
         'reconciliation_note': reconciliation, 'unavailability_reason': unavailable,
         'details': details,
     }

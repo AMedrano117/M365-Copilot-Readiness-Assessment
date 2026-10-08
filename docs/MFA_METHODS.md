@@ -58,6 +58,14 @@ percentages use users with known inventories. Missing fields and conflicting dup
 stay unknown. Member and guest counts are separate; administrators overlap those populations.
 Capability is distinct from registration: a registered method can be disabled by policy.
 
+The [Pass A population rules](AUTHENTICATION_SEMANTICS.md) distinguish explicit
+registration, explicit nonregistration, unknown, conflicting and documented
+excluded states. Only eligible literal boolean registration flags enter the rate;
+the known denominator is not the full returned population. Disabled accounts
+with retained explicit flags are excluded with a reason, while unknown enabled
+state and guest status alone do not exclude a user. Registration remediation
+worklists select only unambiguous explicit false flags from that same population.
+
 ## Default and preferred methods
 
 The report retains three views:

@@ -41,6 +41,13 @@ from system preferences. It does not independently pass a readiness control. Ear
 that treated all Authenticator registrations as passwordless are corrected from saved raw rows;
 registration alone cannot support a phishing-resistant assurance.
 
+[Authentication semantics (Pass A)](AUTHENTICATION_SEMANTICS.md) defines strict
+event-result classification, bounded legacy outcomes, collection-envelope validation
+and the reconciled MFA registration population. Successful legacy authentication
+cannot support legacy-blocking passage. A sign-in sample alone cannot establish
+tenant-wide authentication assurance. Registration, enforcement and observed use
+remain separate in the shared model and customer outputs.
+
 ## Shared evidence contract and reconciliation
 
 Evidence schema `1.1.0` and reconciliation version `2.0.0` describe normalized facts independently

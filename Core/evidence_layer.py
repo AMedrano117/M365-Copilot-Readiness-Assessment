@@ -1602,7 +1602,7 @@ def _signin_utc(value):
 def _build_legacy_signin_sheet(entra_client, recommendations=None, collection_context=None):
     """Retain each matched sign-in event, including repeated users and apps."""
     from .signin_evidence import (LEGACY_CLASSIFICATION_RULE, OUTCOME_RULE, classify_signin_outcome,
-                                  is_legacy_signin, unmatched_legacy_client_type)
+                                  is_legacy_signin, normalize_signin_event, unmatched_legacy_client_type)
     from .source_evidence import source_is_complete
 
     state = (getattr(entra_client, 'collection_status', {}) or {}).get('signin_logs', {}) or {}
@@ -1621,8 +1621,12 @@ def _build_legacy_signin_sheet(entra_client, recommendations=None, collection_co
     except (TypeError, ValueError):
         source_count = None
     reported_count = reported_counts[0] if len(reported_counts) == 1 else source_count
-    logs = _ensure_list(getattr(entra_client, 'signin_logs', None))
-    complete = source_is_complete(entra_client, 'signin_logs')
+    from .authentication_findings import signin_datasets
+    from .signin_evidence import legacy_event_summary
+    datasets = signin_datasets(entra_client)
+    logs = [event for dataset in datasets for event in dataset['records']]
+    authentication_summary = legacy_event_summary(datasets)
+    complete = authentication_summary['complete']
     source_state = str(state.get('availability_status') or ('available' if complete else 'not established'))
     params = state.get('filters') or state.get('request_params') or {}
     query_filter = state.get('filter') or (_safe_get(params, '$filter') if isinstance(params, dict) else str(params)) or 'Not recorded'
@@ -1635,7 +1639,7 @@ def _build_legacy_signin_sheet(entra_client, recommendations=None, collection_co
     source_file = state.get('source_file') or getattr(entra_client, 'source_file', None) or context.get('source_file') or 'Not retained'
     rows = []
     unmatched = {}
-    for event in logs:
+    for event, event_source in [(event, dataset['source']) for dataset in datasets for event in dataset['records']]:
         if not is_legacy_signin(event):
             other = unmatched_legacy_client_type(event)
             if other:
@@ -1646,6 +1650,7 @@ def _build_legacy_signin_sheet(entra_client, recommendations=None, collection_co
         location = _safe_get(event, 'location', {}) or {}
         error_code = _safe_get(status, 'errorCode', None)
         outcome = classify_signin_outcome(event)
+        normalized = normalize_signin_event(event, event_source)
         policies = _safe_get(event, 'appliedConditionalAccessPolicies', None)
         if isinstance(policies, list):
             applied = '; '.join(f"{_signin_text(_safe_get(policy, 'displayName', None) or _safe_get(policy, 'id', None))}: "
@@ -1677,6 +1682,17 @@ def _build_legacy_signin_sheet(entra_client, recommendations=None, collection_co
             'Device OS': _signin_text(_safe_get(device, 'operatingSystem', None)),
             'Device Browser': _signin_text(_safe_get(device, 'browser', None)),
             'Error Code': error_code if error_code is not None else 'Not returned',
+            'Sign-In Result': normalized['NormalizedSignInOutcome'],
+            'Legacy Authentication State': normalized['LegacyAuthenticationState'],
+            'MFA Requirement': normalized['MFARequirement'], 'MFA Satisfaction': normalized['MFASatisfaction'],
+            'Authentication Requirement (raw)': _signin_text(_safe_get(event, 'authenticationRequirement', None)),
+            'Authentication Details (raw)': _signin_text(_safe_get(event, 'authenticationDetails', None)),
+            'Authentication Methods Used (raw)': _signin_text(_safe_get(event, 'authenticationMethodsUsed', None)),
+            'Root Authentication Methods': _signin_text(normalized['RootAuthenticationMethods']),
+            'Applied Policies State': normalized['AppliedPoliciesState'],
+            'Report-Only Results': _signin_text(normalized['ReportOnlyResults']),
+            'Authentication Conflicts': _signin_text(normalized['AuthenticationConflicts']),
+            'Authentication Rule Version': normalized['AuthenticationRuleVersion'],
             'Outcome': outcome['outcome'],
             'Outcome Detail': outcome['detail'],
             'Outcome Basis': outcome['basis'],
@@ -1686,11 +1702,13 @@ def _build_legacy_signin_sheet(entra_client, recommendations=None, collection_co
             'Applied Conditional Access Policies': applied,
             'Is Interactive': _bool_text(_safe_get(event, 'isInteractive', None)) or 'Unknown',
             'Correlation ID': _signin_text(_safe_get(event, 'correlationId', None)),
-            'Source API': source_api, 'Source File': source_file,
-            'Collected At': collected_at, 'Collection Window': window,
-            'Source Filter': query_filter, 'Source State': source_state,
-            'Pages Collected': state.get('pages_collected', 'Not recorded'),
-            'Truncated': state.get('truncated', 'Not recorded'),
+            'Source API': event_source.get('source_api') or source_api, 'Source File': event_source.get('source_file') or source_file,
+            'Collected At': event_source.get('collected_at') or collected_at,
+            'Collection Window': event_source.get('collection_window') or (str(event_source.get('window_start')) + ' to ' + str(event_source.get('window_end') or 'unknown end') if event_source.get('window_start') else 'Original query window not recorded; event timestamps do not establish the query window'),
+            'Source Filter': event_source.get('filter') or event_source.get('request_params') or 'Not recorded',
+            'Source State': event_source.get('availability_status') or 'unknown',
+            'Pages Collected': event_source.get('pages_collected', 'Not recorded'),
+            'Truncated': event_source.get('truncated', 'Not recorded'),
         })
     count = len(rows)
     if not rows and not any(_legacy_signin_finding(record) for record in recommendations or []):
@@ -1720,6 +1738,7 @@ def _build_legacy_signin_sheet(entra_client, recommendations=None, collection_co
         elif not complete:
             unavailable = 'No matching sign-in events were retained, and the source query completeness was not recorded; absence of legacy authentication cannot be established.'
     details = [
+        'Normalized event outcomes: ' + '; '.join(f'{name}: {count}' for name, count in authentication_summary['counts'].items()),
         'Selection: ' + LEGACY_CLASSIFICATION_RULE,
         f'Scope: {len(logs)} retained sign-in records examined; {count} matching events exported, one row per event without user/application deduplication.',
         'Original query scope: ' + str(state.get('scope') or 'Not retained; no tenant-wide coverage claim is made') + '.',
