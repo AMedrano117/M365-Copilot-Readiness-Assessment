@@ -190,7 +190,7 @@ async def orchestrate(
     customer_name=None,
     extra_exports=None,
     run_type=None, assessment_id=None, baseline_run_id=None, assessment_history=None,
-    assessment_purpose=None, primary_environment_id=None,
+    assessment_purpose=None, primary_environment_id=None, delta_mode=None,
 ):
     """Orchestrate gathering of service information and service plans.
     
@@ -416,7 +416,7 @@ async def orchestrate(
                 history_path=assessment_history or (run_package_directory / 'assessment-history.json'
                                                    if run_type=='Initial' else None),
                 assessment_id=assessment_id,baseline_run_id=baseline_run_id,purpose=assessment_purpose,
-                environment_id=primary_environment_id)
+                environment_id=primary_environment_id,delta_enabled=delta_mode!='disabled')
         else:
             console.status('Legacy run intent is unclassified; no Initial run or baseline-run identity is inferred.', 'warning')
         from .lifecycle_report_settings import lifecycle_settings

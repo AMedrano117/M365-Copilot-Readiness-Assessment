@@ -113,6 +113,18 @@ class LifecycleStateTests(unittest.TestCase):
         self.assertTrue(row['PriorResolutionEvidenceReferences'])
         b.pop('lifecycle'); self.assertEqual(finding_record(compare(b,c))['State'],'Regressed')
 
+    def test_resolved_missing_finding_reopens_from_retained_boundary(self):
+        from Core.assessment_identity import new_run
+        b,c=pair(); c['identity']['Entities']=[e for e in c['identity']['Entities'] if e['Type']!='finding']
+        c['recommendations']=[];c['evidence'][0]['value']=0;c['lifecycle']=compare(b,c)
+        self.assertEqual(finding_record(c['lifecycle'])['State'],'ResolvedByCurrentEvidence')
+        next_run=copy.deepcopy(b)
+        next_run['identity']['RunId']=new_run(c['identity'],TENANT,evaluated_at='2026-09-17')['RunId']
+        next_run['run_context'].update(RunType='Reassessment',BaselineRunId=c['identity']['RunId'])
+        row=finding_record(compare(c,next_run))
+        self.assertEqual(row['State'],'Reopened')
+        self.assertTrue(row['BaselineEntityId']);self.assertTrue(row['PriorResolutionEvidenceReferences'])
+
     def test_new_requires_positive_sufficient_baseline_coverage(self):
         b,c=pair(); b['identity']['Entities']=[e for e in b['identity']['Entities'] if e['Type']!='finding']; b['recommendations']=[]
         self.assertEqual(finding_record(compare(b,c))['State'],'Indeterminate')
@@ -122,6 +134,34 @@ class LifecycleStateTests(unittest.TestCase):
             with self.subTest(field=field):
                 saved=copy.deepcopy(b); saved['evidence'][0][field]=value
                 self.assertNotEqual(finding_record(compare(saved,c))['State'],'New')
+
+    def test_metric_cannot_resolve_unrelated_finding_on_same_control(self):
+        from Core.assessment_identity import entity
+        b,c=pair()
+        for snap in (b,c):
+            old=next(e for e in snap['identity']['Entities'] if e['Type']=='finding')
+            other=entity('finding',snap['identity'],dict(old['Boundary'],condition_key='unrelated.issue'))
+            snap['identity']['Entities']=[other if e['Type']=='finding' else e for e in snap['identity']['Entities']]
+        c['evidence'][0]['value']=0
+        self.assertNotEqual(finding_record(compare(b,c))['State'],'ResolvedByCurrentEvidence')
+
+    def test_additional_closure_requirements_need_their_own_proof(self):
+        from Core.assessment_identity import entity
+        b,c=pair()
+        for snap in (b,c):
+            old=next(e for e in snap['identity']['Entities'] if e['Type']=='finding')
+            guarded=entity('finding',snap['identity'],dict(old['Boundary'],closure_requirements='Validated operation and owner review'))
+            snap['identity']['Entities']=[guarded if e['Type']=='finding' else e for e in snap['identity']['Entities']]
+        c['evidence'][0]['value']=0
+        row=finding_record(compare(b,c));self.assertEqual(row['State'],'Improved');self.assertTrue(row['RemainsOpen'])
+
+    def test_changed_applicability_does_not_resolve_unmatched_baseline(self):
+        from Core.assessment_identity import entity
+        b,c=pair();old=next(e for e in c['identity']['Entities'] if e['Type']=='finding')
+        changed=entity('finding',c['identity'],dict(old['Boundary'],applicability='out of scope'))
+        c['identity']['Entities']=[changed if e['Type']=='finding' else e for e in c['identity']['Entities']]
+        c['evidence'][0]['value']=0
+        self.assertTrue(all(r['State']=='Indeterminate' for r in compare(b,c)['Records'] if r['EntityType']=='finding'))
 
     def test_not_comparable_and_baseline_immutability(self):
         b,c=pair(); saved=copy.deepcopy(b); c['identity']['PrimaryEnvironmentId']='ENV-other'
@@ -136,6 +176,35 @@ class LifecycleStateTests(unittest.TestCase):
                 b,c=pair(); b['control_results'][0]['Status']=before; c['control_results'][0]['Status']=after
                 row=next(r for r in compare(b,c)['Records'] if r['EntityType']=='control')
                 self.assertEqual(row['State'],state)
+
+    def test_zero_to_zero_and_failed_control_do_not_invent_resolution(self):
+        b,c=pair();b['evidence'][0]['value']=c['evidence'][0]['value']=0
+        rows=compare(b,c)['Records'];self.assertTrue(all(r['State']=='Unchanged' for r in rows))
+        b['evidence'][0]['value']=4
+        control=next(r for r in compare(b,c)['Records'] if r['EntityType']=='control')
+        self.assertEqual(control['State'],'Improved');self.assertTrue(control['RemainsOpen'])
+
+    def test_control_reopened_requires_prior_resolution(self):
+        b,c=pair();b['control_results'][0]['Status']='Pass'
+        id_=next(e['Id'] for e in b['identity']['Entities'] if e['Type']=='control')
+        b['lifecycle']={'Records':[dict(EntityType='control',EntityId=id_,State='ResolvedByCurrentEvidence',ResolutionEvidenceReferences=[{'RunId':'RUN-prior','EvidenceId':'EV-proof'}])]}
+        self.assertEqual(next(r for r in compare(b,c)['Records'] if r['EntityType']=='control')['State'],'Reopened')
+
+    def test_actions_inherit_only_their_linked_finding_and_metrics_are_typed(self):
+        from Core.assessment_identity import entity,reference
+        for value,state in [(2,'Improved'),(6,'Regressed'),(0,'ResolvedByCurrentEvidence')]:
+            with self.subTest(value=value):
+                b,c=pair()
+                for snap in (b,c):
+                    seed=snap['identity'];finding=next(e for e in seed['Entities'] if e['Type']=='finding')
+                    action=entity('action',seed,dict(assessment_id=seed['AssessmentId'],environment_id=seed['PrimaryEnvironmentId'],action_key='policy.remediation'))
+                    observation=entity('observation',seed,dict(assessment_id=seed['AssessmentId'],run_id=seed['RunId'],
+                        environment_id=seed['PrimaryEnvironmentId'],provider='microsoft',control_id='IDENTITY.MFA',metric_id='identity.policy_exceptions',
+                        population='all users',resource_scope='tenant',window='snapshot',capture_id='PCP-fiction',evidence_level='policy_enforcement'))
+                    seed['Entities'].extend([action,observation]);seed['References']=[reference(action['Id'],'finding',finding['Id'],'finding',seed)]
+                c['evidence'][0]['value']=value;delta=compare(b,c)
+                self.assertEqual(next(r for r in delta['Records'] if r['EntityType']=='action')['State'],state)
+                self.assertEqual(next(r for r in delta['Records'] if r['EntityType']=='metric')['State'],state)
 
 
 class LifecycleMatchingTests(unittest.TestCase):

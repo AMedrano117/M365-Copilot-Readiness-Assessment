@@ -127,6 +127,7 @@ if __name__ == "__main__":
                 run_type=args.run_type, assessment_id=args.assessment_id,
                 baseline_run_id=args.baseline_run_id, assessment_history=args.assessment_history,
                 assessment_purpose=args.assessment_purpose, primary_environment_id=args.primary_environment_id,
+                delta_mode=args.delta_mode,
             )
         )
         if isinstance(exit_code, int) and exit_code:

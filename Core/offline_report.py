@@ -104,7 +104,8 @@ def run_offline_report(args):
             history_path=getattr(args,'assessment_history',None) or
                 (Path(package_directory) / 'assessment-history.json' if explicit_type=='Initial' else None),
             assessment_id=getattr(args,'assessment_id',None),baseline_run_id=getattr(args,'baseline_run_id',None),
-            purpose=getattr(args,'assessment_purpose',None),environment_id=getattr(args,'primary_environment_id',None))
+            purpose=getattr(args,'assessment_purpose',None),environment_id=getattr(args,'primary_environment_id',None),
+            delta_enabled=getattr(args,'delta_mode',None)!='disabled')
         context['identity'] = run_execution.identity
         if payload and payload.get('package_directory') and (Path(payload['package_directory']) / 'collection.json').is_file():
             # Retain raw evidence and its immutable input manifest for the new

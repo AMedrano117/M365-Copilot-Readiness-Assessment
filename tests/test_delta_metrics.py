@@ -4,7 +4,7 @@ import unittest
 
 
 def fact(value=40, metric='identity.mfa_registration_percent', unit='%'):
-    return dict(metric_id=metric, metric_definition=metric, control_id='IDENTITY.MFA',
+    return dict(metric_id=metric, metric_definition=metric, control_id='ENDPOINT.POSTURE' if metric.startswith('endpoint.') else 'IDENTITY.MFA',
         provider='microsoft', value=value, unit=unit, numerator=value, denominator=100,
         population='all users', population_definition='all user accounts', scope='tenant',
         window='snapshot', window_start='2026-09-15T00:00:00Z', window_end='2026-09-15T00:00:00Z',
@@ -26,7 +26,9 @@ class MetricComparisonTests(unittest.TestCase):
             ('endpoint.validated_coverage_percent','%',80,90,'Improved'),
             ('unknown.metric','count',3,1,'Changed')]:
             with self.subTest(metric=metric,before=before,after=after):
-                self.assertEqual(compare_metric(fact(before,metric,unit),fact(after,metric,unit))['State'],state)
+                a,b=fact(before,metric,unit),fact(after,metric,unit)
+                if metric=='identity.policy_exceptions':a['evidence_level']=b['evidence_level']='policy_enforcement'
+                self.assertEqual(compare_metric(a,b)['State'],state)
 
     def test_boundary_and_quality_matrix_never_directional(self):
         from Core.delta_metrics import compare_metric
