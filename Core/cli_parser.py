@@ -231,7 +231,40 @@ Examples:
         help=argparse.SUPPRESS
     )
     
+    intent = parser.add_mutually_exclusive_group()
+    intent.add_argument('--run-type', choices=['Initial','Reassessment','Standalone'],
+        help='Explicit new semantic execution. Reassessment requires explicit --baseline-run-id; rendering preserves an existing run.')
+    intent.add_argument('--replay-snapshot', metavar='PATH',
+        help='Render a shared-result snapshot offline without evaluating evidence or changing run identity/history.')
+    parser.add_argument('--assessment-id', help='Existing AST- identity for explicit continuation; requires its history.')
+    parser.add_argument('--baseline-run-id', help='Explicit completed RUN- identity in the selected history. No automatic selection.')
+    parser.add_argument('--assessment-history', metavar='PATH', help='Assessment history manifest. Initial defaults to its new package.')
+    parser.add_argument('--assessment-purpose', help='Recorded assessment family/purpose; defaults to this tool or selected history.')
+    parser.add_argument('--primary-environment-id', help='Optional ENV- identity to verify against the selected tenant GUID.')
+    parser.add_argument('--render-output-dir', metavar='PATH', help='Parent for snapshot render artifacts; valid only with --replay-snapshot.')
+    if sum(value=='--run-type' or value.startswith('--run-type=') for value in sys.argv[1:])>1:
+        parser.error('Select one explicit --run-type per execution.')
     args = parser.parse_args()
+    if args.run_type=='Reassessment' and not (args.assessment_id and args.baseline_run_id and args.assessment_history):
+        parser.error('Reassessment requires --assessment-id, --baseline-run-id and --assessment-history.')
+    if args.run_type!='Reassessment' and args.baseline_run_id:
+        parser.error('--baseline-run-id requires explicit Reassessment intent.')
+    if args.run_type=='Initial' and args.assessment_id:
+        parser.error('Initial creates an AssessmentId; use Reassessment or Standalone for explicit continuation.')
+    if args.run_type=='Standalone' and args.assessment_id and not args.assessment_history:
+        parser.error('Standalone continuation requires --assessment-history for ownership validation.')
+    if not args.run_type and any((args.assessment_id,args.baseline_run_id,args.assessment_history,
+                                  args.assessment_purpose,args.primary_environment_id)):
+        parser.error('Run ownership and history options require --run-type.')
+    if args.run_type and args.baseline:
+        parser.error('--baseline is legacy change tracking; explicit run workflows use --baseline-run-id without deltas.')
+    if args.render_output_dir and not args.replay_snapshot:
+        parser.error('--render-output-dir requires --replay-snapshot.')
+    if args.replay_snapshot:
+        from .assessment_package import INPUT_KEYS
+        if args.mode=='live' or args.evaluation_date or any(getattr(args,key,None) for key in INPUT_KEYS | {'collection_input'}):
+            parser.error('Snapshot replay cannot collect, add evidence or change the evaluated date.')
+        args.mode = 'offline'
     if args.customer_name is not None:
         args.customer_name = args.customer_name.strip()
         if not args.customer_name:

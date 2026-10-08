@@ -36,6 +36,13 @@ def resolve_alias(result, query):
 def validate_assessment_references(result):
     from .reconciliation_validation import validate_reconciliation
     diagnostics = validate_reconciliation(result)
+    # Preserve the narrow direct identity API's existing diagnostics contract.
+    # Workflow-aware results and serialized snapshots also validate run intent.
+    if ('run_context' in result or 'run_workflow_diagnostics' in result
+            or (result.get('identity') or {}).get('RunType')
+            or (result.get('identity') or {}).get('BaselineRunId')):
+        from .assessment_runs import validate_run_context
+        diagnostics.extend(validate_run_context(result))
     def report(code, subject, message, severity='error'):
         diagnostics.append(dict(severity=severity,code=code,subject=str(subject or 'identity'),message=message))
 

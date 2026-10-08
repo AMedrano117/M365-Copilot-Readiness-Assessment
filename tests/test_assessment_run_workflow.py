@@ -20,7 +20,7 @@ def result(identity):
         'evidence':[{'control_id':'IDENTITY.MFA','metric_id':'enforcement','provider':'microsoft',
             'population':'all users','scope':'tenant','unit':'count','value':0,'availability':'available',
             'complete':True,'evidence_level':'policy_enforcement','window':'snapshot','selection':'selected'}],
-        'run_context':copy.deepcopy(meta['RunContext']),
+        'run_context':copy.deepcopy(meta['RunContext']), 'run_workflow_diagnostics':[],
         'reconciliation':{'state':'legacy','reason':'Synthetic graph without source occurrences.'},
         'run_boundaries':{'purpose':'readiness', 'scope':'tenant-wide', 'providers':['microsoft'],
             'population_definitions':['all users'], 'resource_scopes':['tenant']},
@@ -332,4 +332,14 @@ class ComparabilityTests(unittest.TestCase):
         current, baseline = self.pair()
         current['identity']['PrimaryEnvironmentId'] = 'ENV-foreign'
         self.assertEqual(evaluate_comparability(current, baseline)['Outcome'], 'NotComparable')
+
+    def test_failed_source_without_observations_remains_in_collection_coverage(self):
+        from Core.run_comparability import collection_state_summary, recorded_coverage
+        current, _ = self.pair()
+        current.pop('collection_coverage')
+        current['collection_source_states'] = collection_state_summary({'source_statuses':{
+            'blocked_source':{'availability_status':'inaccessible','available':False,'records_collected':0}}})
+        coverage = recorded_coverage(current)
+        self.assertEqual(coverage['source:blocked_source']['state'],'inaccessible')
+        self.assertFalse(coverage['source:blocked_source']['complete'])
 

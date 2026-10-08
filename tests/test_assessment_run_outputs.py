@@ -90,8 +90,11 @@ class RunRendererTests(unittest.TestCase):
             context = copy.deepcopy(read_assessment_result(root / 'source.json')['run_context'])
             with (patch('Core.assessment_result.build_assessment_result', side_effect=AssertionError('Semantic evaluation')),
                   patch('Core.assessment_history.append_run', side_effect=AssertionError('History append'))):
-                outputs = render_snapshot(root / 'source.json', root / 'rendered')
+                outputs = render_snapshot(root / 'source.json', root / 'rendered',
+                    snapshot_output=root / 'copy.json',extra_exports=['evidence-pages'])
             self.assertEqual(read_assessment_result(root / 'source.json')['run_context'], context)
+            self.assertEqual(read_assessment_result(root / 'copy.json')['run_context'], context)
+            self.assertTrue((Path(outputs['html_evidence_folder_path']) / 'index.html').is_file())
             self.assertTrue(Path(outputs['html_path']).is_file())
             self.assertTrue(Path(outputs['excel_path']).is_file())
             html = Path(outputs['html_path']).read_text(encoding='utf-8')

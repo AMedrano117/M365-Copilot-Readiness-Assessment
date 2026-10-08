@@ -189,6 +189,8 @@ async def orchestrate(
     show_progress=True,
     customer_name=None,
     extra_exports=None,
+    run_type=None, assessment_id=None, baseline_run_id=None, assessment_history=None,
+    assessment_purpose=None, primary_environment_id=None,
 ):
     """Orchestrate gathering of service information and service plans.
     
@@ -395,6 +397,28 @@ async def orchestrate(
         sam_report_paths = sam_report_paths or _split_env_paths('SAM_DAG_REPORT_PATHS')
         dspm_report_paths = dspm_report_paths or _split_env_paths('DSPM_REPORT_PATHS')
         evaluation_date = evaluation_day(evaluation_date)
+        run_execution = None
+        run_package_directory = None
+        if run_type:
+            from .assessment_runs import prepare_run
+            from .export_paths import new_assessment_directory
+            if save_collection_path is None:
+                run_package_directory = new_assessment_directory(customer_name=customer_name,
+                    tenant_name=tenant_name,tenant_id=tenant_id)
+                save_collection_path = str(run_package_directory / 'collection.json')
+            else:
+                from uuid import uuid4
+                selected_path = Path(save_collection_path)
+                run_package_directory = selected_path.with_name(selected_path.stem + '_package')
+                if run_package_directory.exists():
+                    run_package_directory = selected_path.with_name(selected_path.stem + '_package_' + uuid4().hex[:8])
+            run_execution = prepare_run(run_type,tenant_id,evaluated_at=evaluation_date,
+                history_path=assessment_history or (run_package_directory / 'assessment-history.json'
+                                                   if run_type=='Initial' else None),
+                assessment_id=assessment_id,baseline_run_id=baseline_run_id,purpose=assessment_purpose,
+                environment_id=primary_environment_id)
+        else:
+            console.status('Legacy run intent is unclassified; no Initial run or baseline-run identity is inferred.', 'warning')
         from .lifecycle_report_settings import lifecycle_settings
         lifecycle_options = lifecycle_settings(max_age_days=lifecycle_report_max_age_days,
                                               report_dates=lifecycle_report_dates, evaluation_date=evaluation_date)
@@ -402,6 +426,8 @@ async def orchestrate(
             save_collection_path, service_config=service_config,
             tenant_id=tenant_id, tenant_name=tenant_name,
             customer_name=customer_name,
+            identity=run_execution.identity if run_execution else None,
+            package_directory=run_package_directory,
             enabled_collectors=enabled_collectors, connection_results=connection_results,
             evaluation_date=evaluation_date,
             auth_plan=auth_plan,
@@ -592,6 +618,7 @@ async def orchestrate(
             offline_power_platform_inventory=packaged('power_platform_inventory'),
             expected_tenant_id=tenant_id,
             collection_context=context,
+            run_execution=run_execution,
         )
         if isinstance(output, dict) and snapshot_json:
             output['snapshot_path'] = snapshot_json

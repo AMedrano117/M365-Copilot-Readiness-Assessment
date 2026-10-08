@@ -1015,4 +1015,9 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
     from .assessment_identity import attach_identity
     from .finding_reconciliation import attach_reconciliation
     result['_finding_diagnostics'] = collision_diagnostics
-    return attach_identity(attach_reconciliation(attach_catalog(result, bundle), bundle), bundle)
+    result = attach_identity(attach_reconciliation(attach_catalog(result, bundle), bundle), bundle)
+    from .assessment_runs import validate_run_context
+    from .assessment_references import validate_assessment_references
+    result['run_workflow_diagnostics'] = validate_run_context(result)
+    result['identity_validation'] = validate_assessment_references(result)
+    return result

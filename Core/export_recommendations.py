@@ -516,6 +516,8 @@ def export_to_excel(recommendations, filename=None, tenant_name=None, evidence_b
         evidence_bundle['assessment_result'] = result
     from .assessment_references import require_valid_assessment
     require_valid_assessment(result)
+    from .assessment_runs import add_run_manifest_context
+    add_run_manifest_context(evidence_bundle, result)
     prepare_investigation_details(evidence_bundle, result)
     if not evidence_bundle.get('finding_evidence'):
         from .evidence_selection import build_evidence_selection
@@ -1022,6 +1024,8 @@ def export_to_html(recommendations, filename=None, tenant_name=None, evidence_bu
         bundle['assessment_result'] = result
     from .assessment_references import require_valid_assessment
     require_valid_assessment(result)
+    from .assessment_runs import add_run_manifest_context
+    add_run_manifest_context(bundle, result)
     prepare_investigation_details(bundle, result)
     from .export_paths import report_directory
     folder = report_directory(output_dir, tenant_name=tenant_name)

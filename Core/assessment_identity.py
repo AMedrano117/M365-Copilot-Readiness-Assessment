@@ -426,6 +426,8 @@ def attach_identity(result, bundle):
     meta['References'].extend(json.loads(key) for key in sorted({json.dumps(row,sort_keys=True) for row in refs}))
     meta['References'].extend(deepcopy(bundle.get('identity_references') or []))
     result['identity'] = meta
+    if meta.get('RunContext') is not None:
+        result['run_context'] = deepcopy(meta['RunContext'])
     if result.get('reconciliation'):
         for observation in result['reconciliation'].get('observations',[]):
             observation['persistent_observation_ids']=sorted(reconciled_targets.get(observation['id'],[]))

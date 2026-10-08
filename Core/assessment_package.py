@@ -275,6 +275,8 @@ def resolve_package(payload, collection_path):
     if recipe_path.is_file():
         recipe = json.loads(recipe_path.read_text(encoding='utf-8'))
         _apply_recipe(payload, folder, recipe)
+    from .assessment_replay import load_completed_package
+    load_completed_package(payload)
     return payload
 
 
@@ -306,7 +308,8 @@ def load_rebuild_recipe(path, recipe):
         'package': {'version': PACKAGE_VERSION, 'files': recipe.get('files', []),
                     'diagnostics': recipe.get('diagnostics', [])},
     }
-    return methodology_metadata(payload, 'Rebuild recipe')
+    from .assessment_replay import load_completed_package
+    return load_completed_package(methodology_metadata(payload, 'Rebuild recipe'))
 
 
 def new_offline_package(tenant_name, customer_name=None, tenant_id=None):
@@ -501,6 +504,8 @@ def record_package_run(folder, *, mode, tenant_id, collected_at, evaluation_date
         receipt['import_receipt'] = bundle.get('import_receipt', [])
         assessment = bundle.get('assessment_result', {}) or {}
         if isinstance(assessment, dict) and assessment:
+            if assessment.get('run_context'):
+                receipt['semantic_run'] = assessment['run_context']
             receipt['remaining_requirements'] = assessment.get('coverage', [])
             receipt['decision'] = assessment.get('decision')
             receipt['counts'] = assessment.get('counts', {})
