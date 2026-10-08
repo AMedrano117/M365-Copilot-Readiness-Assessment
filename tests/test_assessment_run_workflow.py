@@ -155,6 +155,47 @@ class HistoryTests(RunFixture):
             baseline_run_id=old.identity['RunId'])
         self.assertEqual(loaded['identity']['RunId'], snapshot['identity']['RunId'])
 
+    def test_concurrent_preparation_cannot_overwrite_a_completed_append(self):
+        from Core.assessment_runs import prepare_run, complete_run
+        from Core.assessment_history import read_history
+        old, _ = self.initial()
+        options = dict(evaluated_at='2026-09-16', history_path=self.history,
+            assessment_id=old.identity['AssessmentId'],baseline_run_id=old.identity['RunId'])
+        first = prepare_run('Reassessment', TENANT, **options)
+        second = prepare_run('Reassessment', TENANT, **options)
+        complete_run(result(first.identity), first, self.root / 'first')
+        before = self.history.read_bytes()
+        with self.assertRaises(ValueError):
+            complete_run(result(second.identity), second, self.root / 'second')
+        self.assertEqual(self.history.read_bytes(), before)
+        self.assertEqual(len(read_history(self.history)['Runs']), 2)
+
+    def test_legacy_history_is_readable_but_cannot_establish_continuity(self):
+        from Core.assessment_history import read_history
+        from Core.assessment_runs import prepare_run
+        self.history.write_text('{"version":0,"runs":[]}', encoding='utf-8')
+        loaded = read_history(self.history)
+        self.assertEqual(loaded['State'], 'legacy')
+        self.assertTrue(loaded['Diagnostics'])
+        with self.assertRaises(ValueError):
+            prepare_run('Reassessment', TENANT, evaluated_at=DAY, history_path=self.history,
+                        assessment_id='AST-unknown',baseline_run_id='RUN-unknown')
+
+    def test_snapshot_integrity_change_and_wrong_package_locator_are_blocked(self):
+        from Core.assessment_history import read_history, select_baseline, seal
+        old, _ = self.initial()
+        options = dict(assessment_id=old.identity['AssessmentId'],environment_id=old.identity['PrimaryEnvironmentId'],
+                       baseline_run_id=old.identity['RunId'])
+        history = read_history(self.history)
+        path = self.root / history['Runs'][0]['SnapshotLocator']
+        path.write_text(path.read_text(encoding='utf-8') + ' ', encoding='utf-8')
+        with self.assertRaises(ValueError):
+            select_baseline(self.history, **options)
+        history['Runs'][0]['PackageLocator'] = 'wrong-package'
+        self.history.write_text(json.dumps(seal(history)), encoding='utf-8')
+        with self.assertRaises(ValueError):
+            select_baseline(self.history, **options)
+
 
 class BaselineTests(RunFixture):
     def test_missing_foreign_self_future_and_unreadable_baselines(self):
