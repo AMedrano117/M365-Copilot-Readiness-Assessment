@@ -2,8 +2,8 @@
 
 This additive stage retains methodology 4.0.0 and uses reconciliation model 2.0.0.
 The [assessment templates](assessment-templates/README.md) remain future contract
-direction. Run selection, baselines, deltas, resolution and closure workflows
-are deferred.
+direction. Explicit run selection and baselines are described in
+[Assessment runs](ASSESSMENT_RUNS.md). Deltas, resolution and closure remain deferred.
 
 ## Entry points
 

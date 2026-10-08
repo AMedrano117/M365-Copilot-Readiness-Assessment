@@ -25,6 +25,9 @@ same environment receive different assessment IDs.
 primary environment and creates a new run. It is a library primitive, not a CLI
 reassessment workflow. `RunType` and `BaselineRunId` remain null. No baseline is
 selected and no run is automatically classified as initial, reassessment or delta.
+The explicit [assessment-run workflow](ASSESSMENT_RUNS.md) builds on these primitives
+and records RunType, selected baseline, history and comparison eligibility. Primitive
+callers and legacy packages retain the unclassified compatibility path.
 
 Metadata lives in the shared result's `identity` block:
 
