@@ -514,6 +514,9 @@ def export_to_excel(recommendations, filename=None, tenant_name=None, evidence_b
     if result is None:
         result = build_assessment_result(recommendations, evidence_bundle)
         evidence_bundle['assessment_result'] = result
+    from .identity_finding_taxonomy import ensure_identity_result
+    result = ensure_identity_result(result, evidence_bundle)
+    evidence_bundle['assessment_result'] = result
     from .assessment_references import require_valid_assessment
     require_valid_assessment(result)
     from .assessment_runs import add_run_manifest_context
@@ -596,7 +599,11 @@ def export_to_excel(recommendations, filename=None, tenant_name=None, evidence_b
         # Recommendations register. It is not source evidence for a control decision.
         evidence_index = [{
             'RecommendationId': row.get('RecommendationId', ''),
-            'Domain': row.get('Domain', ''), 'Finding': row.get('Feature', ''),
+            'Domain': row.get('Domain', ''), 'Finding': row.get('FindingTitle') or row.get('Feature', ''),
+            'Capability': row.get('Capability', ''),
+            'Licensing Dependency': '; '.join(row.get('LicensingDependencies') or []),
+            'Associated License Feature': '; '.join(row.get('AssociatedLicenseFeatures') or []),
+            'License Evidence State': row.get('LicenseEvidenceState', ''),
             'Original Date': row.get('ObservationDate', ''),
             'Evidence Basis': row.get('EvidenceBasis', ''), 'Confidence': row.get('Confidence', ''),
             'Qualification': ' '.join(str(value) for value in (row.get('Qualification'), row.get('InvestigationQualification')) if value),
@@ -747,7 +754,7 @@ def export_to_excel(recommendations, filename=None, tenant_name=None, evidence_b
             rec.get("ImpactArea", ""),
             rec.get("AIApplicability", ""),
             rec.get("Category", ""),
-            rec.get("Feature", ""),
+            rec.get('FindingTitle') or rec.get('Feature', ''),
             rec.get("AlsoLicensedVia", ""),
             rec.get("Status", ""),
             rec.get("Priority", ""),
@@ -764,7 +771,14 @@ def export_to_excel(recommendations, filename=None, tenant_name=None, evidence_b
             rec.get('InvestigationCount', ''),
             rec.get('InvestigationQualification', ''),
         ]
-        summary_rows.append(dict(zip(summary_headers, row)))
+        entry = dict(zip(summary_headers, row))
+        entry.update({'FindingTitle': _heading(rec), 'Compatibility Feature': rec.get('OriginalCompatibilityLabel') or rec.get('Feature'),
+                      'Capability': rec.get('Capability'), 'Finding Condition': rec.get('FindingCondition'),
+                      'Licensing Dependency': '; '.join(rec.get('LicensingDependencies') or []),
+                      'Associated License Feature': '; '.join(rec.get('AssociatedLicenseFeatures') or []),
+                      'License Evidence State': rec.get('LicenseEvidenceState'),
+                      'Taxonomy Version': rec.get('FindingTaxonomyVersion')})
+        summary_rows.append(entry)
 
     _append_dict_rows_to_sheet(ws, summary_rows, header_fill, header_font, wrap_alignment, table_name="Recommendations")
     for row_num, rec in enumerate(recommendations, 2):
@@ -826,6 +840,10 @@ def export_to_excel(recommendations, filename=None, tenant_name=None, evidence_b
             'Raw source evidence':next(iter(row.get('RawEvidenceRanges',[])),''),
             'Assessment domain':row.get('AssessmentDomainId'), 'Control':row.get('ControlId'),
             'Original feature':row.get('Feature'), 'Observation':row.get('Observation'),
+            'Capability':row.get('Capability'), 'Finding Condition':row.get('FindingCondition'),
+            'Licensing Dependency':'; '.join(row.get('LicensingDependencies') or []),
+            'Associated License Feature':'; '.join(row.get('AssociatedLicenseFeatures') or []),
+            'License Evidence State':row.get('LicenseEvidenceState'),
             'Responsible role':row.get('OwnerRole'),
             'Evidence level':row.get('EvidenceLevel'), 'Operational result':row.get('OperationalResult'),
             'Observed':row.get('ObservationDate'), 'Qualification':row.get('Qualification'),
@@ -1022,6 +1040,9 @@ def export_to_html(recommendations, filename=None, tenant_name=None, evidence_bu
     if result is None:
         result = build_assessment_result(recommendations, bundle)
         bundle['assessment_result'] = result
+    from .identity_finding_taxonomy import ensure_identity_result
+    result = ensure_identity_result(result, bundle)
+    bundle['assessment_result'] = result
     from .assessment_references import require_valid_assessment
     require_valid_assessment(result)
     from .assessment_runs import add_run_manifest_context

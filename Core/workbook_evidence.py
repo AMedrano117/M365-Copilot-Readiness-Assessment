@@ -108,12 +108,12 @@ def technical_recommendation_rows(result, heading=None):
         prerequisites = detail.get('prerequisites') or {}
         links = [link for link in detail.get('links') or [] if link.get('url')]
         entry = OrderedDict([
-            ('RecommendationId', row.get('RecommendationId')), ('Finding', heading(row) if heading else row.get('Feature')),
+            ('RecommendationId', row.get('RecommendationId')), ('Finding', heading(row) if heading else _finding_title(row)),
             ('Priority', row.get('Priority')), ('Disposition', row.get('Disposition')),
             ('Guidance status', detail.get('guidance_status') or 'admin-center location not verified'),
             ('What to change', detail.get('change') or row.get('Recommendation')),
             ('Where to configure', detail.get('where')), ('Roles', '; '.join(prerequisites.get('roles') or [])),
-            ('Licensing', '; '.join(prerequisites.get('licensing') or [])),
+            ('Licensing', '; '.join(sorted(set(prerequisites.get('licensing') or []) | set(row.get('LicensingDependencies') or [])))),
             ('Other prerequisites', '; '.join(prerequisites.get('other') or [])),
             ('How to verify', detail.get('verify')), ('Evidence needed', detail.get('evidence_needed')),
         ])
@@ -125,3 +125,8 @@ def technical_recommendation_rows(result, heading=None):
         entry['Original recommendation'] = row.get('Recommendation')
         rows.append(entry)
     return rows
+
+
+def _finding_title(row):
+    from .identity_finding_taxonomy import finding_title
+    return finding_title(row)

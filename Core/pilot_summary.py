@@ -97,7 +97,10 @@ def _action_items(rows, numbers, report_name, bundle, *, found=True, limit=8):
         priority = str(row.get("Priority") or "").lower()
         tag = f'<span class="tag" data-priority="{escape(priority)}">{escape(row.get("Priority") or "")}</span>' if priority else ""
         detail = (f'<span class="found">{prose(_first_sentence(_observation(row, bundle)))}</span>' if found else "")
+        control = (f'<span class="found">Required control: {prose(row.get("OriginalCompatibilityLabel") or row.get("Feature"))}.</span>'
+                   if row.get('BaselineCheck') else '')
         items.append(f'<li><strong>{prose(_heading(row))}</strong>{tag}{detail}'
+                     f'{control}'
                      f'<span class="owner">Owner: {prose(row.get("OwnerRole") or "Tenant administrator")}.</span>'
                      f'{_link(report_name, number)}</li>')
     return "".join(items)
@@ -109,6 +112,8 @@ def _more(rows, limit=8):
 
 
 def render_pilot_summary(result, bundle, tenant_name, report_path=None, workbook_path=None, technical_workbook_path=None):
+    from .identity_finding_taxonomy import ensure_identity_result
+    result = ensure_identity_result(result, bundle)
     from .report_presentation import decision_groups
     actions = result.get("actions") or []
     numbers = {row.get("RecommendationId"): index for index, row in enumerate(actions, 1)}

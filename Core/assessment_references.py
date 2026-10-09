@@ -216,6 +216,8 @@ def validate_assessment_references(result):
 
 
 def require_valid_assessment(result):
+    from .identity_finding_taxonomy import require_valid_identity_taxonomy
+    require_valid_identity_taxonomy(result)
     from .privileged_validation import require_valid_privileged_assessment
     require_valid_privileged_assessment(result)
     diagnostics=validate_assessment_references(result)

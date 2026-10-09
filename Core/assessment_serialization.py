@@ -26,7 +26,8 @@ def plain_data(value):
 def write_assessment_result(path, result):
     """Write a data-only, sanitized snapshot of the current runtime result."""
     from .assessment_references import require_valid_assessment
-    snapshot = plain_data(result)
+    from .identity_finding_taxonomy import project_identity_result
+    snapshot = plain_data(project_identity_result(result))
     snapshot.setdefault('reconciliation', {'state':'legacy','reason':'Snapshot predates recorded semantic reconciliation; no equivalence inferred.'})
     from .assessment_runs import validate_run_context
     snapshot['run_workflow_diagnostics'] = validate_run_context(snapshot)
@@ -60,4 +61,5 @@ def read_assessment_result(path):
     from .governance_validation import validate_governance
     result['governance_diagnostics'] = validate_governance(result)
     result['identity_validation'] = require_valid_assessment(result)
-    return result
+    from .identity_finding_taxonomy import project_identity_result
+    return project_identity_result(result)
