@@ -175,6 +175,14 @@ class RiskGuestConsentTaxonomyTests(unittest.TestCase):
 
 
 class LegacyTaxonomyTests(unittest.TestCase):
+    def test_unresolved_historical_label_survives_confirmation_action_wording(self):
+        row = legacy('Prior MFA evidence.', Feature='Confirm multifactor authentication coverage',
+                     OriginalFeature='Historical MFA finding', Historical='Yes')
+        resolved = resolve_identity_finding(row)
+        self.assertEqual(resolved['FindingTitle'], 'Historical MFA finding')
+        self.assertEqual(resolved['TaxonomyState'], 'unresolved')
+        self.assertTrue(resolved['TaxonomyDiagnostics'])
+
     def test_workbook_condition_signatures_resolve_without_row_numbers(self):
         cases = [('2 Conditional Access policies found; verified controls include 1 requiring MFA', 'Conditional Access policy coverage'),
                  ('34 of 132 users with known registration flags are MFA registered.', 'MFA registration coverage'),
@@ -204,6 +212,14 @@ class LegacyTaxonomyTests(unittest.TestCase):
 
 
 class TaxonomyValidationTests(unittest.TestCase):
+    def test_malformed_snapshot_records_are_rejected_before_projection(self):
+        for value in ({}, ['not a row'], 'not a list'):
+            with self.subTest(value=value):
+                result = {'recommendations': value}
+                self.assertEqual(validate_identity_taxonomy(result)[0]['code'], 'identity_taxonomy_records_invalid')
+                with self.assertRaises(ValueError):
+                    project_identity_result(result)
+
     def test_validation_checks_action_projection_and_required_licensing(self):
         row = resolve_identity_finding(legacy(FindingCondition='conditional_access.policy_coverage'))
         row['LicensingDependencies'] = []

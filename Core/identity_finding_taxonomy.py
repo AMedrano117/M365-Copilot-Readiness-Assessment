@@ -235,7 +235,7 @@ def resolve_identity_finding(row, bundle=None):
         title, capability, level = CONDITIONS[condition]
         kind = 'evidence_gap' if level == 'evidence_gap' or condition in {'mfa.registration_unknown', 'mfa.registration_conflicting'} else 'control_condition'
     else:
-        result['FindingTitle'] = str(row.get('FindingTitle') or row.get('Feature') or 'Identity condition not established')
+        result['FindingTitle'] = str(row.get('FindingTitle') or original or 'Identity condition not established')
         result['TaxonomyDiagnostics'] = [{'code': 'identity_taxonomy_unresolved', 'severity': 'compatibility_warning',
             'recommendation_id': row.get('RecommendationId'),
             'reason': 'No unique condition mapping; legacy label is retained without assigning a new condition or governance target.'}]
@@ -263,20 +263,27 @@ BUCKETS = ('recommendations', 'actions', 'customer_findings', 'strengths', 'hist
            'medium', 'blockers', 'pilot_conditions', 'superseded_findings')
 
 
+def _records(value):
+    """Do not coerce malformed snapshot objects into empty or iterable findings."""
+    if not isinstance(value, (list, tuple)) or any(not isinstance(row, dict) for row in value):
+        raise ValueError('Identity taxonomy projection requires a list of record objects.')
+    return value
+
+
 def project_identity_result(result, bundle=None):
     """Copy finding projections only; never copy or modify large evidence/identity graphs."""
     projected = dict(result)
     for bucket in BUCKETS:
         if bucket in result:
-            projected[bucket] = [resolve_identity_finding(row, bundle) for row in result[bucket]]
+            projected[bucket] = [resolve_identity_finding(row, bundle) for row in _records(result[bucket])]
     for bucket in ('domains', 'assessment_domains'):
         if bucket in result:
             projected[bucket] = []
-            for domain in result[bucket]:
+            for domain in _records(result[bucket]):
                 copy = dict(domain)
                 for name in ('findings', 'actions', 'strengths', 'historical_strengths', 'opportunities', 'coverage'):
                     if name in domain:
-                        copy[name] = [resolve_identity_finding(row, bundle) for row in domain[name]]
+                        copy[name] = [resolve_identity_finding(row, bundle) for row in _records(domain[name])]
                 projected[bucket].append(copy)
     projected['identity_taxonomy'] = {'version': VERSION,
         'diagnostics': validate_identity_taxonomy(projected)}
@@ -293,10 +300,15 @@ def project_identity_result(result, bundle=None):
 def validate_identity_taxonomy(result):
     """Invalid structured names block publication; unresolved legacy labels are warnings."""
     diagnostics = []
-    records = [row for bucket in BUCKETS for row in result.get(bucket) or []]
-    records += [row for bucket in ('domains', 'assessment_domains') for domain in result.get(bucket) or []
-                for name in ('findings', 'actions', 'strengths', 'historical_strengths', 'opportunities', 'coverage')
-                for row in domain.get(name) or []]
+    try:
+        records = [row for bucket in BUCKETS if bucket in result for row in _records(result[bucket])]
+        records += [row for bucket in ('domains', 'assessment_domains') if bucket in result
+                    for domain in _records(result[bucket])
+                    for name in ('findings', 'actions', 'strengths', 'historical_strengths', 'opportunities', 'coverage')
+                    if name in domain for row in _records(domain[name])]
+    except ValueError:
+        return [{'code': 'identity_taxonomy_records_invalid', 'severity': 'error',
+                 'reason': 'Finding projections must be lists of record objects; no coercion or silent repair.'}]
     for row in records:
         if not _identity_row(row):
             continue
