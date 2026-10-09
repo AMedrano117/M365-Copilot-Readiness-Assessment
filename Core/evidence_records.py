@@ -5,6 +5,7 @@ and every contributing source row has a zero-based locator in assessment_sources
 No adapter refreshes a historical observation or performs network collection.
 """
 
+from copy import deepcopy
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -217,65 +218,31 @@ def _mfa(sources):
                                    'known_denominator': population['denominator'], 'total_users': population['total']})
 
 
-def _admin(sources):
-    schedules = list(_rows(sources, 'role_assignment_schedules'))
-    assignments = list(_rows(sources, 'role_assignments'))
-    definitions = list(_rows(sources, 'role_definitions'))
-    users = list(_rows(sources, 'users'))
-    selected = []
-    known = set()
-    def key(row):
-        return tuple(_text(_value(row, field)).casefold() for field in ('principalId', 'roleDefinitionId', 'directoryScopeId', 'appScopeId'))
-    for row, ref in schedules:
-        known.add(key(row))
-        schedule = row.get('scheduleInfo') or {}
-        expiration = schedule.get('expiration') or {}
-        if _norm(expiration.get('type')) != 'noexpiration':
-            continue
-        if _norm(row.get('status')) in {'revoked', 'canceled', 'cancelled', 'failed'}:
-            continue
-        selected.append((row, ref, 'Permanent Active', []))
-    # Without schedule detail the original role assignment remains reviewable,
-    # but its duration must not be described as confirmed permanent.
-    if not schedules:
-        selected.extend((row, ref, 'Active (duration unverified)', []) for row, ref in assignments)
-    output = []
-    for row, ref, assignment_type, extra in selected:
-        refs = [ref]
-        principal = row.get('principal') or {}
-        principal_id = _value(row, 'principalId')
-        for user, user_ref in users:
-            if principal_id and _text(user.get('id')).casefold() == _text(principal_id).casefold():
-                principal = {**user, **principal}
-                refs.append(user_ref)
-        role = row.get('roleDefinition') or {}
-        role_id = _value(row, 'roleDefinitionId')
-        for definition, definition_ref in definitions:
-            if role_id and _text(definition.get('id')).casefold() == _text(role_id).casefold():
-                role = {**definition, **role}
-                refs.append(definition_ref)
-        for assignment, assignment_ref in assignments:
-            if key(assignment) == key(row):
-                refs.append(assignment_ref)
-        schedule = row.get('scheduleInfo') or {}
-        fields = {'assignmentId': row.get('id'), 'principalId': principal_id,
-                  'principalDisplayName': _value(principal, 'displayName'), 'upn': _value(principal, 'userPrincipalName'),
-                  'principalType': _value(principal, '@odata.type'), 'roleDefinitionId': role_id,
-                  'roleName': _value(role, 'displayName'), 'scope': _value(row, 'directoryScopeId', 'appScopeId'),
-                  'appScopeId': _value(row, 'appScopeId'), 'assignmentType': assignment_type,
-                  'sourceAssignmentType': _value(row, 'assignmentType'),
-                  'activatedSince': _value(row, 'startDateTime') or _value(schedule, 'startDateTime')}
-        output.append(_record(fields, _refs(refs), native_id=row.get('id'),
-                              derived={'assignmentType': 'No-expiration active schedule; unscheduled assignments have unverified duration.'},
-                              qualifications=['Eligibility is distinct from active assignment. Creation time is not substituted for activation/start time.']))
-    notes = []
-    unmatched = sum(key(row) not in known for row, _ in assignments) if schedules else len(assignments)
-    if unmatched and schedules:
-        notes.append(f'{unmatched} active role assignment(s) have no matching retained schedule and are not counted as confirmed permanent.')
-    return _finish(output, 'standing_admin_assignment', 'Active role schedules explicitly using noExpiration; raw active assignments are used only when schedule detail is absent and duration is qualified.',
-                   sources, ['role_assignment_schedules', 'role_assignments', 'role_definitions', 'users'], notes,
-                   {'selected_assignment_records': len(output), 'unmatched_active_assignments': unmatched,
-                    'eligible_assignments_excluded': sum(1 for _ in _rows(sources, 'role_eligibility_schedules'))})
+def _admin(sources, evaluation_timestamp=None, privileged_assessment=None):
+    from .privileged_identity import build_privileged_assessment
+    from .privileged_assignments import instant
+    dates = [d.get('source', {}).get('collected_at') for datasets in sources.values() for d in datasets
+             if instant(d.get('source', {}).get('collected_at')) is not None]
+    stamp = evaluation_timestamp or (max(dates, key=instant) if dates else None)
+    model = deepcopy(privileged_assessment) if privileged_assessment is not None else build_privileged_assessment(sources, evaluation_timestamp=stamp)
+    selected = [a for a in model['assignments'] if a['temporal_state'] in {'ActivePermanent', 'DirectActiveDurationUnverified'}]
+    for a in selected:
+        matches = [(u, ref) for u, ref in _rows(sources, 'users') if u.get('id') == a['principal_id']]
+        a['principal_display_reference'] = a['principal_display_reference'] or (matches[0][0].get('displayName') if len(matches) == 1 else None)
+        a['upn'] = matches[0][0].get('userPrincipalName') if len(matches) == 1 else None
+        a['evidence_refs'].extend(ref for _, ref in matches)
+    records = [_record({'assignmentId': a['source_id'], 'principalId': a['principal_id'],
+        'principalDisplayName': a['principal_display_reference'], 'upn': a.get('upn'),
+        'principalType': a['principal_type'], 'roleDefinitionId': a['role_definition_id'],
+        'roleName': a['role_name'], 'scope': a['directory_scope_id'], 'appScopeId': a['app_scope_id'],
+        'assignmentType': 'Permanent Active' if a['temporal_state'] == 'ActivePermanent' else 'Active (duration unverified)',
+        'temporalState': a['temporal_state'], 'activatedSince': a['start'], 'assignmentKey': a['assignment_key']},
+        a['evidence_refs'], native_id=a['assignment_key'],
+        derived={'assignmentType': 'Shared temporal classification at the recorded evaluation timestamp.'}) for a in selected]
+    return _finish(records, 'standing_admin_assignment',
+        'Shared current permanent or duration-unverified active assignments; future, expired and eligible grants excluded.',
+        sources, ['role_assignments', 'role_assignment_schedules', 'role_eligibility_schedules'],
+        model['limitations'], {'selected_assignment_records': len(records)})
 
 
 def _risks(sources):
@@ -855,7 +822,7 @@ def _standing_admin_finding(finding):
     return 'admin_role_detail' in keys and bool(_STANDING_ADMIN.search(text))
 
 
-def expand_finding_records(finding, sources, *, evaluation_date=None, tenant_id=None):
+def expand_finding_records(finding, sources, *, evaluation_date=None, tenant_id=None, privileged_assessment=None):
     """Return named records for a supported finding, with exact source locators.
 
     Adapters are chosen from finding content (FindingKey, evidence key and wording),
@@ -867,10 +834,28 @@ def expand_finding_records(finding, sources, *, evaluation_date=None, tenant_id=
     from .signin_evidence import is_legacy_signin_finding
     key = str(finding.get('FindingKey') or '')
     feature = str(finding.get('Feature') or '').lower()
+    if key.startswith('entra.privileged.'):
+        model = privileged_assessment or {}
+        selected = set(finding.get('PrivilegedObservationIds') or [])
+        identities = {i['identity_id']: i for i in model.get('identities') or []}
+        records = []
+        for observation in model.get('observations') or []:
+            if observation['observation_id'] not in selected:
+                continue
+            identity = identities[observation['identity_id']]
+            fields = {'identityId': identity['identity_id'], 'principalId': identity['principal_id'],
+                'principalType': identity['principal_type'], 'condition': observation['condition'],
+                'classification': observation['classification'], 'componentObservationIds': observation['component_ids'],
+                'activeAssignments': identity['active_assignments'], 'eligibleAssignments': identity['eligible_assignments'],
+                'assignmentScopes': identity['scopes'], 'activity': identity['activity'],
+                'purpose': identity['purpose'], 'registrationState': identity['authentication']['registration_state']}
+            records.append(_record(fields, observation['evidence_refs'], native_id=observation['observation_id']))
+        return _finish(records, 'privileged_identity', 'Shared privileged component observations with exact native source locators.',
+                       sources, [], model.get('limitations') or [])
     if 'mfa_registration' in key:
         return _mfa(sources)
     if _standing_admin_finding(finding):
-        return _admin(sources)
+        return _admin(sources, evaluation_date, privileged_assessment)
     if key == 'entra.identity_risk.users':
         return _risks(sources)
     if key == 'entra.apps.user_consent_assignment':

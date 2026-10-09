@@ -296,7 +296,8 @@ def build_evidence_selection(result, bundle, *, tenant_name=None, generated_at=N
                       'limitations': [row.get('InvestigationQualification') or
                                      ('Historical summaries cannot recreate named records.' if historical else 'A planning decision does not assert an affected record population.')]}
         else:
-            detail = expand_finding_records(row, sources, evaluation_date=result.get('evaluation_date'), tenant_id=tenant_id)
+            detail = expand_finding_records(row, sources, evaluation_date=result.get('evaluation_date'), tenant_id=tenant_id,
+                                           privileged_assessment=result.get('privileged_assessment'))
             specialized = detail.get('record_type') != 'unsupported'
             if not specialized:
                 detail = _generic(row, bundle, registry)

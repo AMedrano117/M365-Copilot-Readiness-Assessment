@@ -8,6 +8,9 @@ from .investigation_details import _ref
 
 MAX_DATA_ROWS = 1_048_575
 KEY_SOURCES = {
+ 'admin_role_detail':['role_assignments','role_assignment_schedules','role_eligibility_schedules'],
+ 'privileged_identity_detail':['role_assignments','role_assignment_schedules','role_eligibility_schedules',
+                              'users','user_signin_activity','auth_methods','signin_logs','group_members','privileged_group_members'],
  'authentication_detail':['auth_methods'], 'authentication_methods_detail':['auth_methods'],
  'authentication_preferences_detail':['auth_methods'], 'mfa_registration_detail':['auth_methods'],
  'conditional_access_detail':['ca_policies','authentication_strengths','ca_group_members'],

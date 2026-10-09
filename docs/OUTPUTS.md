@@ -11,6 +11,11 @@ linked HTML evidence pages. Keep companion files together so local links resolve
 
 ## Shared-result snapshots
 
+Pass B adds shared privileged-identity records, aggregate HTML summaries and a
+restricted Privileged Identity Review worksheet. Snapshots retain recorded
+assignment, population, purpose, authentication and explicit inactivity-policy
+evaluation. See [Privileged identity interpretation](PRIVILEGED_IDENTITY.md).
+
 Explicit post-run decisions are documented in [Assessment governance](ASSESSMENT_GOVERNANCE.md).
 Validated governance overlays add separate decision registers and concise shared
 workbook/HTML summaries; original completed runs remain immutable.

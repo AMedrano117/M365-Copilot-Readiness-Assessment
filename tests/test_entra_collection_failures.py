@@ -23,8 +23,9 @@ class EntraCollectionFailureTests(unittest.IsolatedAsyncioTestCase):
                 if '$top' in request.url.params:
                     return httpx.Response(400, json={'error': {'code': 'BadRequest', 'message': 'Unsupported query parameter'}})
                 second = request.url.params.get('$skiptoken') == 'second'
-                row = {'id': 'second' if second else 'first', 'roleDefinitionId': 'global-role',
-                       'scheduleInfo': {'expiration': {'type': 'afterDateTime' if second else 'noExpiration'}}}
+                row = {'id': 'second' if second else 'first', 'principalId': 'fictional-user', 'status': 'Provisioned',
+                       'roleDefinitionId': 'global-role', 'scheduleInfo': {'startDateTime': '2020-01-01T00:00:00Z',
+                       'expiration': {'type': 'afterDateTime', 'endDateTime': '2099-01-01T00:00:00Z'} if second else {'type': 'noExpiration'}}}
                 data = {'value': [row]}
                 if not second:
                     data['@odata.nextLink'] = 'https://graph.microsoft.com' + path + '?$skiptoken=second'

@@ -183,6 +183,8 @@ def render_pilot_summary(result, bundle, tenant_name, report_path=None, workbook
 
     from .authentication_presentation import authentication_summary_html
     sections.append(authentication_summary_html(result))
+    from .privileged_presentation import privileged_summary_html
+    sections.append(privileged_summary_html(result))
     executive = result.get('executive_summary') or {}
     decisions = executive.get('Decisions required') or []
     if decisions:

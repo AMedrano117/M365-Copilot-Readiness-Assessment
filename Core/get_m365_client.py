@@ -142,7 +142,7 @@ async def get_m365_client(
         tasks = {
             'users': graph_client.get_collection(
                 "/v1.0/users",
-                params={'$select': 'id,displayName,userPrincipalName,userType,assignedLicenses,accountEnabled', '$top': '999'},
+                params={'$select': 'id,displayName,userPrincipalName,userType,assignedLicenses,accountEnabled,onPremisesSyncEnabled,createdDateTime', '$top': '999'},
             ),
             'external_connections': graph_client.get_collection(
                 "/v1.0/external/connections", params={'$top': '999'}
