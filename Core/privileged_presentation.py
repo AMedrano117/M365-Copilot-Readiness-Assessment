@@ -3,7 +3,8 @@ from collections import defaultdict
 from copy import deepcopy
 from html import escape
 
-from .privileged_assignments import evaluation_timestamp, instant
+from .privileged_assignments import instant, source_current
+from .source_evidence import envelope_complete
 
 LABELS = {'ActivePermanent': 'Permanent Active', 'ActiveTimeBound': 'Time-Bound Active',
           'EligiblePermanent': 'Eligible Permanent', 'EligibleTimeBound': 'Eligible Time-Bound',
@@ -123,6 +124,8 @@ def privileged_findings(model, sources):
         feature, disposition = FINDING_CONDITIONS[condition]
         refs = [ref for o in observations for ref in o['evidence_refs']]
         states = [sources[r['dataset']][r['dataset_index']]['source'] for r in refs]
+        complete = model['population_complete'] and bool(states) and all(envelope_complete(s)
+            and source_current(s, model['evaluation_timestamp']) and (s.get('source_file') or s.get('source_api')) for s in states)
         dates = [s.get('collected_at') for s in states if instant(s.get('collected_at')) is not None]
         observed_at = min(dates, key=instant) if dates else ''
         row = new_recommendation(service='Entra', feature=feature,
@@ -135,7 +138,7 @@ def privileged_findings(model, sources):
         row.update(ControlId='IDENTITY.ADMIN', DomainId='identity',
             EvidenceSource='privileged_identity.' + condition,
             EvidenceScope='Retained directory privileged identities and assignment scopes; qualified activity and authentication evidence',
-            EvidenceComplete=model['population_complete'], ObservationDate=observed_at,
+            EvidenceComplete=bool(complete), ObservationDate=observed_at,
             Provider=model['boundary'].get('provider'), PrivilegedObservationIds=[o['observation_id'] for o in observations],
             PrivilegedIdentityIds=[o['identity_id'] for o in observations],
             Population='Current privileged identities for this condition', PopulationDefinition=condition,
@@ -146,10 +149,10 @@ def privileged_findings(model, sources):
         row.update(MeasuredValue=len(observations), Unit='identities',
                    AffectedObjectIds=sorted({identities[o['identity_id']]['principal_id'] for o in observations}))
         row['collection_status'] = {row['EvidenceSource']: {'available': True,
-            'availability_status': 'available' if model['population_complete'] else 'partial',
-            'complete': model['population_complete'], 'truncated': not model['population_complete'],
+            'availability_status': 'available' if complete else 'partial',
+            'complete': bool(complete), 'truncated': not complete,
             'collected_at': observed_at, 'source_type': 'derived_evidence',
-            'source_file': '; '.join(sorted({s.get('source_file') or s.get('source_api') or 'Unrecorded source' for s in states})),
+            'source_file': '; '.join(sorted({s.get('source_file') or s.get('source_api') for s in states if s.get('source_file') or s.get('source_api')})),
             'tenant_id': model['boundary'].get('tenant_id'), 'scope': row['EvidenceScope']}}
         output.append(row)
     return output

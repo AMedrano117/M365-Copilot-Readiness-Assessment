@@ -20,7 +20,7 @@ def grant(identifier='grant-1', principal='user-1', **extra):
 
 def dataset(records, **state):
     return {'records': records, 'source': {'available': True, 'availability_status': 'available', 'complete': True,
-            'truncated': False, 'collected_at': NOW, **state}}
+            'truncated': False, 'collected_at': NOW, 'source_file': 'fictional-retained-evidence.json', **state}}
 
 
 def sources(assignments=None, users=None, **extra):

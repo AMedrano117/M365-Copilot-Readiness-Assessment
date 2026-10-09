@@ -13,6 +13,18 @@ TENANT = '11111111-1111-4111-8111-111111111111'
 
 
 class PrivilegedOutputTests(unittest.TestCase):
+    def test_population_completeness_cannot_promote_unqualified_authentication_provenance(self):
+        from Core.privileged_presentation import privileged_findings
+        raw = {'id': 'event', 'userId': 'user-1', 'createdDateTime': RECENT, 'status': {'errorCode': 0}, 'clientAppUsed': 'IMAP'}
+        for change in ({'complete': False, 'availability_status': 'partial'}, {'source_file': ''},
+                       {'collected_at': ''}, {'availability_status': 'failed'}):
+            data = sources(signin_logs=[dataset([raw])]); data['signin_logs'][0]['source'].update(change)
+            model = build(data)
+            self.assertTrue(model['population_complete'])
+            finding = next(r for r in privileged_findings(model, data) if 'SuccessfulLegacyAuthentication' in r['FindingKey'])
+            self.assertFalse(finding['EvidenceComplete'])
+            self.assertEqual(finding['collection_status'][finding['EvidenceSource']]['availability_status'], 'partial')
+
     def fixture(self):
         from Core.assessment_result import build_assessment_result
         from Core.evidence_layer import build_evidence_bundle
