@@ -135,7 +135,7 @@ class LegacySignInEvidenceTests(unittest.TestCase):
         self.assertEqual(rows[0]['Service Principal Name'], 'Private SMTP Principal')
         self.assertEqual(rows[0]['Location Country / Region'], 'US')
         self.assertEqual(rows[2]['Error Code'], 'Not returned')
-        self.assertEqual(rows[0]['Created UTC'], '2026-09-28T05:30:00Z')
+        self.assertEqual(rows[0]['Created UTC'], '2026-09-28T07:30:00+02:00')
         self.assertEqual(rows[0]['Is Interactive'], 'No')
         for field in ('User Principal Name', 'User Display Name', 'Resource ID', 'Resource Name', 'IP Address',
                       'Device ID', 'Device Name', 'Device OS', 'Device Browser', 'Correlation ID', 'Authentication Protocol'):

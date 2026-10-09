@@ -126,7 +126,10 @@ delayed or contradictory steps cannot become favorable assurance. See
 
 Main HTML and readiness summary render the same identity-free layer summary.
 Legacy Excel detail and optional technical HTML show normalized outcomes alongside
-retained source values, event IDs, timestamps and scope. Existing sheet/link and
+retained source values, event IDs, timestamps and scope. Legacy Excel `Created UTC`
+retains raw Graph `createdDateTime` strings verbatim, including fractional digits
+and timezone suffixes. SDK datetime objects retain the existing UTC conversion;
+missing timestamps retain the existing unavailable marker. Existing sheet/link and
 RecommendationId routes remain. Snapshots persist shared/raw normalized values;
 offline replay uses the same evaluators. Existing snapshot validation, package
 ownership, typed identities, evidence references, run history, immutable baselines,

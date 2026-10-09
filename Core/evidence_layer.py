@@ -1605,6 +1605,13 @@ def _signin_utc(value):
         return str(value) + ' (UTC not established)'
 
 
+def _signin_export_timestamp(value):
+    """Preserve raw Graph strings; format only SDK datetime values for export."""
+    if isinstance(value, str):
+        return value if value else 'Not returned'
+    return _signin_utc(value)
+
+
 def _build_legacy_signin_sheet(entra_client, recommendations=None, collection_context=None):
     """Retain each matched sign-in event, including repeated users and apps."""
     from .signin_evidence import (LEGACY_CLASSIFICATION_RULE, OUTCOME_RULE, classify_signin_outcome,
@@ -1678,7 +1685,7 @@ def _build_legacy_signin_sheet(entra_client, recommendations=None, collection_co
             'Client App Used (reported client type)': _signin_text(_safe_get(event, 'clientAppUsed', None)),
             'Authentication Protocol': _signin_text(_safe_get(event, 'authenticationProtocol', None)),
             'User Agent': _signin_text(_safe_get(event, 'userAgent', None)),
-            'Created UTC': _signin_utc(_safe_get(event, 'createdDateTime', None)),
+            'Created UTC': _signin_export_timestamp(_safe_get(event, 'createdDateTime', None)),
             'IP Address': _signin_text(_safe_get(event, 'ipAddress', None)),
             'Location City': _signin_text(_safe_get(location, 'city', None)),
             'Location State': _signin_text(_safe_get(location, 'state', None)),

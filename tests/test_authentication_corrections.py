@@ -563,12 +563,53 @@ class AuthenticationDeliverableTests(unittest.TestCase):
     def test_technical_event_timestamp_keeps_all_returned_fractional_digits(self):
         from Core.evidence_layer import _build_legacy_signin_sheet
         raw = event(0, 'notApplied', 'IMAP')
-        for fraction in ('1234567', '0000007'):
+        for fraction in ('123', '123000', '1234567', '0000007', '123456789'):
             with self.subTest(fraction=fraction):
                 raw['createdDateTime'] = DAY + 'T11:22:33.' + fraction + 'Z'
                 client = NS(signin_logs=[raw], collection_status={'signin_logs': source()})
                 row = _build_legacy_signin_sheet(client, [{'Service': 'Entra', 'FindingKey': 'entra.signins.legacy_auth'}])['rows'][0]
                 self.assertEqual(row['Created UTC'], raw['createdDateTime'])
+
+    def test_raw_signin_timestamp_export_never_calls_datetime_formatter(self):
+        from Core.evidence_layer import _build_legacy_signin_sheet
+        timestamps = (DAY + 'T11:22:33.1234567Z', DAY + 'T11:22:33.0000007Z',
+                      DAY + 'T11:22:33.1234567+00:00')
+        with patch('Core.evidence_layer._signin_utc', side_effect=AssertionError('Raw timestamp must not be parsed')):
+            for timestamp in timestamps:
+                with self.subTest(timestamp=timestamp):
+                    raw = event(0, 'notApplied', 'IMAP')
+                    raw['createdDateTime'] = timestamp
+                    client = NS(signin_logs=[raw], collection_status={'signin_logs': source()})
+                    row = _build_legacy_signin_sheet(client, [{'Service': 'Entra', 'FindingKey': 'entra.signins.legacy_auth'}])['rows'][0]
+                    self.assertEqual(row['Created UTC'], timestamp)
+
+    def test_full_timestamp_strings_survive_serialization_and_workbook_export(self):
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+        from Core.assessment_serialization import plain_data, write_assessment_result, read_assessment_result
+        from Core.export_recommendations import export_to_excel
+        from tests.workbook_test_helpers import load_workbook_pair
+        timestamps = [DAY + 'T11:22:33.' + fraction + 'Z' for fraction in ('1234567', '0000007')]
+        records = [dict(event(0, 'notApplied', 'IMAP'), id='precision-' + str(index), createdDateTime=timestamp)
+                   for index, timestamp in enumerate(timestamps)]
+        client = NS(signin_logs=records, collection_status={'signin_logs': source()})
+        restored_client = _decode(_encode(client))
+        self.assertEqual([row['createdDateTime'] for row in restored_client.signin_logs], timestamps)
+        self.assertEqual([row['createdDateTime'] for row in plain_data(records)], timestamps)
+        result, bundle, _ = self.fixture(restored_client)
+        with TemporaryDirectory() as folder:
+            snapshot_path = Path(folder) / 'snapshot.json'
+            write_assessment_result(snapshot_path, result)
+            snapshot = read_assessment_result(snapshot_path)
+            self.assertEqual([row['createdDateTime'] for row in snapshot['operational_results']['IDENTITY.AUTH']['records']], timestamps)
+            path = export_to_excel(result['recommendations'], filename='precision.xlsx', evidence_bundle=bundle, output_dir=folder)
+            workbook = load_workbook_pair(path)
+            try:
+                values = list(workbook.technical['Legacy Sign-In Detail'].values)
+                column = values[0].index('Created UTC')
+                self.assertEqual([row[column] for row in values[1:]], timestamps)
+            finally:
+                workbook.close()
 
     def test_new_legacy_counts_have_no_inferred_delta_direction_or_automatic_closure(self):
         from Core.delta_metrics import compare_metric
