@@ -163,37 +163,29 @@ def qualify_saved_recommendations(rows, service, client):
             # carries its own gap, so this is not a second action (3.0).
             row.update(Disposition="Reference", EvidenceBasis="Collection context", DomainId="data_protection")
         legacy_count = re.search(r"\b([0-9]+) legacy authentication sign-ins?\b", observation, re.I)
-        if service == "Entra" and legacy_count and int(legacy_count.group(1)) > 0:
-            # Older saved recommendations had no event-detail route and claimed
-            # a 30-day window or successful bypass from a client-type count.
-            count = int(legacy_count.group(1))
-            row.setdefault("OriginalObservation", observation)
-            if row.get("Feature") != "Legacy authentication sign-ins":
-                row.setdefault("OriginalFeature", row.get("Feature"))
-            row.update(Feature="Legacy authentication sign-ins",
-                       FindingKey="entra.signins.legacy_auth", EvidenceKey="legacy_signin_detail",
-                       EvidenceSource="entra_signin_logs", EvidenceComplete=source_is_complete(client, "signin_logs"),
-                       EvidenceScope="Returned sign-in log records classified by clientAppUsed; includes successful and failed attempts",
-                       ReportedLegacySignInCount=count,
-                       Observation=f"{count} legacy authentication sign-in attempt{'s' if count != 1 else ''} detected in the returned sign-in records. Review the event outcomes before deciding whether access succeeded.",
-                       Recommendation="Review the linked sign-in records to identify the accounts, applications, clients and IP addresses involved. Distinguish successful requests from failed or blocked attempts using the error code and Conditional Access result. Confirm business dependencies, migrate required clients to modern authentication, and test a policy to block legacy authentication before enforcement.")
-        if service == "Entra" and "No legacy authentication sign-ins" in observation:
-            complete = source_is_complete(client, "signin_logs")
-            if row.get("Feature") != "Legacy authentication sign-ins":
-                row.setdefault("OriginalFeature", row.get("Feature"))
-            row.update(Feature="Legacy authentication sign-ins", EvidenceSource="signin_logs",
-                       EvidenceComplete=complete, EvidenceScope="Returned sign-in log records",
-                       Observation="No legacy authentication sign-ins were found in the returned sign-in records. This sample does not establish that all access uses modern authentication or that every security control is effective."
-                       if complete else "The sign-in query did not complete. The absence of legacy authentication has not been established.")
-            if not complete:
-                row.update(Disposition="Coverage", Status="Not Assessed", SourceStatus="Not Assessed", EvidenceAvailable="No", EvidenceBasis="Not verified",
-                           Recommendation="Review the dated sign-in evidence and confirm the scope and result of legacy authentication checks.")
-        if (service == "Entra" and re.search(r"\b\d+ of \d+ users\b", observation, re.I)
-                and "mfa" in observation.lower() and ("enroll" in observation.lower() or "registered" in observation.lower())
-                and (row.get("Disposition") == "Action" or str(row.get("Status") or "").lower() in {"action required", "attention required", "warning", "critical"})):
-            row.update(FindingKey="entra.authentication.mfa_registration",
-                       EvidenceKey="authentication_detail;mfa_registration_detail",
-                       EvidenceSource="entra_auth_methods", EvidenceComplete=source_is_complete(client, "auth_methods"))
+        if service == 'Entra' and (legacy_count or 'No legacy authentication sign-ins' in observation
+                                   or row.get('FindingKey') == 'entra.signins.legacy_auth'):
+            from .authentication_findings import qualify_legacy_finding
+            if legacy_count:
+                row.setdefault('ReportedLegacySignInCount', int(legacy_count.group(1)))
+            row = qualify_legacy_finding(row, client)
+        if (service == 'Entra' and (row.get('FindingKey') == 'entra.authentication.mfa_registration' or
+                re.search(r"\b\d+ of \d+ users\b", observation, re.I) and 'mfa' in observation.lower()
+                and any(word in observation.lower() for word in ('enroll', 'registered')))):
+            from .authentication_methods import authentication_method_report, registration_records
+            from .authentication_findings import registration_recommendation
+            report = authentication_method_report(client)
+            if getattr(client, 'auth_methods_registration', None) is not None or registration_records(client):
+                corrected = registration_recommendation({'registration_population': report['registration_population']}, row.get('Feature') or 'MFA registration')
+                # Historical positive cards are references, never a source of new
+                # remediation rows or automatic assurance during replay.
+                if row.get('Status') == 'Success' and row.get('Disposition') != 'Action':
+                    corrected.update(Disposition='Reference', Status='Insight', Recommendation='', EvidenceKey='authentication_detail')
+                row.setdefault('OriginalObservation', observation)
+                for key in ('Observation', 'Recommendation', 'Status', 'Disposition', 'FindingKey', 'EvidenceKey', 'MFARegistrationPopulation'):
+                    row[key] = corrected[key]
+                row.update(EvidenceSource='entra_auth_methods', EvidenceComplete=report['complete'],
+                           EvidenceScope='Returned registration-report users; known flags and documented exclusions reconciled')
         if re.search(r"\bis active in\b", observation, re.I) or (
                 service == "Defender" and row.get("Feature") in {"Microsoft Defender XDR", "Microsoft Defender for Endpoint", "Microsoft Defender for Office 365 (Plan 2)"}):
             row.update(Observation=f"The {row.get('Feature')} service plan was present in the collected license inventory. Operational protection requires separate control evidence.",

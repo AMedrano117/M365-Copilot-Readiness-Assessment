@@ -133,13 +133,19 @@ def _mfa(sources):
     output = []
     users = list(_rows(sources, 'users', 'license_users', 'user_signin_activity'))
     signins = list(_rows(sources, 'signin_logs'))
-    for row, ref in _rows(sources, 'auth_methods', 'auth_methods_registration'):
-        if _boolean(_value(row, 'isMfaRegistered')) is not False:
+    from .authentication_methods import reconcile_registration_population
+    registrations = list(_rows(sources, 'auth_methods', 'auth_methods_registration'))
+    population = reconcile_registration_population([row for row, _ in registrations], users=[row for row, _ in users])
+    for entry in population['entries']:
+        if entry['state'] != 'ExplicitlyNotRegistered':
             continue
+        row = entry['record']
+        registration_refs = [registrations[position-1][1] for position in entry['positions']]
+        ref = registration_refs[0]
         identifier = _value(row, 'id', 'userId')
         upn = _value(row, 'userPrincipalName', 'upn')
         matches = [(user, user_ref) for user, user_ref in users if _matches_user(user, identifier, upn)]
-        refs = [ref] + [user_ref for _, user_ref in matches]
+        refs = registration_refs + [user_ref for _, user_ref in matches]
         display_name = _value(row, 'userDisplayName', 'displayName')
         if not display_name:
             display_name = next((_value(user, 'displayName') for user, _ in matches if _value(user, 'displayName')), None)
@@ -186,6 +192,10 @@ def _mfa(sources):
         last_attempt, attempt_ref = _latest(attempt_history)
         refs = _refs(refs, successful_ref, attempt_ref)
         fields = {'userId': identifier, 'upn': upn, 'displayName': display_name, 'isMfaRegistered': False,
+                  'userType': row.get('userType'), 'accountEnabled': row.get('accountEnabled'),
+                  'isMfaCapable': row.get('isMfaCapable'), 'isPasswordlessCapable': row.get('isPasswordlessCapable'),
+                  'methodsRegistered': row.get('methodsRegistered'), 'lastUpdatedDateTime': row.get('lastUpdatedDateTime'),
+                  'registrationState': entry['state'], 'exclusionReason': entry['exclusion_reason'],
                   'defaultMfaMethod': default,
                   'userPreferredMfaMethod': preference,
                   'systemPreferredAuthenticationEnabled': system_preferred,
@@ -203,7 +213,8 @@ def _mfa(sources):
                               qualifications=['MFA registration is distinct from policy enforcement and observed MFA behavior.']))
     return _finish(output, 'user_mfa_registration', 'Users explicitly reporting isMfaRegistered=false; unknown values are excluded.',
                    sources, ['auth_methods', 'users', 'license_users', 'user_signin_activity', 'signin_logs'],
-                   reconciliation={'selected_user_records': len(output)})
+                   reconciliation={'selected_user_records': len(output), 'registration_population': population['counts'],
+                                   'known_denominator': population['denominator'], 'total_users': population['total']})
 
 
 def _admin(sources):
@@ -736,7 +747,7 @@ def _antivirus(sources, finding):
 
 def _legacy_signins(sources, finding):
     from .signin_evidence import (LEGACY_CLASSIFICATION_RULE, LEGACY_CLIENT_TYPES_SOURCE, LEGACY_SIGNIN_COUNT,
-                                  OUTCOME_RULE, SIGNIN_OUTCOMES, classify_signin_outcome, is_legacy_signin,
+                                  OUTCOME_RULE, SIGNIN_OUTCOMES, classify_signin_outcome, normalize_signin_event, is_legacy_signin,
                                   unmatched_legacy_client_type)
     output, unmatched, examined = [], {}, 0
     outcomes = dict.fromkeys(SIGNIN_OUTCOMES, 0)
@@ -752,6 +763,7 @@ def _legacy_signins(sources, finding):
         location = row.get('location') if isinstance(row.get('location'), dict) else {}
         device = row.get('deviceDetail') if isinstance(row.get('deviceDetail'), dict) else {}
         outcome = classify_signin_outcome(row)
+        normalized = normalize_signin_event(row, ref)
         outcomes[outcome['outcome']] += 1
         policies = row.get('appliedConditionalAccessPolicies')
         account = _text(_value(row, 'userId')) or _text(_value(row, 'userPrincipalName'))
@@ -767,6 +779,20 @@ def _legacy_signins(sources, finding):
             'resourceDisplayName': _value(row, 'resourceDisplayName'),
             'clientAppUsed': _value(row, 'clientAppUsed'),
             'authenticationProtocol': _value(row, 'authenticationProtocol'),
+            'normalized_outcome': normalized['NormalizedSignInOutcome'],
+            'legacyAuthenticationState': normalized['LegacyAuthenticationState'],
+            'authenticationRuleVersion': normalized['AuthenticationRuleVersion'],
+            'authenticationRequirement': row.get('authenticationRequirement'),
+            'mfaRequirement': normalized['MFARequirement'], 'mfaSatisfaction': normalized['MFASatisfaction'],
+            'authenticationDetails': row.get('authenticationDetails'),
+            'authenticationMethodsUsed': row.get('authenticationMethodsUsed'),
+            'rootAuthenticationMethods': normalized['RootAuthenticationMethods'],
+            'appliedPoliciesState': normalized['AppliedPoliciesState'],
+            'reportOnlyResults': normalized['ReportOnlyResults'],
+            'authenticationConflicts': normalized['AuthenticationConflicts'],
+            'riskLevelDuringSignIn': row.get('riskLevelDuringSignIn'),
+            'riskLevelAggregated': row.get('riskLevelAggregated'), 'riskState': row.get('riskState'),
+            'resourceId': row.get('resourceId'), 'userType': row.get('userType'),
             'outcome': outcome['outcome'], 'outcomeDetail': outcome['detail'], 'outcomeBasis': outcome['basis'],
             'errorCode': status.get('errorCode'), 'failureReason': _value(status, 'failureReason'),
             'additionalDetails': _value(status, 'additionalDetails'),

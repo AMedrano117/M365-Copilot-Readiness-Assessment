@@ -144,8 +144,9 @@ def write_html_evidence_pages(model, folder, *, report_name=None, page_rows=PAGE
                  ('Collected at', ', '.join(evidence['collected_at']) or None),
                  ('Source datasets', ', '.join(evidence['datasets']) or None),
                  ('Source IDs', ', '.join(evidence['source_ids']) or None)]
-        if evidence['outcome_counts']:
-            facts.append(('Outcomes', ', '.join(f'{name}: {count}' for name, count in evidence['outcome_counts'].items())))
+        outcome_counts = evidence.get('normalized_outcome_counts') or evidence.get('outcome_counts')
+        if outcome_counts:
+            facts.append(('Outcomes', ', '.join(f'{name}: {count}' for name, count in outcome_counts.items())))
         if evidence['worklist_count'] is not None:
             facts.append(('Workbook worklist', f"{evidence['worklist_count']} {evidence['worklist_unit'] or ''}".strip()))
         workbook = finding.get('workbook') or {}

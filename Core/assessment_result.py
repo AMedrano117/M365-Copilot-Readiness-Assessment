@@ -764,6 +764,15 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
             'SourceType':'operator_attestation', 'SourceFile':(bundle.get('assessment_profile') or {}).get('filename',''),
             'InvestigationEvidence':{'kind':'records','records':assessment['records'], 'reason':assessment['reason'],
                 'source':{'scope':'Tenant-wide owner review','complete':True,'truncated':False}}}
+        if assessment.get('event_derived'):
+            source = deepcopy(assessment.get('source') or {})
+            original.update(EvidenceScope=source.get('scope') or 'Returned sign-in events; original scope unknown',
+                            EvidenceComplete=source.get('complete') is True,
+                            ObservationDate=source.get('collected_at') or source.get('collection_completed_at') or '',
+                            SourceType='tenant_collection', SourceFile=source.get('source_file') or source.get('source_api') or '',
+                            TenantId=source.get('tenant_id') or '', EvidenceKey='legacy_signin_detail',
+                            EvidenceBasis='Observed authentication event')
+            original['InvestigationEvidence']['source'] = source
         row, fact = _qualify_record(original,bundle,day,expected_tenant_id)
         if assessment['result']=='conflict': row['EvidenceStatus']='conflict'
         records.append(row)
@@ -1010,6 +1019,8 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
         result["decision"] = "Readiness unconfirmed"
         result["rationale"] = "Complete the remaining pilot requirements before authorizing the next rollout stage."
     result['operational_results'] = operation
+    from .authentication_findings import assessment_authentication_summary
+    result['authentication_assessment'] = assessment_authentication_summary(bundle, operation)
     result['device_reconciliation'] = devices
     from .assessment_catalog import attach_catalog
     from .assessment_identity import attach_identity

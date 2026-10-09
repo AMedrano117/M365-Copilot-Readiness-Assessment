@@ -111,8 +111,8 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
                 recommendations.append(new_recommendation(
                     service="Entra",
                     feature=feature_name,
-                    observation="No Conditional Access policies configured, leaving Copilot access unprotected",
-                    recommendation="Implement Conditional Access policies to protect Copilot access. Start with requiring MFA for all users, blocking legacy authentication, and enforcing device compliance. CA policies are essential for preventing unauthorized AI usage and protecting sensitive data accessed through Copilot.",
+                    observation="No Conditional Access policies were returned by this inventory; effective authentication protection requires separate confirmation",
+                    recommendation="Review Security Defaults, Conditional Access scope, authentication strengths and documented external-provider requirements. Validate the intended population and observed sign-in results before changing enforcement.",
                     link_text="Configure Conditional Access",
                     link_url="https://learn.microsoft.com/entra/identity/conditional-access/overview",
                     priority="High",
@@ -140,60 +140,10 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
                     status="Success"
                 ))
             
-            # Observation 2: MFA enrollment and usage
-            total_users = mfa_metrics.get('total_users', 0)
-            mfa_enabled = mfa_metrics.get('mfa_enabled_users', 0)
-            mfa_percentage = (mfa_enabled / total_users * 100) if total_users > 0 else 0
+            # Registration uses reconciled known flags, never the complement of an aggregate.
+            from Core.authentication_findings import registration_recommendation
+            recommendations.append(registration_recommendation(mfa_metrics, feature_name))
 
-            if total_users == 0:
-                # No denominator means the MFA registration report was not readable. Reporting
-                # "0 of 0 users (0.0%)" as a finding invents a metric that was never measured.
-                recommendations.append(new_recommendation(
-                    service="Entra",
-                    feature=feature_name,
-                    observation="MFA enrollment could not be determined - the authentication methods registration report returned no users",
-                    recommendation="Grant the assessment Reports.Read.All and UserAuthenticationMethod.Read.All, then rerun. Until MFA coverage is measured, Copilot access cannot be assumed protected against credential theft. Meanwhile, review coverage directly in Entra ID > Authentication methods > Registration.",
-                    link_text="Authentication Methods Activity Report",
-                    link_url="https://learn.microsoft.com/entra/identity/authentication/howto-authentication-methods-activity",
-                    priority="High",
-                    status=NOT_ASSESSED_STATUS
-                ))
-            elif mfa_percentage < 50:
-                # Action Required: Low MFA adoption
-                recommendations.append(new_recommendation(
-                    service="Entra",
-                    feature=feature_name,
-                    observation=f"Only {mfa_enabled} of {total_users} users ({mfa_percentage:.1f}%) were enrolled in MFA.",
-                    recommendation="Require MFA registration for all in-scope users and use Conditional Access to enforce MFA for Microsoft 365. Track exceptions and reach full coverage before broad AI rollout.",
-                    link_text="Configure MFA Requirements",
-                    link_url="https://learn.microsoft.com/entra/identity/authentication/howto-mfa-getstarted",
-                    priority="High",
-                    status="Action Required"
-                ))
-            elif mfa_percentage < 90:
-                # Action Required: Moderate MFA adoption
-                recommendations.append(new_recommendation(
-                    service="Entra",
-                    feature=feature_name,
-                    observation=f"{mfa_enabled} of {total_users} users ({mfa_percentage:.1f}%) enrolled in MFA, registered for MFA; enforcement and observed sign-in behavior require separate confirmation",
-                    recommendation=f"Continue rolling out MFA to remaining {total_users - mfa_enabled} users. Use Conditional Access to require MFA for all Copilot and Microsoft 365 access. Target 100% MFA coverage to fully protect AI services from compromised credentials.",
-                    link_text="MFA Deployment Guide",
-                    link_url="https://learn.microsoft.com/entra/identity/authentication/howto-mfa-getstarted",
-                    priority="Medium",
-                    status="Action Required"
-                ))
-            else:
-                # Success: High MFA adoption
-                recommendations.append(new_recommendation(
-                    service="Entra",
-                    feature=feature_name,
-                    observation=f"{mfa_enabled} of {total_users} users ({mfa_percentage:.1f}%) enrolled in MFA, registered for MFA; registration alone does not establish enforced or observed protection",
-                    recommendation="",
-                    link_text="MFA Best Practices",
-                    link_url="https://learn.microsoft.com/entra/identity/authentication/concept-mfa-howitworks",
-                    status="Success"
-                ))
-            
             # Observation 3: Legacy authentication detection
             legacy_auth_count = signin_metrics.get('legacy_auth_sign_ins', 0)
             
@@ -240,7 +190,7 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
                 recommendations.append(new_recommendation(
                     service="Entra",
                     feature=feature_name,
-                    observation=f"{passwordless_rate:.1f}% of users use passwordless authentication ({total_passwordless} users with FIDO2/Windows Hello/Authenticator)",
+                    observation=f"{passwordless_rate:.1f}% of users with known method inventories have a passwordless method registered ({total_passwordless} users with FIDO2/Windows Hello/Authenticator)",
                     recommendation="Plan phishing-resistant authentication for administrators and high-risk users first, then expand based on risk and user readiness. Evaluate effective MFA and Conditional Access separately.",
                     link_text="Deploy Passwordless Authentication",
                     link_url="https://learn.microsoft.com/entra/identity/authentication/howto-authentication-passwordless-deployment",
@@ -248,12 +198,12 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
                     status="Insight",
                     disposition="Opportunity"
                 ))
-            elif passwordless_rate < 50:
+            elif isinstance(passwordless_rate, (int, float)) and passwordless_rate < 50:
                 # Optional hardening opportunity, not a standalone AI readiness gate.
                 recommendations.append(new_recommendation(
                     service="Entra",
                     feature=feature_name,
-                    observation=f"{passwordless_rate:.1f}% of users use passwordless authentication ({total_passwordless} users: {fido2_users} FIDO2, {windows_hello_users} Windows Hello, {authenticator_users} Authenticator), progressing toward secure Copilot access",
+                    observation=f"{passwordless_rate:.1f}% of users with known method inventories have a passwordless method registered ({total_passwordless} users: {fido2_users} FIDO2, {windows_hello_users} Windows Hello, {authenticator_users} Authenticator); registration does not establish actual use or enforcement",
                     recommendation="Continue risk-based rollout of phishing-resistant authentication. Prioritize administrators and users with access to sensitive data; measure enrollment and sign-in success before expanding.",
                     link_text="Passwordless Authentication Methods",
                     link_url="https://learn.microsoft.com/entra/identity/authentication/concept-authentication-passwordless",
@@ -261,18 +211,23 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
                     status="Insight",
                     disposition="Opportunity"
                 ))
-            else:
-                # Success: High passwordless adoption
+            elif isinstance(passwordless_rate, (int, float)):
+                # High registration is context, not observed use.
                 recommendations.append(new_recommendation(
                     service="Entra",
                     feature=feature_name,
-                    observation=f"{passwordless_rate:.1f}% of users use passwordless authentication ({total_passwordless} users: {fido2_users} FIDO2, {windows_hello_users} Windows Hello, {authenticator_users} Authenticator), strongly securing Copilot access",
+                    observation=f"{passwordless_rate:.1f}% of users with known method inventories have a passwordless method registered ({total_passwordless} users: {fido2_users} FIDO2, {windows_hello_users} Windows Hello, {authenticator_users} Authenticator); registration does not establish actual use, enforcement or phishing resistance",
                     recommendation="",
                     link_text="Passwordless Best Practices",
                     link_url="https://learn.microsoft.com/entra/identity/authentication/concept-authentication-passwordless",
                     status="Success"
                 ))
         
+        if client is not None:
+            from Core.authentication_findings import qualify_legacy_finding
+            from Core.signin_evidence import is_legacy_signin_finding
+            recommendations = [qualify_legacy_finding(row, client) if is_legacy_signin_finding(row)
+                or 'No legacy authentication sign-ins' in row.get('Observation', '') else row for row in recommendations]
         return recommendations
     
     # Non-Success: Keep original license-check recommendation unchanged

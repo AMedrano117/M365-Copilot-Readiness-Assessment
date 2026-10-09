@@ -32,21 +32,8 @@ def source_current(bundle, source, day):
 
 
 def signin_record(record):
-    status = record.get('status') or {}
-    error = status.get('errorCode')
-    outcome = 'success' if error in (0,'0') else 'failure' if error is not None else 'unknown'
-    requirement = str(record.get('authenticationRequirement') or '').lower()
-    details = record.get('authenticationDetails') or []
-    satisfied = [step for step in details if step.get('succeeded') is True and (
-        'multifactor' in str(step.get('authenticationStepRequirement','')).lower()
-        or 'mfa' in str(step.get('authenticationStepResultDetail','')).lower())]
-    prior = any(any(word in str(step.get('authenticationStepResultDetail','')).lower() for word in ('claim','previously','token')) for step in satisfied)
-    return dict(record, SignInOutcome=outcome, MFARequirement='required' if requirement=='multifactorauthentication' else 'not_required' if requirement=='singlefactorauthentication' else 'unknown',
-        MFASatisfaction='previously_satisfied' if prior else 'observed_success' if satisfied else 'unknown',
-        ConditionalAccessResult=str(record.get('conditionalAccessStatus') or 'unknown'),
-        ReportOnlyResults=[policy for policy in record.get('appliedConditionalAccessPolicies',[]) or []
-                           if str(policy.get('result','')).lower().startswith('reportonly')],
-        AppliedPoliciesAvailable='appliedConditionalAccessPolicies' in record)
+    from .signin_evidence import normalize_signin_event
+    return normalize_signin_event(record)
 
 
 def reconcile_devices(bundle, profile=None, *, evaluation_date=None):
@@ -107,14 +94,23 @@ def operational_results(bundle, profile, *, evaluation_date=None, tenant_id=None
     day = evaluation_day(evaluation_date)
     reviews = current_check_reviews(profile, day, tenant_id)
     result = {control:{'result':'unknown', 'reason':'Operational behavior is not established by configuration alone.', 'records':[]} for control in OPERATION_CHECKS}
-    signins = [signin_record(record) for record in rows(bundle,'signin_logs')]
-    relevant = [row for row in signins if row['SignInOutcome']=='success']
-    if source_current(bundle,'signin_logs',day) and relevant:
-        protected = all(row['MFARequirement']=='required' and (row['MFASatisfaction'] in {'previously_satisfied','observed_success'}) and row['ConditionalAccessResult'].lower()=='success' and
-            (observed:=parse_date(row.get('createdDateTime'))) and 0 <= (day-observed).days <= 7 for row in relevant)
-        result['IDENTITY.AUTH'] = {'result':'pass' if protected else 'unknown',
-            'reason':'Returned successful sign-ins show MFA satisfaction and Conditional Access success.' if protected else 'Successful sign-ins require review of MFA requirements, claims and Conditional Access coverage; missing fields do not prove bypass.',
-            'records':signins}
+    from .signin_evidence import normalize_signin_event
+    datasets = bundle.get('assessment_sources', {}).get('signin_logs', [])
+    signins = [normalize_signin_event(record, dataset.get('source')) for dataset in datasets for record in dataset.get('records', [])]
+    current = [row for row in signins if (observed := parse_date(row.get('createdDateTime')))
+               and 0 <= (day-observed).days <= 7
+               and (not tenant_id or str(row['AuthenticationSource'].get('tenant_id') or
+                    (bundle.get('collection_context') or {}).get('tenant_id') or '').casefold() == str(tenant_id).casefold())]
+    successful_legacy = [row for row in current if row['LegacyAuthenticationState'] == 'SuccessfulLegacyAuthentication']
+    conflicts = [row for row in current if row['AuthenticationConflicts']]
+    if signins:
+        result['IDENTITY.AUTH'] = {
+            'result': 'conflict' if conflicts else 'fail' if successful_legacy else 'unknown',
+            'reason': 'Conflicting authentication evidence requires resolution.' if conflicts else
+            'A successful legacy-client token request contradicts the legacy-blocking requirement; favorable MFA or Conditional Access fields do not establish effective blocking.' if successful_legacy else
+            'Returned sign-ins provide event-scoped authentication observations. A complete, dated tenant-wide operational review must establish the required population, MFA enforcement and legacy blocking; missing details do not prove bypass.',
+            'records': signins, 'event_derived': True,
+            'source': ((successful_legacy or conflicts or current or signins)[0]['AuthenticationSource'])}
     devices = reconcile_devices(bundle,profile,evaluation_date=day)
     if devices['denominator']:
         # Device reporting alone establishes no real-time or antivirus protection.
@@ -159,6 +155,22 @@ def operational_results(bundle, profile, *, evaluation_date=None, tenant_id=None
                 for row in review['records'])
             if operational and review['result'] in {'pass','fail','conflict'}:
                 prior = result[control]['result']
-                resolved = 'conflict' if prior=='pass' and review['result']=='fail' else review['result']
-                result[control] = {'result':resolved, 'reason':'Dated tenant-wide review of observed behavior; source records and review are retained.', 'records':review['records']}
+                if control != 'IDENTITY.AUTH':
+                    resolved = 'conflict' if prior == 'pass' and review['result'] == 'fail' else review['result']
+                    result[control] = {'result': resolved,
+                        'reason': 'Dated tenant-wide review of observed behavior; source records and review are retained.',
+                        'records': review['records']}
+                    continue
+                resolved = ('conflict' if prior == 'conflict' or prior in {'pass', 'fail'} and review['result'] in {'pass', 'fail'} and prior != review['result']
+                            else review['result'])
+                # Missing/materially incomplete sign-in windows cannot be repaired
+                # by choosing a favorable review without resolving that coverage.
+                if datasets and not source_current(bundle, 'signin_logs', day) and resolved == 'pass':
+                    resolved = 'unknown'
+                previous = result[control]
+                result[control] = {**previous, 'result':resolved,
+                    'reason': previous['reason'] + ' Dated tenant-wide review of observed behavior; source records and review are retained.',
+                    'records': previous['records'] + review['records']}
+                if resolved == 'fail' and prior not in {'fail', 'conflict'}:
+                    result[control].pop('event_derived', None)
     return result, devices

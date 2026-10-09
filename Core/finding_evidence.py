@@ -334,16 +334,20 @@ def build_finding_evidence(payload):
                         f'{len(records)} {record_unit}' + (f' for {entity_count} {entity_unit}' if entity_count is not None else '')
                         + '. Worklist items can group several detail records.')
         outcomes = None
+        normalized_outcomes = None
         if record_type == 'legacy_signin_event':
             from .signin_evidence import SIGNIN_OUTCOMES
             counter = Counter((record.get('fields') or {}).get('outcome') for record in records)
             outcomes = {name: counter.get(name, 0) for name in SIGNIN_OUTCOMES}
+            from .signin_evidence import NORMALIZED_SIGNIN_OUTCOMES
+            counter = Counter((record.get('fields') or {}).get('normalized_outcome', 'Unknown') for record in records)
+            normalized_outcomes = {name: counter.get(name, 0) for name in NORMALIZED_SIGNIN_OUTCOMES}
         windows = [item for item in native if item.get('window_start') or item.get('window_end')]
         evidence = {
             'kind': kind, 'record_kinds': dict(kinds), 'availability': availability,
             'record_status': status, 'record_type': record_type, 'record_count': len(records), 'record_unit': record_unit,
             'affected_entity_count': entity_count, 'entity_unit': entity_unit, 'entity_basis': entity_basis,
-            'outcome_counts': outcomes, 'worklist_count': worklist_count, 'worklist_unit': worklist_unit,
+            'normalized_outcome_counts': normalized_outcomes, 'outcome_counts': outcomes, 'worklist_count': worklist_count, 'worklist_unit': worklist_unit,
             'count_relation': relation, 'selection': finding.get('record_selection') or '',
             'limitations': list(finding.get('record_limitations') or []),
             'reconciliation': finding.get('record_reconciliation') or {},

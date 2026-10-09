@@ -82,7 +82,73 @@ def _preference(value):
     return PREFERENCES.get(value, ('Unrecognized: ' + value, 'Unknown preference; review required'))
 
 
-def summarize_registrations(records, state=None):
+def reconcile_registration_population(records, exclusions=None, users=None):
+    """Reconcile retained identities once; only literal booleans enter the rate.
+
+    Exclusions require a retained disabled flag or an explicit documented reason.
+    Missing enabled state and guest status never imply an exclusion. Positions are
+    one-based source occurrences, retained for joins and evidence references.
+    """
+    from .expanded_collection import plain
+    unique = {}
+    duplicates = 0
+    users_by_id = {}
+    for user in users or []:
+        identifier = _get(user, 'id')
+        if identifier:
+            users_by_id.setdefault(str(identifier).casefold(), []).append(user)
+    for number, row in enumerate(records or [], 1):
+        identifier = _get(row, 'id') or _get(row, 'userPrincipalName')
+        key = str(identifier).casefold() if identifier else ('anonymous', number)
+        compared = {field: plain(_get(row, field)) for field in FIELDS + ('accountEnabled',)}
+        retained = plain(row)
+        retained = retained if isinstance(retained, dict) else {}
+        # Support SDK snake-case fields while preserving all returned properties.
+        for field in FIELDS + ('id', 'userPrincipalName', 'userDisplayName', 'accountEnabled'):
+            value = _get(row, field)
+            if value is not None and field not in retained:
+                retained[field] = plain(value)
+        if key in unique:
+            entry = unique[key]
+            entry['positions'].append(number)
+            if compared != entry['_compared']:
+                entry['state'] = 'Conflicting'
+            else:
+                duplicates += 1
+        else:
+            flag = _get(row, 'isMfaRegistered')
+            unique[key] = {'record': retained, 'positions': [number], '_compared': compared,
+                           'state': 'ExplicitlyRegistered' if flag is True else
+                           'ExplicitlyNotRegistered' if flag is False else 'Unknown', 'exclusion_reason': ''}
+    counts = dict.fromkeys(('ExplicitlyRegistered', 'ExplicitlyNotRegistered', 'Unknown',
+                            'Conflicting', 'ExcludedWithReason'), 0)
+    entries = list(unique.values())
+    for entry in entries:
+        row = entry['record']
+        matches = users_by_id.get(str(row.get('id') or '').casefold(), [])
+        enabled = {_get(user, 'accountEnabled') for user in matches if type(_get(user, 'accountEnabled')) is bool}
+        if type(row.get('accountEnabled')) is bool:
+            enabled.add(row['accountEnabled'])
+        if len(enabled) > 1:
+            entry['state'] = 'Conflicting'
+        elif enabled:
+            row['accountEnabled'] = next(iter(enabled))
+        reason = (exclusions or {}).get(row.get('id') or row.get('userPrincipalName'))
+        if entry['state'] != 'Conflicting':
+            reason = reason or ('Retained accountEnabled is explicitly false; disabled account excluded from registration remediation.'
+                                if row.get('accountEnabled') is False else '')
+            if isinstance(reason, str) and reason.strip():
+                entry.update(state='ExcludedWithReason', exclusion_reason=reason.strip())
+        counts[entry['state']] += 1
+        del entry['_compared']
+    denominator = counts['ExplicitlyRegistered'] + counts['ExplicitlyNotRegistered']
+    return {'counts': counts, 'entries': entries, 'total': len(entries), 'denominator': denominator,
+            'percentage': round(counts['ExplicitlyRegistered'] / denominator * 100, 1) if denominator else None,
+            'duplicates_removed': duplicates, 'evidence_layer': 'registration',
+            'qualification': 'Returned registration population; unknown, conflicting and documented exclusions do not enter the known denominator. Registration does not prove enforcement or use.'}
+
+
+def summarize_registrations(records, state=None, *, users=None):
     state = state or {}
     availability = state.get('availability_status') or ('available' if state.get('available') else 'unknown')
     if state.get('truncated'):
@@ -91,21 +157,11 @@ def summarize_registrations(records, state=None):
         availability = 'partial'
     if availability == 'available' and state.get('available') is False:
         availability = 'partial' if records else 'unavailable'
-    unique, conflicts, duplicates = {}, set(), 0
-    for index, row in enumerate(records or []):
-        key = _get(row, 'id') or _get(row, 'userPrincipalName') or ('anonymous', index)
-        normalized = {field: _get(row, field) for field in FIELDS}
-        if key in unique:
-            if normalized != unique[key]:
-                conflicts.add(key)
-            else:
-                duplicates += 1
-        else:
-            unique[key] = normalized
-    # Conflicting snapshots stay in the denominator with unknown fields.
-    for key in conflicts:
-        unique[key] = {}
-    records = list(unique.values())
+    population = reconcile_registration_population(records, users=users)
+    conflicts = population['counts']['Conflicting']
+    duplicates = population['duplicates_removed']
+    records = [entry['record'] if entry['state'] not in {'Conflicting', 'ExcludedWithReason'} else {}
+               for entry in population['entries']]
     total = len(records)
     metrics = Counter()
     registered, chosen, system, current = Counter(), Counter(), Counter(), Counter()
@@ -202,6 +258,9 @@ def summarize_registrations(records, state=None):
     summary_rows.append({'Metric': 'Users in returned registration report', 'Value': total,
                          'Known users': total, 'Unknown users': 0, 'Interpretation': 'Members and guests; disabled/deleted users are outside this report.'})
     metric('MFA registered users', 'mfa_registered', 'mfa_registered_known', 'Registration does not establish enforcement or phishing resistance.')
+    for name, count in population['counts'].items():
+        summary_rows.append({'Metric': 'Registration state: ' + name, 'Value': count,
+                             'Interpretation': 'Mutually exclusive reconciled states; counts sum to the returned population. Only explicit true/false eligible flags enter the rate.'})
     registered_known = metrics['mfa_registered_known']
     summary_rows.append({'Metric': 'MFA registration rate (%)',
                          'Value': round(metrics['mfa_registered'] / registered_known * 100, 1) if registered_known else 'Unknown',
@@ -252,11 +311,12 @@ def summarize_registrations(records, state=None):
                         'Preferences unknown': values['users'] - values['preference_known']}
                        for name, values in populations.items() if values['users']]
     return {'available': bool(records), 'source_state': availability,
+            'evidence_layer': 'registration', 'registration_population': {key: value for key, value in population.items() if key != 'entries'},
             'complete': availability == 'available' and not conflicts,
             'total_users': total, 'metrics': dict(metrics), 'summary_rows': summary_rows,
             'method_rows': method_rows, 'preference_rows': preference_rows, 'population_rows': population_rows,
             'updated_from': min(dates) if dates else '', 'updated_to': max(dates) if dates else '',
-            'dates_unknown': total - len(dates), 'duplicates_removed': duplicates, 'conflicting_users': len(conflicts),
+            'dates_unknown': total - len(dates), 'duplicates_removed': duplicates, 'conflicting_users': conflicts,
             'details': [
                 'Counts cover users returned by the authentication registration report, including members and guests. Administrators overlap those populations; do not add them to the total.',
                 'Users can register multiple methods. Method counts and percentages overlap; they do not add to 100%. Unknown fields are not measured zero.',
@@ -268,9 +328,24 @@ def summarize_registrations(records, state=None):
             ]}
 
 
+def registration_records(client):
+    raw = getattr(client, 'auth_methods_registration', None)
+    records = list(raw) if isinstance(raw, (list, tuple)) else []
+    for name in ('auth_methods', 'auth_methods_registration'):
+        for dataset in (getattr(client, 'assessment_datasets', {}) or {}).get(name, []):
+            records.extend(dataset.get('records') or [])
+    return records
+
+
 def authentication_method_report(client):
-    return summarize_registrations(getattr(client, 'auth_methods_registration', None),
-        (getattr(client, 'collection_status', {}) or {}).get('auth_methods', {}))
+    from copy import deepcopy
+    from .source_evidence import envelope_complete
+    state = deepcopy((getattr(client, 'collection_status', {}) or {}).get('auth_methods', {}))
+    for name in ('auth_methods', 'auth_methods_registration'):
+        for dataset in (getattr(client, 'assessment_datasets', {}) or {}).get(name, []):
+            if not envelope_complete(dataset.get('source') or {}):
+                state.update(complete=False, availability_status='partial')
+    return summarize_registrations(registration_records(client), state, users=getattr(client, 'users', None))
 
 
 def legacy_registration_summary(records):
@@ -279,6 +354,8 @@ def legacy_registration_summary(records):
     metrics = report['metrics']
     total = report['total_users']
     return {'total_users': total, 'mfa_registered': metrics.get('mfa_registered', 0),
+            'registration_population': report['registration_population'],
+            'mfa_registered_known': metrics.get('mfa_registered_known', 0),
             'mfa_capable': metrics.get('mfa_capable', 0), 'passwordless_enabled': metrics.get('passwordless_registered', 0),
             'mfa_registration_rate': round(metrics.get('mfa_registered', 0) / metrics['mfa_registered_known'] * 100,1) if metrics.get('mfa_registered_known') else None,
             'passwordless_adoption_rate': round(metrics.get('passwordless_registered', 0) / metrics['method_inventory_known'] * 100,1) if metrics.get('method_inventory_known') else None,
