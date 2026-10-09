@@ -281,7 +281,8 @@ def prepare_investigation_details(bundle, result):
     """Require evidence or a visible, specific gap for every recommended next step."""
     from .investigation_contract import materialize_declared_evidence, recommended_actions, validate_investigation_coverage
     from .investigation_context import explain_missing_detail, is_consent_configuration, source_limitations, supporting_range
-    signature = (id(result), tuple(row.get('RecommendationId') for row in result.get('recommendations',[])))
+    from .identity_finding_taxonomy import finding_title, project_identity_sheet_links
+    signature = (id(result), tuple((row.get('RecommendationId'), finding_title(row)) for row in result.get('recommendations',[])))
     if bundle.get('_split_investigation_signature') == signature:
         return result
     from .privileged_presentation import prepare_privileged_sheets
@@ -297,6 +298,7 @@ def prepare_investigation_details(bundle, result):
         if rec.get('_shared_inventory_support') and rec['RecommendationId'] not in by_id:
             by_id[rec['RecommendationId']] = dict(rec['_shared_inventory_support'])
     _scope_application_grants(sheets, [rec for rec in actions if rec.get('RecommendationId') not in by_id])
+    project_identity_sheet_links(sheets, result.get('recommendations') or [])
     used_titles = {sheet.get('title', '').casefold() for sheet in sheets.values()}
     title, suffix = 'Investigation Items', 2
     while title.casefold() in used_titles:
@@ -338,7 +340,7 @@ def prepare_investigation_details(bundle, result):
                         identifiers = set(filter(None, str(source_row['RecommendationId'] or '').split('; ')))
                         identifiers.add(identifier)
                         source_row['RecommendationId'] = '; '.join(sorted(identifiers))
-            item.update(RecommendationId=identifier, Finding=_first(rec, 'OriginalFeature', 'Feature'), **{'Source Detail': source})
+            item.update(RecommendationId=identifier, Finding=finding_title(rec), **{'Source Detail': source})
             all_rows.append({field: item.get(field, '') for field in FIELDS})
         count = len(seen)
         location = _ref(title, first, first + count - 1, len(FIELDS)) if count else ''

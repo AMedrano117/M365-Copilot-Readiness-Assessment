@@ -95,6 +95,10 @@ def _date_text(row):
 
 def _heading(row):
     """Use reviewed topic labels for the parser-facing report families."""
+    from .identity_finding_taxonomy import resolve_identity_finding
+    taxonomy = resolve_identity_finding(row)
+    if taxonomy.get('FindingTitle'):
+        return taxonomy['FindingTitle']
     if row.get('Historical')=='Yes':
         return str(row.get('OriginalFeature') or row.get('Feature') or 'Historical observation')
     titles = {
@@ -734,6 +738,8 @@ def context_has_collection(bundle):
 
 
 def render_customer_report(result, bundle, tenant_name, workbook_path=None, summary_path=None, technical_workbook_path=None):
+    from .identity_finding_taxonomy import ensure_identity_result, licensing_context
+    result = ensure_identity_result(result, bundle)
     from .lifecycle_presentation import summary_html,technical_html,finding_html
     from .governance_presentation import summary_html as governance_summary,technical_html as governance_technical,finding_html as governance_finding
     from .report_presentation import baseline_panel, coverage_panels, decision_groups, domain_tiles, short_text
@@ -812,6 +818,7 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None, summ
         status = {'supported': 'Observed', 'limited': 'Limited coverage', 'gap': 'Evidence needed', 'stale': 'Older evidence'}.get(status, status)
         return f'''<article class="finding"><div class="eyebrow">{prose(status)} · {prose(_date_text(row))}</div>
           <h4>{prose(_heading(row))}</h4><p>{prose(description)}</p>{('<p>' + prose(support) + '</p>') if support else ''}
+          {('<p class="qualification">' + prose(licensing_context(row)) + '</p>') if row.get('FindingTaxonomyVersion') else ''}
           {('<p><strong>What to do.</strong> ' + prose(_action_text(row)) + '</p>') if with_action else ''}
           {investigation_link(row) if row.get('Recommendation') else ''}{technical_evidence(row)}
           {('<p class="qualification">' + prose(qualification) + '</p>') if qualification else ''}
@@ -830,6 +837,7 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None, summ
           <p class="action-preview"><span class="preview-label" data-kind="fix">{step_label}</span>{prose(short_text(_action_text(row)))}</p><span class="detail-prompt">Details, next step and supporting logs</span></summary><div class="action-body">
           <div class="callout callout-found" data-priority="{slug(row.get('Priority'))}"><p><strong>What we found.</strong> {prose(_observation(row, bundle))}</p>{settings_html}</div>
           <div class="callout callout-fix"><p><strong>What to do.</strong> {prose(_action_text(row))}</p></div>{investigation_link(row)}{technical_evidence(row)}
+          {('<p class="qualification">' + prose(licensing_context(row)) + '</p>') if row.get('FindingTaxonomyVersion') else ''}
           <div class="action-meta"><p><strong>Responsible role</strong><br>{prose(row.get('OwnerRole'))}</p>
           <p><strong>Rollout stage</strong><br>{prose(row.get('ReadinessStage'))}</p></div>
           <p><strong>Evidence of completion.</strong> {prose(_completion(row))}</p>{guidance_link}

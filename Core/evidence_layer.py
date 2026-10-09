@@ -1073,7 +1073,8 @@ def _link_sheet_rows_to_recommendations(sheets, recommendations):
     for key, sheet in sheets.items():
         linked_recommendations = recommendations_by_key.get(key, [])
         recommendation_ids = [item.get("RecommendationId", "") for item in linked_recommendations if item.get("RecommendationId")]
-        flagged_by = [item.get("Feature", "") for item in linked_recommendations if item.get("Feature")]
+        from .identity_finding_taxonomy import finding_title
+        flagged_by = [finding_title(item) for item in linked_recommendations if item.get("Feature") or item.get('FindingTitle')]
         for row in sheet.get("rows", []):
             existing_ids = _stringify_list(str(row.get("RecommendationId", "") or "").split(";"))
             existing_features = _stringify_list(str(row.get("Flagged By", "") or "").split(";"))

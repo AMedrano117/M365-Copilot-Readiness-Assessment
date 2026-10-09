@@ -11,6 +11,12 @@ linked HTML evidence pages. Keep companion files together so local links resolve
 
 ## Shared-result snapshots
 
+Identity finding titles now follow one [versioned condition taxonomy](IDENTITY_FINDING_TAXONOMY.md).
+P1/P2 remain separate licensing context. The original source feature and IDs are
+preserved; Excel's Recommendations Feature column displays the condition title
+and appends compatibility/licensing columns. Legacy snapshot reads add qualified
+title projections in memory without rewriting completed evidence or baselines.
+
 Pass B adds shared privileged-identity records, aggregate HTML summaries and a
 restricted Privileged Identity Review worksheet. Snapshots retain recorded
 assignment, population, purpose, authentication and explicit inactivity-policy

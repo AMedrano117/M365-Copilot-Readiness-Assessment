@@ -75,6 +75,19 @@ def _recommendations(rows):
                 normalized[canonical] = value
         if not {"Service", "Feature", "Recommendation"}.issubset(normalized):
             raise ValueError("Prior assessment recommendations require Service, Feature, and Recommendation fields.")
+        # The taxonomy workbook displays FindingTitle in Feature. Restore its
+        # retained compatibility input before legacy fingerprint/evaluation.
+        # Archived worksheet rows are left verbatim in the original workbook.
+        from .identity_finding_taxonomy import VERSION
+        if normalized.get('Taxonomy Version') == VERSION and normalized.get('Compatibility Feature'):
+            normalized['OriginalCompatibilityLabel'] = normalized['Compatibility Feature']
+            normalized['Feature'] = normalized['Compatibility Feature']
+            if normalized.get('Finding Condition'):
+                normalized['FindingCondition'] = normalized['Finding Condition']
+            for target, column in (('LicensingDependencies', 'Licensing Dependency'),
+                                   ('AssociatedLicenseFeatures', 'Associated License Feature')):
+                if isinstance(normalized.get(column), str):
+                    normalized[target] = [item.strip() for item in normalized[column].split(';') if item.strip()]
         result.append(normalized)
     return result
 
