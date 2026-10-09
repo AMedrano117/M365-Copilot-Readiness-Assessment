@@ -93,12 +93,13 @@ class InvestigationDetailsTests(unittest.TestCase):
         global_standing = assignment('standing-global', 'Global Administrator', 'global-user')
         sharepoint_standing = assignment('standing-sharepoint', 'SharePoint Administrator', 'sharepoint-user')
         for row in (global_standing, sharepoint_standing):
-            row['scheduleInfo'] = {'expiration': {'type': 'noExpiration'}}
+            row['status'] = 'Provisioned'
+            row['scheduleInfo'] = {'startDateTime': '2026-08-01T00:00:00Z', 'expiration': {'type': 'noExpiration'}}
         client = SimpleNamespace(
             role_assignment_schedules=[global_standing, sharepoint_standing],
             role_assignments=[assignment('unverified-global', 'Global Administrator', 'other-user')],
             role_eligibility_schedules=[assignment('eligible-global', 'Global Administrator', 'eligible-user')])
-        rows = _build_admin_role_sheet(client)['rows']
+        rows = _build_admin_role_sheet(client, '2026-09-15T12:00:00Z')['rows']
         # Exact population wording emitted by AAD_PREMIUM_P2.
         observation = ('2 active directory role assignment schedules have no expiration, '
                        'including 1 Global Administrator assignment')

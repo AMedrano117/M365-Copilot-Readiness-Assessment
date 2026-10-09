@@ -91,15 +91,16 @@ CATALOG = [
      'links': [_link('Run a registration campaign', 'entra/identity/authentication/how-to-mfa-registration-campaign'),
                _link('Authentication methods activity and registration details', 'entra/identity/authentication/howto-authentication-methods-activity')]},
     {'id': 'standing-admin-access', 'predicate': _standing_admin, 'controls': {'IDENTITY.ADMIN'},
-     'change': 'Convert the listed standing (no-expiration) privileged role assignments to Privileged Identity Management eligible '
-               'or time-bound active assignments. Keep documented emergency access accounts as the only permanent Global Administrators.',
+     'change': 'Review the recorded principals, business need, purpose, dependencies, scope and documented exceptions. '
+               'Agree whether to retain, reduce, time-bound or remove access. Validate PIM applicability before choosing '
+               'treatment for human, emergency, service, synchronization or workload identities.',
      'prerequisites': {'roles': ['Privileged Role Administrator'],
                        'licensing': ['Microsoft Entra ID P2 or Microsoft Entra ID Governance for users with eligible or time-bound assignments'],
                        'other': []},
      'where': _ENTRA + ' > ID Governance > Privileged Identity Management > Microsoft Entra roles > Roles '
               '(Add assignments: Eligible; existing Active roles: Update or Remove)',
-     'verify': 'Privileged Identity Management > Microsoft Entra roles > Assignments: the listed principals appear under Eligible '
-               'assignments, or as Active assignments with an end date. Re-run the assessment.',
+     'verify': 'Privileged Identity Management > Microsoft Entra roles > Assignments: verify the agreed scope and '
+               'duration, supported account purpose and retained exception evidence. Re-run the assessment.',
      'evidence_needed': 'Role assignment schedules (RoleManagement.Read.Directory).',
      'links': [_link('Assign Microsoft Entra roles in PIM', 'entra/id-governance/privileged-identity-management/pim-how-to-add-role-to-user'),
                _link('Microsoft Entra ID Governance licensing fundamentals', 'entra/id-governance/licensing-fundamentals')]},

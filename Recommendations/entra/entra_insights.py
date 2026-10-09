@@ -505,10 +505,10 @@ def build_pim_metrics(entra_insights):
     if global_admins > 0:
         metrics.append(f"{global_admins} permanent global admins")
         if global_admins > 5:
-            recommendation = "Move global admins to PIM eligible roles (recommended max: 5 permanent)"
+            recommendation = "Review recorded principals, scopes, business need, purpose and documented exceptions before choosing privileged-access treatment."
     
     if permanent > 0 and eligible == 0:
-        recommendation = "Enable PIM for just-in-time privileged access"
+        recommendation = "Validate account purpose, dependencies, scope and PIM applicability before considering eligibility or time-bound access."
     
     return metrics, recommendation
 

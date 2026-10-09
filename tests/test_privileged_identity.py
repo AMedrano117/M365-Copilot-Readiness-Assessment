@@ -19,8 +19,8 @@ def grant(identifier='grant-1', principal='user-1', **extra):
 
 
 def dataset(records, **state):
-    return {'records': records, 'source': dict(available=True, availability_status='available', complete=True,
-            truncated=False, collected_at=NOW, **state)}
+    return {'records': records, 'source': {'available': True, 'availability_status': 'available', 'complete': True,
+            'truncated': False, 'collected_at': NOW, **state}}
 
 
 def sources(assignments=None, users=None, **extra):
@@ -259,6 +259,7 @@ class PrivilegedAuthenticationTests(unittest.TestCase):
                'appliedConditionalAccessPolicies': []}
         data = sources(signin_logs=[dataset([raw])])
         self.assertNotIn('PrivilegedSuccessfulSignInOutsideExpectedCACoverage', build(data)['identities'][0]['authentication']['observations'])
+        data['ca_policies'] = [dataset([{'id': 'expected'}])]
         model = build(data, expected_ca=[{'principal_id': 'user-1', 'policy_id': 'expected', 'evidence_refs': [{'dataset': 'ca_policies', 'dataset_index': 0, 'record_index': 0}]}])
         self.assertIn('PrivilegedSuccessfulSignInOutsideExpectedCACoverage', model['identities'][0]['authentication']['observations'])
 
@@ -275,7 +276,8 @@ class SpecialPurposeTests(unittest.TestCase):
         for kind in ('emergency', 'service', 'ordinary'):
             declaration = {'principal_id': 'user-1', 'purpose': kind, 'owner': 'fictional-owner',
                            'evidence_refs': [{'dataset': 'purpose', 'dataset_index': 0, 'record_index': 0}], 'source_type': 'customer_declaration'}
-            identity = build(account_purposes=[declaration], inactivity_policy=policy())['identities'][0]
+            data = sources(purpose=[dataset([{'id': 'fictional-purpose', 'purpose': kind}])])
+            identity = build(data, account_purposes=[declaration], inactivity_policy=policy())['identities'][0]
             self.assertTrue(identity['purpose']['validated'])
             if kind == 'emergency': self.assertNotEqual(identity['activity']['state'], 'PotentiallyInactivePrivilegedAccount')
             del declaration['evidence_refs']
@@ -290,7 +292,7 @@ class SpecialPurposeTests(unittest.TestCase):
         raw = {'id': 'event', 'userId': 'user-1', 'createdDateTime': RECENT, 'status': {'errorCode': 0}, 'isInteractive': True}
         for purpose, expected in (('emergency', 'EmergencyAccessRecentlyUsed'), ('service', 'InteractiveUseObservedForServiceAccount')):
             declaration = {'principal_id': 'user-1', 'purpose': purpose, 'owner': 'fictional-owner', 'source_type': 'configuration', 'evidence_refs': [{'dataset': 'purpose', 'dataset_index': 0, 'record_index': 0}]}
-            identity = build(sources(signin_logs=[dataset([raw])]), account_purposes=[declaration], inactivity_policy=policy())['identities'][0]
+            identity = build(sources(signin_logs=[dataset([raw])], purpose=[dataset([{'id': 'fictional-purpose', 'purpose': purpose}])]), account_purposes=[declaration], inactivity_policy=policy())['identities'][0]
             self.assertIn(expected, identity['review_states'])
 
 

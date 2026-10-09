@@ -647,6 +647,12 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
     """
     bundle = evidence_bundle or {}
     day = evaluation_day(evaluation_date or bundle.get("evaluation_date"))
+    from .privileged_identity import build_privileged_assessment, privileged_context
+    from .privileged_presentation import privileged_findings, qualify_privileged_recommendations
+    privileged = build_privileged_assessment(bundle.get('assessment_sources') or {},
+        **privileged_context(bundle, day, expected_tenant_id))
+    recommendations = qualify_privileged_recommendations(recommendations, privileged)
+    recommendations += privileged_findings(privileged, bundle.get('assessment_sources') or {})
     from .operational_evidence import operational_results, OPERATION_CHECKS
     operation, devices = operational_results(bundle, bundle.get('assessment_profile'), evaluation_date=day,
                                              tenant_id=expected_tenant_id)
@@ -1021,6 +1027,9 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
     result['operational_results'] = operation
     from .authentication_findings import assessment_authentication_summary
     result['authentication_assessment'] = assessment_authentication_summary(bundle, operation)
+    result['privileged_assessment'] = privileged
+    from .privileged_validation import validate_privileged_assessment
+    result['privileged_diagnostics'] = validate_privileged_assessment(privileged)
     result['device_reconciliation'] = devices
     from .assessment_catalog import attach_catalog
     from .assessment_identity import attach_identity

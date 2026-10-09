@@ -79,7 +79,7 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
                         f"{permanent_count} active directory role assignment {schedule_label} have no expiration"
                         + (f", including {permanent_global_admins} Global Administrator {admin_label}" if permanent_global_admins else "")
                     ),
-                    recommendation="Review the named principals and roles in Admin Role Detail. Convert standing assignments to PIM eligibility or time-bound activation where operationally feasible, retaining documented emergency-access exceptions.",
+                    recommendation="Review the named principals, scopes, business need, account purpose and documented exceptions in Admin Role Detail. Agree whether to retain, reduce, time-bound or remove access; confirm PIM applicability and service dependencies before selecting treatment.",
                     link_text="Configure PIM for Copilot Admins",
                     link_url="https://learn.microsoft.com/entra/id-governance/privileged-identity-management/pim-configure",
                     priority="High" if permanent_global_admins else "Medium",

@@ -283,6 +283,7 @@ class NamedFindingDetailTests(unittest.TestCase):
                 'id': 'assignment-a', 'principalId': 'user-a',
                 'roleDefinitionId': 'role-a', 'directoryScopeId': '/',
                 'assignmentType': 'Assigned',
+                'status': 'Provisioned',
                 'roleDefinition': {'id': 'role-a', 'displayName': 'Global Administrator'},
                 'scheduleInfo': {'startDateTime': '2026-08-01T09:00:00Z',
                                  'expiration': {'type': 'noExpiration'}}}]),

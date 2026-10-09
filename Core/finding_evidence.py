@@ -50,6 +50,7 @@ _FINDING_KEY_CONCERNS = (
     ('baseline.license.', 'licensing-adoption'), ('m365.portal_copilot_readiness', 'licensing-adoption'),
 )
 _EVIDENCE_KEY_CONCERNS = {
+    'privileged_identity_detail': 'admin-access',
     'legacy_signin_detail': 'legacy-authentication',
     'mfa_registration_detail': 'mfa-registration', 'authentication_detail': 'mfa-registration',
     'authentication_methods_detail': 'mfa-registration', 'authentication_preferences_detail': 'mfa-registration',
@@ -108,6 +109,8 @@ DATASET_KINDS = {
     'users': 'entity_state', 'license_users': 'entity_state', 'guest_users': 'entity_state', 'auth_methods': 'entity_state',
     'user_signin_activity': 'entity_state', 'role_assignments': 'entity_state', 'role_assignment_schedules': 'entity_state',
     'role_eligibility_schedules': 'entity_state', 'risky_users': 'entity_state', 'service_principals': 'entity_state',
+    'role_assignment_schedule_instances': 'entity_state', 'role_eligibility_schedule_instances': 'entity_state',
+    'group_members': 'entity_state', 'privileged_group_members': 'entity_state', 'account_purpose_evidence': 'supporting_context',
     'oauth_grants': 'entity_state', 'application_permissions': 'entity_state', 'application_owners': 'entity_state',
     'service_principal_signin_activities': 'entity_state', 'managed_devices': 'entity_state',
     'directory_devices': 'entity_state', 'machines': 'entity_state', 'antivirus_health': 'entity_state',
@@ -122,6 +125,7 @@ DATASET_KINDS = {
     'entra_recommendations': 'supporting_context', 'context': 'supporting_context', 'check_reviews': 'supporting_context',
 }
 _RECORD_TYPES = {
+    'privileged_identity': ('privileged identity observations', 'entity_state', 'identities', ('identityId',), 'privileged-identities', 'Privileged Identity Review'),
     # record_type: (record unit, evidence kind, entity unit, entity identifier fields, table slug, table title)
     'legacy_signin_event': ('sign-in events', 'observed_event', 'accounts', ('userId', 'userPrincipalName'), 'signin-events', 'Sign-ins'),
     'user_mfa_registration': ('registration records', 'entity_state', 'users', ('userId', 'upn'), 'registration-gaps', 'Registration'),

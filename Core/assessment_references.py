@@ -216,6 +216,8 @@ def validate_assessment_references(result):
 
 
 def require_valid_assessment(result):
+    from .privileged_validation import require_valid_privileged_assessment
+    require_valid_privileged_assessment(result)
     diagnostics=validate_assessment_references(result)
     errors=[row for row in diagnostics if row['severity']=='error']
     if errors:

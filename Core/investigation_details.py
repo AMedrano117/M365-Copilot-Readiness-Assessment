@@ -145,22 +145,35 @@ def _select(key, row, rec):
             _text(row, 'Last Updated'), 'Entra admin center > Protection > Identity Protection',
             'Review the risk detections and recent sign-ins, then confirm remediation or dismissal.')
     if key == 'admin_role_detail':
+        if rec.get('PrivilegedObservationIds'):
+            return None
         assignment = _text(row, 'Assignment Type')
+        if 'PrivilegedAssignmentKeys' in rec:
+            if row.get('Assignment Key') not in rec['PrivilegedAssignmentKeys']:
+                return None
         if assignment not in {'Permanent Active', 'Active (Duration Unverified)'}:
             return None
         # Legacy PIM recommendations have no FindingKey. Match their leading
         # population, not an "including N Global Administrators" subgroup.
         global_only = bool(re.match(r'^\d+\s+(?:permanent\s+)?global admin', observation))
-        if global_only and 'global admin' not in _text(row, 'Role Name').lower():
+        if 'PrivilegedAssignmentKeys' not in rec and global_only and 'global admin' not in _text(row, 'Role Name').lower():
             return None
         standing_only = bool(re.search(r'\bpermanent\b|\bno[ -]expiration\b', observation))
-        if standing_only and assignment != 'Permanent Active':
+        if 'PrivilegedAssignmentKeys' not in rec and standing_only and assignment != 'Permanent Active':
             return None
         return _item('Role assignment', _text(row, 'Principal Display Name'),
             _first(row, 'Assignment ID', 'Principal ID'), _text(row, 'Reason Flagged'), assignment,
             _details(row, 'Role Name', 'Principal ID', 'Role Definition ID', 'Directory Scope ID', 'End Date'),
             _text(row, 'Start Date'), 'Entra admin center > Privileged Identity Management > Microsoft Entra roles',
             'Validate the principal and business need; review eligibility, duration and least privilege.')
+    if key == 'privileged_identity_detail':
+        if row.get('Identity ID') not in (rec.get('PrivilegedIdentityIds') or []):
+            return None
+        return _item('Privileged identity', _first(row, 'Display Reference', 'Principal ID'),
+            _text(row, 'Principal ID'), _text(rec, 'Feature'), _text(row, 'Activity State'),
+            _details(row, 'Principal Type', 'Assignment Scopes', 'MFA Registration State', 'Observed Authentication', 'Purpose Classification'),
+            _text(row, 'Last Qualified Successful Activity'), 'Entra admin center > Identity governance > Privileged Identity Management',
+            _text(rec, 'Recommendation'))
     if key == 'sharepoint_lifecycle_detail':
         ownerless = 'ownerless' in text and _yes(row.get('Is Ownerless'))
         inactive = 'inactive' in text and _yes(row.get('Is Inactive'))
@@ -271,6 +284,8 @@ def prepare_investigation_details(bundle, result):
     signature = (id(result), tuple(row.get('RecommendationId') for row in result.get('recommendations',[])))
     if bundle.get('_split_investigation_signature') == signature:
         return result
+    from .privileged_presentation import prepare_privileged_sheets
+    prepare_privileged_sheets(bundle, result)
     sheets = bundle.setdefault('sheets', {})
     from .raw_evidence import prepare_raw_details
     prepare_raw_details(bundle, result)

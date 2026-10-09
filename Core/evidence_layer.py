@@ -31,7 +31,7 @@ SHEET_DEFINITIONS = OrderedDict([
         "title": "Admin Role Detail",
         "appendix_title": "Appendix: Administrative Role Detail",
         "default_note": "See Admin Role Detail for the privileged assignments that support this recommendation.",
-        "preview_columns": ["Assignment Type", "Principal Display Name", "Role Name", "Reason Flagged"],
+        "preview_columns": [],
     }),
     ("authentication_detail", {
         "title": "Authentication Coverage",
@@ -1846,116 +1846,12 @@ def _build_identity_risk_sheet(entra_client):
     }
 
 
-def _build_admin_role_sheet(entra_client):
+def _build_admin_role_sheet(entra_client, evaluation_timestamp=None):
     if not entra_client:
         return None
-
-    role_assignments = _ensure_list(getattr(entra_client, "role_assignments", []))
-    eligible_assignments = _ensure_list(getattr(entra_client, "role_eligibility_schedules", []))
-    time_bound_assignments = _ensure_list(getattr(entra_client, "role_assignment_schedules", []))
-    role_definitions = {
-        _iso_text(_safe_get(item, "id")).lower(): item
-        for item in _ensure_list(getattr(entra_client, "role_definitions", []))
-        if _iso_text(_safe_get(item, "id"))
-    }
-    rows = []
-
-    def identity_key(assignment):
-        return (
-            _iso_text(_safe_get(assignment, "principalId")).lower(),
-            _iso_text(_safe_get(assignment, "roleDefinitionId")).lower(),
-            _iso_text(_safe_get(assignment, "directoryScopeId")).lower() or "/",
-        )
-
-    def normalized_row(assignment, assignment_type, end_date="", reason=""):
-        principal = _safe_get(assignment, "principal") or {}
-        role_definition_id = _iso_text(_safe_get(assignment, "roleDefinitionId"))
-        role_definition = _safe_get(assignment, "roleDefinition") or role_definitions.get(role_definition_id.lower(), {})
-        principal_name = (
-            _iso_text(_safe_get(principal, "displayName"))
-            or _iso_text(_safe_get(principal, "userPrincipalName"))
-        )
-        role_name = _iso_text(_safe_get(role_definition, "displayName"))
-        principal_type = _iso_text(_safe_get(principal, "@odata.type")).replace("#microsoft.graph.", "")
-        resolution = "Resolved" if principal_name and role_name else "Partial" if principal_name or role_name else "Unresolved"
-        if resolution != "Resolved":
-            reason = (reason + "; " if reason else "") + "Identity resolution required before changing this assignment"
-        return {
-            "RecommendationId": "",
-            "Flagged By": "",
-            "Principal Display Name": principal_name or "Unresolved principal",
-            "Principal Type": principal_type or "Unknown",
-            "Role Name": role_name or "Unresolved role definition",
-            "Assignment Type": assignment_type,
-            "Assignment ID": _iso_text(_safe_get(assignment, "id")),
-            "Principal ID": _iso_text(_safe_get(assignment, "principalId")),
-            "Role Definition ID": role_definition_id,
-            "Role Template ID": _iso_text(_safe_get(role_definition, "templateId")),
-            "Directory Scope ID": _iso_text(_safe_get(assignment, "directoryScopeId")) or "/",
-            "Start Date": _iso_text(_safe_get(assignment, "startDateTime")),
-            "End Date": end_date,
-            "Identity Resolution": resolution,
-            "Reason Flagged": reason,
-        }
-
-    scheduled_keys = set()
-    for assignment in time_bound_assignments:
-        schedule_info = _safe_get(assignment, "scheduleInfo") or {}
-        expiration = _safe_get(schedule_info, "expiration") or {}
-        expiration_type = _iso_text(_safe_get(expiration, "type"))
-        end_date = _iso_text(_safe_get(expiration, "endDateTime")) or _iso_text(_safe_get(assignment, "endDateTime"))
-        is_permanent = "noexpiration" in expiration_type.lower().replace("_", "")
-        scheduled_keys.add(identity_key(assignment))
-        rows.append(normalized_row(
-            assignment,
-            "Permanent Active" if is_permanent else "Time-Bound Active",
-            end_date or ("Permanent" if is_permanent else "Unclassified"),
-            "Standing privileged assignment" if is_permanent else "Active privileged assignment with schedule",
-        ))
-
-    # A unified roleAssignment and its assignmentSchedule describe the same grant. Keep the
-    # richer schedule row and retain only base assignments that have no schedule match.
-    for assignment in role_assignments:
-        if identity_key(assignment) in scheduled_keys:
-            continue
-        rows.append(normalized_row(
-            assignment,
-            "Active (Duration Unverified)",
-            _iso_text(_safe_get(assignment, "endDateTime")) or "Duration unavailable",
-            "Active assignment; no matching schedule was returned",
-        ))
-
-    for assignment in eligible_assignments:
-        rows.append(normalized_row(
-            assignment,
-            "Eligible",
-            _iso_text(_safe_get(assignment, "endDateTime")),
-            "Just-in-time eligible assignment",
-        ))
-
-    rows.sort(key=lambda row: (
-        str(row.get("Assignment Type", "")).lower(),
-        str(row.get("Role Name", "")).lower(),
-        str(row.get("Principal Display Name", "")).lower(),
-    ))
-
-    permanent_count = sum(row.get("Assignment Type") == "Permanent Active" for row in rows)
-    eligible_count = sum(row.get("Assignment Type") == "Eligible" for row in rows)
-    time_bound_count = sum(row.get("Assignment Type") == "Time-Bound Active" for row in rows)
-    unresolved_count = sum(row.get("Identity Resolution") != "Resolved" for row in rows)
-
-    return {
-        "rows": rows,
-        "summary": (
-            f"{_count_phrase(permanent_count, 'permanent active assignment')}, "
-            f"{_count_phrase(eligible_count, 'eligible assignment')}, and "
-            f"{_count_phrase(time_bound_count, 'time-bound active assignment')} were reviewed after schedule deduplication."
-        ),
-        "details": [
-            "The review merges active assignments with their schedules so the same grant is not counted twice.",
-            f"{_count_phrase(unresolved_count, 'row')} lack either a principal or role display name; their identifiers are retained for follow-up.",
-        ],
-    }
+    from .privileged_identity import client_privileged_assessment
+    from .privileged_presentation import assignment_sheet
+    return assignment_sheet(client_privileged_assessment(entra_client, evaluation_timestamp))
 
 
 def _build_access_review_sheet(entra_client):

@@ -56,7 +56,7 @@ BASELINE_CONTROLS = {
     "IDENTITY.MFA": {"expectation": "Every pilot user has a phishing-resistant or strong MFA method registered.",
                      "owner": "Identity and access administrator",
                      "link": "https://learn.microsoft.com/entra/identity/authentication/overview-authentication"},
-    "IDENTITY.ADMIN": {"expectation": "Privileged roles are few, eligible (not permanent) and reviewed.",
+    "IDENTITY.ADMIN": {"expectation": "Privileged roles have reviewed purpose, scope, duration and documented exceptions; eligibility and activity remain distinct.",
                        "owner": "Identity and access administrator",
                        "link": "https://learn.microsoft.com/entra/id-governance/privileged-identity-management/pim-configure"},
     "CONTENT.SHARING": {"expectation": "Default sharing links are 'Specific people'; Anyone links expire or are disabled.",

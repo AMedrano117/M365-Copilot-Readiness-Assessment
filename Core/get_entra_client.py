@@ -876,34 +876,28 @@ async def get_entra_client(graph_client, tenant_id=None, preview_collectors='aut
                 schedules = _extract_response_items(role_sched_response)
                 client_obj.role_assignment_schedules = schedules
 
-                global_admin_role = '62e90394-69f5-4237-9190-012177145e10'
-                for schedule in schedules:
-                    schedule_info = _get_attr(schedule, 'scheduleInfo', {}) or {}
-                    expiration = _get_attr(schedule_info, 'expiration', {}) or {}
-                    expiration_type = str(_get_attr(expiration, 'type', '') or '').lower()
-                    end_date = _get_attr(expiration, 'endDateTime', None)
-                    role_def_id = str(_get_attr(schedule, 'roleDefinitionId', '') or '').lower()
-                    role_definition = _get_attr(schedule, 'roleDefinition', {}) or role_definition_by_id.get(role_def_id, {})
-                    role_template_id = str(_get_attr(role_definition, 'templateId', '') or '').lower()
-                    role_name = str(_get_attr(role_definition, 'displayName', '') or '').lower()
-
-                    if 'noexpiration' in expiration_type.replace('_', ''):
-                        client_obj.pim_summary['permanent_assignments'] += 1
-                        if role_template_id == global_admin_role or role_def_id == global_admin_role or role_name == 'global administrator':
-                            client_obj.pim_summary['permanent_global_admins'] += 1
-                    elif end_date or 'after' in expiration_type:
-                        client_obj.pim_summary['total_time_bound_assignments'] += 1
-                    else:
-                        client_obj.pim_summary['unclassified_active_assignments'] += 1
-                
             except Exception as e:
                 with _stdout_lock:
                     console.status(f"Entra: Role schedules parse error: {e}", tone='error')
         
-        # Calculate PIM metrics
-        if client_obj.pim_summary['total_eligible_assignments'] > 0:
-            client_obj.pim_summary['pim_enabled_roles'] = client_obj.pim_summary['total_eligible_assignments']
-        
+        # Compatibility counters derive from the shared temporal/scope model.
+        from .privileged_identity import client_privileged_assessment
+        privileged = client_privileged_assessment(client_obj)
+        counts = privileged['counts']
+        temporal = counts['temporal_states']
+        client_obj.pim_summary.update(
+            total_active_assignments=counts['active_assignments'],
+            total_eligible_assignments=counts['eligible_assignments'],
+            eligible_assignments=counts['eligible_assignments'],
+            permanent_assignments=temporal.get('ActivePermanent', 0),
+            total_time_bound_assignments=temporal.get('ActiveTimeBound', 0),
+            unclassified_active_assignments=temporal.get('DirectActiveDurationUnverified', 0),
+            pim_enabled_roles=counts['eligible_assignments'],
+            permanent_global_admins=sum(a['temporal_state'] == 'ActivePermanent' and
+                (str(a['role_name'] or '').lower() == 'global administrator' or
+                 a['role_template_id'] == '62e90394-69f5-4237-9190-012177145e10')
+                for a in privileged['assignments']))
+
         # Process Access Reviews
         reviews_response = phase1_results.get('access_reviews')
         if reviews_response and not isinstance(reviews_response, Exception):

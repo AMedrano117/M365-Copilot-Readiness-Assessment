@@ -140,6 +140,17 @@ def context_validation(profile):
     errors = []
     if not isinstance(context, dict):
         return ['assessment_context must be an object']
+    if 'privileged_inactivity_policy' in context:
+        from .privileged_identity import normalize_inactivity_policy
+        if not normalize_inactivity_policy(context['privileged_inactivity_policy'], '2000-01-01T00:00:00Z')['valid']:
+            errors.append('assessment_context.privileged_inactivity_policy requires an explicit supported policy ID, version, days threshold, methodology reference and conservative activity/source treatments')
+    if 'privileged_evaluation_timestamp' in context:
+        from .privileged_assignments import instant
+        if instant(context['privileged_evaluation_timestamp']) is None:
+            errors.append('assessment_context.privileged_evaluation_timestamp requires an offset timestamp')
+    for field in ('account_purposes', 'privileged_expected_ca'):
+        if field in context and (not isinstance(context[field], list) or any(not isinstance(row, dict) for row in context[field])):
+            errors.append('assessment_context.' + field + ' must be an object array')
     for field in ('device_activity_days', 'endpoint_reporting_days'):
         if field in context and (type(context[field]) is not int or not 1 <= context[field] <= 365):
             errors.append(f'assessment_context.{field} must be an integer from 1 to 365')
@@ -178,6 +189,10 @@ def collect_assessment_sources(clients, *, collected_at='', data_exposure=None, 
         'role_assignments':'role_assignments', 'access_reviews':'access_reviews',
         'role_definitions':'role_definitions', 'role_assignment_schedules':'role_assignment_schedules',
         'role_eligibility_schedules':'role_eligibility_schedules', 'risky_users':'risky_users',
+        'role_assignment_schedule_instances':'role_assignment_schedule_instances',
+        'role_eligibility_schedule_instances':'role_eligibility_schedule_instances',
+        'group_members':'group_members', 'privileged_group_members':'privileged_group_members',
+        'account_purpose_evidence':'account_purpose_evidence',
         'risk_detections':'risk_detections', 'guest_users':'guest_users',
         'cross_tenant_access_policy':'cross_tenant_access_policy', 'security_defaults':'security_defaults',
         'service_principal_signin_activities':'service_principal_signin_activities',
