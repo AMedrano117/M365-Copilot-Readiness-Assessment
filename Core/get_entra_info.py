@@ -136,8 +136,9 @@ async def get_entra_info(client, services_and_licenses=None, entra_client=None):
             status = resolution.get('status', plan.get('status', 'Success'))
             sku_name = resolution.get('sku_name', sku_name)
             
-            # Generate recommendations - pass pre-computed entra_insights
-            rec = get_recommendation('entra', plan_name, sku_name, status, client=client, entra_insights=entra_insights)
+            # Entra feature modules read retained evidence, not Graph endpoints.
+            # The transport's dynamic attributes are not collection-status maps.
+            rec = get_recommendation('entra', plan_name, sku_name, status, client=entra_client, entra_insights=entra_insights)
             
             # Handle both single recommendations and lists
             if isinstance(rec, list):

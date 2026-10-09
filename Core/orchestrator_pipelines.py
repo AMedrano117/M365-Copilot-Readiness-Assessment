@@ -217,6 +217,7 @@ def create_pipelines(
         if not run_entra:
             return {'available': False, 'recommendations': []}
         
+        entra_client = None
         try:
             console.status('Entra: collecting identity, access and device evidence...')
             # Gathering phase (the client logs its start and completion)
@@ -248,7 +249,13 @@ def create_pipelines(
         except Exception as e:
             with _stdout_lock:
                 console.status(f'Entra pipeline failed: {e}', tone='error')
-            return {'available': False, 'recommendations': []}
+            # A processing failure does not erase completed or partial reads.
+            # Dataset envelopes remain authoritative; report processing failed.
+            result = {'available': False, 'availability_status': 'unavailable',
+                      'pipeline_error': str(e)[:300], 'recommendations': []}
+            if entra_client is not None:
+                result['_client'] = entra_client
+            return result
     
     async def purview_pipeline():
         """Purview: Gather client data, then process"""
@@ -440,7 +447,7 @@ def create_pipelines(
                     sys.stdout.flush()
             else:
                 pp_client = None
-                console.status('Power Platform: skipped; optional inventory was not supplied or selected.')
+                console.status('Power Platform: skipped; optional inventory was not supplied or selected.', tone='warning')
                 with _stdout_lock:
                     console.detail(f'[{get_timestamp()}]   ℹ️  Power Platform inventory not supplied and preview API not selected; optional extensibility inventory remains not assessed\n')
                     sys.stdout.flush()
@@ -510,7 +517,7 @@ def create_pipelines(
                     sys.stdout.flush()
             else:
                 pp_client = None
-                console.status('Copilot Studio: skipped; optional inventory was not supplied or selected.')
+                console.status('Copilot Studio: skipped; optional inventory was not supplied or selected.', tone='warning')
                 with _stdout_lock:
                     console.detail(f'[{get_timestamp()}]   ℹ️  Copilot Studio inventory not supplied and Power Platform preview API not selected; agent inventory remains supplemental and not assessed\n')
                     sys.stdout.flush()
