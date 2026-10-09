@@ -13,6 +13,13 @@ be exposed. Provider-side settings and contracts require separate validation.
 
 ## Completeness, evidence and readiness
 
+Privileged identity interpretation is documented in
+[Privileged identity and activity](PRIVILEGED_IDENTITY.md). Missing activity and
+unsuccessful attempts do not establish inactivity. Eligibility, future schedules
+and expired schedules do not establish current active privilege. Explicit
+inactivity-policy candidates and special-purpose reviews remain separate from
+human governance decisions and account/assignment changes.
+
 These are separate conclusions:
 
 - **Report completeness:** the agreed domains, findings, actions and qualifications are covered.
