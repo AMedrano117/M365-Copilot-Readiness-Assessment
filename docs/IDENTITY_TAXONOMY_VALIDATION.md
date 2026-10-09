@@ -171,9 +171,9 @@ No methodology threshold or automated outcome is introduced. Applicable licensin
 
 # 15. GitHub result
 
-Publication follows the completed validation above. Branch: fix/identity-finding-taxonomy. Target: main. Source/test commits: 5362eb6, da54318, 1ceb821, dfc2281. No merge is authorized. Pull-request URL and final publication state will be added after creation.
+Branch fix/identity-finding-taxonomy is pushed to GitHub. [PR 15: Separate identity findings from Entra licensing labels](https://github.com/AMedrano117/M365-Copilot-Readiness-Assessment/pull/15) is open against main and is not merged. Source/test commits: 5362eb6, da54318, 1ceb821, dfc2281; validation report commit: a6be239, followed by this publication-state update. Current PR CI is pending; the six prerequisite Pass B checks and post-merge CI passed.
 
 # 16. Completion status
 
-Local implementation and all required validation categories are complete. Publication and GitHub review remain the final workflow steps. No tenant collection occurred, no customer evidence was modified, supplied workbook hash matches the original, and no generated customer artifacts or secrets are staged. Next: independent review, then an authorized merge and controlled engineering rerun before canonical-contract migration.
+Implementation, all required local validation categories, branch publication and PR creation are complete. The PR remains unmerged pending CI and independent review. No tenant collection occurred, no customer evidence was modified, supplied workbook hash matches the original, and no generated customer artifacts or secrets were committed. Next: independent review, then an authorized merge and controlled engineering rerun before canonical-contract migration. The separate live adapter fix in PR 14 remains open and excluded from this branch.
 
