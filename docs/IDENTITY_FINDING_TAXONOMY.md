@@ -26,6 +26,8 @@ Primary Microsoft references: [Conditional Access requirements](https://learn.mi
 
 Projection copies only finding records and summary containers; it does not duplicate large evidence graphs or mutate raw source records. Snapshot reads enrich runtime copies without rewriting files. Completed baselines, counts, semantic IDs, source occurrences, evidence references, compatibility aliases, history, closure rules and governance logs are preserved. Title-only projection does not enter persistent-ID or delta calculation. Packages retain sanitized snapshot bytes and existing integrity checks.
 
+`prior_report_import._recommendations` recognizes the new workbook taxonomy marker and restores the retained Compatibility Feature as the semantic/source Feature before legacy fingerprint calculation. It retains the displayed FindingTitle, condition and licensing context. Archived worksheet rows and workbook bytes are unchanged. Legacy workbooks without the marker keep their existing import behavior.
+
 ## Condition registry
 
 | Stable condition | Finding title | Capability | Condition evidence layer |

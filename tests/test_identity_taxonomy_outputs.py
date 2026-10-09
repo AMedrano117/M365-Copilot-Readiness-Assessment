@@ -185,6 +185,25 @@ class TaxonomyProjectionTests(unittest.TestCase):
             self.assertEqual(replay['identity_taxonomy'], result['identity_taxonomy'])
             self.assertEqual(replay['identity'], result['identity'])
 
+    def test_prior_workbook_restores_semantic_feature_and_license_context(self):
+        from Core.prior_report_import import load_prior_report
+        from Core.assessment_result import _finding_identity
+        from Core.identity_finding_taxonomy import resolve_identity_finding
+        bundle, result, _ = fixture()
+        source = next(row for row in result['recommendations'] if row['RecommendationId'] == 'ENT-fiction')
+        with TemporaryDirectory() as folder, redirect_stdout(io.StringIO()):
+            path = export_to_excel(result['recommendations'], filename='fiction.xlsx', evidence_bundle=bundle, output_dir=folder)
+            original = Path(path).read_bytes()
+            imported = load_prior_report(path)
+            row = next(row for row in imported['recommendations'] if row['RecommendationId'] == 'ENT-fiction')
+            self.assertEqual(row['Feature'], source['Feature'])
+            self.assertEqual(row['FindingTitle'], source['FindingTitle'])
+            # Exercise the legacy fallback independently of a known FindingKey.
+            self.assertEqual(_finding_identity(dict(row, FindingKey='')),
+                             _finding_identity(dict(source, FindingKey='')))
+            self.assertEqual(resolve_identity_finding(row)['AssociatedLicenseFeatures'], ['Microsoft Entra ID P1'])
+            self.assertEqual(Path(path).read_bytes(), original)
+
 
 class TaxonomyRealLifecycleTests(unittest.TestCase):
     def test_title_only_projection_leaves_actual_delta_unchanged(self):
