@@ -77,6 +77,9 @@ def apply_workbook_navigation(workbook, result, bundle, *, role='assessment', co
         {'Open': 'Latest collection timestamp', 'Purpose': max(timestamps, default='Unknown'), 'Rows': None, 'Type': 'Metadata'},
         {'Open': 'Run timestamp', 'Purpose': manifest.get('Generation Time (UTC)') or (bundle.get('run_manifest') or {}).get('generated_at') or 'Unknown', 'Rows': None, 'Type': 'Metadata'},
         {'Open': 'Methodology version', 'Purpose': result.get('methodology_version'), 'Rows': None, 'Type': 'Metadata'},
+        {'Open': 'Producing source', 'Purpose': ((result.get('producing_revision') or {}).get('publication') or {}).get('output_qualification')
+            or (result.get('producing_revision') or {}).get('qualification') or 'Producing revision unrecorded', 'Rows': None, 'Type': 'Metadata'},
+        {'Open': 'Producing commit', 'Purpose': (result.get('producing_revision') or {}).get('commit_sha') or 'Unrecorded', 'Rows': None, 'Type': 'Metadata'},
         {'Open': companion, 'Purpose': 'Technical workbook: complete raw exports, findings lineage, full selected records and historical context.' if role == 'assessment' else
          'Assessment workbook: prioritized actions, findings, coverage and readable supporting records.', 'Rows': None, 'Type': 'Companion'},
         {'Open': 'How to read the evidence', 'Purpose': 'Filter ID for one finding. Its evidence rows form a contiguous block. Evidence ID opens the exact technical source row. Records can support several findings; do not add counts across findings. Unknown values remain unknown.' if role == 'assessment' else

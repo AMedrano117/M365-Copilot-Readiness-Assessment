@@ -506,6 +506,7 @@ def export_to_excel(recommendations, filename=None, tenant_name=None, evidence_b
         return export_to_csv(recommendations, csv_filename, tenant_name=tenant_name, output_dir=output_dir)
 
     from .assessment_result import build_assessment_result
+    from .repository_provenance import provenance_rows
     from .investigation_details import prepare_investigation_details
     from .customer_report import _heading
     from .workbook_evidence import technical_recommendation_rows
@@ -881,6 +882,7 @@ def export_to_excel(recommendations, filename=None, tenant_name=None, evidence_b
         ('Source Windows', result.get('source_windows',[])),
         ('Documentation Verification',result.get('documentation_verification',[])),
         ('Assessment Summary', [{'Item': 'Deployment decision', 'Value': result['decision']},
+            *provenance_rows(result),
             {'Item': 'Rationale', 'Value': result['rationale']},
             {'Item': 'Evaluation date', 'Value': result.get('evaluation_date')},
             *[{'Item': key, 'Value': value} for key, value in result['counts'].items()]]),

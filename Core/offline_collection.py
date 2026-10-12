@@ -117,6 +117,8 @@ def save_collection(path=None, *, tenant_id, tenant_name, service_results,
     payload['methodology_version'] = METHODOLOGY_VERSION
     payload['assessment_version'] = ASSESSMENT_VERSION
     payload['evaluation_date'] = evaluation_day(evaluation_date)
+    from .repository_provenance import current_revision
+    payload['producing_revision'] = current_revision()
     from .assessment_identity import new_identity, incomplete_identity
     previous_identity = (_checkpoint_package or {}).get('identity') or identity
     if previous_identity:

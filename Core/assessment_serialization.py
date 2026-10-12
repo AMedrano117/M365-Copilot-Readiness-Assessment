@@ -28,6 +28,8 @@ def write_assessment_result(path, result):
     from .assessment_references import require_valid_assessment
     from .identity_finding_taxonomy import project_identity_result
     snapshot = plain_data(project_identity_result(result))
+    from .repository_provenance import current_revision
+    snapshot.setdefault('producing_revision', current_revision())
     snapshot.setdefault('reconciliation', {'state':'legacy','reason':'Snapshot predates recorded semantic reconciliation; no equivalence inferred.'})
     from .assessment_runs import validate_run_context
     snapshot['run_workflow_diagnostics'] = validate_run_context(snapshot)
@@ -50,6 +52,9 @@ def read_assessment_result(path):
         result = json.load(handle)
     if not isinstance(result, dict):
         raise ValueError('Assessment snapshot must contain a shared-result object.')
+    if 'producing_revision' not in result:
+        from .repository_provenance import unrecorded_revision
+        result['producing_revision'] = unrecorded_revision()
     if 'identity' not in result:
         result['identity'] = incomplete_identity('legacy')
     if 'reconciliation' not in result:

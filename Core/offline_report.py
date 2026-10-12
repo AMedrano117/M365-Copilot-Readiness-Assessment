@@ -22,6 +22,8 @@ def run_offline_report(args):
     payload = load_collection(args.collection_input) if args.collection_input else None
     from .assessment_package import restore_arguments, record_package_run, save_rebuild_recipe, render_with_failure_receipt, new_offline_package
     args = restore_arguments(args, payload)
+    from .repository_provenance import update_execution_configuration
+    update_execution_configuration(args)
     explicit_type = getattr(args, 'run_type', None)
     if (payload or {}).get('completed_run_snapshot') and not explicit_type:
         from .assessment_package import INPUT_KEYS

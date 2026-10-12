@@ -103,6 +103,8 @@ def complete_run(result, execution, package_path):
     """Persist a completed semantic snapshot before any renderer publishes."""
     if not execution.is_new:
         return None
+    from .repository_provenance import current_revision
+    result.setdefault('producing_revision', current_revision())
     package = Path(package_path).resolve()
     meta = result['identity']
     for field in ('AssessmentId','RunId','PrimaryEnvironmentId','RunType','BaselineRunId','EvaluatedAt'):
@@ -133,6 +135,7 @@ def complete_run(result, execution, package_path):
                    expected_hash=execution.expected_hash)
     atomic_write(package / 'assessment-run.json', {
         'SchemaVersion':VERSION,'Identity':execution_metadata(meta),
+        'ProducingRevision':deepcopy(result.get('producing_revision')),
         'SnapshotLocator':snapshot.relative_to(package).as_posix(),'SnapshotHash':file_hash(snapshot)})
     return str(snapshot)
 
@@ -212,8 +215,9 @@ def validate_run_context(result):
 
 def run_context_rows(result):
     context = result.get('run_context') or {}
+    from .repository_provenance import provenance_rows
     if not context:
-        return [{'Item':'Run intent','Value':'Unrecorded legacy workflow; no baseline inferred'}]
+        return [{'Item':'Run intent','Value':'Unrecorded legacy workflow; no baseline inferred'}, *provenance_rows(result)]
     rows = [{'Item':key,'Value':context.get(key)} for key in
         ('AssessmentId','RunId','RunType','BaselineRunId','EvaluatedAt','HistoryReference') if context.get(key)]
     comparison = context.get('Comparability') or {}
@@ -221,7 +225,7 @@ def run_context_rows(result):
     if comparison.get('Reasons'):
         rows.append({'Item':'Comparability reasons','Value':'; '.join(
             row['Code'] + ': ' + row['Detail'] for row in comparison['Reasons'])})
-    return rows
+    return rows + provenance_rows(result)
 
 
 def add_run_manifest_context(bundle, result):

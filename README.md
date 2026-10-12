@@ -100,6 +100,11 @@ These commands retain the existing Standard default. Existing Standard apps need
 
 Use [RUN.md](docs/RUN.md) as the canonical operator runbook: prepare, collect and save, add exports, rebuild and review. [prereq.md](docs/prereq.md) covers connected access and setup; [the portal guide](docs/PORTAL_REPORTS_AND_OFFLINE.md) covers report requests and validated export schemas.
 
+Before execution, use `--plan` or `--plan --plan-format json` to review run intent,
+baseline, delta and source publication eligibility. New production executions
+require clean committed source. See [reproducible execution](docs/REPRODUCIBLE_EXECUTION.md)
+for controlled engineering validation and retained package provenance.
+
 ## Collect once, then rebuild offline
 
 To preview HTML and Excel immediately using the repository's synthetic report samples, run:

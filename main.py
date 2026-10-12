@@ -9,7 +9,7 @@ setup_console_encoding()
 # Import common utilities
 from Core.spinner import get_timestamp
 
-if __name__ == "__main__":
+def main():
     from params import TENANT_ID, SERVICES
     from Core.cli_parser import parse_arguments
     from Core.credentials_check import load_env_file, validate_credentials_or_exit, print_configuration_summary
@@ -18,6 +18,12 @@ if __name__ == "__main__":
     # Parse command-line arguments
     args = parse_arguments(TENANT_ID, SERVICES)
     configure_console(verbose=args.verbose, color=args.color)
+    from Core.run_plan import build_run_plan, print_run_plan, plan_json
+    from Core.repository_provenance import set_execution_revision
+    if args.plan:
+        plan = build_run_plan(args)
+        print(plan_json(plan)) if args.plan_format == 'json' else print_run_plan(plan)
+        sys.exit(0 if plan['execution_eligible'] else 2)
     section('AI READINESS AND M365 HARDENING')
     status('Mode: offline — saved evidence and local exports.' if args.offline else
            'Mode: live — tenant evidence collection.')
@@ -26,6 +32,23 @@ if __name__ == "__main__":
     # Console helpers flush explicitly, including when stdout is redirected.
     from Core.check_dependencies import check_dependencies
     check_dependencies(offline=args.offline)
+
+    # Local settings are resolved after the startup receipt, before authentication.
+    if not args.offline:
+        try:
+            load_env_file(args.env_file)
+            args.tenant_id = args.tenant_id or os.environ.get('TENANT_ID') or TENANT_ID
+            from Core.cli_parser import resolve_live_permission_profile
+            args.permission_profile = resolve_live_permission_profile(
+                args.permission_profile, args.preview_collectors, args.legacy_power_platform_collector)
+        except ValueError as exc:
+            status(f'Configuration error: {exc}', 'error')
+            sys.exit(1)
+    plan = build_run_plan(args)
+    print_run_plan(plan)
+    if not plan['execution_eligible']:
+        sys.exit(2)
+    set_execution_revision(plan['producing_revision'])
 
     if args.offline:
         from Core.offline_report import run_offline_report
@@ -142,3 +165,9 @@ if __name__ == "__main__":
     except Exception as e:
         status(f"Unexpected error: {e}", 'error')
         sys.exit(1)
+
+
+if __name__ == '__main__':
+    from Core.repository_provenance import producing_context, unrecorded_revision
+    with producing_context(unrecorded_revision()):
+        main()

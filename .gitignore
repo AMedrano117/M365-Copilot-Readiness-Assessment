@@ -48,6 +48,7 @@ ENV/
 .assessment-deps/
 
 # Generated reports and exports
+/AssessmentHistories/
 [Rr]eports/
 [Oo]utput/
 [Cc]ollections/

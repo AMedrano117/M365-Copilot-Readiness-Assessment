@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
+from provenance_fixture import fictional_revision
 
 from Core.assessment_package import restore_arguments
 from Core.cli_parser import parse_arguments
@@ -423,6 +424,8 @@ class AssessmentPackageTests(unittest.TestCase):
                     stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
                     stack.enter_context(patch('sys.argv', ['main.py', '--mode', 'offline', '--collection-input', str(collection), '--snapshot-json', str(snapshot)]))
                     stack.enter_context(patch('Core.console_setup.setup_console_encoding'))
+                    stack.enter_context(patch('Core.run_plan.capture_revision', return_value=fictional_revision()))
+                    stack.enter_context(patch('Core.repository_provenance.capture_revision', return_value=fictional_revision()))
                     for target in ('socket.socket.connect', 'socket.create_connection', 'subprocess.Popen', 'builtins.input',
                                    'Core.credentials_check.load_env_file', 'Core.credentials_check.validate_credentials_or_exit',
                                    'Core.offline_collection.save_collection'):

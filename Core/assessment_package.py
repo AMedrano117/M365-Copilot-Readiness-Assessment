@@ -368,6 +368,8 @@ def save_rebuild_recipe(folder, args, settings=None, *, tenant_id=None, tenant_n
               'collection': 'collection.json' if (folder / 'collection.json').is_file() else None,
               'assessment_settings': {key: value for key, value in (settings or {}).items() if key in SETTING_KEYS},
               'inputs': {}, 'files': [], 'diagnostics': manifest['diagnostics']}
+    from .repository_provenance import current_revision
+    recipe['producing_revision'] = current_revision()
     if identity:
         from .assessment_identity import execution_metadata
         recipe['identity'] = execution_metadata(identity)
@@ -496,6 +498,8 @@ def record_package_run(folder, *, mode, tenant_id, collected_at, evaluation_date
                'collected_at': collected_at, 'evaluation_date': evaluation_date,
                'status': status, 'deliverables': delivered,
                'inputs': inputs or []}
+    from .repository_provenance import current_revision
+    receipt['producing_revision'] = current_revision()
     if methodology_migration:
         receipt['methodology_migration'] = methodology_migration
     receipt['package_diagnostics'] = diagnostics or []
@@ -504,6 +508,9 @@ def record_package_run(folder, *, mode, tenant_id, collected_at, evaluation_date
         receipt['import_receipt'] = bundle.get('import_receipt', [])
         assessment = bundle.get('assessment_result', {}) or {}
         if isinstance(assessment, dict) and assessment:
+            receipt['producing_revision'] = assessment.get('producing_revision')
+            if assessment.get('replay_tool_revision'):
+                receipt['replay_tool_revision'] = assessment['replay_tool_revision']
             if assessment.get('run_context'):
                 receipt['semantic_run'] = assessment['run_context']
             receipt['remaining_requirements'] = assessment.get('coverage', [])

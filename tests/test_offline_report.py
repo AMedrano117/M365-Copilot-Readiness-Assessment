@@ -12,6 +12,7 @@ from datetime import datetime, timedelta, timezone
 from html import unescape
 from types import SimpleNamespace
 from unittest.mock import patch
+from provenance_fixture import fictional_revision
 from urllib.parse import unquote, urlsplit
 
 from Core.offline_collection import (
@@ -125,6 +126,8 @@ class OfflineReportTests(unittest.TestCase):
         try:
             os.chdir(directory)
             with patch('sys.argv', ['main.py', *args]), \
+                 patch('Core.run_plan.capture_revision', return_value=fictional_revision()), \
+                 patch('Core.repository_provenance.capture_revision', return_value=fictional_revision()), \
                  patch('Core.console_setup.setup_console_encoding'), \
                  patch('Core.credentials_check.load_env_file', side_effect=AssertionError('loaded credentials')), \
                  patch('Core.credentials_check.validate_credentials_or_exit', side_effect=AssertionError('validated credentials')), \

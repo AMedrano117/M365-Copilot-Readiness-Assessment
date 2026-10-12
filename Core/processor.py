@@ -446,6 +446,8 @@ def process_and_print_all_information(m365_result, entra_info,
             evaluation_date=evaluation_date,tenant_id=expected_tenant_id))
         assessment_result = build_assessment_result(all_recommendations, evidence_bundle,
             evaluation_date=evaluation_date, expected_tenant_id=expected_tenant_id)
+        from .repository_provenance import verify_execution_source
+        verify_execution_source()
         if run_execution is not None:
             from pathlib import Path
             from .assessment_runs import complete_run

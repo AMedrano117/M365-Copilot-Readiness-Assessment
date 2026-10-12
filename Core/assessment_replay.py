@@ -1,5 +1,6 @@
 """Render a persisted semantic snapshot without evaluating evidence or history."""
 from pathlib import Path
+import hashlib
 from .assessment_serialization import read_assessment_result
 from .assessment_runs import run_context_rows
 
@@ -8,6 +9,8 @@ def render_snapshot(snapshot_path, output_directory, *, tenant_name=None, report
                     snapshot_output=None, extra_exports=None):
     source = Path(snapshot_path).resolve()
     result = read_assessment_result(source)
+    from .repository_provenance import current_revision
+    result['replay_tool_revision'] = current_revision()
     if snapshot_output:
         target = Path(snapshot_output).resolve()
         if target.exists():
@@ -17,6 +20,11 @@ def render_snapshot(snapshot_path, output_directory, *, tenant_name=None, report
     from .export_paths import new_numbered_directory
     from .export_recommendations import export_to_excel, export_to_html, export_to_csv
     folder = new_numbered_directory(Path(output_directory) / 'Renders')
+    from .assessment_history import atomic_write
+    atomic_write(folder / 'render-provenance.json', {'schema_version':'1.0.0',
+        'original_producing_revision':result['producing_revision'],
+        'replay_tool_revision':result['replay_tool_revision'],'tenant_recollected':False,
+        'source_snapshot_sha256':hashlib.sha256(source.read_bytes()).hexdigest()})
     bundle = {'assessment_result':result,'control_results':result.get('control_results',[]),
         'run_manifest':{'rows':run_context_rows(result)},
         'collection_context':{'mode':'snapshot render','identity':result.get('identity'),
@@ -61,6 +69,8 @@ def load_completed_package(payload):
     if not snapshot.is_file() or file_hash(snapshot)!=manifest.get('SnapshotHash'):
         raise ValueError('Completed-run package snapshot integrity mismatch.')
     result = read_assessment_result(snapshot)
+    if 'ProducingRevision' in manifest and manifest['ProducingRevision'] != result.get('producing_revision'):
+        raise ValueError('Completed-run manifest and snapshot producing revisions differ.')
     meta, seed = result['identity'], manifest.get('Identity') or {}
     from .assessment_identity import execution_metadata
     if execution_metadata(meta)!=seed:
