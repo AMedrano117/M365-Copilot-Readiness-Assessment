@@ -253,16 +253,16 @@ def summarize_registrations(records, state=None, *, users=None):
     def metric(label, key, known_key=None, note=''):
         known = metrics[known_key] if known_key else total
         value = metrics[key] if known else None
-        summary_rows.append({'Metric': label, 'Value': value if value is not None else 'Unknown',
+        summary_rows.append({'Metric ID':key, 'Metric': label, 'Value': value if value is not None else 'Unknown',
                              'Known users': known, 'Unknown users': total - known, 'Interpretation': note})
-    summary_rows.append({'Metric': 'Users in returned registration report', 'Value': total,
+    summary_rows.append({'Metric ID':'population.returned', 'Metric': 'Users in returned registration report', 'Value': total,
                          'Known users': total, 'Unknown users': 0, 'Interpretation': 'Members and guests; disabled/deleted users are outside this report.'})
     metric('MFA registered users', 'mfa_registered', 'mfa_registered_known', 'Registration does not establish enforcement or phishing resistance.')
     for name, count in population['counts'].items():
-        summary_rows.append({'Metric': 'Registration state: ' + name, 'Value': count,
+        summary_rows.append({'Metric ID':'registration.' + name, 'Metric': 'Registration state: ' + name, 'Value': count,
                              'Interpretation': 'Mutually exclusive reconciled states; counts sum to the returned population. Only explicit true/false eligible flags enter the rate.'})
     registered_known = metrics['mfa_registered_known']
-    summary_rows.append({'Metric': 'MFA registration rate (%)',
+    summary_rows.append({'Metric ID':'mfa.rate', 'Metric': 'MFA registration rate (%)',
                          'Value': round(metrics['mfa_registered'] / registered_known * 100, 1) if registered_known else 'Unknown',
                          'Known users': registered_known, 'Unknown users': total - registered_known,
                          'Numerator':metrics['mfa_registered'] if registered_known else None, 'Denominator':registered_known or None,
@@ -273,7 +273,7 @@ def summarize_registrations(records, state=None, *, users=None):
     for flag, label in (('isSsprRegistered','SSPR registered'),('isSsprEnabled','SSPR enabled'),('isSsprCapable','SSPR capable')):
         known = sum(type(row.get(flag)) is bool for row in records)
         count = sum(row.get(flag) is True for row in records)
-        summary_rows.append({'Metric':label,'Value':count if known else 'Unknown','Known users':known,'Unknown users':total-known,
+        summary_rows.append({'Metric ID':flag,'Metric':label,'Value':count if known else 'Unknown','Known users':known,'Unknown users':total-known,
             'Numerator':count if known else None,'Denominator':known or None,
             'Interpretation':'Returned registration report population; capability and registration do not prove enforcement.'})
     metric('Passwordless capable users', 'passwordless_capable', 'passwordless_capable_known', 'Graph capability flag; passwordless is not always phishing-resistant.')

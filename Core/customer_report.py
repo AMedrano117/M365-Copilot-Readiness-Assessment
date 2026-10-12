@@ -418,6 +418,11 @@ def _sharing_table(rows, caption=''):
 
 def _sharing_changes(bundle):
     """Settings to change, shown inside the sharing action card."""
+    grouped = (bundle.get('assessment_result') or {}).get('configuration_groups') or (bundle.get('finding_evidence') or {}).get('configuration_groups')
+    if grouped and grouped.get('groups'):
+        from .configuration_groups import summary_html
+        rows = [g for g in grouped['groups'] if g['assessment'] != 'Meets']
+        return summary_html({'groups':rows})
     rows = [row for row in _sharing_review(bundle) if row['state'] != 'ok']
     if not rows:
         return ''
@@ -428,6 +433,10 @@ def _sharing_changes(bundle):
 
 
 def _settings(bundle):
+    grouped = (bundle.get('assessment_result') or {}).get('configuration_groups') or (bundle.get('finding_evidence') or {}).get('configuration_groups')
+    if grouped and grouped.get('groups'):
+        from .configuration_groups import summary_html
+        return summary_html(grouped) + '<p class="qualification">Configuration describes permitted behavior; it does not establish actual content access. Object-level membership remains in Technical Evidence.</p>'
     rows = _sharing_review(bundle)
     if not rows:
         return ''

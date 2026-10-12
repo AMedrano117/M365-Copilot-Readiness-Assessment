@@ -112,6 +112,20 @@ def write_html_evidence_pages(model, folder, *, report_name=None, page_rows=PAGE
     tenant = model.get('tenant_name')
     pages, rows_written = {}, {}
     context_pages = {}
+    configuration_pages = {}
+    grouped = model.get('configuration_groups') or {}
+    members_by_group = {}
+    for member in grouped.get('members') or []:
+        members_by_group.setdefault(member['group_id'],[]).append(member)
+    for group in grouped.get('groups') or []:
+        members = members_by_group[group['group_id']]
+        chunks = [members[index:index + page_rows] for index in range(0,len(members),page_rows)]
+        names = [_page_name('configuration',group['group_id'],number) for number in range(1,len(chunks)+1)]
+        configuration_pages[group['group_id']] = names
+        columns = list(dict.fromkeys(key for member in members for key in member))
+        for number, chunk in enumerate(chunks,1):
+            body = '<p><a href="index.html">All findings</a></p>' + _pager(names,number) + _rows_table(columns,chunk,'object_id') + _pager(names,number)
+            (folder / names[number-1]).write_text(_document(group['configuration'] + ': affected configuration objects',body,tenant),encoding='utf-8')
     for table_id, table in model['tables'].items():
         if table['role'] != 'context':
             continue
@@ -168,6 +182,12 @@ def write_html_evidence_pages(model, folder, *, report_name=None, page_rows=PAGE
                   '</dl>' + ('<h2>Limitations and reconciliation</h2><ul class="notes">' + ''.join(f'<li>{_text(note)}</li>' for note in notes) + '</ul>'
                              if notes else '') +
                   (f'<h2>Supporting context</h2><ul>{context_links}</ul>' if context_links else ''))
+        related = [g for g in grouped.get('groups') or [] if g['finding_id'] == finding['finding_id']]
+        if related:
+            from .configuration_groups import summary_html
+            header += summary_html({'groups':related}) + '<ul>' + ''.join(
+                '<li><a href="' + quote(configuration_pages[g['group_id']][0]) + '">' + escape(g['group_id']) +
+                ': ' + str(g['affected_object_count']) + ' affected objects</a></li>' for g in related) + '</ul>'
         for number, chunk in enumerate(chunks, 1):
             if selected:
                 records = (f'<h2>Records ({len(selected)} {escape(evidence["record_unit"])}; rows {(number - 1) * page_rows + 1}–'
@@ -195,4 +215,5 @@ def write_html_evidence_pages(model, folder, *, report_name=None, page_rows=PAGE
              f'<tbody>{index_rows}</tbody></table></div>')
     (folder / 'index.html').write_text(_document('Technical evidence index', index, tenant), encoding='utf-8')
     return {'folder': str(folder), 'index': str(folder / 'index.html'), 'pages': pages, 'context_pages': context_pages,
+            'configuration_pages':configuration_pages,
             'rows_written': rows_written}

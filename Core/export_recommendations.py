@@ -597,7 +597,9 @@ def export_to_excel(recommendations, filename=None, tenant_name=None, evidence_b
     if evidence_bundle:
         # License availability belongs in Service Plan Inventory and the compatibility
         # Recommendations register. It is not source evidence for a control decision.
+        from .licensing_projection import licensing_columns
         evidence_index = [{
+            **licensing_columns(row),
             'RecommendationId': row.get('RecommendationId', ''),
             'Domain': row.get('Domain', ''), 'Finding': row.get('FindingTitle') or row.get('Feature', ''),
             'Capability': row.get('Capability', ''),
@@ -772,6 +774,8 @@ def export_to_excel(recommendations, filename=None, tenant_name=None, evidence_b
             rec.get('InvestigationQualification', ''),
         ]
         entry = dict(zip(summary_headers, row))
+        from .licensing_projection import licensing_columns
+        entry.update(licensing_columns(rec))
         entry.update({'FindingTitle': _heading(rec), 'Compatibility Feature': rec.get('OriginalCompatibilityLabel') or rec.get('Feature'),
                       'Capability': rec.get('Capability'), 'Finding Condition': rec.get('FindingCondition'),
                       'Licensing Dependency': '; '.join(rec.get('LicensingDependencies') or []),
@@ -844,6 +848,7 @@ def export_to_excel(recommendations, filename=None, tenant_name=None, evidence_b
             'Licensing Dependency':'; '.join(row.get('LicensingDependencies') or []),
             'Associated License Feature':'; '.join(row.get('AssociatedLicenseFeatures') or []),
             'License Evidence State':row.get('LicenseEvidenceState'),
+            **licensing_columns(row),
             'Responsible role':row.get('OwnerRole'),
             'Evidence level':row.get('EvidenceLevel'), 'Operational result':row.get('OperationalResult'),
             'Observed':row.get('ObservationDate'), 'Qualification':row.get('Qualification'),

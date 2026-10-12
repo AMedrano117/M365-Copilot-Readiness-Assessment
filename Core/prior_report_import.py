@@ -79,13 +79,14 @@ def _recommendations(rows):
         # retained compatibility input before legacy fingerprint/evaluation.
         # Archived worksheet rows are left verbatim in the original workbook.
         from .identity_finding_taxonomy import VERSION
-        if normalized.get('Taxonomy Version') == VERSION and normalized.get('Compatibility Feature'):
+        if normalized.get('Taxonomy Version') in {VERSION,'1.0.0'} and normalized.get('Compatibility Feature'):
             normalized['OriginalCompatibilityLabel'] = normalized['Compatibility Feature']
             normalized['Feature'] = normalized['Compatibility Feature']
             if normalized.get('Finding Condition'):
                 normalized['FindingCondition'] = normalized['Finding Condition']
             for target, column in (('LicensingDependencies', 'Licensing Dependency'),
-                                   ('AssociatedLicenseFeatures', 'Associated License Feature')):
+                                   ('AssociatedLicenseFeatures', 'Associated License Feature'),
+                                   ('AssociatedServicePlans','Associated Service Plan')):
                 if isinstance(normalized.get(column), str):
                     normalized[target] = [item.strip() for item in normalized[column].split(';') if item.strip()]
         result.append(normalized)

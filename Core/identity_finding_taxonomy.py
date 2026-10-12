@@ -6,10 +6,12 @@ authority. This module never alters semantic keys, conclusions or raw evidence.
 from copy import deepcopy
 import re
 
-VERSION = '1.0.0'
+VERSION = '1.1.0'
 
 # condition: (title, capability, condition evidence level)
 CONDITIONS = {
+    'licensing.copilot_group_assignment': ('Copilot group-based license assignment coverage', 'Group-based licensing', 'license_assignment'),
+    'licensing.guest_assignment': ('Guest license assignment review', 'Guest product assignment', 'license_assignment'),
     'mfa.registration': ('MFA registration coverage', 'Multifactor authentication registration', 'registration_state'),
     'mfa.not_registered': ('User explicitly not registered for MFA', 'Multifactor authentication registration', 'registration_state'),
     'mfa.registration_unknown': ('MFA registration state unknown', 'Multifactor authentication registration', 'registration_state'),
@@ -177,12 +179,24 @@ def _resolve(row):
     # must not replace that current scope/purpose condition in presentation.
     if row.get('PrivilegedAssignmentKeys') is not None:
         return 'privileged.scope_purpose', 'scoped_privileged_grants'
-    label = str(row.get('OriginalCompatibilityLabel') or row.get('OriginalFeature') or row.get('Feature') or '')
-    if label in LICENSES and (row.get('EvidenceBasis') == 'License signal'
-            or re.match(r'^' + re.escape(label.lower()) + r' is (?:active in|included in|licensed|pendingactivation|disabled)', text)):
-        return 'license.' + label, 'license_inventory_subject'
+    assignment = _assignment_condition(text)
+    if assignment:
+        return assignment, 'assignment_condition_signature'
     candidates = {condition for condition, pattern in LEGACY.items() if re.search(pattern, text)}
-    return (next(iter(candidates)) if len(candidates) == 1 else None), 'legacy_condition_signature'
+    if candidates:
+        return (next(iter(candidates)) if len(candidates) == 1 else None), 'legacy_condition_signature'
+    label = str(row.get('OriginalCompatibilityLabel') or row.get('OriginalFeature') or row.get('Feature') or '')
+    if label in LICENSES and re.match(r'^' + re.escape(label.lower()) + r' is (?:active in|included in|licensed|pendingactivation|disabled)', text):
+        return 'license.' + label, 'license_inventory_subject'
+    return None, 'legacy_condition_signature'
+
+
+def _assignment_condition(text):
+    if re.search(r'guest (?:users?|accounts?).*(?:m365|product|license) licens|guest (?:users?|accounts?).*(?:have|assigned).*licens|licensed guest|no guest users? have.*licens', text):
+        return 'licensing.guest_assignment'
+    if re.search(LEGACY['licensing.group_assignment'], text):
+        return 'licensing.copilot_group_assignment' if 'copilot' in text else 'licensing.group_assignment'
+    return None
 
 
 def _license_metadata(row, bundle, condition=None):
@@ -214,12 +228,24 @@ def _license_metadata(row, bundle, condition=None):
         metadata['LicenseContextQualification'] = 'Associated source feature; applicable licensing prerequisites and entitlement require separate confirmation.'
     if present:
         metadata.update(LicenseObserved=True, LicenseSource='retained service-plan inventory')
+    from .licensing_projection import normalize_licensing
+    metadata.update(normalize_licensing(row, bundle, associated, dependencies, LICENSES, condition))
     return metadata
 
 
 def resolve_identity_finding(row, bundle=None):
     """Return an additive copy; an existing versioned projection is validated separately."""
     result = dict(row)
+    if row.get('FindingTaxonomyVersion') == '1.0.0':
+        # Validate the known predecessor before enriching a runtime copy. An
+        # invalid historical projection must never be silently repaired.
+        if any(d['severity'] == 'error' for d in validate_identity_taxonomy({'recommendations':[row]})):
+            return result
+        row = dict(row)
+        row.pop('FindingTaxonomyVersion', None)
+        if str(row.get('FindingCondition') or '').startswith('license.'):
+            row.pop('FindingCondition', None)
+        result = dict(row)
     if not _identity_row(row) or row.get('FindingTaxonomyVersion'):
         return result
     condition, authority = _resolve(row)
@@ -322,7 +348,7 @@ def validate_identity_taxonomy(result):
         if isinstance(condition, str) and condition.startswith('license.') and condition[len('license.'):] in LICENSES:
             expected = (condition[len('license.'):] + ' license availability', 'Service-plan inventory', 'license_inventory')
         error = None
-        if row['FindingTaxonomyVersion'] != VERSION:
+        if row['FindingTaxonomyVersion'] not in {VERSION, '1.0.0'}:
             error = 'unsupported_identity_taxonomy_version'
         elif row.get('TaxonomyState') not in {'resolved', 'unresolved'}:
             error = 'identity_taxonomy_state_invalid'
@@ -343,6 +369,14 @@ def validate_identity_taxonomy(result):
         if error:
             diagnostics.append({'code': error, 'severity': 'error',
                 'recommendation_id': row.get('RecommendationId'), 'reason': 'Structured taxonomy does not match the versioned condition registry; no silent repair.'})
+        if row['FindingTaxonomyVersion'] == VERSION and isinstance(condition, str) and condition.startswith('license.'):
+            observed = dict(row)
+            observed.pop('FindingCondition', None)
+            observed.pop('FindingType', None)
+            actual, _ = _resolve(observed)
+            if actual and not actual.startswith('license.'):
+                diagnostics.append({'code':'identity_taxonomy_license_subject_mismatch', 'severity':'error',
+                    'recommendation_id':row.get('RecommendationId'), 'reason':'License title conflicts with the retained technical or assignment subject.'})
     unique = {(str(row.get('recommendation_id') or ''), row['code']): row for row in diagnostics}
     return [unique[key] for key in sorted(unique)]
 
@@ -400,6 +434,17 @@ def project_identity_sheet_links(sheets, recommendations):
             detail['Licensing Dependency'] = '; '.join(sorted({value for row in resolved for value in row.get('LicensingDependencies') or []}))
             detail['Associated License Feature'] = '; '.join(sorted({value for row in resolved for value in row.get('AssociatedLicenseFeatures') or []}))
             detail['Source Signal'] = 'Linked finding context; record-level applicability requires the retained selector and evidence.'
+            detail['Associated Service Plan'] = '; '.join(sorted({value for row in resolved for value in row.get('AssociatedServicePlans') or []}))
+            detail['License Evidence State'] = '; '.join(sorted({row.get('LicenseEvidenceState','unknown') for row in resolved}))
+            detail['License Inventory Evidence State'] = '; '.join(sorted({row.get('LicenseInventoryEvidenceState','NotCollected') for row in resolved}))
+            detail['License Source'] = '; '.join(sorted({row['LicenseSource'] for row in resolved if row.get('LicenseSource')}))
+            detail['Entitlement Verification State'] = '; '.join(sorted({row.get('EntitlementVerificationState','not_established') for row in resolved}))
+            if key == 'authentication_detail' and (detail.get('Metric ID') or detail.get('Metric')):
+                from .authentication_metric_taxonomy import resolve_metric
+                detail['Parent Finding Context'] = detail['Flagged By']
+                detail.update(resolve_metric(detail))
+                detail['Flagged By'] = detail['Metric Condition']
+                detail['Capability'] = 'Authentication registration report: ' + detail['Metric Evidence Level']
             if key == 'mfa_registration_detail' and detail.get('MFA Registered') is False:
                 detail['Record Condition'] = CONDITIONS['mfa.not_registered'][0]
 
@@ -415,6 +460,9 @@ def licensing_context(row):
     if row.get('LicensingDependencies'):
         parts.append('Licensing dependency: ' + '; '.join(row['LicensingDependencies']))
     if row.get('AssociatedLicenseFeatures'):
-        parts.append('Supporting license context: ' + '; '.join(row['AssociatedLicenseFeatures']))
-    parts.append('License inventory evidence: ' + str(row.get('LicenseEvidenceState') or 'unknown') + '; entitlement requires separate confirmation')
+        parts.append('Original compatibility license context: ' + '; '.join(row['AssociatedLicenseFeatures']))
+    if row.get('AssociatedServicePlans'):
+        parts.append('Observed service plans: ' + '; '.join(row['AssociatedServicePlans']))
+    parts.append('License inventory evidence: ' + str(row.get('LicenseInventoryEvidenceState') or 'NotCollected') + '; entitlement requires separate confirmation')
+    parts.append('Entitlement verification: ' + str(row.get('EntitlementVerificationState') or 'not_established'))
     return '. '.join(parts) + '.'

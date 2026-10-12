@@ -458,7 +458,9 @@ def build_finding_evidence(payload):
                          'finding_ids': concern_findings[identifier],
                          'tables': [table_id for table_id, table in tables.items() if table['concern_id'] == identifier],
                          'related_concerns': [item for item in _RELATED.get(identifier, []) if item in concern_findings]})
+    from .configuration_groups import build_configuration_groups
     return {'format': 'm365-readiness-finding-evidence', 'schema_version': MODEL_SCHEMA_VERSION,
+            'configuration_groups': payload.get('configuration_groups') or build_configuration_groups(payload),
             'tenant_id': payload.get('tenant_id'), 'tenant_name': payload.get('tenant_name'),
             'evaluation_date': payload.get('evaluation_date'), 'generated_at': payload.get('generated_at'),
             'methodology_version': payload.get('methodology_version'), 'decision': payload.get('decision'),
