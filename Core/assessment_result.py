@@ -1041,4 +1041,5 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
     result['run_workflow_diagnostics'] = validate_run_context(result)
     result['identity_validation'] = validate_assessment_references(result)
     from .identity_finding_taxonomy import project_identity_result
-    return project_identity_result(result, bundle)
+    from .configuration_groups import attach_configuration_groups
+    return attach_configuration_groups(project_identity_result(result, bundle), bundle)

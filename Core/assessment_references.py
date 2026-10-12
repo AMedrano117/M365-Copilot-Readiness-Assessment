@@ -36,6 +36,10 @@ def resolve_alias(result, query):
 def validate_assessment_references(result):
     from .reconciliation_validation import validate_reconciliation
     diagnostics = validate_reconciliation(result)
+    if 'configuration_groups' in result:
+        from .configuration_groups import validate_configuration_groups
+        diagnostics.extend({'code':'configuration_group_reconciliation','severity':'error','subject':'configuration_groups','message':message}
+                           for message in validate_configuration_groups(result['configuration_groups']))
     if 'governance' in result:
         from .governance_validation import validate_governance
         diagnostics.extend(validate_governance(result))

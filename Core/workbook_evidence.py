@@ -123,6 +123,8 @@ def technical_recommendation_rows(result, heading=None):
             entry[f'Documentation {index + 1} title'] = link.get('title')
         entry['Verified on'] = detail.get('verified_on')
         entry['Original recommendation'] = row.get('Recommendation')
+        from .licensing_projection import licensing_columns
+        entry.update(licensing_columns(row))
         rows.append(entry)
     return rows
 

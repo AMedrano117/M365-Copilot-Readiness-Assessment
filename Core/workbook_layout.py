@@ -22,7 +22,11 @@ COMPATIBILITY_TITLES = ('Recommendations', 'Evidence Index', 'Control Results',
 FINDING_COLUMNS = ('ID', 'Priority', 'Readiness effect', 'Area', 'Finding', 'What we found',
                    'What to do', 'Affected', 'Evidence', 'Observed', 'Owner', 'Status', 'Target date')
 EVIDENCE_COLUMNS = {
-    'Configuration': ('ID', 'Setting', 'Current', 'Recommended', 'Status', 'Observed', 'Evidence ID'),
+    'Configuration': ('ID', 'Setting', 'Current', 'Recommended', 'Status', 'Observed', 'Object type', 'Scope',
+                      'Provider', 'Environment', 'Configuration source', 'Collection state', 'Qualification',
+                      'Affected objects', 'Total objects assessed', 'Unknown objects', 'Conflicting objects',
+                      'Population qualification', 'Observation period', 'Evidence summary', 'Affected objects link',
+                      'Technical evidence link', 'Group ID', 'Evidence ID'),
     'Devices': ('ID', 'Device', 'Primary user', 'OS', 'Issue', 'Detail', 'Last reported', 'Intune compliance', 'Evidence ID'),
     'Users & Identity': ('ID', 'User', 'UPN', 'User type', 'Admin', 'Issue', 'Detail', 'Last sign-in or observed', 'Evidence ID'),
     'Apps & Consent': ('ID', 'App', 'App ID', 'Publisher / verified', 'Permission or grant', 'Consent type', 'Issue', 'Detail', 'Evidence ID'),
@@ -619,6 +623,38 @@ def split_workbook_layout(source_workbook, result, bundle, assessment_path, tech
 
     assessment_rows = defaultdict(list)
     evidence_links = {}
+    from .configuration_groups import validate_configuration_groups
+    configuration = result.get('configuration_groups') or model.get('configuration_groups') or {'version':'1.0.0','groups':[],'members':[]}
+    if validate_configuration_groups(configuration):
+        raise WorkbookLayoutError('Configuration grouping failed membership/count validation.')
+    # Existing wide registers have native rows but lack per-setting result,
+    # origin and CFG membership. This narrow membership register supplies that
+    # missing relationship without copying the native evidence registers.
+    config_targets = {}
+    config_evidence_ids = defaultdict(set)
+    if configuration['members']:
+        detail_rows = []
+        for member in sorted(configuration['members'], key=lambda m:(m['group_id'], m.get('object_id') or '', m.get('primary_evidence_id') or '')):
+            config_evidence_ids[member['group_id']].update(member['evidence_ids'])
+            detail_rows.append({'FindingId':member['finding_id'], 'Group ID':member['group_id'],
+                'Object type':member['object_type'], 'Object ID':member.get('object_id'), 'Object name':member.get('object_name'),
+                'Locator':member.get('locator'), 'Configuration key':member['configuration_key'],
+                'Raw observed':member.get('raw_observed'), 'Observed':member['observed'], 'Recommended':member['recommended'],
+                'Assessment':member['assessment'], 'Configuration source':member['configuration_source'],
+                'Evidence IDs':member.get('evidence_ids'), 'Source references':member.get('source_refs'),
+                'Source capture':member.get('source_capture'), 'Collection state':member['collection_state'],
+                'Observation period':member['period'], 'Qualification':member['qualification'], 'Conflict state':member['conflict_state'],
+                'Native Evidence ID':member.get('primary_evidence_id')})
+        sheet = _write(technical, 'Configuration Detail', detail_rows)
+        for number, detail in enumerate(detail_rows, 2):
+            config_targets.setdefault(detail['Group ID'], []).append(number)
+            target = evidence_targets.get(detail['Native Evidence ID'])
+            if target:
+                _cell_link(sheet, number, 'Native Evidence ID', '#' + _ref(target[0],target[1],target[1],1))
+        config_targets = {key:_ref(sheet.title,min(rows),max(rows),sheet.max_column) for key,rows in config_targets.items()}
+    groups_by_finding = defaultdict(list)
+    for group in configuration['groups']:
+        groups_by_finding[group['finding_id']].append(group)
     reconciliation = []
     issues = []
     for row in result['recommendations']:
@@ -627,8 +663,25 @@ def split_workbook_layout(source_workbook, result, bundle, assessment_path, tech
         row['AssessmentEvidenceRanges'] = []
         row['TechnicalEvidenceRanges'] = []
         records = selected.get(identifier, [])
+        for group in groups_by_finding[identifier]:
+            target = Path(technical_path).name + '#' + config_targets[group['group_id']]
+            ids = sorted(config_evidence_ids[group['group_id']])
+            assessment_rows['Configuration'].append({'ID':identifier, 'Setting':group['configuration'], 'Current':group['observed'],
+                'Recommended':group['recommended'], 'Status':group['assessment'], 'Observed':group['period'].get('capture'),
+                'Object type':group['object_type'], 'Scope':group['scope'], 'Affected objects':group['affected_object_count'],
+                'Provider':group['provider'], 'Environment':group['environment'], 'Configuration source':group['configuration_source'],
+                'Collection state':group['collection_state'], 'Qualification':group['qualification'],
+                'Total objects assessed':group['total_objects_assessed'], 'Unknown objects':group['unknown_object_count'],
+                'Conflicting objects':group['conflicting_object_count'], 'Population qualification':group['population_qualification'],
+                'Observation period':group['period'], 'Evidence summary':str(group['evidence_count']) + ' retained evidence records',
+                'Affected objects link':'View '+str(group['affected_object_count'])+' objects', 'Technical evidence link':'Configuration membership',
+                'Group ID':group['group_id'], 'Evidence ID':ids[0] if len(ids)==1 else str(len(ids))+' evidence records; see detail'})
+            evidence_links[('Configuration',len(assessment_rows['Configuration'])+1)] = target
         for record in records:
             title, projected = _projection(row, record, devices)
+            if title == 'Configuration' and groups_by_finding[identifier] and record.get('dataset') in {
+                    'sharepoint_site_settings','sharepoint_tenant_settings','sharepoint_graph_settings'}:
+                continue
             assessment_rows[title].append(projected)
             destination = evidence_targets.get(record['evidence_id'])
             if destination:
@@ -655,6 +708,9 @@ def split_workbook_layout(source_workbook, result, bundle, assessment_path, tech
         for number, row in enumerate(assessment_rows[title], 2):
             blocks.setdefault(row['ID'], []).append(number)
             _cell_link(sheet, number, 'Evidence ID', evidence_links.get((title, number)))
+            if title == 'Configuration':
+                for field in ('Affected objects link', 'Technical evidence link'):
+                    _cell_link(sheet, number, field, evidence_links.get((title, number)))
         for identifier, numbers in blocks.items():
             if numbers != list(range(numbers[0], numbers[-1] + 1)):
                 issues.append(f'{identifier}: assessment evidence rows are not contiguous.')
@@ -665,7 +721,9 @@ def split_workbook_layout(source_workbook, result, bundle, assessment_path, tech
         if ranges:
             row['AssessmentEvidenceRange'] = max(ranges, key=lambda location: int(RANGE.fullmatch(location)[5]) - int(RANGE.fullmatch(location)[3]))
         written = sum(int(RANGE.fullmatch(location)[5]) - int(RANGE.fullmatch(location)[3]) + 1 for location in ranges)
-        expected = len(selected.get(identifier, []))
+        expected = len(groups_by_finding[identifier]) + sum(
+            not (groups_by_finding[identifier] and record.get('dataset') in {'sharepoint_site_settings','sharepoint_tenant_settings','sharepoint_graph_settings'} and
+                 _projection(row, record, devices)[0] == 'Configuration') for record in selected.get(identifier, []))
         reconciliation.append({'Status': 'Passed' if expected == written else 'Failed', 'Check': 'Finding evidence rows',
                                'Source': identifier, 'Source rows': expected, 'Written rows': written,
                                'Issue': '' if expected == written else 'Affected records do not reconcile.'})

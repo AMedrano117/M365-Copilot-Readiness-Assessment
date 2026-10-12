@@ -361,6 +361,7 @@ def build_evidence_selection(result, bundle, *, tenant_name=None, generated_at=N
                     'record_reconciliation': reconciliation, 'evidence_record_ids': evidence_ids})
         enriched.append(row)
         finding = {'finding_id': identifier,
+                   'finding_key':row.get('FindingKey'),
                    'title': _heading(row), 'domain_id': row.get('AssessmentDomainId') or row.get('DomainId'), 'control_id': row.get('ControlId'),
                    'service': row.get('Service'), 'disposition': row.get('Disposition'), 'priority': row.get('Priority'),
                    'observation': row.get('Observation'), 'recommendation': row.get('Recommendation'),
@@ -391,6 +392,7 @@ def build_evidence_selection(result, bundle, *, tenant_name=None, generated_at=N
         'methodology_version': result.get('methodology_version'),
         'decision': result.get('decision'), 'rationale': result.get('rationale'),
         'counts': result.get('counts') or {}, 'evidence_counts': evidence_counts, 'findings': findings,
+        **({'configuration_groups':result['configuration_groups']} if 'configuration_groups' in result else {}),
         'recommendations': enriched, 'sources': registry.sources,
         'evidence_records': registry.evidence,
         'portal_report_highlights': report_highlights(bundle.get('portal_review')),
