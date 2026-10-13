@@ -1,3 +1,4 @@
+from provenance_fixture import fictional_publication
 import io
 import json
 import copy
@@ -11,6 +12,7 @@ from Core.assessment_package import record_package_run
 from Core.console_reporting import configure_console, print_paragraph, print_source_gaps
 
 
+@fictional_publication
 class ConsoleReportingTests(unittest.TestCase):
     def test_old_pdf_package_notices_are_explained_without_rewriting_receipts(self):
         configure_console(verbose=False, color='never')

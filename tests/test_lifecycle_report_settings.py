@@ -1,3 +1,4 @@
+from provenance_fixture import fictional_publication
 """Lifecycle age and date confirmations survive portable, offline replay."""
 
 import hashlib
@@ -11,6 +12,7 @@ from Core.lifecycle_report_settings import lifecycle_settings
 from Core.offline_collection import empty_service_results, load_collection, save_collection
 
 
+@fictional_publication
 class LifecycleSettingsTests(unittest.TestCase):
     def test_policy_precedence_keeps_saved_and_explicit_settings(self):
         with patch.dict(os.environ, {'LIFECYCLE_REPORT_MAX_AGE_DAYS': '120'}):

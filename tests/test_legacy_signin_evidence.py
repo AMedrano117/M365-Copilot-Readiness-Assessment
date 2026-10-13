@@ -1,3 +1,4 @@
+from provenance_fixture import fictional_publication
 import os
 import io
 from contextlib import redirect_stdout
@@ -19,6 +20,7 @@ from Core.customer_report import _heading
 from Core.saved_control_checks import qualify_saved_recommendations
 
 
+@fictional_publication
 class LegacySignInEvidenceTests(unittest.TestCase):
     def test_live_legacy_finding_is_named_for_the_issue_and_preserves_license_observation(self):
         from Recommendations.entra import AAD_PREMIUM, AAD_PREMIUM_P1

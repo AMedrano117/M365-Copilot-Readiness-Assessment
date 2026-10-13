@@ -45,7 +45,11 @@ def report_file_stem(stem, *, customer_name=None, tenant_name=None, tenant_id=No
 
 def new_numbered_directory(parent):
     """Reserve a short sequence number without replacing any previous build."""
+    from .repository_provenance import require_publication
+    require_publication()
     parent = Path(parent)
+    from .publication_io import validate_container
+    validate_container(parent)
     parent.mkdir(parents=True, exist_ok=True)
     number = 1
     while True:
@@ -59,7 +63,11 @@ def new_numbered_directory(parent):
 
 
 def new_assessment_directory(*, customer_name=None, tenant_name=None, tenant_id=None):
+    from .repository_provenance import require_publication
+    require_publication()
     parent = customer_reports_directory(customer_name, tenant_name, tenant_id)
+    from .publication_io import validate_container
+    validate_container(parent)
     parent.mkdir(parents=True, exist_ok=True)
     assessment_date = datetime.now(timezone.utc).strftime('%Y-%m-%d')
     number = 1
@@ -79,7 +87,11 @@ def new_deliverables_directory(package_directory):
 
 def report_directory(output_dir=None, *, customer_name=None, tenant_name=None, tenant_id=None):
     """Direct exporters use the customer folder; report builds supply their run folder."""
+    from .repository_provenance import require_publication
+    require_publication()
     folder = Path(output_dir) if output_dir is not None else customer_reports_directory(
         customer_name, tenant_name, tenant_id)
+    from .publication_io import validate_container
+    validate_container(folder)
     folder.mkdir(parents=True, exist_ok=True)
     return folder

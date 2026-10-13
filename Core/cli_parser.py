@@ -52,6 +52,12 @@ Examples:
         default=None,
         help='Tenant ID to analyze. Order: --tenant-id, then TENANT_ID in the selected environment file. There is no built-in default tenant.'
     )
+    parser.add_argument('--plan', action='store_true', help='Read-only run plan; no collection, imports, history writes or outputs.')
+    parser.add_argument('--plan-format', choices=['human','json'], default='human', help='Console or structured stdout for --plan.')
+    parser.add_argument('--source-policy', choices=['production','engineering-validation'], default='production',
+        help='Production requires clean committed source. Engineering outputs are prominently qualified.')
+    parser.add_argument('--source-reason', help='Non-sensitive reason for engineering validation; never a governance approval.')
+    parser.add_argument('--acknowledge-dirty-source', action='store_true', help='Explicitly acknowledge engineering source qualification.')
     parser.add_argument(
         '--confirm-tenant',
         type=str,

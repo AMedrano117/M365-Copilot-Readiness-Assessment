@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout
 from unittest.mock import AsyncMock, patch
+from provenance_fixture import fictional_revision
 
 from Core import console_reporting as console
 from Core.credentials_check import load_env_file, check_credentials, print_configuration_summary
@@ -122,6 +123,8 @@ class ConfigurationValidationTests(unittest.TestCase):
                                     '--sharepoint-admin-url', 'https://contoso-admin.sharepoint.com']), \
                  patch('Core.console_setup.setup_console_encoding'), \
                  patch('Core.check_dependencies.check_dependencies'), \
+                 patch('Core.run_plan.capture_revision', return_value=fictional_revision()), \
+                 patch('Core.repository_provenance.capture_revision', return_value=fictional_revision()), \
                  patch('Core.orchestrator.orchestrate', side_effect=inspect_configuration) as orchestrate, \
                  redirect_stdout(output):
                 runpy.run_path(str(ROOT / 'main.py'), run_name='__main__')

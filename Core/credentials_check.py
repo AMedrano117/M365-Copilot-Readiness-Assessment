@@ -27,19 +27,13 @@ def resolve_env_file_path(env_file=None, base_path=None):
     return os.path.join(base_path, '.env')
 
 
-def load_env_file(env_file=None, base_path=None):
-    """Load configuration atomically; an explicitly selected file must exist.
-    
-    Args:
-        env_file: Optional explicit environment file path.
-        base_path: Base path to look for default .env file. If None, uses parent of Core folder.
-    """
+def read_env_file(env_file=None, base_path=None):
+    """Parse selected settings without changing process state or revealing values."""
     env_path = resolve_env_file_path(env_file=env_file, base_path=base_path)
     if not os.path.isfile(env_path):
         if env_file is not None or os.path.exists(env_path):
             raise ValueError(f'Environment file does not exist or is not a file: {env_path}')
-        os.environ['ASSESSMENT_ENV_FILE'] = env_path
-        return None
+        return env_path, {}, False
 
     values = {}
     try:
@@ -66,10 +60,16 @@ def load_env_file(env_file=None, base_path=None):
                     values[key] = value
     except (OSError, UnicodeError) as exc:
         raise ValueError(f'Environment file cannot be read: {env_path}') from exc
+    return env_path, values, True
+
+
+def load_env_file(env_file=None, base_path=None):
+    """Load the same parsed configuration atomically for live authentication."""
+    env_path, values, exists = read_env_file(env_file, base_path)
     os.environ.update(values)
     os.environ['ASSESSMENT_ENV_FILE'] = env_path
     _ENV_FILE_SOURCES.update({key: env_path for key in values})
-    return env_path
+    return env_path if exists else None
 
 
 def check_credentials(env_file=None, *, load_environment=True):

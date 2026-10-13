@@ -12,6 +12,7 @@ Start with the [operator runbook](RUN.md) for the complete assessment workflow. 
 | Choose Standard or Restricted access | [Permissions and coverage](PERMISSIONS.md) |
 | Prepare a new customer engagement | [Customer checklist](NEW_TENANT_CHECKLIST.md) |
 | Collect evidence, rebuild offline and review deliverables | [Operator runbook](RUN.md) |
+| Review source provenance, run preflight and publication eligibility | [Reproducible execution](REPRODUCIBLE_EXECUTION.md) |
 | Retain evidence and remove assessment access or working copies | [Cleanup](CLEANUP.md) |
 | Set up or repair Python, including OneDrive workspaces | [Python environment](PYTHON_ENVIRONMENT.md) |
 | Run automated checks and update tested dependencies | [Development and validation](DEVELOPMENT.md) |

@@ -1008,6 +1008,8 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
             {"stage": "Expand", "condition": "Close or approve the remaining remediation, confirm earlier findings and review pilot outcomes."},
         ],
     }
+    from .repository_provenance import current_revision
+    result['producing_revision'] = current_revision()
     result["readiness_review"] = review
     from .readiness_progress import build_rollout_progress
     result["rollout_progress"] = build_rollout_progress(result, review)

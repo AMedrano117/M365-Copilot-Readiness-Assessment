@@ -1,3 +1,4 @@
+from provenance_fixture import fictional_publication
 """A new service exports useful investigation evidence without a service adapter."""
 
 from copy import deepcopy
@@ -45,6 +46,7 @@ def declaration(**values):
             'reconciliation': {'operation': 'count', 'expected': 2}, **values}
 
 
+@fictional_publication
 class InvestigationContractTests(unittest.TestCase):
     def materialize(self, contract):
         bundle = {'sheets': {}}
@@ -152,6 +154,7 @@ class InvestigationContractTests(unittest.TestCase):
         self.assertEqual(len(bundle['investigation_coverage']), 1)
 
 
+@fictional_publication
 class InvestigationContractExportTests(unittest.TestCase):
     def setUp(self):
         self.previous = os.getcwd()
@@ -165,7 +168,9 @@ class InvestigationContractExportTests(unittest.TestCase):
     def export(self, rec):
         bundle = {'sheets': {}, 'evaluation_date': '2026-09-30',
                   'collection_context': {'collected_at': DAY, 'tenant_id': 'fixture-tenant', 'mode': 'offline'}}
-        path = export_to_excel([rec], filename='generic-investigation.xlsx', evidence_bundle=bundle)
+        number=getattr(self,'_export_number',0);self._export_number=number+1
+        filename='generic-investigation'+('-'+str(number) if number else '')+'.xlsx'
+        path = export_to_excel([rec], filename=filename, evidence_bundle=bundle)
         workbook = load_workbook(path)
         self.addCleanup(workbook.close)
         return path, workbook, bundle

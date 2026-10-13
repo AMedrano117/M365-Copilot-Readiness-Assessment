@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 from copy import deepcopy
@@ -87,6 +88,11 @@ def save_collection(path=None, *, tenant_id, tenant_name, service_results,
                     collection_progress=None, _checkpoint_package=None, auth_plan=None,
                     customer_name=None, identity=None, package_directory=None):
     """Save one collection in its customer assessment folder by default."""
+    from .repository_provenance import require_publication
+    require_publication()
+    if path and not _checkpoint_package:
+        from .publication_io import validate_destination
+        validate_destination(path)
     results = {key: service_results[key] for key in SERVICE_KEYS}
     # The legacy Power Platform collector attaches evidence to its HTTP transport.
     # Copy only its named evidence fields; never serialize transport configuration.
@@ -117,6 +123,8 @@ def save_collection(path=None, *, tenant_id, tenant_name, service_results,
     payload['methodology_version'] = METHODOLOGY_VERSION
     payload['assessment_version'] = ASSESSMENT_VERSION
     payload['evaluation_date'] = evaluation_day(evaluation_date)
+    from .repository_provenance import current_revision
+    payload['producing_revision'] = current_revision()
     from .assessment_identity import new_identity, incomplete_identity
     previous_identity = (_checkpoint_package or {}).get('identity') or identity
     if previous_identity:
@@ -149,10 +157,10 @@ def save_collection(path=None, *, tenant_id, tenant_name, service_results,
         encoded = replace_source_paths(encoded, _checkpoint_package['references'])
         encoded['package'] = dict(_checkpoint_package['manifest'], directory='.')
         canonical = package_folder / 'collection.json'
-        _write_collection_json(canonical, encoded)
+        _write_collection_json(canonical, encoded, checkpoint=True)
         if target.resolve() != canonical.resolve():
             encoded['package']['directory'] = package_folder.name
-            _write_collection_json(target, encoded)
+            _write_collection_json(target, encoded, checkpoint=True)
         return str(target.resolve())
     # Preserve the collected facts even if copying a supplemental file fails.
     _write_collection_json(target, encoded)
@@ -166,10 +174,10 @@ def save_collection(path=None, *, tenant_id, tenant_name, service_results,
         encoded = replace_source_paths(encoded, references)
         encoded['package'] = dict(manifest, directory='.')
         canonical = package_folder / 'collection.json'
-        _write_collection_json(canonical, encoded)
+        _write_collection_json(canonical, encoded, checkpoint=canonical.resolve()==target.resolve())
         if target.resolve() != canonical.resolve():
             encoded['package']['directory'] = package_folder.name
-            _write_collection_json(target, encoded)
+            _write_collection_json(target, encoded, checkpoint=True)
         if _checkpoint_package is not None:
             _checkpoint_package.update(folder=package_folder, manifest=manifest, references=references)
     except (ValueError, OSError) as exc:
@@ -177,13 +185,34 @@ def save_collection(path=None, *, tenant_id, tenant_name, service_results,
     return str(target.resolve())
 
 
-def _write_collection_json(target, payload):
+def _write_collection_json(target, payload, *, checkpoint=False):
     """Replace a complete JSON document; never truncate the last saved checkpoint."""
+    from .repository_provenance import require_publication
+    require_publication()
+    from .publication_io import write_text
+    if not checkpoint or not target.exists():
+        write_text(target, json.dumps(payload, ensure_ascii=False, indent=2, allow_nan=False))
+        return
+    from .publication_io import linked_path
+    if any(linked_path(part) for part in (target,*target.parents)) or target.stat().st_nlink!=1:
+        raise ValueError('Checkpoint destination contains a symbolic link.')
+    previous=json.loads(target.read_text(encoding='utf-8-sig'))
+    if previous.get('format') != COLLECTION_FORMAT or payload.get('format') != COLLECTION_FORMAT:
+        raise ValueError('Checkpoint update cannot overwrite an immutable artifact.')
+    if (previous.get('identity') or {}).get('RunId') != (payload.get('identity') or {}).get('RunId'):
+        raise ValueError('Checkpoint update cannot change run ownership.')
+    if any((parent/'assessment-run.json').exists() for parent in target.parents):
+        raise ValueError('Completed collection is immutable.')
+    before=target.read_bytes()
     temporary = target.with_name(target.name + '.' + uuid4().hex + '.tmp')
     try:
-        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2, allow_nan=False), encoding='utf-8')
+        with temporary.open('x',encoding='utf-8') as handle:
+            handle.write(json.dumps(payload,ensure_ascii=False,indent=2,allow_nan=False))
+            handle.flush();os.fsync(handle.fileno())
         for attempt in range(3):
             try:
+                if any(linked_path(part) for part in (target,*target.parents)) or target.stat().st_nlink!=1 or target.read_bytes()!=before:
+                    raise ValueError('Checkpoint destination changed before its atomic update.')
                 temporary.replace(target)
                 break
             except PermissionError as exc:

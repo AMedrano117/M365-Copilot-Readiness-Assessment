@@ -446,6 +446,8 @@ def process_and_print_all_information(m365_result, entra_info,
             evaluation_date=evaluation_date,tenant_id=expected_tenant_id))
         assessment_result = build_assessment_result(all_recommendations, evidence_bundle,
             evaluation_date=evaluation_date, expected_tenant_id=expected_tenant_id)
+        from .repository_provenance import verify_execution_source
+        verify_execution_source()
         if run_execution is not None:
             from pathlib import Path
             from .assessment_runs import complete_run
@@ -576,7 +578,7 @@ def process_and_print_all_information(m365_result, entra_info,
             evidence_pages = write_html_evidence_pages(
                 finding_model, reports_root / evidence_folder_name, report_name=f'{report_stem}.html',
                 workbook_name=Path(excel_path).name if excel_path else None,
-                technical_workbook_name=Path(technical_excel_path).name if technical_excel_path else None)
+                technical_workbook_name=Path(technical_excel_path).name if technical_excel_path else None,assessment_result=assessment_result)
             evidence_bundle['html_evidence_folder_path'] = evidence_pages['folder']
             evidence_bundle['html_evidence_index'] = evidence_pages['index']
         html_path = export_to_html(

@@ -1,3 +1,4 @@
+from provenance_fixture import fictional_publication
 """Actual fictional workbooks, HTML, snapshots and immutable lifecycle results."""
 from contextlib import redirect_stdout
 from copy import deepcopy
@@ -28,6 +29,7 @@ def shared_fixture():
     return bundle,result
 
 
+@fictional_publication
 class ConfigurationOutputTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -104,6 +106,7 @@ class ConfigurationOutputTests(unittest.TestCase):
             self.assertEqual(sum(len(p) for p in output['configuration_pages'].values()),len(model['configuration_groups']['members']))
 
 
+@fictional_publication
 class ConfigurationLifecycleTests(unittest.TestCase):
     def test_display_grouping_does_not_change_real_delta(self):
         from test_delta_lifecycle import pair,compare

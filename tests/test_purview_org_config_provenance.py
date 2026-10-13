@@ -1,3 +1,4 @@
+from provenance_fixture import fictional_publication
 """Organization settings retain explicit raw values across live hydration/replay."""
 
 import asyncio
@@ -16,6 +17,7 @@ def hydrate(properties):
             'org_config': {'available': True, 'availability_status': 'available', 'data': properties}})
 
 
+@fictional_publication
 class PurviewOrgConfigProvenanceTests(unittest.TestCase):
     def test_false_is_retained_as_explicit_original_field_and_generically_exportable(self):
         for field, value in [('CustomerLockBoxEnabled', False), ('CustomerLockboxEnabled', 'False'), ('CUSTOMERLOCKBOXENABLED', False)]:

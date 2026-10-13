@@ -1,3 +1,4 @@
+from provenance_fixture import fictional_publication
 """Interrupted runs retain portable evidence without inventing successful reads."""
 
 import asyncio
@@ -18,6 +19,7 @@ from Core.export_paths import BUILDS_FOLDER, SUMMARY_STEM
 TENANT = '11111111-1111-1111-1111-111111111111'
 
 
+@fictional_publication
 class CollectionCheckpointTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()

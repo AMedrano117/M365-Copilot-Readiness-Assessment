@@ -1,3 +1,4 @@
+from provenance_fixture import fictional_publication
 import os
 import io
 import tempfile
@@ -19,6 +20,7 @@ from Core.export_recommendations import (
 )
 
 
+@fictional_publication
 class ExportRecommendationsTests(unittest.TestCase):
     def setUp(self):
         self.original_cwd = os.getcwd()

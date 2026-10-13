@@ -1,3 +1,4 @@
+from provenance_fixture import fictional_publication
 """Regression tests for report signal-to-noise.
 
 The assessment used to emit ~300 cards for a tenant with a few dozen real findings. Two thirds
@@ -23,6 +24,7 @@ import unittest
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 
+@fictional_publication
 class FillerCardSuppressionTests(unittest.TestCase):
     def test_unmapped_plans_produce_no_card(self):
         from Recommendations.m365 import get_feature_recommendation
@@ -82,6 +84,7 @@ class FillerCardSuppressionTests(unittest.TestCase):
         self.assertNotEqual(records[0]["Disposition"], "Coverage")
 
 
+@fictional_publication
 class PlanStatusResolutionTests(unittest.TestCase):
     def test_plan_active_in_any_sku_is_reported_active(self):
         from Core.service_categorization import resolve_plan_statuses
@@ -116,6 +119,7 @@ class PlanStatusResolutionTests(unittest.TestCase):
         self.assertNotIn("SHAREPOINTENTERPRISE", RETIRED_PLANS)
 
 
+@fictional_publication
 class StatusPriorityCoherenceTests(unittest.TestCase):
     def test_success_cannot_carry_an_urgent_action(self):
         from Core.new_recommendation import new_recommendation
@@ -166,6 +170,7 @@ class StatusPriorityCoherenceTests(unittest.TestCase):
         self.assertEqual(rec["Priority"], "")
 
 
+@fictional_publication
 class FindingDeduplicationTests(unittest.TestCase):
     def _rec(self, service, feature, obs, rec="", priority="Medium",
              status="Success", finding_key=""):
@@ -240,6 +245,7 @@ class FindingDeduplicationTests(unittest.TestCase):
         self.assertIn("app_access_detail", merged[0]["EvidenceKey"])
 
 
+@fictional_publication
 class CardHeadingTests(unittest.TestCase):
     def test_heading_describes_the_finding_not_the_licence(self):
         from Core.export_recommendations import summarize_finding
@@ -278,6 +284,7 @@ class CardHeadingTests(unittest.TestCase):
         self.assertEqual(summarize_finding(None), "")
 
 
+@fictional_publication
 class RecommendationTextRenderingTests(unittest.TestCase):
     def test_no_recommendation_text_contains_unrendered_placeholders(self):
         """Plain strings with {placeholders} reach the customer verbatim."""

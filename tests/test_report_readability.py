@@ -1,3 +1,4 @@
+from provenance_fixture import fictional_publication
 """Regression checks for concise presentation and shared, readable source logs."""
 
 from pathlib import Path
@@ -41,6 +42,7 @@ def bundle_and_result():
     return bundle,build_assessment_result(records,bundle,evaluation_date=DAY,expected_tenant_id=TENANT)
 
 
+@fictional_publication
 class ReadabilityTests(unittest.TestCase):
     def test_shared_inventory_is_retained_once_with_readable_original_fields(self):
         bundle,result = bundle_and_result()

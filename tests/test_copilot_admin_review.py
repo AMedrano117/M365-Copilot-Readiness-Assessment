@@ -1,3 +1,4 @@
+from provenance_fixture import fictional_publication
 import asyncio
 import copy
 import json
@@ -31,6 +32,7 @@ def policy_client(mode='Enable', **overrides):
                            dlp_rules={'available': True, 'rules': [rule]}, collected_at='2026-09-14T12:00:00Z')
 
 
+@fictional_publication
 class ActivitySummaryTests(unittest.TestCase):
     def test_zero_counts_are_kept_without_retaining_identities(self):
         value = summarize_activity([activity(), activity(userPrincipalName='second@example.invalid')])
@@ -104,6 +106,7 @@ class ActivitySummaryTests(unittest.TestCase):
             self.assertEqual(len(value['user_detail']), 1)
 
 
+@fictional_publication
 class CopilotPolicyTests(unittest.TestCase):
     def test_monitoring_and_enforced_rule_configuration_are_distinct(self):
         self.assertEqual(summarize_copilot_dlp(policy_client('TestWithNotifications'))['rows'][0]['Mode'], 'Monitoring only')

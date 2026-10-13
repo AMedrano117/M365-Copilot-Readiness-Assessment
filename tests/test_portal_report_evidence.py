@@ -1,3 +1,4 @@
+from provenance_fixture import fictional_publication
 """Portal evidence provenance, offline presentation, and restricted workbook checks."""
 
 import os
@@ -14,6 +15,7 @@ from Core.export_recommendations import export_to_excel, export_to_html
 from Core.new_recommendation import new_recommendation
 
 
+@fictional_publication
 class PortalReportEvidenceTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()

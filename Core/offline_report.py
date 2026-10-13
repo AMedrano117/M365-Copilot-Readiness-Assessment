@@ -6,6 +6,12 @@ from pathlib import Path
 
 
 def run_offline_report(args):
+    from .repository_provenance import require_publication
+    require_publication()
+    from .effective_configuration import resolve_effective
+    args, _, resolution_errors = resolve_effective(args)
+    if resolution_errors:
+        raise ValueError("Offline configuration blocked: " + ", ".join(resolution_errors))
     if getattr(args, 'replay_snapshot', None):
         from .assessment_replay import render_snapshot
         render_snapshot(args.replay_snapshot,
@@ -22,6 +28,8 @@ def run_offline_report(args):
     payload = load_collection(args.collection_input) if args.collection_input else None
     from .assessment_package import restore_arguments, record_package_run, save_rebuild_recipe, render_with_failure_receipt, new_offline_package
     args = restore_arguments(args, payload)
+    from .repository_provenance import update_execution_configuration
+    update_execution_configuration(args)
     explicit_type = getattr(args, 'run_type', None)
     if (payload or {}).get('completed_run_snapshot') and not explicit_type:
         from .assessment_package import INPUT_KEYS
@@ -140,7 +148,7 @@ def run_offline_report(args):
     ):
         settings.setdefault(key, _positive_int_env(environment, default))
     from .lifecycle_report_settings import lifecycle_settings
-    settings = lifecycle_settings(settings, max_age_days=getattr(args, 'lifecycle_report_max_age_days', None),
+    settings = lifecycle_settings(args._effective_settings, max_age_days=getattr(args, 'lifecycle_report_max_age_days', None),
                                   report_dates=getattr(args, 'lifecycle_report_date', None),
                                   evaluation_date=args.evaluation_date)
     context['assessment_settings'] = settings
@@ -167,6 +175,10 @@ def run_offline_report(args):
         collection_input=args.collection_input,
         methodology_migration=migration,
     )
+    recipe = None
+    if explicit_type:
+        recipe = save_rebuild_recipe(package_directory,args,settings,tenant_id=expected_tenant_id,tenant_name=tenant_name,
+            methodology_migration=migration,identity=run_execution.identity)
     result = render_with_failure_receipt(
         process_and_print_all_information, receipt=receipt,
         **results, tenant_name=tenant_name, open_html_report=args.open_html_report,
@@ -193,14 +205,14 @@ def run_offline_report(args):
         receipt['tenant_id'] = expected_tenant_id
     if isinstance(result, dict) and args.snapshot_json:
         result['snapshot_path'] = args.snapshot_json
-    recipe = None
     recovered_raw_collection = False
-    if result and result.get('html_path'):
+    if result and result.get('html_path') and recipe is None:
         if not (payload or {}).get('package_directory') and payload and payload.get('format') == 'm365-readiness-collection':
             # Recover a raw collection saved before supplemental packaging failed.
             # Copy the immutable original; do not synthesize or overwrite a collection.
             import shutil
-            shutil.copy2(args.collection_input, Path(receipt['folder']) / 'collection.json')
+            from .publication_io import copy_file
+            copy_file(args.collection_input, Path(receipt['folder']) / 'collection.json')
             recovered_raw_collection = True
         recipe = save_rebuild_recipe(receipt['folder'], args,
                                      settings,

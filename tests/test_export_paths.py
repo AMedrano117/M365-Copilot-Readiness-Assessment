@@ -1,3 +1,4 @@
+from provenance_fixture import fictional_publication
 import builtins
 import contextlib
 import io
@@ -11,6 +12,7 @@ from Core.export_paths import REPORT_STEM, customer_reports_directory, new_asses
 from Core.export_recommendations import build_report_filename, export_to_csv, export_to_excel, export_to_json
 
 
+@fictional_publication
 class CustomerExportPathTests(unittest.TestCase):
     def setUp(self):
         self.original_cwd = Path.cwd()

@@ -1,3 +1,4 @@
+from provenance_fixture import fictional_publication
 import os
 from pathlib import Path
 import tempfile
@@ -8,6 +9,7 @@ from tests.workbook_test_helpers import load_workbook_pair as load_workbook
 from Core.export_recommendations import export_to_excel, export_to_html
 
 
+@fictional_publication
 class PriorReportRenderTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()

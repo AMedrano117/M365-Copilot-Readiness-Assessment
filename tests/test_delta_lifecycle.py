@@ -1,3 +1,4 @@
+from provenance_fixture import fictional_publication
 """Conservative transitions and typed matching, without collectors or files."""
 import copy
 import unittest
@@ -42,6 +43,7 @@ def finding_record(delta):
     return next(row for row in delta['Records'] if row['EntityType']=='finding')
 
 
+@fictional_publication
 class LifecycleStateTests(unittest.TestCase):
     def test_no_comparison_and_explicit_disabled_matrix(self):
         from Core.assessment_delta import evaluate_delta
@@ -226,6 +228,7 @@ class LifecycleStateTests(unittest.TestCase):
         self.assertEqual(len([r for r in delta['Records'] if r['EntityType']=='metric']),2)
 
 
+@fictional_publication
 class LifecycleMatchingTests(unittest.TestCase):
     def test_different_pfi_does_not_match_display_id(self):
         from Core.assessment_identity import entity

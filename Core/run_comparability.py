@@ -145,6 +145,18 @@ def evaluate_comparability(current, baseline, *, control_mapping=None):
                 'Explicit catalog mapping qualifies comparison.' if mapping_ok else
                 'No declared compatibility for changed semantic versions.',blocking=not bool(mapping_ok))
     ac, bc = current.get('run_context') or {}, baseline.get('run_context') or {}
+    producing,previous=current.get('producing_revision') or {},baseline.get('producing_revision') or {}
+    if producing.get('commit_sha') != previous.get('commit_sha'):
+        reasons.append(reason('producing_revision_changed','source','Producing commits differ; this alone does not change technical eligibility.'))
+    for field in ('taxonomy_version',):
+        if producing.get(field) and previous.get(field) and producing[field]!=previous[field]:
+            add('source_semantics_changed',field,'Recorded source component changed; retain comparison qualifications.')
+    adapters, old_adapters = producing.get('import_adapters') or {}, previous.get('import_adapters') or {}
+    if adapters and old_adapters and adapters != old_adapters:
+        semantic = any((adapters.get(name) or {}).get('version') and (old_adapters.get(name) or {}).get('version')
+            and adapters[name]['version'] != old_adapters[name]['version'] for name in set(adapters) | set(old_adapters))
+        add('source_semantics_changed' if semantic else 'source_implementation_changed', 'import_adapters',
+            'Declared adapter semantics changed.' if semantic else 'Adapter implementation bytes changed; semantic equivalence requires review.')
     if not ac.get('ReconciliationVersion') or not bc.get('ReconciliationVersion'):
         add('legacy_version_gap','reconciliation','Reconciliation version is unrecorded.')
     elif ac['ReconciliationVersion']!=bc['ReconciliationVersion']:

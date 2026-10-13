@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+from .publication_io import copy_file, write_text
 import re
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -157,7 +158,13 @@ def confined_path(root, reference):
 
 def package_inputs(folder, supplemental_inputs):
     """Copy originals, preserve basenames, and record hashes and skipped inputs."""
+    from .repository_provenance import require_publication
+    require_publication()
+    from .publication_io import validate_container
+    validate_container(folder)
     folder = Path(folder)
+    if (folder/'assessment-run.json').exists():
+        raise ValueError('Completed package inputs are immutable.')
     folder.mkdir(parents=True, exist_ok=True)
     manifest = {'version': PACKAGE_VERSION, 'inputs': {}, 'files': [], 'diagnostics': []}
     references = {}
@@ -200,7 +207,7 @@ def package_inputs(folder, supplemental_inputs):
                     _check_json_credentials(candidate)
                     destination = target / candidate.name if source.is_dir() else target
                     destination.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(candidate, destination)
+                    copy_file(candidate, destination)
                     relative = destination.relative_to(folder).as_posix()
                     manifest['files'].append({'role': role, 'source_file': candidate.name,
                                               'path': relative, 'sha256': _digest(destination),
@@ -210,7 +217,7 @@ def package_inputs(folder, supplemental_inputs):
                 for asset in visual_assets:
                     destination = target.parent / asset.relative_to(source.parent)
                     destination.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(asset, destination)
+                    copy_file(asset, destination)
                     relative = destination.relative_to(folder).as_posix()
                     manifest['files'].append({'role': role, 'source_file': asset.name,
                                               'path': relative, 'sha256': _digest(destination),
@@ -313,6 +320,8 @@ def load_rebuild_recipe(path, recipe):
 
 
 def new_offline_package(tenant_name, customer_name=None, tenant_id=None):
+    from .repository_provenance import require_publication
+    require_publication()
     from .export_paths import new_assessment_directory
     folder = new_assessment_directory(
         customer_name=customer_name, tenant_name=tenant_name, tenant_id=tenant_id)
@@ -343,6 +352,8 @@ def restore_arguments(args, payload):
 def save_rebuild_recipe(folder, args, settings=None, *, tenant_id=None, tenant_name=None,
                         methodology_migration=None, customer_name=None, identity=None):
     """Retain a successful offline build's additions without saving a collection."""
+    from .repository_provenance import require_publication
+    require_publication()
     if not folder:
         return None
     folder = Path(folder).resolve()
@@ -368,6 +379,8 @@ def save_rebuild_recipe(folder, args, settings=None, *, tenant_id=None, tenant_n
               'collection': 'collection.json' if (folder / 'collection.json').is_file() else None,
               'assessment_settings': {key: value for key, value in (settings or {}).items() if key in SETTING_KEYS},
               'inputs': {}, 'files': [], 'diagnostics': manifest['diagnostics']}
+    from .repository_provenance import current_revision
+    recipe['producing_revision'] = current_revision()
     if identity:
         from .assessment_identity import execution_metadata
         recipe['identity'] = execution_metadata(identity)
@@ -395,15 +408,16 @@ def save_rebuild_recipe(folder, args, settings=None, *, tenant_id=None, tenant_n
                 recipe['files'].append({'role': role, 'source_file': item.name, 'path': reference,
                                          'sha256': _digest(item), 'size_bytes': item.stat().st_size})
     encoded = json.dumps(recipe, ensure_ascii=False, indent=2, allow_nan=False)
-    (run_folder / 'rebuild.json').write_text(encoded, encoding='utf-8')
-    temporary = folder / ('rebuild.' + uuid4().hex[:8] + '.tmp')
-    temporary.write_text(encoded, encoding='utf-8')
-    temporary.replace(folder / 'rebuild.json')
+    write_text(run_folder / 'rebuild.json',encoded)
+    from .assessment_history import atomic_write
+    atomic_write(folder / 'rebuild.json',recipe)
     return recipe
 
 
 def render_with_failure_receipt(processor, *, receipt, **arguments):
     """Record rejected imports or rendering errors while retaining collected facts."""
+    from .repository_provenance import require_publication
+    require_publication()
     try:
         return processor(**arguments)
     except Exception as exc:
@@ -414,16 +428,20 @@ def render_with_failure_receipt(processor, *, receipt, **arguments):
 
 def _retain_snapshot(source, report_directory):
     """Retain a shared-result snapshot without changing its contents."""
+    from .repository_provenance import require_publication
+    require_publication()
     destination = report_directory / source.name
     if destination.exists():
         destination = report_directory / (source.stem + '-snapshot-' + uuid4().hex[:8] + source.suffix)
-    shutil.copy2(source, destination)
+    copy_file(source, destination)
 
 
 def record_package_run(folder, *, mode, tenant_id, collected_at, evaluation_date,
                        outputs=None, inputs=None, status='complete', error=None, diagnostics=None,
                        collection_input=None, methodology_migration=None):
     """Keep generated artifacts and a receipt without rewriting saved evidence."""
+    from .repository_provenance import require_publication
+    require_publication()
     from .console_reporting import detail, detail_path, is_verbose, print_collection_handoff, print_paragraph
     if not folder:
         if collection_input and Path(collection_input).is_file():
@@ -474,7 +492,7 @@ def record_package_run(folder, *, mode, tenant_id, collected_at, evaluation_date
                     continue
                 destination = destination_folder / source.relative_to(source_folder)
                 destination.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(source, destination)
+                copy_file(source, destination)
                 copied_sources.add(source.resolve())
                 delivered.append(destination.relative_to(folder).as_posix())
         output_paths = dict(outputs)
@@ -489,13 +507,15 @@ def record_package_run(folder, *, mode, tenant_id, collected_at, evaluation_date
                 continue
             destination = copied_destination(source.name)
             destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, destination)
+            copy_file(source, destination)
             copied_sources.add(source.resolve())
             delivered.append(destination.relative_to(folder).as_posix())
     receipt = {'run_id': run_id, 'mode': mode, 'tenant_id': tenant_id,
                'collected_at': collected_at, 'evaluation_date': evaluation_date,
                'status': status, 'deliverables': delivered,
                'inputs': inputs or []}
+    from .repository_provenance import current_revision, qualify_publication_result
+    receipt['producing_revision'] = current_revision()
     if methodology_migration:
         receipt['methodology_migration'] = methodology_migration
     receipt['package_diagnostics'] = diagnostics or []
@@ -504,6 +524,10 @@ def record_package_run(folder, *, mode, tenant_id, collected_at, evaluation_date
         receipt['import_receipt'] = bundle.get('import_receipt', [])
         assessment = bundle.get('assessment_result', {}) or {}
         if isinstance(assessment, dict) and assessment:
+            assessment=qualify_publication_result(assessment)
+            receipt['producing_revision'] = assessment.get('producing_revision')
+            if assessment.get('replay_tool_revision'):
+                receipt['replay_tool_revision'] = assessment['replay_tool_revision']
             if assessment.get('run_context'):
                 receipt['semantic_run'] = assessment['run_context']
             receipt['remaining_requirements'] = assessment.get('coverage', [])
@@ -511,8 +535,8 @@ def record_package_run(folder, *, mode, tenant_id, collected_at, evaluation_date
             receipt['counts'] = assessment.get('counts', {})
     if error:
         receipt['error'] = str(error)
-    with (folder / 'operator-log.jsonl').open('a', encoding='utf-8') as handle:
-        handle.write(json.dumps(receipt, ensure_ascii=False, allow_nan=False) + '\n')
+    from .publication_io import append_receipt
+    append_receipt(folder / 'operator-log.jsonl',receipt)
     detail(f'Assessment receipt: tenant {tenant_id or "not identified"}; collected {collected_at or "not supplied"}; evaluation date {evaluation_date}.')
     detail_path('Portable assessment folder', folder)
     # One readable receipt per file; the full individual records stay in JSON/workbook.

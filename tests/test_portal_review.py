@@ -1,3 +1,4 @@
+from provenance_fixture import fictional_publication
 """Manually reviewed portal visuals remain portable context, never scored evidence."""
 
 import contextlib
@@ -53,6 +54,7 @@ def reviewed_fixture(folder):
     return path, manifest
 
 
+@fictional_publication
 class PortalReviewTests(unittest.TestCase):
     def parse(self, *arguments):
         with patch('sys.argv', ['main.py', *map(str, arguments)]):

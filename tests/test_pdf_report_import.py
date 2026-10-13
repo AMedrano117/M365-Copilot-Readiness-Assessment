@@ -1,3 +1,4 @@
+from provenance_fixture import fictional_publication
 """Automatic PDF intake keeps original context portable without scoring OCR guesses."""
 
 import contextlib
@@ -31,6 +32,7 @@ def pdf_fixture(path, *, blank=False):
     return path
 
 
+@fictional_publication
 class PdfImportTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -181,6 +183,7 @@ class PdfImportTests(unittest.TestCase):
         self.assertEqual(raw.read_bytes(), before)
 
 
+@fictional_publication
 class PdfLivePreflightTests(unittest.IsolatedAsyncioTestCase):
     async def test_missing_manifest_is_rejected_before_authentication(self):
         from Core.orchestrator import orchestrate

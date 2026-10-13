@@ -1,3 +1,4 @@
+from provenance_fixture import fictional_publication
 """Live orchestration persists replayable evidence without an operator save flag."""
 
 import contextlib
@@ -15,6 +16,7 @@ from Core.orchestrator import orchestrate
 from Core.console_reporting import display_path
 
 
+@fictional_publication
 class CollectionAutosaveTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()

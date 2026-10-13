@@ -1,3 +1,4 @@
+from provenance_fixture import fictional_publication
 import csv
 import os
 import tempfile
@@ -10,6 +11,7 @@ from Core.evidence_layer import build_evidence_bundle
 from Core.export_recommendations import export_to_html
 
 
+@fictional_publication
 class DataExposureAssessmentTests(unittest.TestCase):
     def _csv(self, directory, name, rows):
         path = Path(directory) / name

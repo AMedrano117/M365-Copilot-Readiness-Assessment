@@ -1,3 +1,4 @@
+from provenance_fixture import fictional_publication
 """Tests for the decision-oriented AI readiness classification layer."""
 
 import os
@@ -18,6 +19,7 @@ from Core.export_recommendations import export_to_html
 from Core.new_recommendation import NOT_ASSESSED_STATUS, new_recommendation
 
 
+@fictional_publication
 class DispositionTests(unittest.TestCase):
     def test_healthy_license_observation_is_assurance_not_a_finding(self):
         rec = new_recommendation(
@@ -127,6 +129,7 @@ class DispositionTests(unittest.TestCase):
         self.assertEqual(enriched["AIApplicability"], "AI agents and connected apps")
 
 
+@fictional_publication
 class ReadinessDecisionTests(unittest.TestCase):
     def test_high_action_blocks_broad_rollout_but_not_a_bounded_pilot(self):
         action = new_recommendation(
@@ -154,6 +157,7 @@ class ReadinessDecisionTests(unittest.TestCase):
         self.assertEqual(len(summary["optional_coverage"]), 1)
 
 
+@fictional_publication
 class ReportLaneTests(unittest.TestCase):
     def test_html_only_renders_actions_as_primary_cards(self):
         records = [
@@ -194,6 +198,7 @@ class ReportLaneTests(unittest.TestCase):
         self.assertNotIn("Three readiness conclusions", body)
 
 
+@fictional_publication
 class RecommendationQualityGuardTests(unittest.TestCase):
     def test_priority_never_uses_status_vocabulary(self):
         repo_root = pathlib.Path(__file__).resolve().parent.parent

@@ -4,7 +4,8 @@ from pathlib import Path
 import json
 import os
 import re
-import subprocess
+import contextlib
+import io
 import sys
 from urllib.parse import unquote
 import tempfile
@@ -187,20 +188,30 @@ def _evidence_page_issues(report, html_source, workbook):
 
 def validate_case(destination, *, active_incident=False, evidence_drilldown=False):
     destination.mkdir(parents=True, exist_ok=True)
-    collection = create_synthetic_package(destination / 'evidence', active_incident=active_incident,
-                                          evidence_drilldown=evidence_drilldown)
-    result = subprocess.run(
-        [sys.executable, str(ROOT / 'main.py'), '--mode', 'offline',
-         '--collection-input', str(collection), '--evaluation-date', '2026-09-15',
-         '--extra-exports', 'evidence-pages',
-         '--color', 'never'], cwd=destination,
-        env={**os.environ, 'PYTHONUTF8': '1', 'NO_COLOR': '1'},
-        capture_output=True, text=True, encoding='utf-8', timeout=600 if evidence_drilldown else 120,
-    )
-    if result.returncode:
-        print(result.stdout)
-        print(result.stderr)
-        return result.returncode
+    # This entry point constructs invented evidence itself. It is not a customer
+    # execution override and is not exposed through the assessment CLI.
+    from Core.repository_provenance import capture_revision, producing_context, publication_policy
+    from Core.cli_parser import parse_arguments
+    from Core.offline_report import run_offline_report
+    revision = capture_revision(ROOT)
+    revision['publication'] = publication_policy(revision,policy='engineering-validation',
+        purpose='Fictional report validation',reason='Synthetic evidence audit',acknowledged=True)
+    previous_cwd, previous_argv = Path.cwd(), sys.argv
+    output = io.StringIO()
+    try:
+        os.chdir(destination)
+        with producing_context(revision), contextlib.redirect_stdout(output):
+            collection = create_synthetic_package(destination / 'evidence', active_incident=active_incident,
+                                                  evidence_drilldown=evidence_drilldown)
+            sys.argv = ['main.py', '--mode', 'offline', '--collection-input', str(collection),
+                        '--evaluation-date', '2026-09-15', '--extra-exports', 'evidence-pages', '--color', 'never']
+            result = run_offline_report(parse_arguments(None, []))
+        if result:
+            print(output.getvalue())
+            return result
+    finally:
+        os.chdir(previous_cwd)
+        sys.argv = previous_argv
     package = Path(load_collection(collection)['package_directory'])
     receipt = json.loads((package / 'operator-log.jsonl').read_text(encoding='utf-8').splitlines()[-1])
     html_paths, summaries, workbooks = _report_paths(package, receipt)

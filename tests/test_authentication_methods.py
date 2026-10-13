@@ -1,3 +1,4 @@
+from provenance_fixture import fictional_publication
 """Registered credentials, preferred second factors and enforced strengths are distinct."""
 
 import contextlib
@@ -23,6 +24,7 @@ def registration(identifier, methods, **values):
             'lastUpdatedDateTime': '2026-09-14T10:00:00Z', **values}
 
 
+@fictional_publication
 class AuthenticationMethodsTests(unittest.TestCase):
     def test_email_push_passwordless_and_phishing_resistance_are_distinct(self):
         rows = [registration('email-only', ['email'], isMfaRegistered=False, isMfaCapable=False),
@@ -171,6 +173,7 @@ class AuthenticationMethodsTests(unittest.TestCase):
         self.assertEqual(row['Disposition'], 'Reference')
 
 
+@fictional_publication
 class AuthenticationCollectorTests(unittest.IsolatedAsyncioTestCase):
     async def test_existing_registration_request_keeps_preferences_and_normalizes_methods(self):
         from Core.get_entra_client import get_entra_client

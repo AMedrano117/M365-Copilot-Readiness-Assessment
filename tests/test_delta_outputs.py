@@ -1,3 +1,4 @@
+from provenance_fixture import fictional_publication
 """Execution, portable snapshots, CLI, and shared renderer integration."""
 import copy
 import json
@@ -10,6 +11,7 @@ from test_assessment_run_workflow import RunFixture,TENANT,DAY,result
 from test_assessment_run_outputs import parse
 
 
+@fictional_publication
 class DeltaWorkflowTests(RunFixture):
     def test_initial_and_standalone_record_not_evaluated(self):
         from Core.assessment_runs import prepare_run,complete_run
@@ -75,6 +77,7 @@ class DeltaWorkflowTests(RunFixture):
         self.assertEqual(snapshot,original)
 
 
+@fictional_publication
 class DeltaCliTests(unittest.TestCase):
     def test_disable_requires_explicit_reassessment_and_has_no_interactive_prompt(self):
         valid=['--mode','offline','--run-type','Reassessment','--assessment-id','AST-fiction',
@@ -85,6 +88,7 @@ class DeltaCliTests(unittest.TestCase):
             with self.subTest(options=options),self.assertRaises(SystemExit):parse(*options)
 
 
+@fictional_publication
 class DeltaLegacyTests(unittest.TestCase):
     def test_legacy_missing_and_rank_changed_findings_remain_unresolved(self):
         from Core.cross_provider_assessment import compare_baseline,METHODOLOGY_VERSION
@@ -110,6 +114,7 @@ class DeltaLegacyTests(unittest.TestCase):
             self.assertEqual({r['Origin'] for r in compared['rows']},{'Current','Baseline'})
 
 
+@fictional_publication
 class DeltaRendererTests(unittest.TestCase):
     def test_technical_fields_and_long_values_are_preserved(self):
         from Core.lifecycle_presentation import detail_rows

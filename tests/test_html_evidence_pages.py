@@ -1,3 +1,4 @@
+from provenance_fixture import fictional_publication
 """Linked technical evidence pages keep every record reachable while the main report stays aggregate-only."""
 
 import os
@@ -12,6 +13,7 @@ from Core.html_evidence_pages import context_page_name, page_name, write_html_ev
 from tests.test_finding_evidence import build, event, legacy_finding, source
 
 
+@fictional_publication
 class EvidencePageTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
@@ -78,6 +80,7 @@ class EvidencePageTests(unittest.TestCase):
             self.assertNotEqual(context_page_name(common + 'first', number), context_page_name(common + 'second', number))
 
 
+@fictional_publication
 class MainReportLinkTests(unittest.TestCase):
     def test_main_report_links_to_pages_without_named_records(self):
         from Core.assessment_result import build_assessment_result

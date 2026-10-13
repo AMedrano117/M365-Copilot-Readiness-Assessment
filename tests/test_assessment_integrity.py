@@ -1,3 +1,4 @@
+from provenance_fixture import fictional_publication
 """Regression tests for assessment integrity.
 
 These cover three classes of defect that caused the assessment to report things that were not
@@ -39,6 +40,7 @@ def _literal_dict_keys(source_path, function_name):
     return keys
 
 
+@fictional_publication
 class InsightKeyContractTests(unittest.TestCase):
     """Every insight key a recommendation reads must actually be produced."""
 
@@ -85,6 +87,7 @@ class InsightKeyContractTests(unittest.TestCase):
                 self.assertIn(key, keys, f"{key!r} missing from insights dict #{index}")
 
 
+@fictional_publication
 class GraphResponseShapeTests(unittest.TestCase):
     """Counters must survive both SDK model objects and plain dicts."""
 
@@ -171,6 +174,7 @@ class GraphResponseShapeTests(unittest.TestCase):
         )
 
 
+@fictional_publication
 class UnreadDataIsNotReportedAsCleanTests(unittest.TestCase):
     """A dataset that was never read must be reported as Not Assessed, not as clean."""
 
@@ -347,6 +351,7 @@ class UnreadDataIsNotReportedAsCleanTests(unittest.TestCase):
         self.assertIn("does not establish", device_result["Observation"])
 
 
+@fictional_publication
 class ScanCoverageSeparationTests(unittest.TestCase):
     """Assessment coverage limits must not inflate or pollute tenant findings."""
 

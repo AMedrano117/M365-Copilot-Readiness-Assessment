@@ -1,3 +1,4 @@
+from provenance_fixture import fictional_publication
 """Synthetic acceptance checks for the assessment/technical workbook pair."""
 
 from copy import deepcopy
@@ -74,6 +75,7 @@ def fixture():
     return rows, bundle
 
 
+@fictional_publication
 class WorkbookLayoutTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()

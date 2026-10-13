@@ -1,3 +1,4 @@
+from provenance_fixture import fictional_publication
 """Exercise the live Entra processing boundary with fictional, local Graph responses."""
 
 import io
@@ -15,6 +16,7 @@ from Core.offline_collection import _encode, _decode
 from Core.services_and_licenses import ServicesAndLicenses
 
 
+@fictional_publication
 class EntraPipelineIntegrationTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.plan = 'AAD_PREMIUM'
