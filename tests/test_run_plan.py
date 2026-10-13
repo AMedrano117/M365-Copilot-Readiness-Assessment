@@ -1,3 +1,4 @@
+from provenance_fixture import fictional_publication
 """Preflight performs metadata reads only, with explicit baseline selection."""
 from contextlib import redirect_stdout
 from copy import deepcopy
@@ -18,7 +19,7 @@ def args(**overrides):
     values=dict(run_type='Initial',tenant_id=TENANT,source_policy='production',assessment_id=None,
         baseline_run_id=None,assessment_history=None,assessment_purpose=None,primary_environment_id=None,
         source_reason=None,acknowledge_dirty_source=False,delta_mode=None,replay_snapshot=None,
-        offline=True,services=[],permission_profile=None,preview_collectors='auto')
+        offline=False,services=[],permission_profile=None,preview_collectors='auto')
     values.update(overrides);return SimpleNamespace(**values)
 
 
@@ -26,6 +27,7 @@ def plan(timestamp='2026-10-12T17:00:00Z',**overrides):
     return build_run_plan(args(**overrides),revision=fictional_revision(),generated_at=timestamp)
 
 
+@fictional_publication
 class PlanTests(unittest.TestCase):
     def test_initial_no_baseline(self):self.assertEqual(plan()['baseline']['completion'],'not_selected')
     def test_initial_no_delta(self):self.assertFalse(plan()['delta']['expected'])
@@ -77,6 +79,7 @@ class PlanTests(unittest.TestCase):
         self.assertTrue(any('NOT CUSTOMER-READY' in w for w in p['warnings']))
 
 
+@fictional_publication
 class BaselinePlanTests(RunFixture):
     def setup_plan(self,**overrides):
         old,_=self.initial()

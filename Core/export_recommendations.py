@@ -279,7 +279,7 @@ def _excel_safe_rows(rows, sheet_title):
         output.append(row)
     return output
 
-def export_to_csv(recommendations, filename=None, tenant_name=None, output_dir=None):
+def export_to_csv(recommendations, filename=None, tenant_name=None, output_dir=None, assessment_result=None):
     """
     Export recommendations to CSV file
     
@@ -290,6 +290,8 @@ def export_to_csv(recommendations, filename=None, tenant_name=None, output_dir=N
     Returns:
         str: Path to created CSV file
     """
+    from .repository_provenance import require_publication
+    require_publication()
     recommendations = enrich_assessment_records(recommendations)
 
     from .export_paths import report_directory
@@ -309,9 +311,18 @@ def export_to_csv(recommendations, filename=None, tenant_name=None, output_dir=N
         return None
 
     # Define CSV headers
-    fieldnames = RECOMMENDATION_EXPORT_FIELDS
+    from .repository_provenance import current_revision
+    publication = current_revision()
+    qualification = publication['publication']['output_qualification']
+    if assessment_result is not None:
+        from .repository_provenance import normalize_revision
+        original=normalize_revision(assessment_result.get('producing_revision'))
+        qualification += '; Original producing source: '+str((original.get('publication') or {}).get('output_qualification') or original['qualification'])
+    fieldnames = [*RECOMMENDATION_EXPORT_FIELDS, 'Publication qualification', 'Publishing tool commit']
+    recommendations = [dict(row, **{'Publication qualification': qualification, 'Publishing tool commit': publication.get('commit_sha')}) for row in recommendations]
 
-    with open(filepath, 'w', newline='', encoding='utf-8') as csvfile:
+    from .publication_io import exclusive_output
+    with exclusive_output(filepath, newline='') as csvfile:
         # Recommendation dicts carry internal fields (EvidenceKey) that are not exported.
         # Without extrasaction='ignore' DictWriter raises on every row.
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames, extrasaction='ignore')
@@ -320,7 +331,7 @@ def export_to_csv(recommendations, filename=None, tenant_name=None, output_dir=N
     
     return str(filepath)
 
-def export_to_json(recommendations, filename=None, tenant_name=None, output_dir=None):
+def export_to_json(recommendations, filename=None, tenant_name=None, output_dir=None, assessment_result=None):
     """
     Export recommendations to JSON file
     
@@ -331,6 +342,8 @@ def export_to_json(recommendations, filename=None, tenant_name=None, output_dir=
     Returns:
         str: Path to created JSON file
     """
+    from .repository_provenance import require_publication
+    require_publication()
     recommendations = enrich_assessment_records(recommendations)
 
     from .export_paths import report_directory
@@ -349,8 +362,12 @@ def export_to_json(recommendations, filename=None, tenant_name=None, output_dir=
         print("No recommendations to export.")
         return None
     
-    with open(filepath, 'w', encoding='utf-8') as jsonfile:
-        json.dump(recommendations, jsonfile, indent=2, ensure_ascii=False)
+    from .publication_io import exclusive_output
+    with exclusive_output(filepath) as jsonfile:
+        from .repository_provenance import current_revision
+        from .repository_provenance import normalize_revision
+        original=normalize_revision((assessment_result or {}).get('producing_revision')) if assessment_result is not None else current_revision()
+        json.dump([dict(row, publication_provenance=current_revision(),original_producing_revision=original) for row in recommendations], jsonfile, indent=2, ensure_ascii=False)
     
     print(f"Recommendations exported to JSON: {filepath}")
     return str(filepath)
@@ -496,6 +513,8 @@ def export_to_excel(recommendations, filename=None, tenant_name=None, evidence_b
     Returns:
         str: Path to created Excel file
     """
+    from .repository_provenance import require_publication
+    require_publication()
     try:
         from openpyxl import Workbook
         from openpyxl.styles import Font, PatternFill, Alignment
@@ -515,6 +534,8 @@ def export_to_excel(recommendations, filename=None, tenant_name=None, evidence_b
     if result is None:
         result = build_assessment_result(recommendations, evidence_bundle)
         evidence_bundle['assessment_result'] = result
+    from .repository_provenance import qualify_publication_result
+    result = qualify_publication_result(result)
     from .identity_finding_taxonomy import ensure_identity_result
     result = ensure_identity_result(result, evidence_bundle)
     evidence_bundle['assessment_result'] = result
@@ -1033,12 +1054,17 @@ def export_to_excel(recommendations, filename=None, tenant_name=None, evidence_b
     technical_path = technical_workbook_path(filepath)
     assessment, technical = split_workbook_layout(wb, result, evidence_bundle, filepath, technical_path,
                                                   tenant_name=tenant_name)
-    assessment.save(filepath)
-    technical.save(technical_path)
+    from .publication_io import exclusive_output
+    with exclusive_output(filepath, binary=True) as handle:
+        assessment.save(handle)
+    with exclusive_output(technical_path, binary=True) as handle:
+        technical.save(handle)
     return str(filepath)
 
 def export_to_html(recommendations, filename=None, tenant_name=None, evidence_bundle=None, excel_path=None, output_dir=None, summary_filename=None, technical_excel_path=None):
     """Render the same assessed result used by the workbook and operator receipt."""
+    from .repository_provenance import require_publication
+    require_publication()
     from .assessment_result import build_assessment_result
     from .investigation_details import prepare_investigation_details
     from .customer_report import render_customer_report
@@ -1047,6 +1073,8 @@ def export_to_html(recommendations, filename=None, tenant_name=None, evidence_bu
     if result is None:
         result = build_assessment_result(recommendations, bundle)
         bundle['assessment_result'] = result
+    from .repository_provenance import qualify_publication_result
+    result = qualify_publication_result(result)
     from .identity_finding_taxonomy import ensure_identity_result
     result = ensure_identity_result(result, bundle)
     bundle['assessment_result'] = result
@@ -1063,12 +1091,13 @@ def export_to_html(recommendations, filename=None, tenant_name=None, evidence_bu
     path = folder / name
     summary_path = path.with_name(summary_filename or path.stem + ' Summary.html')
     technical_excel_path = technical_excel_path or (bundle.get('technical_excel_path') if excel_path else None)
-    path.write_text(render_customer_report(result, bundle, tenant_name, excel_path, summary_path=summary_path,
-                                          technical_workbook_path=technical_excel_path), encoding='utf-8')
+    from .publication_io import write_text
+    write_text(path, render_customer_report(result, bundle, tenant_name, excel_path, summary_path=summary_path,
+                                          technical_workbook_path=technical_excel_path))
     # A short pilot-readiness summary beside the full report; both come from the same result.
     from .pilot_summary import render_pilot_summary
-    summary_path.write_text(render_pilot_summary(result, bundle, tenant_name, path, excel_path,
-                                               technical_workbook_path=technical_excel_path), encoding='utf-8')
+    write_text(summary_path, render_pilot_summary(result, bundle, tenant_name, path, excel_path,
+                                               technical_workbook_path=technical_excel_path))
     bundle['summary_html_path'] = str(summary_path)
     return str(path)
 

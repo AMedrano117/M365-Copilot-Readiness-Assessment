@@ -1,3 +1,4 @@
+from provenance_fixture import fictional_publication
 """Stage 1 regression boundaries, using fictional in-memory evidence only."""
 
 import copy
@@ -55,6 +56,7 @@ def evidence(states=None, **changes):
     return dict(bundle, **changes)
 
 
+@fictional_publication
 class ContradictionTests(unittest.TestCase):
     def test_other_assurance_cannot_mask_unresolved_fact_conflict(self):
         inputs = [dict(fact(), control_result='pass', source_file='a.csv'),
@@ -132,6 +134,7 @@ class ContradictionTests(unittest.TestCase):
         self.assertNotIn('duplicate', [row['selection'] for row in first])
 
 
+@fictional_publication
 class ProvenanceTests(unittest.TestCase):
     def qualify(self, row=None, bundle=None):
         row = observation() if row is None else row
@@ -265,6 +268,7 @@ class ProvenanceTests(unittest.TestCase):
         self.assertEqual(control['status'], 'Not established')
 
 
+@fictional_publication
 class AdapterTests(unittest.TestCase):
     def test_failed_or_partial_access_review_collection_never_claims_absence(self):
         for status in ['unavailable', 'failed', 'partial', 'unknown']:
@@ -344,6 +348,7 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(result['use_case_conclusion'], 'Ready')
 
 
+@fictional_publication
 class LegacyGraphTests(unittest.IsolatedAsyncioTestCase):
     def client(self, responses):
         client = object.__new__(GraphRestClient)

@@ -1,3 +1,4 @@
+from provenance_fixture import fictional_publication
 """Original source attribution survives fictional packages and derivative renders."""
 from copy import deepcopy
 import json
@@ -8,6 +9,7 @@ from provenance_fixture import fictional_revision
 from test_assessment_run_workflow import RunFixture,TENANT,result
 
 
+@fictional_publication
 class ProvenancePackageTests(RunFixture):
     def completed(self):
         from Core.assessment_runs import prepare_run,complete_run
@@ -18,7 +20,7 @@ class ProvenancePackageTests(RunFixture):
             path=complete_run(r,execution,self.root/'package')
         return r,Path(path)
     def test_package_records_revision(self):
-        r,path=self.completed();manifest=json.loads((path.parents[1]/'assessment-run.json').read_text());self.assertEqual(manifest['ProducingRevision'],r['producing_revision'])
+        r,path=self.completed();manifest=json.loads((path.parents[1]/'assessment-run.json').read_text(encoding='utf-8'));self.assertEqual(manifest['ProducingRevision'],r['producing_revision'])
     def test_snapshot_preserves_revision(self):
         r,path=self.completed();self.assertEqual(json.loads(path.read_text())['producing_revision']['commit_sha'],'a'*40)
     def test_snapshot_integrity_covers_provenance(self):
@@ -38,7 +40,9 @@ class ProvenancePackageTests(RunFixture):
         self.assertEqual(metadata['original_producing_revision']['commit_sha'],'a'*40);self.assertEqual(metadata['replay_tool_revision']['commit_sha'],'c'*40)
         self.assertFalse(metadata['tenant_recollected']);self.assertEqual(path.read_bytes(),before);self.assertEqual(self.history.read_bytes(),history)
     def test_qualified_output_banner(self):
-        r={'producing_revision':dict(fictional_revision(),publication={'output_qualification':'ENGINEERING VALIDATION ONLY — NOT CUSTOMER-READY'})}
+        from Core.repository_provenance import publication_policy
+        revision=fictional_revision(); revision['publication']=publication_policy(revision,policy='engineering-validation',purpose='Fixture validation',reason='Test warning',acknowledged=True)
+        r={'producing_revision':revision}
         self.assertIn('NOT CUSTOMER-READY',provenance_html(r))
     def test_raw_collection_retains_revision(self):
         from Core.offline_collection import save_collection,empty_service_results
@@ -54,5 +58,5 @@ class ProvenancePackageTests(RunFixture):
     def test_adapter_version_qualifies_comparison(self):
         from test_delta_lifecycle import pair
         from Core.run_comparability import evaluate_comparability
-        before,after=pair();before['producing_revision']=fictional_revision();after['producing_revision']=deepcopy(before['producing_revision']);after['producing_revision']['import_adapters']['portal_review']['version']='99.0'
+        before,after=pair();before['producing_revision']=fictional_revision();before['producing_revision']['import_adapters']['portal_review']['version']='1.0';after['producing_revision']=deepcopy(before['producing_revision']);after['producing_revision']['import_adapters']['portal_review']['version']='99.0'
         comparison=evaluate_comparability(after,before);self.assertIn('source_semantics_changed',[r['Code'] for r in comparison['Reasons']])

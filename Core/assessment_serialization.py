@@ -25,11 +25,16 @@ def plain_data(value):
 
 def write_assessment_result(path, result):
     """Write a data-only, sanitized snapshot of the current runtime result."""
+    from .repository_provenance import require_publication, normalize_revision
+    require_publication()
     from .assessment_references import require_valid_assessment
     from .identity_finding_taxonomy import project_identity_result
-    snapshot = plain_data(project_identity_result(result))
+    from .repository_provenance import qualify_publication_result
+    snapshot = plain_data(project_identity_result(qualify_publication_result(result)))
     from .repository_provenance import current_revision
-    snapshot.setdefault('producing_revision', current_revision())
+    snapshot['producing_revision'] = normalize_revision(snapshot.get('producing_revision'))
+    if 'replay_tool_revision' in snapshot:
+        snapshot['replay_tool_revision'] = normalize_revision(snapshot['replay_tool_revision'])
     snapshot.setdefault('reconciliation', {'state':'legacy','reason':'Snapshot predates recorded semantic reconciliation; no equivalence inferred.'})
     from .assessment_runs import validate_run_context
     snapshot['run_workflow_diagnostics'] = validate_run_context(snapshot)
@@ -39,8 +44,8 @@ def write_assessment_result(path, result):
     snapshot['governance_diagnostics'] = validate_governance(snapshot)
     snapshot['identity_validation'] = require_valid_assessment(snapshot)
     target = Path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2, allow_nan=False) + '\n', encoding='utf-8')
+    from .publication_io import write_text
+    write_text(target, json.dumps(snapshot, ensure_ascii=False, indent=2, allow_nan=False) + '\n')
     return str(target)
 
 
@@ -52,9 +57,10 @@ def read_assessment_result(path):
         result = json.load(handle)
     if not isinstance(result, dict):
         raise ValueError('Assessment snapshot must contain a shared-result object.')
-    if 'producing_revision' not in result:
-        from .repository_provenance import unrecorded_revision
-        result['producing_revision'] = unrecorded_revision()
+    from .repository_provenance import normalize_revision
+    result['producing_revision'] = normalize_revision(result.get('producing_revision'))
+    if 'replay_tool_revision' in result:
+        result['replay_tool_revision'] = normalize_revision(result['replay_tool_revision'])
     if 'identity' not in result:
         result['identity'] = incomplete_identity('legacy')
     if 'reconciliation' not in result:

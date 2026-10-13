@@ -8,6 +8,7 @@ Every value is HTML-escaped; the pages use no scripts or external resources.
 from html import escape
 from hashlib import sha256
 from pathlib import Path
+from .publication_io import write_text
 from urllib.parse import quote
 
 from .customer_report import slug as report_slug
@@ -57,7 +58,9 @@ def context_page_name(table_id, page=1):
     return _page_name('context', table_id, page)
 
 
-def _document(title, body, tenant):
+def _document(title, body, tenant, provenance=None):
+    from .repository_provenance import current_revision, provenance_html
+    body = provenance_html(provenance or {"producing_revision":current_revision()}) + body
     return (f'<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">'
             f'<meta name="robots" content="noindex,nofollow"><title>{escape(title)}</title><style>{CSS}</style></head><body>'
             f'<header><div class="muted">{escape(str(tenant or "Tenant"))} · Technical evidence</div><h1>{escape(title)}</h1>'
@@ -103,9 +106,15 @@ def _fix(detail):
             '</div>' + (f'<h3>Microsoft documentation</h3><ul>{links}</ul>' if links else '') + '</section>')
 
 
-def write_html_evidence_pages(model, folder, *, report_name=None, page_rows=PAGE_ROWS, workbook_name=None, technical_workbook_name=None):
+def write_html_evidence_pages(model, folder, *, report_name=None, page_rows=PAGE_ROWS, workbook_name=None, technical_workbook_name=None, assessment_result=None):
     """Write index, per-finding and shared-context pages; return the page map and row counts."""
+    from .repository_provenance import require_publication
+    require_publication()
+    from .repository_provenance import qualify_publication_result
+    provenance=qualify_publication_result(assessment_result) if assessment_result is not None else None
     folder = Path(folder)
+    from .publication_io import validate_container
+    validate_container(folder)
     if folder.exists() and any(folder.iterdir()):
         raise FileExistsError(f'Evidence page folder is not empty: {folder}')
     folder.mkdir(parents=True, exist_ok=True)
@@ -125,7 +134,7 @@ def write_html_evidence_pages(model, folder, *, report_name=None, page_rows=PAGE
         columns = list(dict.fromkeys(key for member in members for key in member))
         for number, chunk in enumerate(chunks,1):
             body = '<p><a href="index.html">All findings</a></p>' + _pager(names,number) + _rows_table(columns,chunk,'object_id') + _pager(names,number)
-            (folder / names[number-1]).write_text(_document(group['configuration'] + ': affected configuration objects',body,tenant),encoding='utf-8')
+            write_text(folder / names[number-1], _document(group['configuration'] + ': affected configuration objects',body,tenant,provenance))
     for table_id, table in model['tables'].items():
         if table['role'] != 'context':
             continue
@@ -137,7 +146,7 @@ def write_html_evidence_pages(model, folder, *, report_name=None, page_rows=PAGE
                     f'{escape(table["row_unit"])}, shared by findings {escape(", ".join(table["finding_ids"]))}. '
                     'Supporting context does not assert an affected population.</p>'
                     + _pager(names, number) + _rows_table(table['columns'], chunk, 'evidence_record_id') + _pager(names, number))
-            (folder / names[number - 1]).write_text(_document(table['title'], body, tenant), encoding='utf-8')
+            write_text(folder / names[number - 1], _document(table['title'], body, tenant,provenance))
     for finding in model['findings']:
         evidence = finding['evidence']
         selected = [row for table_id in evidence['tables'] for row in model['tables'][table_id]['rows']
@@ -199,7 +208,7 @@ def write_html_evidence_pages(model, folder, *, report_name=None, page_rows=PAGE
                                     'See evidence availability and the limitations above.')) + '</p>')
             body = header + records + _fix(finding.get('recommendation_detail'))
             title = f"{finding['finding_id']}: {finding.get('title') or ''}"
-            (folder / names[number - 1]).write_text(_document(title, body, tenant), encoding='utf-8')
+            write_text(folder / names[number - 1], _document(title, body, tenant,provenance))
     index_rows = ''.join(
         f'<tr><td><a href="{quote(pages[item["finding_id"]][0])}">{escape(item["finding_id"])}</a></td><td>{_text(item.get("title"))}</td>'
         f'<td>{_text(item.get("priority"))}</td><td>{_text(item["concern_title"])}</td><td>{_text(item["evidence"]["kind"])}</td>'
@@ -213,7 +222,7 @@ def write_html_evidence_pages(model, folder, *, report_name=None, page_rows=PAGE
              '<div class="table-scroll"><table><thead><tr><th>Finding</th><th>Title</th><th>Priority</th><th>Concern</th>'
              '<th>Evidence kind</th><th>Availability</th><th>Records</th><th>Affected entities</th></tr></thead>'
              f'<tbody>{index_rows}</tbody></table></div>')
-    (folder / 'index.html').write_text(_document('Technical evidence index', index, tenant), encoding='utf-8')
+    write_text(folder / 'index.html', _document('Technical evidence index', index, tenant,provenance))
     return {'folder': str(folder), 'index': str(folder / 'index.html'), 'pages': pages, 'context_pages': context_pages,
             'configuration_pages':configuration_pages,
             'rows_written': rows_written}

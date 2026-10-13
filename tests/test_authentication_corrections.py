@@ -1,3 +1,4 @@
+from provenance_fixture import fictional_publication
 """Pass A regression gates: fictional inputs and mocked Graph only."""
 import copy
 import io
@@ -51,6 +52,7 @@ MFA_STEP = {'succeeded': True, 'authenticationStepRequirement': 'multiFactorAuth
             'authenticationStepResultDetail': 'MFA completed', 'authenticationMethod': 'Authenticator App'}
 
 
+@fictional_publication
 class CollectionEnvelopeTests(unittest.IsolatedAsyncioTestCase):
     async def fetch(self, bodies):
         bodies = iter(bodies)
@@ -103,6 +105,7 @@ class CollectionEnvelopeTests(unittest.IsolatedAsyncioTestCase):
             await client.aclose()
 
 
+@fictional_publication
 class EventClassifierTests(unittest.TestCase):
     def test_result_code_table_and_input_permutation(self):
         cases = [(0, 'Success'), ('0', 'Success'), (False, 'Unknown'), (True, 'Unknown'),
@@ -160,6 +163,7 @@ class EventClassifierTests(unittest.TestCase):
         self.assertEqual(_decode(_encode(normalized)), normalized)
 
 
+@fictional_publication
 class LegacyAndControlTests(unittest.TestCase):
     def test_legacy_event_meaning_table(self):
         cases = [(0, 'notApplied', 'SuccessfulLegacyAuthentication'),
@@ -230,6 +234,7 @@ class LegacyAndControlTests(unittest.TestCase):
         self.assertEqual(len(detail['records']), 4)
 
 
+@fictional_publication
 class MFAPopulationTests(unittest.TestCase):
     def population(self, records, **kwargs):
         return __import__('Core.authentication_methods', fromlist=['reconcile_registration_population']).reconcile_registration_population(records, **kwargs)
@@ -290,6 +295,7 @@ class MFAPopulationTests(unittest.TestCase):
                 self.assertFalse(any('remaining' in r.get('Recommendation', '') for r in registration))
 
 
+@fictional_publication
 class MFALayerTests(unittest.TestCase):
     def test_completion_denial_claim_external_and_strong_primary(self):
         cases = [([MFA_STEP], 'observed_success'),
@@ -320,6 +326,7 @@ class MFALayerTests(unittest.TestCase):
         self.assertIn('registration', registered['evidence_layer'])
 
 
+@fictional_publication
 class AuthenticationOutputTests(unittest.TestCase):
     def test_saved_registration_recommendations_are_reconciled(self):
         client = NS(auth_methods_registration=[{'id': 'a', 'isMfaRegistered': True}, {'id': 'b'}],
@@ -359,6 +366,7 @@ class AuthenticationOutputTests(unittest.TestCase):
         self.assertFalse(any('leaving Copilot access unprotected' in r['Observation'] for r in rows))
 
 
+@fictional_publication
 class CollectionFailureTests(unittest.IsolatedAsyncioTestCase):
     async def test_partial_marker_and_page_cap_never_complete_zero(self):
         client = GraphRestClient(NS())
@@ -386,6 +394,7 @@ class CollectionFailureTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(result['page_requests'][1]['params'], {})
 
 
+@fictional_publication
 class AuthenticationBoundaryTests(unittest.TestCase):
     def test_tenant_mismatch_and_future_events_cannot_determine_current_control(self):
         bundle = {'assessment_sources': {'signin_logs': [dataset([event(0, 'notApplied', 'IMAP')], tenant_id='other')]}}
@@ -458,6 +467,7 @@ class AuthenticationBoundaryTests(unittest.TestCase):
         self.assertEqual(_mfa(sources)['records'], [])
 
 
+@fictional_publication
 class AuthenticationDeliverableTests(unittest.TestCase):
     def fixture(self, client=None):
         from Core.evidence_layer import build_evidence_bundle

@@ -1,3 +1,4 @@
+from provenance_fixture import fictional_publication
 """Offline companion tools locate compact output trees and retain legacy inputs."""
 
 import tempfile
@@ -8,6 +9,7 @@ from Core.export_paths import EVIDENCE_FOLDER
 from tools.validate_offline_report import _companion_folders, _report_paths
 
 
+@fictional_publication
 class ExportToolPathTests(unittest.TestCase):
 
     def test_validation_companions_support_both_layouts(self):

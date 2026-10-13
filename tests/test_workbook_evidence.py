@@ -1,3 +1,4 @@
+from provenance_fixture import fictional_publication
 """Workbook evidence sheets, Findings Register links and technical recommendations."""
 
 import os
@@ -15,6 +16,7 @@ from Core.workbook_evidence import add_evidence_sheets
 from tests.test_finding_evidence import build, event, legacy_finding, source
 
 
+@fictional_publication
 class WorkbookEvidenceTests(unittest.TestCase):
     def workbook(self, max_rows=None):
         logs = [event(number, code=[0, 53003, 50126][number % 3], id=f'{number:020d}') for number in range(1, 9)]

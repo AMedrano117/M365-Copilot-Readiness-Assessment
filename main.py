@@ -44,6 +44,8 @@ def main():
         except ValueError as exc:
             status(f'Configuration error: {exc}', 'error')
             sys.exit(1)
+    from Core.effective_configuration import resolve_effective
+    args, _, resolution_errors = resolve_effective(args)
     plan = build_run_plan(args)
     print_run_plan(plan)
     if not plan['execution_eligible']:
@@ -141,6 +143,7 @@ def main():
                 evaluation_date=args.evaluation_date,
                 lifecycle_report_max_age_days=args.lifecycle_report_max_age_days,
                 lifecycle_report_dates=args.lifecycle_report_date,
+                effective_assessment_settings=args._effective_settings,
                 portal_review=args.portal_review,
                 permission_profile=permission_profile,
                 confirm_tenant=args.confirm_tenant,

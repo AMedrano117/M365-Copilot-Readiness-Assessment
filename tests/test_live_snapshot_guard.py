@@ -1,3 +1,4 @@
+from provenance_fixture import fictional_publication
 """Live snapshot validation must preserve original reviewed portal evidence."""
 
 import contextlib
@@ -11,6 +12,7 @@ from Core.orchestrator import orchestrate
 from tests.test_portal_review import TENANT, reviewed_fixture
 
 
+@fictional_publication
 class LiveSnapshotGuardTests(unittest.IsolatedAsyncioTestCase):
     async def test_manifest_pdf_and_preview_collisions_stop_before_authentication_or_writes(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -1,3 +1,4 @@
+from provenance_fixture import fictional_publication
 """Noninteractive workflows with temporary, fictional portable packages."""
 from contextlib import redirect_stdout
 import io
@@ -12,6 +13,7 @@ from test_assessment_run_workflow import RunFixture, TENANT
 from test_assessment_run_outputs import parse
 
 
+@fictional_publication
 class RunExecutionTests(RunFixture):
     def source(self):
         from tests.synthetic_package_fixture import create_synthetic_package
@@ -96,6 +98,7 @@ class RunExecutionTests(RunFixture):
         self.assertEqual(Path(collection).read_bytes(),original)
 
 
+@fictional_publication
 class LiveRunExecutionTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         from test_collection_autosave import CollectionAutosaveTests

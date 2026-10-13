@@ -12,25 +12,36 @@ INPUTS=('collection_input','sam_report','dspm_report','reports_dir','copilot_rea
 
 
 def build_run_plan(args, *, revision=None, generated_at=None):
+    from .effective_configuration import resolve_effective
+    args, saved, resolution_errors = resolve_effective(args)
     get=lambda name,default=None:getattr(args,name,default)
     timestamp=generated_at or datetime.now(timezone.utc).isoformat()
     revision=deepcopy(revision or capture_revision(config=args,generated_at=timestamp))
+    from .repository_provenance import configuration_hash, collector_configuration_hash
+    revision['run_configuration_hash']=configuration_hash(args)
+    revision['collector_configuration_hash']=collector_configuration_hash(vars(args))
     policy=publication_policy(revision,policy=get('source_policy','production'),purpose=get('assessment_purpose'),
         reason=get('source_reason'),acknowledged=get('acknowledge_dirty_source',False))
     revision['publication']=policy
+    from .repository_provenance import normalize_revision
+    normalized=normalize_revision(revision)
+    if normalized!=revision:
+        revision=normalized
+        revision['run_configuration_hash']=configuration_hash(args)
+        revision['collector_configuration_hash']=collector_configuration_hash(vars(args))
+        policy=publication_policy(revision,policy=get('source_policy','production'),purpose=get('assessment_purpose'),
+            reason=get('source_reason'),acknowledged=get('acknowledge_dirty_source',False))
+        revision['publication']=policy
     intent=get('run_type'); replay=bool(get('replay_snapshot'))
-    saved={}; stored_result=None; metadata_errors=[]
-    if get('collection_input'):
+    stored_result=None; metadata_errors=list(resolution_errors)
+    if get('collection_input') and not intent and not metadata_errors:
         try:
-            saved=json.loads(Path(get('collection_input')).read_text(encoding='utf-8-sig'))
-            if not isinstance(saved,dict):raise ValueError('invalid collection metadata')
-            if not intent:
-                from .assessment_replay import load_completed_package
-                metadata=load_completed_package(dict(saved,package_directory=str(Path(get('collection_input')).resolve().parent)))
-                if metadata.get('completed_run_snapshot'):
-                    replay=True
-                    from .assessment_serialization import read_assessment_result
-                    stored_result=read_assessment_result(metadata['completed_run_snapshot'])
+            from .assessment_replay import load_completed_package
+            saved=load_completed_package(saved)
+            if saved.get('completed_run_snapshot'):
+                replay=True
+                from .assessment_serialization import read_assessment_result
+                stored_result=read_assessment_result(saved['completed_run_snapshot'])
         except (ValueError,OSError,KeyError,TypeError):metadata_errors.append('saved_collection_metadata_invalid')
     if get('replay_snapshot'):
         try:
@@ -110,16 +121,24 @@ def build_run_plan(args, *, revision=None, generated_at=None):
     if get('delta_mode')=='enabled' and intent!='Reassessment':errors.append('delta_requested_without_reassessment')
     if get('delta_mode')=='disabled' and intent not in {None,'Reassessment'}:errors.append('delta_setting_requires_reassessment')
     if get('baseline') and intent in {'Initial','Reassessment','Standalone'}:errors.append('legacy_baseline_cannot_mix_with_explicit_run')
+    from .publication_io import validate_destination
+    for role in ('snapshot_json','save_collection'):
+        if get(role):
+            try:validate_destination(get(role))
+            except (ValueError,OSError):errors.append('protected_output_destination')
     output=get('render_output_dir') or get('save_collection') or get('snapshot_json') or 'Reports/<customer>/<date>/Builds/<new-number>'
-    supplied={key:len(get(key)) if isinstance(get(key),(list,tuple)) else 1 for key in INPUTS if get(key)}
+    from .repository_provenance import input_selection_count
+    supplied={key:input_selection_count(key,get(key)) for key in INPUTS if get(key)}
     for key,values in (saved.get('inputs') or {}).items():
         if key in INPUTS and key not in supplied and values:supplied[key]=len(values) if isinstance(values,list) else 1
     warnings.extend(revision.get('warnings') or [])
-    if not replay:errors.extend(policy['errors'])
-    else:
+    errors.extend(policy['errors'])
+    if replay:
         warnings.append('Original producing revision is retained; current source identifies the replay tool only.')
     if policy['policy']=='engineering-validation':warnings.append(policy['output_qualification'])
-    if errors:delta_expected=False
+    if errors:
+        delta_expected=False
+        if delta_enabled:reason='Delta blocked by run or publication validation.'
     identity_behavior=('preserve stored identities' if replay else 'reuse supplied AssessmentId with verified history' if assessment_id else
                        'new AssessmentId after preflight' if intent in {'Initial','Standalone'} else 'legacy compatibility identity behavior')
     return dict(schema_version=VERSION,generated_at=timestamp,requested_run_type=intent or 'UnclassifiedLegacy',
@@ -129,7 +148,7 @@ def build_run_plan(args, *, revision=None, generated_at=None):
         methodology_version=revision.get('methodology_version'),taxonomy_version=revision.get('taxonomy_version'),
         catalog_version=revision.get('catalog_version'),benchmark_catalog_version=revision.get('benchmark_catalog_version'),
         sources={'mode':'offline' if get('offline') or replay else 'live','services':sorted(get('services',[]) or ['default selected collectors']),
-                 'preview_collectors':get('preview_collectors','auto'),'permission_profile':get('permission_profile') or 'environment/default; not resolved by read-only plan',
+                 'preview_collectors':get('preview_collectors','auto'),'permission_profile':get('permission_profile') or saved.get('assessment_settings',{}).get('permission_profile') or 'standard',
                  'imports_supplied':supplied,'optional_imports_not_supplied':[key for key in INPUTS if key not in supplied],
                  'tenant_collection':not bool(get('offline') or replay)},
         output_destination=str(output),overwrite_behavior='Completed snapshots and original inputs cannot be overwritten; numbered derivative outputs.',
@@ -137,6 +156,9 @@ def build_run_plan(args, *, revision=None, generated_at=None):
         original_producing_revision=(stored_result or {}).get('producing_revision'),
         source_revision_role='replay_tool' if replay else 'producing_assessment',
         retained_run_id=((stored_result or {}).get('identity') or {}).get('RunId'),
+        effective_configuration={'evaluation_date':args.evaluation_date,'report_format':get('report_format'),
+            'settings':args._effective_settings,'interactive_auth':args.interactive_auth,
+            'authentication':get('_effective_authentication',{})},
         execution_eligible=not errors,replay=replay,history_mutated=False,completed_run_created=False,
         warnings=sorted(set(warnings)),validation_errors=sorted(set(errors)))
 
@@ -150,9 +172,13 @@ def plan_lines(plan):
         ('Run identity',plan.get('retained_run_id') or plan['run_id_behavior']),('Baseline',baseline['run_id'] or 'None'),
         ('Baseline completion',baseline['completion']),('Baseline integrity',baseline['integrity']),('Baseline ownership',baseline['ownership']),
         ('Methodology',plan['methodology_version']),('Taxonomy',plan['taxonomy_version']),('Internal catalog',plan['catalog_version']),
-        ('Benchmark catalog',plan['benchmark_catalog_version'] or 'Not implemented'),('Delta expected',delta['expected']),('Delta reason',delta['reason']),
+        ('Benchmark catalog',plan['benchmark_catalog_version'] or 'Not implemented'),('Delta enabled',delta['enabled']),('Delta expected',delta['expected']),('Delta reason',delta['reason']),
         ('Source mode',plan['sources']['mode']),('Services',', '.join(plan['sources']['services'])),
-        ('Imports supplied',', '.join(plan['sources']['imports_supplied']) or 'None'),
+        ('Permission profile',plan['sources']['permission_profile']),('Preview collectors',plan['sources']['preview_collectors']),
+        ('Run configuration hash',rev.get('run_configuration_hash')),('Collector configuration hash',rev.get('collector_configuration_hash')),
+        ('Imports supplied',json.dumps(plan['sources']['imports_supplied'],sort_keys=True)),
+        ('Effective configuration',json.dumps(plan['effective_configuration'],sort_keys=True)),
+        ('Source policy',rev['publication']['policy']),('Output qualification',rev['publication']['output_qualification']),
         ('Optional imports absent',', '.join(plan['sources']['optional_imports_not_supplied'])),('Output',plan['output_destination']),
         ('Overwrite behavior',plan['overwrite_behavior']),('Replay tool commit' if plan['replay'] else 'Producing commit',rev.get('commit_sha') or 'Unavailable'),
         ('Source state',rev['source_state']),('Dirty fingerprint',rev.get('dirty_tree_fingerprint') or 'None'),

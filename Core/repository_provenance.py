@@ -14,11 +14,13 @@ import subprocess
 from urllib.parse import urlsplit, unquote
 
 VERSION = '1.0.0'
-FINGERPRINT_VERSION = 'sha256-source-state-v1'
+FINGERPRINT_VERSION = 'sha256-source-state-v2'
+POLICY_VERSION = '2.0.0'
 EXPECTED_REMOTE = 'github.com/AMedrano117/M365-Copilot-Readiness-Assessment'
 _active = ContextVar('assessment_producing_revision', default=None)
+_metadata_readers = {}
 SOURCE_DIRS = {'Core', 'Recommendations', 'tests', 'tools', 'docs'}
-SOURCE_SUFFIXES = {'.py', '.ps1', '.md', '.json', '.toml', '.yaml', '.yml', '.txt', '.ini', '.cfg'}
+SOURCE_SUFFIXES = {'.py', '.ps1', '.psm1', '.psd1', '.md', '.json', '.toml', '.yaml', '.yml', '.txt', '.ini', '.cfg'}
 LOCAL_DIRS = {'.venv', 'venv', '.assessment-deps', '.cache', '.pytest_cache', '.kilo', '.vscode', '.idea', '.playwright-cli'}
 EVIDENCE_DIRS = {'Reports', 'reports', 'output', 'Output', 'Collections', 'collections', '.private-assessment-evidence'}
 ARTIFACT_SUFFIXES = {'.xlsx', '.pdf', '.zip', '.html', '.pptx', '.pfx', '.pem', '.key', '.p12'}
@@ -137,9 +139,12 @@ def dirty_fingerprint(entries):
     records=[]
     for row in entries:
         # Untracked evidence/cache bytes are excluded; their risks still affect policy.
+        parts=Path(row['path']).parts
+        if any(part in EVIDENCE_DIRS|LOCAL_DIRS|{'__pycache__'} for part in parts) or Path(row['path']).suffix.lower() in ARTIFACT_SUFFIXES|{'.pyc','.pyo','.log'}:continue
+        if row.get('classification') in {'CustomerEvidence','GeneratedArtifact','LocalEnvironment','TemporaryArtifact'}: continue
         if row.get('ignored') or (not row.get('tracked') and not row.get('source_like')): continue
         records.append({key:row.get(key) for key in
-            ('path','original_path','status','head_blob','index_blob','modes','content_sha256','read_error')})
+            ('path','original_path','status','head_blob','index_blob','modes','executable_mode','content_sha256','read_error')})
     return digest({'version':FINGERPRINT_VERSION,'entries':sorted(records,key=lambda r:(r['path'],r.get('original_path') or ''))}) if records else None
 
 
@@ -152,12 +157,14 @@ def _git(root, *args):
 
 def _read(root, path):
     target=root/path
-    if target.is_symlink() or any(parent.is_symlink() for parent in target.parents if parent!=root and parent.is_relative_to(root)):
+    from .publication_io import linked_path
+    if linked_path(target) or any(linked_path(parent) for parent in target.parents if parent!=root and parent.is_relative_to(root)):
         return {'symlink':True},None
     if not target.exists(): return {'content_sha256':None,'deleted':True},None
     try:
         data=target.read_bytes()
-        return {'content_sha256':hashlib.sha256(data).hexdigest(),'size':len(data)},data
+        return {'content_sha256':hashlib.sha256(data).hexdigest(),'size':len(data),
+                'executable_mode':'100755' if target.stat().st_mode & 0o111 else '100644'},data
     except OSError as exc:
         return {'read_error':type(exc).__name__,'content_sha256':None},None
 
@@ -175,6 +182,10 @@ def inventory_repository(root, *, ignored=False, git_reader=None):
         else:
             metadata,data=_read(root,path); row.update(metadata)
         result.append(classify_entry(row,data))
+    if not ignored:
+        from .runtime_source import audit_source
+        result = [classify_entry(row, _read(root, row['path'])[1])
+                  for row in audit_source(root, read, _read, result)]
     return result
 
 
@@ -204,27 +215,15 @@ def runtime_versions(root=None):
 
 def configuration_hash(config):
     """Portable non-secret options and input selections; package hashes bind bytes."""
-    source=vars(config) if hasattr(config,'__dict__') else dict(config or {})
-    fields=('mode','run_type','assessment_id','baseline_run_id','assessment_purpose','primary_environment_id',
-        'delta_mode','permission_profile','services','preview_collectors','interactive_auth','delegated',
-        'legacy_power_platform_collector','include_user_usage_detail','data_exposure_enabled','report_format',
-        'evaluation_date','source_policy','source_reason','acknowledge_dirty_source')
-    values={key:source[key] for key in fields if key in source}
-    for key,value in list(values.items()):
-        if isinstance(value,(set,list,tuple)): values[key]=sorted(value)
-    inputs=('sam_report','dspm_report','reports_dir','collection_input','assessment_profile','provider_evidence',
-        'copilot_readiness_export','copilot_dashboard_export','power_platform_inventory','prior_report','purview_cache',
-        'portal_review','baseline','assessment_history','ai_baseline_export')
-    values['input_selections']={key:input_selection_count(key,source[key])
-                             for key in inputs if source.get(key)}
-    return digest(values)
+    from .effective_configuration import portable_configuration
+    return digest(portable_configuration(config))
 
 
 def input_selection_count(role, supplied):
     """Deduplicate copied export bytes without retaining paths or source content."""
     paths=supplied if isinstance(supplied,(list,tuple)) else [supplied]
     if role not in {'sam_report','dspm_report','reports_dir'}:return len(paths)
-    suffixes={'.csv','.tsv','.xlsx','.zip'}
+    suffixes={'.csv','.tsv','.xlsx','.zip','.json','.pdf'}
     identities=set()
     for value in paths:
         path=Path(value)
@@ -301,20 +300,22 @@ def capture_revision(root=None, config=None, *, git_reader=None, expected_remote
 
 def publication_policy(revision, *, policy='production', purpose=None, reason=None, acknowledged=False):
     state=revision.get('source_state'); errors=[]
+    purpose = purpose.strip() if isinstance(purpose, str) else None
+    reason = reason.strip() if isinstance(reason, str) else None
     if any(secret_risk_types(str(value or '').encode()) or re.search(r'(?i)(?:[a-z]:[\\/]|/(?:home|users)/)',str(value or '')) for value in (purpose,reason)):
         purpose=reason='Redacted unsafe provenance annotation'
         errors.append('unsafe_provenance_annotation')
     if policy=='production':
-        if state!='CleanCommitted' or any(not re.fullmatch(r'[0-9a-f]{40,64}',str(revision.get(key) or '')) for key in ('commit_sha','commit_tree_sha')):
+        if state!='CleanCommitted' or any(not re.fullmatch(r'(?:[0-9a-f]{40}|[0-9a-f]{64})',str(revision.get(key) or '')) for key in ('commit_sha','commit_tree_sha')):
             errors.append('production_requires_clean_committed_source')
     elif policy=='engineering-validation':
         if state not in {'CleanCommitted','DirtyReproducible'}: errors.append('engineering_source_unclassified_or_unavailable')
         if not purpose or not reason or acknowledged is not True: errors.append('engineering_requires_purpose_reason_acknowledgement')
         if state=='DirtyReproducible' and not revision.get('dirty_tree_fingerprint'): errors.append('dirty_fingerprint_failure')
     else:errors.append('unknown_source_policy')
-    return dict(policy=policy,execution_eligible=not errors,customer_publication_eligible=not errors and policy=='production',
+    return dict(policy=policy,policy_version=POLICY_VERSION,execution_eligible=not errors,customer_publication_eligible=not errors and policy=='production',
         output_qualification='Customer publication eligible' if not errors and policy=='production' else 'ENGINEERING VALIDATION ONLY — NOT CUSTOMER-READY' if not errors else 'PUBLICATION BLOCKED',
-        purpose=purpose,reason=reason,source_state_acknowledged=acknowledged,errors=errors)
+        purpose=purpose,reason=reason,source_state_acknowledged=acknowledged is True,errors=errors)
 
 
 def unrecorded_revision():
@@ -341,7 +342,7 @@ def set_execution_revision(revision):
 def collector_configuration_hash(options):
     values={key:options.get(key) for key in
         ('services','preview_collectors','permission_profile','legacy_power_platform_collector','include_user_usage_detail')}
-    if isinstance(values['services'],(list,tuple,set)):values['services']=sorted(values['services'])
+    if isinstance(values['services'],(list,tuple,set)):values['services']=sorted(set(values['services']))
     return digest(values)
 
 
@@ -363,19 +364,109 @@ def require_execution(revision):
 
 def verify_execution_source():
     original=_active.get()
-    if not original or not original.get('publication'):return
-    require_execution(original)
-    current=capture_revision()
-    fields=('commit_sha','commit_tree_sha','dirty_tree_fingerprint','source_state','methodology_version','taxonomy_version','import_adapters')
+    if not original or not original.get('publication'):
+        raise ValueError('Source publication gate blocked: validated producing revision is required.')
+    require_execution(normalize_revision(original))
+    if original.get('repository_identifier')==EXPECTED_REMOTE:
+        from .runtime_source import MetadataReader
+        root=Path(__file__).resolve().parents[1]
+        try:
+            refreshed=False
+            def read(*args):
+                nonlocal refreshed
+                reader=_metadata_readers.get(root)
+                if reader is None:
+                    reader=MetadataReader(root,lambda *options:_git(root,*options));_metadata_readers[root]=reader
+                if not refreshed:reader.refresh();refreshed=True
+                return reader(*args)
+            current=capture_revision(root,git_reader=read)
+        except (OSError,ValueError,subprocess.SubprocessError):
+            _metadata_readers.pop(root,None)
+            raise ValueError('Source publication gate blocked: Git metadata cannot be verified.') from None
+    else:
+        current=capture_revision()
+    fields=('repository_identifier','remote_identifier','branch','commit_sha','commit_tree_sha',
+        'dirty_tree_fingerprint','fingerprint_version','source_state','methodology_version','taxonomy_version',
+        'catalog_version','benchmark_catalog_version','import_adapters')
     if any(original.get(key)!=current.get(key) for key in fields):
         raise ValueError('Source publication gate blocked: producing source changed after preflight.')
 
 
+def normalize_revision(value):
+    """Unsupported historical contracts are readable, never implicitly trusted."""
+    valid = isinstance(value, dict) and value.get('schema_version') == VERSION
+    if valid:
+        valid = value.get('source_state') in {'CleanCommitted','DirtyReproducible','DirtyUnclassified','DetachedOrUnowned','SourceStateUnavailable'}
+        valid = valid and isinstance(value.get('qualification'), str) and bool(value['qualification'].strip())
+        if value.get('source_state') in {'CleanCommitted','DirtyReproducible'}:
+            valid = valid and all(re.fullmatch(r'(?:[0-9a-f]{40}|[0-9a-f]{64})', str(value.get(k) or '')) for k in ('commit_sha','commit_tree_sha'))
+            valid = valid and value.get('repository_identifier')==EXPECTED_REMOTE and value.get('remote_identifier')==EXPECTED_REMOTE
+            valid = valid and all(type(value.get(key)) is int and value[key]>=0 for key in ('staged_change_count','tracked_modification_count','untracked_entry_count'))
+        if value.get('source_state')=='CleanCommitted':
+            valid = valid and value.get('dirty_tree_fingerprint') is None and value.get('staged_change_count')==0 and value.get('tracked_modification_count')==0
+        if value.get('source_state') == 'DirtyReproducible':
+            valid = valid and bool(re.fullmatch(r'[0-9a-f]{64}', str(value.get('dirty_tree_fingerprint') or '')))
+        required_strings=('repository_identifier','generated_at','methodology_version','taxonomy_version','catalog_version')
+        if value.get('source_state') in {'CleanCommitted','DirtyReproducible'}:required_strings+=('branch',)
+        valid = valid and all(isinstance(value.get(key),str) and bool(value[key].strip()) for key in required_strings)
+        valid = valid and value.get('fingerprint_version')==FINGERPRINT_VERSION
+        valid = valid and all(isinstance(value.get(key),str) and bool(re.fullmatch(r'[0-9a-f]{64}',value[key])) for key in ('run_configuration_hash','collector_configuration_hash'))
+        environment=value.get('execution_environment')
+        valid = valid and isinstance(environment,dict) and all(isinstance(environment.get(key),str) and bool(environment[key]) for key in ('os','python'))
+        adapters=value.get('import_adapters')
+        valid = valid and isinstance(adapters,dict)
+        if isinstance(adapters,dict):
+            valid = valid and all(isinstance(name,str) and isinstance(adapter,dict)
+                and (adapter.get('version') is None or isinstance(adapter.get('version'),str))
+                and (adapter.get('implementation_sha256') is None or isinstance(adapter.get('implementation_sha256'),str)
+                     and bool(re.fullmatch(r'[0-9a-f]{64}',adapter['implementation_sha256']))) for name,adapter in adapters.items())
+        valid = valid and isinstance(value.get('warnings',[]),list) and all(isinstance(item,str) for item in value.get('warnings',[]))
+        valid = valid and isinstance(value.get('diagnostics',[]),list)
+        try:
+            valid = valid and datetime.fromisoformat(value['generated_at'].replace('Z','+00:00')).tzinfo is not None
+        except (ValueError,TypeError,KeyError,AttributeError):
+            valid=False
+        try: digest(value)
+        except (ValueError,TypeError,OverflowError):valid=False
+    if not valid:
+        return unrecorded_revision()
+    result = deepcopy(value)
+    publication = result.get('publication')
+    if publication is None and result['source_state'] in {'CleanCommitted','DirtyReproducible'}:
+        return unrecorded_revision()
+    if publication is not None:
+        if not isinstance(publication, dict):
+            return unrecorded_revision()
+        expected = publication_policy(result, policy=publication.get('policy'), purpose=publication.get('purpose'),
+            reason=publication.get('reason'), acknowledged=publication.get('source_state_acknowledged'))
+        if publication != expected:
+            return unrecorded_revision()
+    return result
+
+
+def require_publication():
+    revision = normalize_revision(current_revision())
+    require_execution(revision)
+    verify_execution_source()
+    return revision
+
+
+def qualify_publication_result(result):
+    """Keep original attribution; every derivative records its actual publishing tool."""
+    tool=require_publication()
+    result=deepcopy(result)
+    original=normalize_revision(result.get('producing_revision'))
+    result['producing_revision']=original
+    if original != tool or 'replay_tool_revision' in result:
+        result['replay_tool_revision']=tool
+    return result
+
+
 def provenance_html(result):
     from html import escape
-    record=result.get('producing_revision') or unrecorded_revision()
+    record=normalize_revision(result.get('producing_revision'))
     qualification=(record.get('publication') or {}).get('output_qualification') or record.get('qualification')
-    tool=result.get('replay_tool_revision') or {}
+    tool=normalize_revision(result['replay_tool_revision']) if result.get('replay_tool_revision') else {}
     replay_note=''
     if tool:
         tool_qualification=(tool.get('publication') or {}).get('output_qualification') or tool.get('qualification') or 'Replay provenance unverified'
@@ -385,11 +476,12 @@ def provenance_html(result):
 
 
 def provenance_rows(result):
-    revision=result.get('producing_revision') or unrecorded_revision()
+    revision=normalize_revision(result.get('producing_revision'))
     rows=[{'Item':'Producing '+key,'Value':revision.get(key)} for key in
         ('commit_sha','commit_tree_sha','branch','source_state','dirty_tree_fingerprint','qualification')] + [
         {'Item':'Publication qualification','Value':(revision.get('publication') or {}).get('output_qualification') or revision['qualification']}]
-    tool=result.get('replay_tool_revision')
+    tool=normalize_revision(result['replay_tool_revision']) if result.get('replay_tool_revision') else None
     if tool:
         rows.extend({'Item':'Replay tool '+key,'Value':tool.get(key)} for key in ('commit_sha','source_state','qualification'))
+        rows.append({'Item':'Replay publication qualification','Value':(tool.get('publication') or {}).get('output_qualification') or tool.get('qualification')})
     return rows

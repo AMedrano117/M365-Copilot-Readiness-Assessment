@@ -1,3 +1,4 @@
+from provenance_fixture import fictional_publication
 """Governance persistence and deliverables under the OS-temp-only test guard."""
 import copy
 import json
@@ -9,6 +10,7 @@ from unittest.mock import patch
 from test_governance_decisions import draft,advance,NOW,LATER,fixture
 
 
+@fictional_publication
 class SerializationTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup);self.root=Path(self.temp.name)
@@ -89,6 +91,7 @@ class SerializationTests(unittest.TestCase):
         select_baseline(history,assessment_id=r['identity']['AssessmentId'],environment_id=r['identity']['PrimaryEnvironmentId'],baseline_run_id=r['identity']['RunId'])
 
 
+@fictional_publication
 class RendererTests(unittest.TestCase):
     def test_recorded_projection_replay_never_transitions(self):
         from Core.governance import attach
@@ -135,6 +138,7 @@ class RendererTests(unittest.TestCase):
         self.assertEqual(r,before)
 
 
+@fictional_publication
 class CliTests(unittest.TestCase):
     def test_cli_separates_draft_approval_activation_and_exports(self):
         from Core.governance_cli import main

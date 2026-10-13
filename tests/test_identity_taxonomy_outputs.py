@@ -1,3 +1,4 @@
+from provenance_fixture import fictional_publication
 """Fictional taxonomy outputs reconcile without rewriting source evidence or history."""
 import copy
 import io
@@ -53,6 +54,7 @@ def rows(workbook, name):
     return [dict(zip(headers, row)) for row in values]
 
 
+@fictional_publication
 class TaxonomyProjectionTests(unittest.TestCase):
     def test_shared_builder_uses_title_without_changing_feature_or_evidence(self):
         bundle, result, client = fixture()
@@ -205,6 +207,7 @@ class TaxonomyProjectionTests(unittest.TestCase):
             self.assertEqual(Path(path).read_bytes(), original)
 
 
+@fictional_publication
 class TaxonomyRealLifecycleTests(unittest.TestCase):
     def test_title_only_projection_leaves_actual_delta_unchanged(self):
         from test_delta_lifecycle import pair, compare, finding_record

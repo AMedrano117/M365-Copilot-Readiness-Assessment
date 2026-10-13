@@ -1,3 +1,4 @@
+from provenance_fixture import fictional_publication
 """PDF context is visible and traceable without becoming scored measurements."""
 
 from copy import deepcopy
@@ -45,6 +46,7 @@ def fixture(directory):
     return load_portal_review(path, TENANT, '2026-09-15')
 
 
+@fictional_publication
 class Links(HTMLParser):
     def __init__(self):
         super().__init__()
@@ -58,6 +60,7 @@ class Links(HTMLParser):
             self.anchors.append(attrs['href'][1:])
 
 
+@fictional_publication
 class PortalInsightsTests(unittest.TestCase):
     def test_excerpts_are_exact_page_text_with_stable_provenance_and_separate_dates(self):
         with tempfile.TemporaryDirectory() as directory:

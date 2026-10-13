@@ -190,13 +190,12 @@ def validate_case(destination, *, active_incident=False, evidence_drilldown=Fals
     destination.mkdir(parents=True, exist_ok=True)
     # This entry point constructs invented evidence itself. It is not a customer
     # execution override and is not exposed through the assessment CLI.
-    from Core.repository_provenance import capture_revision, producing_context
+    from Core.repository_provenance import capture_revision, producing_context, publication_policy
     from Core.cli_parser import parse_arguments
     from Core.offline_report import run_offline_report
     revision = capture_revision(ROOT)
-    revision['publication'] = dict(policy='fictional-test-fixture', execution_eligible=True,
-        customer_publication_eligible=False,
-        output_qualification='FICTIONAL TEST OUTPUT — NOT CUSTOMER-READY')
+    revision['publication'] = publication_policy(revision,policy='engineering-validation',
+        purpose='Fictional report validation',reason='Synthetic evidence audit',acknowledged=True)
     previous_cwd, previous_argv = Path.cwd(), sys.argv
     output = io.StringIO()
     try:

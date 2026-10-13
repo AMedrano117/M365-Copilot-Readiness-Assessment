@@ -14,6 +14,8 @@ def read_log(path):
 
 
 def write_log(path,value,*,expected_hash=None):
+    from .repository_provenance import require_publication
+    require_publication()
     require_log(value)
     with _locked(path):
         target=Path(path)
@@ -37,6 +39,8 @@ def link_history(history_path,log_path,*,as_of,expected_hash):
     The log update and history link are separate atomic operations. A failed
     link never rolls back an approved event; retry only the metadata link.
     """
+    from .repository_provenance import require_publication
+    require_publication()
     log=read_log(log_path);view=project(log,as_of=as_of)
     with _locked(history_path):
         old=read_history(history_path)

@@ -1,3 +1,4 @@
+from provenance_fixture import fictional_publication
 """Operator handoffs remain copyable and presentation flags keep evidence intact."""
 
 import io
@@ -19,11 +20,13 @@ from Core.console_reporting import (
 )
 
 
+@fictional_publication
 class TerminalBuffer(io.StringIO):
     def isatty(self):
         return True
 
 
+@fictional_publication
 class ConsoleWorkflowTests(unittest.TestCase):
     def setUp(self):
         configure_console(verbose=False, color='never')

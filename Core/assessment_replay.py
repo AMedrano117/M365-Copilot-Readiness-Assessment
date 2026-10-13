@@ -7,6 +7,8 @@ from .assessment_runs import run_context_rows
 
 def render_snapshot(snapshot_path, output_directory, *, tenant_name=None, report_format='both',
                     snapshot_output=None, extra_exports=None):
+    from .repository_provenance import require_publication
+    require_publication()
     source = Path(snapshot_path).resolve()
     result = read_assessment_result(source)
     from .repository_provenance import current_revision
@@ -24,7 +26,7 @@ def render_snapshot(snapshot_path, output_directory, *, tenant_name=None, report
     atomic_write(folder / 'render-provenance.json', {'schema_version':'1.0.0',
         'original_producing_revision':result['producing_revision'],
         'replay_tool_revision':result['replay_tool_revision'],'tenant_recollected':False,
-        'source_snapshot_sha256':hashlib.sha256(source.read_bytes()).hexdigest()})
+        'source_snapshot_sha256':hashlib.sha256(source.read_bytes()).hexdigest()}, immutable=True)
     bundle = {'assessment_result':result,'control_results':result.get('control_results',[]),
         'run_manifest':{'rows':run_context_rows(result)},
         'collection_context':{'mode':'snapshot render','identity':result.get('identity'),
@@ -32,7 +34,7 @@ def render_snapshot(snapshot_path, output_directory, *, tenant_name=None, report
     rows = result.get('recommendations',[])
     excel = export_to_excel(rows,filename='Assessment.xlsx',tenant_name=tenant_name,
                            evidence_bundle=bundle,output_dir=folder) if report_format in {'both','excel'} else None
-    csv = export_to_csv(rows,filename='Assessment.csv',tenant_name=tenant_name,output_dir=folder
+    csv = export_to_csv(rows,filename='Assessment.csv',tenant_name=tenant_name,output_dir=folder,assessment_result=result
                        ) if report_format in {'both','csv'} else None
     if 'evidence-pages' in set(extra_exports or ()):
         from .evidence_selection import build_evidence_selection
@@ -43,7 +45,7 @@ def render_snapshot(snapshot_path, output_directory, *, tenant_name=None, report
         bundle['html_evidence_folder'] = 'Evidence'
         pages = write_html_evidence_pages(model,folder / 'Evidence',report_name='Assessment.html',
             workbook_name=Path(excel).name if excel else None,
-            technical_workbook_name=Path(bundle['technical_excel_path']).name if bundle.get('technical_excel_path') else None)
+            technical_workbook_name=Path(bundle['technical_excel_path']).name if bundle.get('technical_excel_path') else None,assessment_result=result)
         bundle['html_evidence_folder_path'] = pages['folder']
     html = export_to_html(rows,filename='Assessment.html',tenant_name=tenant_name,
         evidence_bundle=bundle,excel_path=excel,output_dir=folder,summary_filename='Readiness Summary.html')
@@ -69,7 +71,8 @@ def load_completed_package(payload):
     if not snapshot.is_file() or file_hash(snapshot)!=manifest.get('SnapshotHash'):
         raise ValueError('Completed-run package snapshot integrity mismatch.')
     result = read_assessment_result(snapshot)
-    if 'ProducingRevision' in manifest and manifest['ProducingRevision'] != result.get('producing_revision'):
+    stored_provenance=json.loads(snapshot.read_text(encoding='utf-8-sig')).get('producing_revision')
+    if 'ProducingRevision' in manifest and manifest['ProducingRevision'] != stored_provenance:
         raise ValueError('Completed-run manifest and snapshot producing revisions differ.')
     meta, seed = result['identity'], manifest.get('Identity') or {}
     from .assessment_identity import execution_metadata

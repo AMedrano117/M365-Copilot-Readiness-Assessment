@@ -6,10 +6,10 @@ import os
 from pathlib import Path
 
 
-def lifecycle_settings(settings=None, *, max_age_days=None, report_dates=None, evaluation_date=None):
+def lifecycle_settings(settings=None, *, max_age_days=None, report_dates=None, evaluation_date=None, environment=None):
     settings = dict(settings or {})
     age = max_age_days if max_age_days is not None else settings.get(
-        'lifecycle_report_max_age_days', os.environ.get('LIFECYCLE_REPORT_MAX_AGE_DAYS', '90'))
+        'lifecycle_report_max_age_days', (os.environ if environment is None else environment).get('LIFECYCLE_REPORT_MAX_AGE_DAYS', '90'))
     try:
         age = int(age)
         if age <= 0:

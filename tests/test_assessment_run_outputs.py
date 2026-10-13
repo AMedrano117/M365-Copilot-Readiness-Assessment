@@ -1,3 +1,4 @@
+from provenance_fixture import fictional_publication
 """Stage A CLI, validation and renderer integration acceptance tests."""
 import copy
 import io
@@ -16,6 +17,7 @@ def parse(*options):
         return parse_arguments(None, [])
 
 
+@fictional_publication
 class RunCliTests(unittest.TestCase):
     def test_modes_and_noninteractive_baseline_options(self):
         args = parse('--mode','offline','--run-type','Reassessment','--assessment-id','AST-example',
@@ -46,6 +48,7 @@ class RunCliTests(unittest.TestCase):
         self.assertIn('explicit', output.getvalue().lower())
 
 
+@fictional_publication
 class RunValidationTests(unittest.TestCase):
     def test_invalid_context_is_blocked_before_snapshot_creation(self):
         from Core.assessment_runs import prepare_run
@@ -75,6 +78,7 @@ class RunValidationTests(unittest.TestCase):
                             for row in diagnostics))
 
 
+@fictional_publication
 class RunRendererTests(unittest.TestCase):
     def test_shared_snapshot_replay_preserves_context_without_evaluation_or_history_append(self):
         from Core.assessment_runs import prepare_run

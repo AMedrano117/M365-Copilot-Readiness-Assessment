@@ -1,3 +1,4 @@
+from provenance_fixture import fictional_publication
 """Cross-stage tests use valid persisted identity and lifecycle graphs."""
 import copy
 import unittest
@@ -63,6 +64,7 @@ def lifecycle_pair(bound_condition=False):
     return current,baseline,d,p
 
 
+@fictional_publication
 class SeparationTests(unittest.TestCase):
     def test_customer_action_status_remains_visible_with_recorded_lifecycle(self):
         from Core.governance import new_log,create_draft,attach

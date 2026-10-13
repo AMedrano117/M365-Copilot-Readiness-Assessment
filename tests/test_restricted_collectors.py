@@ -1,3 +1,4 @@
+from provenance_fixture import fictional_publication
 """Restricted runs retain useful evidence without turning intentional gaps into zeros."""
 
 import contextlib
@@ -18,6 +19,7 @@ from Recommendations.entra.entra_insights import extract_entra_insights_from_cli
 from Recommendations.m365.m365_insights import get_sites_observation
 
 
+@fictional_publication
 class RestrictedCollectorTests(unittest.IsolatedAsyncioTestCase):
     def licensed_graph(self, names):
         sku = SimpleNamespace(sku_part_number='SPE_E5', sku_id='synthetic-sku',

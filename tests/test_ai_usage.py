@@ -1,3 +1,4 @@
+from provenance_fixture import fictional_publication
 """Evidence-model tests for aggregate AI usage and optional enrichment."""
 
 import asyncio
@@ -35,6 +36,7 @@ from Recommendations.m365.m365_insights import (
 )
 
 
+@fictional_publication
 class FakeResponse:
     def __init__(self, status_code=200, payload=None, text="", headers=None):
         self.status_code = status_code
@@ -48,6 +50,7 @@ class FakeResponse:
         return self._payload
 
 
+@fictional_publication
 class FakeClient:
     def __init__(self, responses):
         self.responses = list(responses)
@@ -70,6 +73,7 @@ def summary_payload(period, enabled, active, prompts=0, apps=None, refresh="2026
     return {"value": [{"reportRefreshDate": refresh, "adoptionByProduct": [row]}]}
 
 
+@fictional_publication
 class CopilotUsageTests(unittest.TestCase):
     def test_legacy_graph_csv_report_parser_returns_rows(self):
         rows = _parse_csv_report(b"User Principal Name,Send Count\r\nuser@example.com,4\r\n")
@@ -334,6 +338,7 @@ class CopilotUsageTests(unittest.TestCase):
         self.assertEqual(len(client.paths), 2)
 
 
+@fictional_publication
 class LicenseCoverageIntegrationTests(unittest.TestCase):
     def _collect(self, coverage=None, failure=None):
         async def collection(path, params=None):
@@ -421,6 +426,7 @@ class LicenseCoverageIntegrationTests(unittest.TestCase):
         self.assertEqual(insights["copilot_license_coverage_status"], "unavailable")
 
 
+@fictional_publication
 class ShadowAiTests(unittest.TestCase):
     def test_permission_missing(self):
         evidence = asyncio.run(collect_shadow_ai_usage(FakeClient([FakeResponse(403, {}, "Forbidden")])))
@@ -458,6 +464,7 @@ class ShadowAiTests(unittest.TestCase):
         self.assertNotIn("users", evidence["applications"][0])
 
 
+@fictional_publication
 class PowerPlatformAggregationTests(unittest.TestCase):
     def test_multi_environment_results_are_aggregated(self):
         merged = _merge_environment_responses("apps", [
@@ -479,6 +486,7 @@ class PowerPlatformAggregationTests(unittest.TestCase):
         self.assertIn("HTTP 403", merged.text)
 
 
+@fictional_publication
 class ReportPrivacyAndDecisionTests(unittest.TestCase):
     def test_optional_extensibility_gap_does_not_change_core_readiness(self):
         optional_gap = new_recommendation(

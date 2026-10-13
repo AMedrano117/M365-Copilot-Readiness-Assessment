@@ -1,3 +1,4 @@
+from provenance_fixture import fictional_publication
 import contextlib
 import csv
 import io
@@ -24,6 +25,7 @@ from Core.export_paths import BUILDS_FOLDER, EVIDENCE_FOLDER, SUMMARY_STEM, cust
 ROOT = Path(__file__).resolve().parents[1]
 
 
+@fictional_publication
 class OfflineReportTests(unittest.TestCase):
     def csv(self, path, rows):
         with path.open('w', encoding='utf-8-sig', newline='') as handle:

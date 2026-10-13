@@ -1,3 +1,4 @@
+from provenance_fixture import fictional_publication
 """Restricted access checks use only fabricated grants and local evidence."""
 
 import base64
@@ -34,6 +35,7 @@ def token(roles):
     return SimpleNamespace(token=f'header.{payload}.signature')
 
 
+@fictional_publication
 class AuditClient:
     def __init__(self):
         allowed = profile_permission_resources('restricted')
@@ -88,6 +90,7 @@ class AuditClient:
         self.assignments.append({'resourceId': resource['id'], 'appRoleId': role['id']})
 
 
+@fictional_publication
 class ProfileSelectionTests(unittest.TestCase):
     def test_cli_then_selected_environment_then_default(self):
         with patch.dict(os.environ, {}, clear=True):
@@ -139,6 +142,7 @@ class ProfileSelectionTests(unittest.TestCase):
             self.assertEqual(collection_context(portable)['permission_profile'], 'unrecorded')
 
 
+@fictional_publication
 class RestrictedAuditTests(unittest.IsolatedAsyncioTestCase):
     async def test_matching_manifest_and_actual_grants_pass(self):
         client = AuditClient()
@@ -227,6 +231,7 @@ class RestrictedAuditTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('UserAuthenticationMethod', str(results))
 
 
+@fictional_publication
 class RestrictedOrchestrationTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.stack = ExitStack()

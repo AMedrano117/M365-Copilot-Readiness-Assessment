@@ -31,8 +31,38 @@ def file_hash(path):
     return digest.hexdigest()
 
 
-def atomic_write(path, value):
+def atomic_write(path, value, *, immutable=False):
+    from .repository_provenance import require_publication
+    require_publication()
+    if immutable:
+        from .publication_io import write_text
+        kind='run-seed' if isinstance(value,dict) and value.get('RunId') and value.get('AssessmentId') and 'identity' not in value else None
+        write_text(path, json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False) + '\n',artifact_kind=kind)
+        return Path(path)
     target = Path(path)
+    if not target.exists():
+        from .publication_io import write_text
+        kind='run-seed' if isinstance(value,dict) and value.get('RunId') and value.get('AssessmentId') and 'identity' not in value else None
+        write_text(target,json.dumps(value,ensure_ascii=False,indent=2,allow_nan=False)+'\n',artifact_kind=kind)
+        return target
+    from .publication_io import linked_path
+    if any(linked_path(part) for part in (target,*target.parents)) or target.stat().st_nlink!=1:
+        raise ValueError('Mutable metadata destination contains a symbolic link.')
+    def mutable_kind(record):
+        if not isinstance(record,dict):return None
+        if record.get('format')=='m365-readiness-rebuild':return 'recipe'
+        if isinstance(record.get('Runs'),list) and record.get('AssessmentId'):return 'history'
+        if isinstance(record.get('Events'),list) and record.get('AssessmentId'):return 'governance'
+        return None
+    previous=json.loads(target.read_text(encoding='utf-8-sig'))
+    if not mutable_kind(value) or mutable_kind(value)!=mutable_kind(previous):
+        raise ValueError('Atomic metadata update cannot overwrite an immutable artifact.')
+    kind=mutable_kind(previous)
+    if kind in {'history','governance'}:
+        entries='Runs' if kind=='history' else 'Events'
+        if any(previous.get(key)!=value.get(key) for key in ('AssessmentId','PrimaryEnvironmentId')) or value[entries][:len(previous[entries])]!=previous[entries]:
+            raise ValueError('Mutable metadata must preserve ownership and all prior records.')
+    before=file_hash(target)
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary = target.with_name(target.name + '.' + uuid4().hex + '.tmp')
     try:
@@ -41,6 +71,8 @@ def atomic_write(path, value):
             handle.write('\n')
             handle.flush()
             os.fsync(handle.fileno())
+        if any(linked_path(part) for part in (target,*target.parents)) or target.stat().st_nlink!=1 or file_hash(target)!=before:
+            raise ValueError('Mutable metadata changed before its atomic update.')
         temporary.replace(target)
     finally:
         if temporary.exists():
@@ -50,6 +82,8 @@ def atomic_write(path, value):
 
 @contextmanager
 def _locked(path):
+    from .repository_provenance import require_publication
+    require_publication()
     lock = Path(path).with_name(Path(path).name + '.lock')
     lock.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -158,6 +192,8 @@ def validate_history(value):
 
 
 def create_history(path, identity, purpose=None):
+    from .repository_provenance import require_publication
+    require_publication()
     value = {key:identity.get(key) for key in ('AssessmentId','PrimaryEnvironmentId','MethodologyVersion','CatalogVersion')}
     value.update(SchemaVersion=VERSION, Purpose=purpose, InitialRunId=identity['RunId']
         if identity.get('RunType')=='Initial' else None, Runs=[], UpdatedAt=timestamp())
@@ -216,6 +252,8 @@ def select_baseline(path, *, assessment_id, environment_id, baseline_run_id,
 
 
 def append_run(path, result, *, snapshot_path, package_path, expected_hash=None):
+    from .repository_provenance import require_publication
+    require_publication()
     from .assessment_references import require_valid_assessment
     require_valid_assessment(result)
     meta, context = result['identity'], result['run_context']

@@ -1,3 +1,4 @@
+from provenance_fixture import fictional_publication
 """Publication, replay and renderer contracts for the reconciled assessment."""
 import copy
 import os
@@ -18,6 +19,7 @@ def result(rows=None, observations=None, seed=None):
     return built,bundle
 
 
+@fictional_publication
 class ReconciledPublicationTests(unittest.TestCase):
     def test_renderer_publication_is_blocked_before_any_output(self):
         from Core.export_recommendations import export_to_excel,export_to_html
@@ -106,6 +108,7 @@ class ReconciledPublicationTests(unittest.TestCase):
         self.assertEqual(len(retained[0]['SourceOccurrences']),2)
 
 
+@fictional_publication
 class ReconciledReplayTests(unittest.TestCase):
     def test_complete_absence_declarations_preserve_their_state(self):
         from Core.evidence_layer import deduplicate_findings
@@ -161,6 +164,7 @@ class ReconciledReplayTests(unittest.TestCase):
         self.assertEqual(first['findings'][0]['record_count'],1)
 
 
+@fictional_publication
 class ReconciledRendererTests(unittest.TestCase):
     def fixture(self):
         rows=[observation(RecommendationId='ENT-001',Population=population,Provider='microsoft',

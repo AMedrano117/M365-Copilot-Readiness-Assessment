@@ -191,6 +191,7 @@ async def orchestrate(
     extra_exports=None,
     run_type=None, assessment_id=None, baseline_run_id=None, assessment_history=None,
     assessment_purpose=None, primary_environment_id=None, delta_mode=None,
+    effective_assessment_settings=None,
 ):
     """Orchestrate gathering of service information and service plans.
     
@@ -439,6 +440,7 @@ async def orchestrate(
                 'provider_evidence_max_age_days': int(os.environ.get('PROVIDER_EVIDENCE_MAX_AGE_DAYS', '90')),
                 'sam_report_max_age_days': _positive_int_env('SAM_REPORT_MAX_AGE_DAYS', 35),
                 'dspm_report_max_age_days': _positive_int_env('DSPM_REPORT_MAX_AGE_DAYS', 8),
+                **(effective_assessment_settings or {}),
             },
             supplemental_inputs={
                 'sam_report': sam_report_paths, 'dspm_report': dspm_report_paths,

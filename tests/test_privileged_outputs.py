@@ -1,3 +1,4 @@
+from provenance_fixture import fictional_publication
 """End-to-end privilege output, replay, privacy and publication gates."""
 import copy
 import json
@@ -12,6 +13,7 @@ from test_privileged_identity import sources, grant, policy, NOW, FUTURE, RECENT
 TENANT = '11111111-1111-4111-8111-111111111111'
 
 
+@fictional_publication
 class PrivilegedOutputTests(unittest.TestCase):
     def test_population_completeness_cannot_promote_unqualified_authentication_provenance(self):
         from Core.privileged_presentation import privileged_findings

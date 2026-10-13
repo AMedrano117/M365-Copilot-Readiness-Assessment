@@ -1,3 +1,4 @@
+from provenance_fixture import fictional_publication
 """Hardening: access errors, tenant confirmation, report privacy and checkpoint recovery."""
 
 import asyncio
@@ -28,6 +29,7 @@ def token_for(tenant):
     return SimpleNamespace(token=f"header.{body}.signature")
 
 
+@fictional_publication
 class FakeOrgClient:
     def __init__(self, tenant=TENANT, domains=("contoso.onmicrosoft.com", "contoso.com"), token_tenant=None):
         self.tenant = tenant
@@ -39,6 +41,7 @@ class FakeOrgClient:
             {"name": name, "isInitial": name.endswith(".onmicrosoft.com")} for name in self.domains]}]}
 
 
+@fictional_publication
 class AccessErrorTests(unittest.TestCase):
     def test_both_exception_types_are_classified(self):
         self.assertIn(GraphRequestError, ACCESS_ERRORS)
@@ -75,6 +78,7 @@ class AccessErrorTests(unittest.TestCase):
             self.assertNotIn("requires admin role", source, name)
 
 
+@fictional_publication
 class TenantIdentityTests(unittest.IsolatedAsyncioTestCase):
     async def confirm(self, client, **kwargs):
         with redirect_stdout(io.StringIO()), patch.dict(os.environ, {}, clear=True):
@@ -114,6 +118,7 @@ class TenantIdentityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("", params.TENANT_ID)
 
 
+@fictional_publication
 class ReportPrivacyTests(unittest.IsolatedAsyncioTestCase):
     async def collect(self, payload=None, error=None):
         class Client:
@@ -139,6 +144,7 @@ class ReportPrivacyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([], build_report_privacy_recommendations(denied))
 
 
+@fictional_publication
 class CheckpointRecoveryTests(unittest.TestCase):
     def test_failed_m365_pipeline_keeps_saved_sharepoint_evidence(self):
         from Core.collection_checkpoint import CollectionCheckpoint

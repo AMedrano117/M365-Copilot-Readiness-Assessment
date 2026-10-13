@@ -1,3 +1,4 @@
+from provenance_fixture import fictional_publication
 """Closure hardening uses synthetic, valid lifecycle graphs and explicit grants."""
 import copy
 import json
@@ -71,6 +72,7 @@ def edited_history(log, field, value=None, *, remove=False):
     return seal(changed)
 
 
+@fictional_publication
 class TypedStatementTests(unittest.TestCase):
     def test_required_statements_reject_nontext_and_blank_values(self):
         from Core.governance import transition, project
@@ -128,6 +130,7 @@ class TypedStatementTests(unittest.TestCase):
                         transition(log, result, key, 'submit', actor='operator', at=NOW)
 
 
+@fictional_publication
 class OverrideRequirementsTests(unittest.TestCase):
     def test_every_lifecycle_state_requires_complete_override_at_submission(self):
         from Core.governance import transition
@@ -284,6 +287,7 @@ class OverrideRequirementsTests(unittest.TestCase):
         self.assertEqual(historical, before)
 
 
+@fictional_publication
 class ClosurePersistenceTests(unittest.TestCase):
     def test_valid_normal_and_override_closures_render_without_decision_operations(self):
         from Core.governance import attach

@@ -1,3 +1,4 @@
+from provenance_fixture import fictional_publication
 """Explicit governance acceptance tests; all actors and evidence are fictional."""
 import copy
 import unittest
@@ -50,6 +51,7 @@ def advance(result,log,identifier,policy,operations=('submit','approve','activat
     return log
 
 
+@fictional_publication
 class DecisionTests(unittest.TestCase):
     def test_identity_is_stable_and_log_input_immutable(self):
         from Core.governance import project
@@ -180,6 +182,7 @@ class DecisionTests(unittest.TestCase):
                 self.assertEqual({k:v for k,v in output.items() if not k.startswith('governance')},before)
 
 
+@fictional_publication
 class WorkflowTests(unittest.TestCase):
     def test_draft_pending_approved_and_active_are_distinct(self):
         from Core.governance import transition,project
@@ -274,6 +277,7 @@ class WorkflowTests(unittest.TestCase):
                 self.assertTrue(any(d['severity']=='error' for d in validate_log(seal(bad))))
 
 
+@fictional_publication
 class AuthorityTests(unittest.TestCase):
     def test_default_deny_and_actor_role_binding_matrix(self):
         from Core.governance import transition

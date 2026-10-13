@@ -11,7 +11,7 @@ permissions:
 jobs:
   offline-validation:
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -26,6 +26,13 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Bind the exact revision to an owned validation branch
+        run: |
+          $expectedRevision = '${{ github.event.pull_request.head.sha || github.sha }}'
+          if ((git rev-parse HEAD).Trim() -ne $expectedRevision) { throw 'Unexpected validation revision.' }
+          git checkout -b ci-validation-source
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot bind the validation source branch.' }
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}

@@ -1,3 +1,4 @@
+from provenance_fixture import fictional_publication
 """Conservative comparison acceptance tests; all fixtures are fictional."""
 import copy
 import itertools
@@ -14,6 +15,7 @@ def reconcile(rows):
     return reconcile_evidence(rows, evaluation_date=DAY, expected_tenant_id=TENANT)
 
 
+@fictional_publication
 class ScopeReconciliationTests(unittest.TestCase):
     def test_exact_duplicates_preserve_occurrences_and_locators(self):
         rows = [fact(source_file='a.csv', capture_id='capture-a', native_id='native-a'),
@@ -142,6 +144,7 @@ class ScopeReconciliationTests(unittest.TestCase):
         self.assertFalse([r for r in validate_assessment_references(result) if r['severity']=='error'])
 
 
+@fictional_publication
 class ReconciliationValidationTests(unittest.TestCase):
     def test_invalid_memberships_and_favorable_conflict_block_publication(self):
         from Core.assessment_result import build_assessment_result

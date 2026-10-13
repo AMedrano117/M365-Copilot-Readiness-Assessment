@@ -1,3 +1,4 @@
+from provenance_fixture import fictional_publication
 """Stage A acceptance tests; fictional identity and evidence only."""
 import copy
 import json
@@ -28,6 +29,7 @@ def result(identity):
             'population':'all users','collection_semantics':'full enumeration'}}}
 
 
+@fictional_publication
 class RunFixture(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -44,6 +46,7 @@ class RunFixture(unittest.TestCase):
         return execution, snapshot
 
 
+@fictional_publication
 class WorkflowTests(RunFixture):
     def test_initial_persists_seed_and_completed_history_once(self):
         from Core.assessment_history import read_history
@@ -109,6 +112,7 @@ class WorkflowTests(RunFixture):
         self.assertEqual(current.identity['AssessmentId'], old.identity['AssessmentId'])
 
 
+@fictional_publication
 class HistoryTests(RunFixture):
     def test_tampering_and_unknown_schema_are_rejected(self):
         from Core.assessment_history import read_history
@@ -134,12 +138,12 @@ class HistoryTests(RunFixture):
         self.assertEqual(self.history.read_bytes(), before)
 
     def test_failed_atomic_replace_preserves_prior_history(self):
-        from Core.assessment_history import atomic_write
+        from Core.assessment_history import atomic_write, read_history
         self.initial()
         before = self.history.read_bytes()
         with patch('pathlib.Path.replace', side_effect=OSError('Synthetic disk failure')):
             with self.assertRaises(OSError):
-                atomic_write(self.history, {'replacement':'must not truncate history'})
+                atomic_write(self.history, read_history(self.history))
         self.assertEqual(self.history.read_bytes(), before)
 
     def test_moved_history_and_packages_preserve_baseline_identity(self):
@@ -197,6 +201,7 @@ class HistoryTests(RunFixture):
             select_baseline(self.history, **options)
 
 
+@fictional_publication
 class BaselineTests(RunFixture):
     def test_missing_foreign_self_future_and_unreadable_baselines(self):
         from Core.assessment_history import select_baseline, read_history
@@ -216,6 +221,7 @@ class BaselineTests(RunFixture):
             select_baseline(self.history, **options)
 
 
+@fictional_publication
 class ComparabilityTests(unittest.TestCase):
     def pair(self):
         from Core.assessment_runs import prepare_run

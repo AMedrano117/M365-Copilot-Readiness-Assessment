@@ -1,3 +1,4 @@
+from provenance_fixture import fictional_publication
 import unittest
 
 from openpyxl import Workbook
@@ -5,6 +6,7 @@ from openpyxl import Workbook
 from tools.validate_offline_report import _investigation_issues
 
 
+@fictional_publication
 class InvestigationWorkbookAuditTests(unittest.TestCase):
     def workbook(self, location="'Novel Evidence'!A2:B2", count=1, qualification='One retained record supports the action.'):
         workbook = Workbook()

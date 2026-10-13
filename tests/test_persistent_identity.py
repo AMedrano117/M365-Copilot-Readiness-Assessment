@@ -1,3 +1,4 @@
+from provenance_fixture import fictional_publication
 """Acceptance tests for the additive identity boundary; fictional evidence only."""
 import copy
 import json
@@ -63,6 +64,7 @@ def graph():
     return {'tenant_id': TENANT, 'identity': meta, 'recommendations': [{'RecommendationId':'ENT-001'}]}
 
 
+@fictional_publication
 class PersistentIdentityTests(unittest.TestCase):
     def test_bound_compatibility_locators_and_selected_support(self):
         identity, references = api()
@@ -358,6 +360,7 @@ for name,code,mutation in [
     setattr(PersistentIdentityTests, 'test_validation_'+name, invalid_case(code,mutation))
 
 
+@fictional_publication
 class IdentitySerializationTests(unittest.TestCase):
     def test_snapshot_render_replay_preserves_identity_and_compatibility(self):
         import test_offline_report as offline_tests
@@ -395,8 +398,11 @@ class IdentitySerializationTests(unittest.TestCase):
             first = path.read_bytes()
             loaded = read_assessment_result(path)
             self.assertEqual(loaded['identity'],result['identity'])
-            write_assessment_result(path,loaded)
+            with self.assertRaises(FileExistsError):write_assessment_result(path,loaded)
             self.assertEqual(first,path.read_bytes())
+            derivative = Path(folder)/'snapshot-copy.json'
+            write_assessment_result(derivative,loaded)
+            self.assertEqual(first,derivative.read_bytes())
             self.assertEqual(loaded['recommendations'][0]['RecommendationId'],'ENT-001')
             self.assertNotIn('dashboard', loaded)
 

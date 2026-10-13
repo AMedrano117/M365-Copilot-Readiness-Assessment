@@ -1,3 +1,4 @@
+from provenance_fixture import fictional_publication
 """Customer callouts must resolve to the actual records in the saved collection."""
 
 import os
@@ -35,6 +36,7 @@ def state():
             'window_start': '2026-09-22T20:00:00Z', 'filter': 'createdDateTime ge 2026-09-22T20:00:00Z'}
 
 
+@fictional_publication
 class InvestigationEventExportTests(unittest.TestCase):
     def setUp(self):
         self.cwd = os.getcwd()

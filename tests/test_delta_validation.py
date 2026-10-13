@@ -1,9 +1,11 @@
+from provenance_fixture import fictional_publication
 """Reject fabricated favorable transitions instead of silently repairing them."""
 import copy
 import unittest
 from test_delta_lifecycle import pair,compare,finding_record
 
 
+@fictional_publication
 class LifecycleValidationTests(unittest.TestCase):
     def errors(self,current):
         from Core.lifecycle_validation import validate_lifecycle

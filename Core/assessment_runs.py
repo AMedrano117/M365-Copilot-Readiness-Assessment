@@ -23,6 +23,8 @@ class RunExecution:
 def prepare_run(run_type, tenant_id, *, evaluated_at, history_path=None, assessment_id=None,
                 baseline_run_id=None, purpose=None, catalog_version=None, environment_id=None,
                 existing_identity=None, methodology_version=None, delta_enabled=True):
+    from .repository_provenance import require_publication
+    require_publication()
     if run_type=='Replay':
         if not existing_identity:
             raise ValueError('Replay requires an existing persisted run identity.')
@@ -101,6 +103,8 @@ def prepare_run(run_type, tenant_id, *, evaluated_at, history_path=None, assessm
 
 def complete_run(result, execution, package_path):
     """Persist a completed semantic snapshot before any renderer publishes."""
+    from .repository_provenance import require_publication
+    require_publication()
     if not execution.is_new:
         return None
     from .repository_provenance import current_revision
@@ -125,7 +129,7 @@ def complete_run(result, execution, package_path):
     from .assessment_references import require_valid_assessment
     result['identity_validation'] = require_valid_assessment(result)
     package.mkdir(parents=True,exist_ok=True)
-    atomic_write(package / 'run-seed.json',execution_metadata(meta))
+    atomic_write(package / 'run-seed.json',execution_metadata(meta), immutable=True)
     snapshot = package / 'assessment-results' / (meta['RunId'] + '.json')
     if snapshot.exists():
         raise ValueError('A completed semantic snapshot cannot be overwritten.')
@@ -136,7 +140,7 @@ def complete_run(result, execution, package_path):
     atomic_write(package / 'assessment-run.json', {
         'SchemaVersion':VERSION,'Identity':execution_metadata(meta),
         'ProducingRevision':deepcopy(result.get('producing_revision')),
-        'SnapshotLocator':snapshot.relative_to(package).as_posix(),'SnapshotHash':file_hash(snapshot)})
+        'SnapshotLocator':snapshot.relative_to(package).as_posix(),'SnapshotHash':file_hash(snapshot)}, immutable=True)
     return str(snapshot)
 
 

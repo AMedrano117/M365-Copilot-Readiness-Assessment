@@ -25,6 +25,7 @@ class FakeGit:
         self.calls.append(args)
         if self.unavailable:raise ValueError('metadata unavailable')
         if args[0]=='status':return self.status
+        if args[0]=='ls-files':return b''
         if args[0]=='symbolic-ref':
             if self.detached:raise ValueError('detached')
             return b'fictional-branch'
@@ -60,7 +61,7 @@ class ClassificationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             before=list(Path(folder).iterdir());p.inventory_repository(folder,git_reader=fake)
             self.assertEqual(list(Path(folder).iterdir()),before)
-        self.assertEqual(fake.calls,[('status','--porcelain=v2','-z','--untracked-files=all')])
+        self.assertEqual(fake.calls,[('status','--porcelain=v2','-z','--untracked-files=all'),('ls-files','--stage','-z'),('ls-files','-v','-z')])
     def test_rename_unicode_and_spaces(self):
         raw=('2 R. N... 100644 100644 100644 '+'a'*40+' '+'b'*40+' R100 Core/é sample.py\0Core/old.py\0').encode()
         row=p.parse_status(raw)[0];self.assertEqual(row['path'],'Core/é sample.py');self.assertEqual(row['original_path'],'Core/old.py')
@@ -183,7 +184,7 @@ class PolicyTests(unittest.TestCase):
         r=fictional_revision();r['publication']=self.policy()
         with p.producing_context(r),patch.object(p,'capture_revision',return_value=r):p.verify_execution_source()
     def test_no_implicit_git_for_library(self):
-        with p.producing_context(p.unrecorded_revision()),patch.object(p,'capture_revision',side_effect=AssertionError('unexpected')):p.verify_execution_source()
+        with p.producing_context(p.unrecorded_revision()),patch.object(p,'capture_revision',side_effect=AssertionError('unexpected')):self.assertRaises(ValueError,p.verify_execution_source)
 
 
 if __name__=='__main__':unittest.main()

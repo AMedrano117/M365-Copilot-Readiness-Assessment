@@ -1,3 +1,4 @@
+from provenance_fixture import fictional_publication
 """Only reviewed transitions (2.0.0 / 2.1.0 / 3.0.0 -> 4.0.0) can reuse saved evidence."""
 
 import contextlib
@@ -22,6 +23,7 @@ COLLECTED = '2026-09-10T12:00:00+00:00'
 EVALUATED = '2026-09-15'
 
 
+@fictional_publication
 class MethodologyMigrationTests(unittest.TestCase):
     def parse(self, *arguments):
         with patch('sys.argv', ['main.py', *map(str, arguments)]):

@@ -27,8 +27,20 @@ def main(argv=None):
     parser.add_argument('--decision-id')
     parser.add_argument('--output',help='New register or overlay output; existing files cannot be overwritten.')
     parser.add_argument('--history',help='Assessment history, only for explicit link-history metadata update.')
+    parser.add_argument('--source-policy',choices=['production','engineering-validation'],default='production')
+    parser.add_argument('--assessment-purpose')
+    parser.add_argument('--source-reason')
+    parser.add_argument('--acknowledge-dirty-source',action='store_true')
     args=parser.parse_args(argv)
     try:
+        if args.operation not in {'validate','review-expired'} or args.output:
+            from .repository_provenance import capture_revision, publication_policy, current_revision, set_execution_revision, require_publication
+            if not current_revision().get('publication'):
+                revision=capture_revision(config=args)
+                revision['publication']=publication_policy(revision,policy=args.source_policy,purpose=args.assessment_purpose,
+                    reason=args.source_reason,acknowledged=args.acknowledge_dirty_source)
+                set_execution_revision(revision)
+            require_publication()
         result=read_assessment_result(args.snapshot)
         source=Path(args.snapshot).resolve();logpath=Path(args.log).resolve()
         if source==logpath:raise ValueError('Decision log cannot overwrite the assessment snapshot.')
@@ -57,7 +69,8 @@ def main(argv=None):
             if args.output:
                 target=Path(args.output)
                 if target.exists():raise ValueError('Governance export cannot overwrite an existing file.')
-                atomic_write(target,view)
+                from .repository_provenance import current_revision
+                atomic_write(target,dict(view,publication_revision=current_revision()))
             report={'ValidationStatus':view['ValidationStatus'],'Summary':view['Summary']}
             if args.operation=='review-expired':report['ReviewRequirements']=[{key:r.get(key) for key in ('DecisionId','DecisionType',
                 'WorkflowState','ReviewAt','ExpirationAt','ExpirationDue')} for r in view['Records'] if r['RequiresReview']]

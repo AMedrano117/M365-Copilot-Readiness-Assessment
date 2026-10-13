@@ -80,6 +80,9 @@ def apply_workbook_navigation(workbook, result, bundle, *, role='assessment', co
         {'Open': 'Producing source', 'Purpose': ((result.get('producing_revision') or {}).get('publication') or {}).get('output_qualification')
             or (result.get('producing_revision') or {}).get('qualification') or 'Producing revision unrecorded', 'Rows': None, 'Type': 'Metadata'},
         {'Open': 'Producing commit', 'Purpose': (result.get('producing_revision') or {}).get('commit_sha') or 'Unrecorded', 'Rows': None, 'Type': 'Metadata'},
+        *([{'Open': 'Replay tool publication', 'Purpose': ((result['replay_tool_revision'].get('publication') or {}).get('output_qualification')
+             or result['replay_tool_revision'].get('qualification') or 'Replay provenance unverified'), 'Rows': None, 'Type': 'Metadata'}]
+          if result.get('replay_tool_revision') else []),
         {'Open': companion, 'Purpose': 'Technical workbook: complete raw exports, findings lineage, full selected records and historical context.' if role == 'assessment' else
          'Assessment workbook: prioritized actions, findings, coverage and readable supporting records.', 'Rows': None, 'Type': 'Companion'},
         {'Open': 'How to read the evidence', 'Purpose': 'Filter ID for one finding. Its evidence rows form a contiguous block. Evidence ID opens the exact technical source row. Records can support several findings; do not add counts across findings. Unknown values remain unknown.' if role == 'assessment' else

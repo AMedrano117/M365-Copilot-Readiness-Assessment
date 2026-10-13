@@ -1,3 +1,4 @@
+from provenance_fixture import fictional_publication
 """Retained deliverables work independently of the discontinued export pipeline."""
 
 import contextlib
@@ -21,6 +22,7 @@ RETIRED = ('Core.dashboard_export', 'Core.dashboard_package', 'Core.dashboard_re
 ROOT = Path(__file__).resolve().parents[1]
 
 
+@fictional_publication
 class DashboardRetirementTests(unittest.TestCase):
     def parse(self, *arguments):
         with patch('sys.argv', ['main.py', *arguments]), contextlib.redirect_stderr(io.StringIO()):

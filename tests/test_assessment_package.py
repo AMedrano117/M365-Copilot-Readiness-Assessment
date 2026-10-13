@@ -1,3 +1,4 @@
+from provenance_fixture import fictional_publication
 """Portable replay retains source files/settings and never needs the source machine."""
 
 import contextlib
@@ -28,6 +29,7 @@ from Core.portal_report_import import validate_report_tenants
 TENANT = '11111111-1111-1111-1111-111111111111'
 
 
+@fictional_publication
 class AssessmentPackageTests(unittest.TestCase):
     def parse(self, *arguments):
         with patch('sys.argv', ['main.py', *map(str, arguments)]):
@@ -93,7 +95,7 @@ class AssessmentPackageTests(unittest.TestCase):
             self.assertEqual(restored.customer_name, 'Northwind customer')
 
     def test_outputs_rendered_into_package_are_receipted_without_another_deliverable_copy(self):
-        from Core.assessment_package import record_package_run
+        from Core.assessment_package import record_package_run, copy_file
         with tempfile.TemporaryDirectory() as directory:
             folder = Path(directory).resolve() / 'portable'
             report_directory = folder / 'Builds' / '1'
@@ -104,7 +106,7 @@ class AssessmentPackageTests(unittest.TestCase):
             snapshot.write_text(json.dumps({'counts': {'actions': 0}, 'controls': [], 'recommendations': []}), encoding='utf-8')
             original_snapshot = snapshot.read_bytes()
             with contextlib.redirect_stdout(io.StringIO()), \
-                 patch('Core.assessment_package.shutil.copy2', wraps=shutil.copy2) as copy:
+                 patch('Core.assessment_package.copy_file', wraps=copy_file) as copy:
                 delivered = record_package_run(
                     folder, mode='offline', tenant_id=TENANT, collected_at=None,
                     evaluation_date='2026-09-15', outputs={
@@ -400,7 +402,7 @@ class AssessmentPackageTests(unittest.TestCase):
                     prior.unlink()
                     cache.unlink()
                     self.assertEqual(run_offline_report(self.parse('--collection-input', copied / 'rebuild.json',
-                                                                  '--snapshot-json', root / 'shared-result.json')), 0)
+                                                                  '--snapshot-json', root / 'derivative' / 'shared-result.json')), 0)
                     second = render.call_args.kwargs['evidence_bundle']['assessment_result']
             finally:
                 os.chdir(previous)

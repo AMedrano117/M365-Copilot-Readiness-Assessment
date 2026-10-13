@@ -1,3 +1,4 @@
+from provenance_fixture import fictional_publication
 """Methodology 4 collection, operational confirmation and lossless outputs."""
 
 import asyncio
@@ -49,6 +50,7 @@ def device_bundle():
         'machines':dataset([{'id':'mde','aadDeviceId':'stable','lastSeen':'2026-09-14T12:00:00Z','onboardingStatus':'Onboarded','healthStatus':'Active'}])}}
 
 
+@fictional_publication
 class ExpandedCollectionTests(unittest.IsolatedAsyncioTestCase):
     async def test_shadow_ai_paging_and_entity_failure_preserve_returned_catalog(self):
         from Core.ai_usage import collect_shadow_ai_usage
@@ -179,6 +181,7 @@ class ExpandedCollectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(client.collection_status['authentication_strengths']['complete'])
 
 
+@fictional_publication
 class PolicyAndOperationTests(unittest.TestCase):
     def test_standard_auto_selections_and_permissions(self):
         services={'run_m365':True,'run_entra':True}
@@ -261,6 +264,7 @@ class PolicyAndOperationTests(unittest.TestCase):
             with self.subTest(changed=changed):self.assertFalse(conditional_access_facts([row])['enforced_mfa_all'])
 
 
+@fictional_publication
 class DeviceAndSourceTests(unittest.TestCase):
     def test_endpoint_string_booleans_conflicts_and_original_report_dates(self):
         bundle=device_bundle()
@@ -361,6 +365,7 @@ class DeviceAndSourceTests(unittest.TestCase):
         self.assertEqual(sources['content_exposure'][0]['records'][0]['_evidence_date'],'2025-12-01')
 
 
+@fictional_publication
 class FindingLinksTests(unittest.TestCase):
     def test_oversized_register_worksheets_preserve_every_row(self):
         from openpyxl import Workbook
