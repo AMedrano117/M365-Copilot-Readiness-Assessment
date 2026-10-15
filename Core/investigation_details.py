@@ -285,6 +285,14 @@ def prepare_investigation_details(bundle, result):
     signature = (id(result), tuple((row.get('RecommendationId'), finding_title(row)) for row in result.get('recommendations',[])))
     if bundle.get('_split_investigation_signature') == signature:
         return result
+    if bundle.get('retained_investigations'):
+        # Completed snapshot replay reuses the original materialized selections,
+        # counts and qualifications. It must not reselect them from a reduced
+        # replay context. Only native-row destinations are rendered again.
+        from .raw_evidence import prepare_raw_details
+        prepare_raw_details(bundle, result)
+        bundle['_split_investigation_signature'] = signature
+        return result
     from .privileged_presentation import prepare_privileged_sheets
     prepare_privileged_sheets(bundle, result)
     sheets = bundle.setdefault('sheets', {})

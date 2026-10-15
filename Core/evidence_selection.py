@@ -101,8 +101,12 @@ class _Registry:
     def link(self, records):
         for record in records:
             refs = record.get('source_refs') or []
-            identifiers = [self.refs[(ref['dataset'], ref['dataset_index'], ref['record_index'])]
-                           for ref in refs]
+            try:
+                identifiers = [self.refs[(ref['dataset'], ref['dataset_index'], ref['record_index'])]
+                               for ref in refs]
+            except KeyError as exc:
+                raise ValueError('Native evidence reference is unavailable. Snapshot replay requires the original '
+                                 'completed package and its retained technical workbook.') from exc
             record['evidence_record_ids'] = list(dict.fromkeys(identifiers))
 
 
@@ -281,6 +285,20 @@ def build_evidence_selection(result, bundle, *, tenant_name=None, generated_at=N
     sources = _plain(bundle.get('assessment_sources') or {})
     tenant_id = result.get('tenant_id') or bundle.get('expected_tenant_id')
     registry = _Registry(tenant_id, sources)
+    original_registry_ids = {row['record_id'] for row in registry.evidence}
+    original_source_ids = {row['dataset_id'] for row in registry.sources}
+    retained = bundle.get('retained_record_selection') or {}
+    for identifier, row in (retained.get('derived') or {}).items():
+        name = row.get('Source dataset')
+        dataset_id = retained['derived_source_ids'][identifier]
+        if not any(source['dataset_id'] == dataset_id for source in registry.sources):
+            registry.sources.append({'dataset_id': dataset_id, 'dataset': name, 'dataset_index': 0,
+                'source': {'evidence_origin': 'retained_technical_export', 'granularity': 'materialized_investigation',
+                           'qualification': 'Original same-run derived detail; not a recollected native response.'}, 'record_count': 0})
+        next(source for source in registry.sources if source['dataset_id'] == dataset_id)['record_count'] += 1
+        registry.evidence.append({'record_id': identifier, 'dataset_id': dataset_id, 'dataset': name,
+            'source_record_index': None, 'source_record_id': _native_id(row),
+            'raw': {key: value for key, value in row.items() if key not in {'Evidence Record ID', 'Source dataset'} and value is not None}})
     enriched, findings = [], []
     for original in result.get('recommendations') or []:
         row = _plain(original)
@@ -315,8 +333,17 @@ def build_evidence_selection(result, bundle, *, tenant_name=None, generated_at=N
                     if marker not in seen and not (refs and all(_fingerprint(ref) in covered_refs for ref in refs)):
                         records.append(record); seen.add(marker)
                 detail.setdefault('limitations',[]).extend(declarations.get('limitations') or [])
-        registry.link(records)
+        retained_records = (retained.get('records') or {}).get(identifier)
+        retained_selected = identifier in (retained.get('selected_findings') or [])
+        if retained_records:
+            records = _plain(retained_records)
+            if retained_selected and not specialized:
+                detail['record_type'] = 'supporting_detail'
+        else:
+            registry.link(records)
         for occurrence, record in enumerate(records):
+            if retained_records:
+                continue
             original_id = record['record_id']
             record['compatibility_record_id'] = original_id
             record['source_record_id'] = (None if re.fullmatch(r'(?:ROW-|record-)[a-f0-9]{24}', str(original_id))
@@ -336,12 +363,12 @@ def build_evidence_selection(result, bundle, *, tenant_name=None, generated_at=N
                     if not isinstance(values, list):
                         values = [values]
                     limitations.extend(f'{name}: {value}' for value in values)
-        status = detail.get('status') or ('records_available' if records else _availability(names, sources))
-        if records and ('summary evidence' in investigation or
+        status = 'records_available' if retained_records and retained_selected else detail.get('status') or ('records_available' if records else _availability(names, sources))
+        if not retained_selected and records and ('summary evidence' in investigation or
                         all(record['fields'].get('recordGranularity') == 'site_summary' for record in records)):
             status = 'summary_only'
             limitations.append('The retained rows are summaries. Their counts cannot recreate individual users, devices, or files.')
-        elif records and not specialized and (detail.get('record_type') == 'supporting_inventory' or
+        elif not retained_selected and records and not specialized and (detail.get('record_type') == 'supporting_inventory' or
                           row.get('InvestigationSummary') == 'Shared source inventory' or
                           ('unavailable' in investigation and not row.get('InvestigationEvidence'))):
             status = 'supporting_context'
@@ -373,6 +400,11 @@ def build_evidence_selection(result, bundle, *, tenant_name=None, generated_at=N
                                                  'record_limitations', 'record_reconciliation', 'evidence_record_ids')})
         findings.append(finding)
     selected_ids = {identifier for row in findings for identifier in row['evidence_record_ids']}
+    if retained:
+        retained_ids = original_registry_ids | set(retained.get('derived') or {}) | selected_ids
+        registry.evidence = [row for row in registry.evidence if row['record_id'] in retained_ids]
+        active_sources = {row['dataset_id'] for row in registry.evidence} | original_source_ids
+        registry.sources = [row for row in registry.sources if row['dataset_id'] in active_sources]
     source_boundaries = {row['dataset_id']: (row['dataset'],row['source'].get('tenant_id') or tenant_id,
         row['source'].get('provider'),row['source'].get('workload'),
         _fingerprint([row['source'].get('population'),row['source'].get('scope')]))

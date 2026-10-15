@@ -5,7 +5,7 @@ from pathlib import Path
 import re
 
 
-def apply_workbook_navigation(workbook, result, bundle, *, role='assessment', companion_path=None, tenant_name=None):
+def apply_workbook_navigation(workbook, result, bundle, *, role='assessment', companion_path=None, tenant_name=None, freeze_panes=None):
     from openpyxl.styles import Alignment, Font, PatternFill
     from openpyxl.formatting.rule import CellIsRule
     from openpyxl.utils import get_column_letter
@@ -22,7 +22,12 @@ def apply_workbook_navigation(workbook, result, bundle, *, role='assessment', co
         sheet.sheet_view.showGridLines = False
         sheet.sheet_properties.tabColor = ('007F85' if sheet.title in {'Action Plan', 'Findings', 'Findings Lineage'} else
                                           'C49943' if 'Coverage' in sheet.title else '102B40')
-        sheet.freeze_panes = 'A2'
+        if role == 'assessment':
+            if sheet.title == 'Configuration':
+                sheet.sheet_properties.tabColor = 'ED7D31'
+            elif 'Coverage' in sheet.title:
+                sheet.sheet_properties.tabColor = None
+        sheet.freeze_panes = (bundle.get('workbook_settings') or {}).get('freeze_panes', freeze_panes)
         sheet.row_dimensions[1].height = 32
         for cell in sheet[1]:
             cell.fill, cell.font, cell.alignment = fill, font, wrap
@@ -38,7 +43,7 @@ def apply_workbook_navigation(workbook, result, bundle, *, role='assessment', co
                 cell.alignment = wrap
                 value = cell.value
                 is_id = bool(re.search(r'(^id$|\bid\b|identifier|guid|upn|url|principalname)', name, re.I))
-                if isinstance(value, str):
+                if isinstance(value, str) and cell.data_type != 'f':
                     cell.data_type = 's'
                 if is_id:
                     if value is not None and not isinstance(value, str):
@@ -94,9 +99,9 @@ def apply_workbook_navigation(workbook, result, bundle, *, role='assessment', co
     for sheet in workbook:
         entries.append({'Open': sheet.title, 'Purpose': (source_sheets.get(sheet.title) or {}).get('summary') or
                        ('Compatibility register (hidden).' if sheet.sheet_state != 'visible' else
-                        'Prioritized actions; numbers match the HTML report.' if sheet.title == 'Action Plan' else
+                        'Pilot blockers, required validation, planning and improvements; source records retain the original action numbers.' if sheet.title == 'Action Plan' else
                         'One row per finding with its supporting record block.' if sheet.title == 'Findings' else
-                        'Required checks, evidence state and applicability.' if sheet.title == 'Coverage' else
+                        'Separate assessment topics and readiness controls; collection availability is distinct from control outcomes.' if sheet.title == 'Coverage' else
                         'Page-backed PDF excerpts and follow-up; source context with separate capture and refresh dates.' if sheet.title == 'PDF Highlights' else
                         'Retained records and lineage.'), 'Rows': max(sheet.max_row - 1, 0),
                         'Type': 'Hidden register' if sheet.sheet_state != 'visible' else 'Worksheet'})
@@ -112,6 +117,7 @@ def apply_workbook_navigation(workbook, result, bundle, *, role='assessment', co
     for column, width in [('A', 36), ('B', 80), ('C', 14), ('D', 22)]:
         guide.column_dimensions[column].width = width
     guide.sheet_view.showGridLines = False
+    guide.freeze_panes = (bundle.get('workbook_settings') or {}).get('freeze_panes', freeze_panes)
     guide.sheet_properties.tabColor = '007F85'
     leading = list(ASSESSMENT_ORDER) if role == 'assessment' else ['Start Here', 'Findings Lineage']
     if 'PDF Highlights' in workbook:
