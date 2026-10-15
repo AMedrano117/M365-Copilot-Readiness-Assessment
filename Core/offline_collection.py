@@ -201,7 +201,8 @@ def _write_collection_json(target, payload, *, checkpoint=False):
         raise ValueError('Checkpoint update cannot overwrite an immutable artifact.')
     if (previous.get('identity') or {}).get('RunId') != (payload.get('identity') or {}).get('RunId'):
         raise ValueError('Checkpoint update cannot change run ownership.')
-    if any((parent/'assessment-run.json').exists() for parent in target.parents):
+    from .publication_io import nested_run_path
+    if any((parent/'assessment-run.json').exists() and not nested_run_path(target.relative_to(parent)) for parent in target.parents):
         raise ValueError('Completed collection is immutable.')
     before=target.read_bytes()
     temporary = target.with_name(target.name + '.' + uuid4().hex + '.tmp')
@@ -211,6 +212,8 @@ def _write_collection_json(target, payload, *, checkpoint=False):
             handle.flush();os.fsync(handle.fileno())
         for attempt in range(3):
             try:
+                if any((parent/'assessment-run.json').exists() and not nested_run_path(target.relative_to(parent)) for parent in target.parents):
+                    raise ValueError('Completed collection is immutable.')
                 if any(linked_path(part) for part in (target,*target.parents)) or target.stat().st_nlink!=1 or target.read_bytes()!=before:
                     raise ValueError('Checkpoint destination changed before its atomic update.')
                 temporary.replace(target)

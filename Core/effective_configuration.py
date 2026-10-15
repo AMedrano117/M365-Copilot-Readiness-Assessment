@@ -123,6 +123,10 @@ def resolve_effective(args, saved=None):
     result._effective_settings = settings
     if getattr(result,'offline',False) and not getattr(result,'replay_snapshot',None) and not getattr(result,'collection_input',None) and not any(getattr(result,k,None) for k in INPUTS if k not in {'baseline','assessment_profile','provider_evidence'}):
         errors.append('offline_evidence_required')
+    if getattr(result, 'reassess', None):
+        from .reassessment_cli import normalize_reassessment
+        result, reassessment_errors = normalize_reassessment(result)
+        errors.extend(reassessment_errors)
     return result,saved,errors
 
 
@@ -130,7 +134,7 @@ def portable_configuration(config):
     source = vars(config) if hasattr(config,'__dict__') else dict(config or {})
     excluded = {'plan','plan_format','verbose','color','no_progress','open_html_report','customer_name','tenant_name',
         'save_collection','snapshot_json','render_output_dir','env_file','replay_snapshot','collection_input',
-        'assessment_history','lifecycle_report_date','client_secret','password','access_token','refresh_token',
+        'assessment_history','reassess','lifecycle_report_date','client_secret','password','access_token','refresh_token',
         'certificate_path','certificate_password','_provided_options','snapshot','log','input','output','history','policy'}
     values = {k:v for k,v in source.items() if k not in excluded and k not in INPUTS and not k.startswith('_')
         and not any(word in k.lower() for word in ('secret','password','token','credential'))}

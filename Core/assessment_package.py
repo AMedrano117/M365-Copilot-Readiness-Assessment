@@ -442,7 +442,7 @@ def record_package_run(folder, *, mode, tenant_id, collected_at, evaluation_date
     """Keep generated artifacts and a receipt without rewriting saved evidence."""
     from .repository_provenance import require_publication
     require_publication()
-    from .console_reporting import detail, detail_path, is_verbose, print_collection_handoff, print_paragraph
+    from .console_reporting import detail, detail_path, is_verbose, print_collection_handoff, print_paragraph, section
     if not folder:
         if collection_input and Path(collection_input).is_file():
             print_collection_handoff(collection_input)
@@ -583,4 +583,19 @@ def record_package_run(folder, *, mode, tenant_id, collected_at, evaluation_date
         detail_path('Packaged deliverables', retained_directory or copied_directory)
     candidates = ([Path(collection_input)] if collection_input else []) + [folder / 'collection.json', folder / 'rebuild.json']
     print_collection_handoff(next((path for path in candidates if path.is_file()), None))
+    context = receipt.get('semantic_run', {})
+    if status == 'complete' and mode in {'live', 'offline'} and context.get('HistoryReference'):
+        from .assessment_history import read_history
+        history_path = (folder / context['HistoryReference']).resolve()
+        try:
+            history = read_history(history_path)
+            if (history.get('AssessmentId') == context.get('AssessmentId') and
+                    history.get('PrimaryEnvironmentId') == context.get('PrimaryEnvironmentId') and
+                    any(row['RunId'] == context.get('RunId') for row in history.get('Runs', []))):
+                from .reassessment_cli import reassessment_command
+                section('REASSESS WITH NEW EVIDENCE')
+                print_paragraph(reassessment_command(history_path, context['RunId']))
+                print_paragraph('Add --env-file for this customer and use compatible collection scope and settings.', tone='muted')
+        except (ValueError, OSError):
+            print_paragraph('Reassessment handoff unavailable: verify the retained history.', tone='warning')
     return delivered
