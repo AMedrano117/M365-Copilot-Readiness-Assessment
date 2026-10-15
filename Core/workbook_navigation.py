@@ -103,6 +103,11 @@ def apply_workbook_navigation(workbook, result, bundle, *, role='assessment', co
                         'One row per finding with its supporting record block.' if sheet.title == 'Findings' else
                         'Separate assessment topics and readiness controls; collection availability is distinct from control outcomes.' if sheet.title == 'Coverage' else
                         'Page-backed PDF excerpts and follow-up; source context with separate capture and refresh dates.' if sheet.title == 'PDF Highlights' else
+                        'Specific missing fields and the supported collection or owner follow-up.' if sheet.title == 'Evidence Requests' else
+                        'DSPM scope and feature billing guidance; tenant entitlement and active meters remain unverified.' if sheet.title == 'DSPM Billing Guidance' else
+                        'Microsoft-reported compliance action states; reference only, without changing technical readiness.' if sheet.title == 'AI Baseline Actions' else
+                        'Customer review order: reported failures/conflicts first, then unverified actions by remaining compliance points.' if sheet.title == 'AI Baseline Review Queue' else
+                        'Original AI Baseline exports, dates, content hashes and tenant identity verification.' if sheet.title == 'AI Baseline Sources' else
                         'Retained records and lineage.'), 'Rows': max(sheet.max_row - 1, 0),
                         'Type': 'Hidden register' if sheet.sheet_state != 'visible' else 'Worksheet'})
     guide = workbook.create_sheet('Start Here', 0)

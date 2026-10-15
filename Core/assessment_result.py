@@ -521,7 +521,7 @@ GAP_GUIDANCE = {
     "DATA.RETENTION": ("Retention policies were not collected.",
                        "Assign a role that can read them (setup-service-principal.ps1 -WorkloadRbac GlobalReader), or confirm in Microsoft Purview > Data lifecycle management how Copilot interactions and content are retained."),
     "DATA.EXPOSURE": ("No data security posture report on sensitive content was available.",
-                      "Run the DSPM for AI data risk assessment in Microsoft Purview and supply the export with --reports-dir, or record the owner's review of who can reach sensitive content."),
+                      "Reuse a completed DSPM data risk assessment in Microsoft Purview and supply the structured export with --reports-dir, or record the owner's review of who can reach sensitive content. Confirm coverage of the intended locations; the default covers the top 100 SharePoint sites by usage. Verify scope and entitlement before requesting additional classification or PAYG capabilities."),
     "APPS.CONSENT": ("Application consent settings and grants were not collected.",
                      "Collect them (Microsoft Graph Policy.Read.All and Directory.Read.All), or review Microsoft Entra admin center > Enterprise applications > Consent and permissions."),
     "APPS.CONNECTIONS": ("Copilot connectors were not collected.",

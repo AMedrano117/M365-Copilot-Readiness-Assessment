@@ -10,7 +10,7 @@ from .data_exposure_assessment import (
 
 
 def route_portal_reports(directories):
-    routed = {"sam": [], "dspm": [], "readiness": [], "warnings": [], "reference_warnings": []}
+    routed = {"sam": [], "dspm": [], "readiness": [], "ai_baseline": [], "warnings": [], "reference_warnings": []}
     seen = set()
     for directory in directories or []:
         folder = Path(directory)
@@ -31,6 +31,11 @@ def route_portal_reports(directories):
             seen.add(identity)
             kinds = set()
             try:
+                if path.suffix.lower() == '.xlsx':
+                    from .ai_baseline_import import is_ai_baseline_export
+                    if is_ai_baseline_export(path):
+                        routed['ai_baseline'].append(str(path))
+                        continue
                 for row in _read_records(path):
                     keys = {str(key).strip().lower() for key in row}
                     if {"has copilot license assigned", "uses eligible update channel", "report refresh date"} <= keys:

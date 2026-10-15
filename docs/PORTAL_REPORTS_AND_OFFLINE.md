@@ -223,3 +223,9 @@ With the saved collection and exports, we can rebuild the HTML assessment and ev
 Thanks,
 
 [Name]
+
+## Compliance Manager AI Baseline reference
+
+Use `--ai-baseline-export PATH.xlsx` for an original Compliance Manager **Export actions** workbook, repeating the flag for dated snapshots. Supported exports are also discovered through `--reports-dir`. The original files are retained in portable evidence packages.
+
+Microsoft-reported implementation and testing states remain dated reference evidence. They do not pass technical controls, close assessment actions or change readiness. Tenant identity, source dates, conflicting states and customer versus Microsoft responsibility remain visible. Workbooks include the actions, a customer review queue and source details; replay preserves these references.

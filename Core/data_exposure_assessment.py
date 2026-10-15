@@ -1062,7 +1062,7 @@ def build_data_exposure_assessment(sam_report_paths=None, dspm_report_paths=None
             "--sam-report",
             "SAM_DAG_REPORT_PATHS",
             "https://learn.microsoft.com/en-us/sharepoint/data-access-governance-reports",
-            "First check SharePoint admin center > Reports > Data access governance for a completed report within the accepted freshness window and export it if one exists. If no current report exists, create the site-permissions baseline plus sharing-link and EEEU reports and let Microsoft complete them. If Data Access Governance is unavailable, optionally confirm SharePoint Advanced Management licensing and assign the SharePoint Administrator or SharePoint Advanced Management Administrator role.",
+            "The live SharePoint collector reuses and downloads existing completed Data Access Governance reports when administrative access is available. First check collector download failures, report dates and missing scope. If automatic download is unavailable, export the relevant completed results from SharePoint admin center > Reports > Data access governance. Ask an administrator to create only reports with no current result, then let Microsoft complete them and rerun live collection. The assessment does not start scans. Confirm the applicable SharePoint Advanced Management entitlement and administrator role before requesting new reports.",
             errors=sam["errors"],
         ))
     else:
@@ -1086,7 +1086,7 @@ def build_data_exposure_assessment(sam_report_paths=None, dspm_report_paths=None
             "--dspm-report",
             "DSPM_REPORT_PATHS",
             "https://learn.microsoft.com/en-us/purview/data-security-posture-management-oversharing",
-            "First check Microsoft Purview > Data Security Posture Management > Discover > Data risk assessments for a recent completed default or custom assessment and export it if one exists. If no current result exists, let the default assessment complete or run a custom assessment for the required SharePoint sites. If DSPM is not configured, optionally complete its setup tasks for Audit and analytics first.",
+            "First check Microsoft Purview > Data Security Posture Management > Discover > Data risk assessments for an existing completed default or custom assessment and export the missing evidence. The weekly default covers the top 100 SharePoint sites by usage; verify the intended locations are covered. If more scope is needed, ask the owner to confirm the applicable entitlement before requesting a custom assessment. On-demand classification and network or non-Microsoft 365 AI protections are separate, potentially metered capabilities; do not enable PAYG solely to satisfy this evidence request. The assessment does not activate billing or start scans.",
             errors=dspm["errors"],
         ))
     else:

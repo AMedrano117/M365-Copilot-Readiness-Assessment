@@ -199,7 +199,7 @@ CATALOG = [
                        'other': []},
      'where': 'Microsoft Purview portal > Solutions > Information Protection > Sensitivity labels (create), then Publishing policies (publish)',
      'verify': 'The label policy lists the intended labels and users. Allow up to 24 hours to propagate, then re-run the assessment.',
-     'evidence_needed': 'Sensitivity labels and label policies (InformationProtectionPolicy.Read.All or Security & Compliance PowerShell).',
+     'evidence_needed': 'Sensitivity labels and label policies (SensitivityLabels.Read.All or Security & Compliance PowerShell).',
      'links': [_link('Create and publish sensitivity labels', 'purview/create-sensitivity-labels'),
                _link('Permissions to create and manage sensitivity labels', 'purview/get-started-with-sensitivity-labels')]},
     {'id': 'audit', 'finding_key_prefixes': ('purview.audit.',), 'controls': {'DATA.AUDIT'},

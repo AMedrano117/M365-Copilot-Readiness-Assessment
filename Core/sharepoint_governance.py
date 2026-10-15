@@ -472,10 +472,10 @@ def build_sharepoint_recommendations(governance):
             ),
             recommendation=(
                 "If SharePoint Advanced Management is licensed, open SharePoint admin center > Reports > Data access governance. "
-                "Enable activity-data collection where it is Not initiated or Paused, then run Permissioned users for SharePoint and OneDrive, "
-                "Everyone/Everyone except external users item-level reports, and recent Anyone/guest sharing-link reports. "
+                "Check only the report types and scope listed in the gaps. Reuse current completed results; let running reports finish without starting duplicates. "
+                "For missing or stale results, ask an administrator to enable activity-data collection where needed and generate the relevant permission-state, Everyone/EEEU or sharing-link reports. "
                 "Do not wait in this tool: Microsoft's first permission-state report can take up to five days; later runs generally complete within 24 hours. "
-                "Rerun this assessment after the reports show Completed; it will reuse and download the results."
+                "Rerun this assessment after the reports show Completed; it will reuse and download the results. If a download fails, import the specific structured export with --reports-dir. A Completed status alone does not prove complete exposure coverage."
             ),
             link_text="Data Access Governance reports",
             link_url="https://learn.microsoft.com/sharepoint/data-access-governance-reports",

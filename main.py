@@ -148,6 +148,7 @@ def main():
                 customer_name=args.customer_name,
                 reports_dirs=args.reports_dir,
                 copilot_readiness_export=args.copilot_readiness_export,
+                ai_baseline_exports=args.ai_baseline_export,
                 evaluation_date=args.evaluation_date,
                 lifecycle_report_max_age_days=args.lifecycle_report_max_age_days,
                 lifecycle_report_dates=args.lifecycle_report_date,

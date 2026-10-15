@@ -21,7 +21,7 @@ def run_offline_report(args):
         return 0
     from .processor import process_and_print_all_information
 
-    if not (args.collection_input or args.sam_report or args.dspm_report or args.reports_dir
+    if not (args.collection_input or args.sam_report or args.dspm_report or args.reports_dir or getattr(args, 'ai_baseline_export', None)
             or args.copilot_readiness_export or args.copilot_dashboard_export or args.power_platform_inventory
             or args.prior_report or args.purview_cache or getattr(args, 'portal_review', None)):
         raise ValueError("Provide a saved collection, --prior-report, --purview-cache, --portal-review, or at least one portal export for offline mode.")
@@ -200,6 +200,7 @@ def run_offline_report(args):
         enabled_collectors=(payload or {}).get("enabled_collectors", []),
         connection_results=(payload or {}).get("connection_results", []),
         reports_dirs=args.reports_dir, copilot_readiness_export=args.copilot_readiness_export,
+        ai_baseline_exports=getattr(args, 'ai_baseline_export', None),
         collection_context=context, expected_tenant_id=expected_tenant_id, prior_report=prior,
         offline_copilot_dashboard_export=args.copilot_dashboard_export,
         offline_power_platform_inventory=args.power_platform_inventory,

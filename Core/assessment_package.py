@@ -20,9 +20,9 @@ REBUILD_FORMAT = 'm365-readiness-rebuild'
 INPUT_KEYS = {
     'sam_report', 'dspm_report', 'reports_dir', 'copilot_readiness_export',
     'copilot_dashboard_export', 'power_platform_inventory', 'assessment_profile',
-    'provider_evidence', 'baseline', 'prior_report', 'purview_cache', 'portal_review',
+    'provider_evidence', 'baseline', 'prior_report', 'purview_cache', 'portal_review', 'ai_baseline_export',
 }
-LIST_INPUTS = {'sam_report', 'dspm_report', 'reports_dir'}
+LIST_INPUTS = {'sam_report', 'dspm_report', 'reports_dir', 'ai_baseline_export'}
 DATA_SUFFIXES = {'.csv', '.tsv', '.xlsx', '.zip', '.json'}
 SETTING_KEYS = {'report_format', 'data_exposure_enabled', 'preview_collectors', 'permission_profile',
                 'include_user_usage_detail', 'provider_evidence_max_age_days',

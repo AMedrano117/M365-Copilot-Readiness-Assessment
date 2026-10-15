@@ -145,7 +145,7 @@ def process_and_print_all_information(m365_result, entra_info,
                                       expected_tenant_id=None, offline_copilot_dashboard_export=None,
                                       offline_power_platform_inventory=None, include_user_usage_detail=True,
                                       prior_report=None, portal_review=None, output_dir=None, customer_name=None,
-                                      extra_exports=None, run_execution=None):
+                                      extra_exports=None, run_execution=None, ai_baseline_exports=None):
     """Process all service information and generate recommendations."""
     # Unpack M365 results
     (m365_info, m365_recommendations) = m365_result
@@ -193,6 +193,10 @@ def process_and_print_all_information(m365_result, entra_info,
         ], expected_tenant_id, receipt=identity_receipt,
     )
     expected_tenant_id = expected_tenant_id or imported_tenant_id
+    from .ai_baseline_import import load_ai_baseline_exports
+    ai_baseline_review = load_ai_baseline_exports(
+        list(ai_baseline_exports or []) + routed['ai_baseline'], expected_tenant_id)
+    expected_tenant_id = expected_tenant_id or ai_baseline_review.get('tenant_id')
     if readiness_paths:
         from .copilot_readiness_import import load_copilot_readiness_export
         readiness = load_copilot_readiness_export(readiness_paths[0], include_user_details=include_user_usage_detail)
@@ -416,6 +420,7 @@ def process_and_print_all_information(m365_result, entra_info,
             for scan in data_exposure_info.get('sources', {}).values() for report in scan.get('reports', [])
         ]
         evidence_bundle['import_receipt'].extend(identity_receipt)
+        evidence_bundle['import_receipt'].extend(ai_baseline_review['receipt'])
         evidence_bundle['import_receipt'].extend(portal_review_data['receipt'])
         for scan in data_exposure_info.get('sources', {}).values():
             evidence_bundle['import_receipt'].extend({'Source': 'Supplied ' + scan.get('kind', '') + ' report',
@@ -448,6 +453,18 @@ def process_and_print_all_information(m365_result, entra_info,
             evaluation_date=evaluation_date, expected_tenant_id=expected_tenant_id)
         from .repository_provenance import verify_execution_source
         verify_execution_source()
+        from .copilot_admin_review import build_admin_review
+        from .evidence_requests import build_evidence_requests
+        from .purview_billing_guidance import build_purview_billing_guidance
+        evidence_bundle['ai_baseline_review'] = ai_baseline_review
+        evidence_bundle['copilot_admin_review'] = build_admin_review(m365_client, purview_client, collection_context)
+        evidence_bundle['evidence_requests'] = build_evidence_requests(
+            evidence_bundle['copilot_admin_review'], data_exposure_info,
+            {**(collection_context or {}), 'enabled_collectors': enabled_collectors or []}, sharepoint_payload)
+        evidence_bundle['purview_billing_guidance'] = build_purview_billing_guidance()
+        assessment_result['supplemental_reviews'] = {
+            key: evidence_bundle[key] for key in ('ai_baseline_review', 'copilot_admin_review',
+                                                 'evidence_requests', 'purview_billing_guidance')}
         if run_execution is not None:
             from pathlib import Path
             from .assessment_runs import complete_run
@@ -457,8 +474,6 @@ def process_and_print_all_information(m365_result, entra_info,
         from .assessment_references import require_valid_assessment
         assessment_result['identity_validation'] = require_valid_assessment(assessment_result)
         evidence_bundle['assessment_result'] = assessment_result
-        from .copilot_admin_review import build_admin_review
-        evidence_bundle['copilot_admin_review'] = build_admin_review(m365_client, purview_client, collection_context)
         from .investigation_details import prepare_investigation_details
         prepare_investigation_details(evidence_bundle, assessment_result)
         all_recommendations = assessment_result['recommendations']

@@ -694,11 +694,71 @@ def _purview_policy_table(bundle, workbook_url=''):
             + (f'<p class="qualification">{more} more DLP policies in the workbook.</p>' if more > 0 else ''))
 
 
+def _ai_baseline_review(bundle):
+    review = bundle.get('ai_baseline_review')
+    if review is None:
+        return ''
+    rows = review.get('rows') or []
+    content = '<p>' + prose(review.get('qualification')) + '</p>'
+    if rows:
+        sources = []
+        for source in review.get('sources') or []:
+            sources.append({'File': source.get('source_file'), 'Assessment': source.get('assessment'),
+                            'Export date': source.get('export_date') or 'Date not established',
+                            'Tenant verification': 'Verified' if source.get('identity_verified') else 'Unverified: confirm customer identity'})
+        content += table(sources, [('Source file', 'File'), ('Assessment', 'Assessment'),
+                                  ('Export date', 'Export date'), ('Tenant verification', 'Tenant verification')])
+        customer = [row for row in rows if row.get('Responsibility') == 'Customer']
+        microsoft = [row for row in rows if row.get('Responsibility') == 'Microsoft']
+        failed = sum(str(row.get('Test result') or '').lower().startswith('failed') for row in customer)
+        passed = sum(str(row.get('Test result') or '').lower() in {'passed', 'pass'} for row in customer)
+        content += '<p>' + str(len(customer)) + ' customer action(s): ' + str(failed) + ' reported failed, ' + str(passed) + ' reported passed. ' + str(len(microsoft)) + ' Microsoft-managed reference action(s) are kept separate. Blank and Unknown statuses remain unverified.</p>'
+        queue = review.get('review_queue') or []
+        if queue:
+            content += '<h3>Customer actions to review first</h3><p>Reported high-risk failures and source conflicts appear first. Remaining unverified actions are ordered by unearned Microsoft compliance points, then name. Points guide the compliance review; they do not establish tenant risk or technical readiness. Confirm scope and licensing before implementing any recommendation. <a href="https://learn.microsoft.com/en-us/purview/compliance-manager-scoring">Microsoft scoring guidance</a>.</p>'
+            content += table(queue[:20], [('Review priority', 'Review priority'), ('Improvement action', 'Improvement action'),
+                                         ('Solution', 'Solution'), ('Microsoft test result', 'Test result'),
+                                         ('Points remaining', 'Points remaining'), ('Why review it', 'Priority reason')], mobile_labels=True)
+            content += '<p>' + str(len(queue)) + ' customer action(s) awaiting review. The workbook contains the full queue with source dates and references.</p>'
+        displayed = [dict(row, **{'Test date': row.get('Test date') or 'Date not established'}) for row in rows[:50]]
+        content += '<details><summary>Imported action reference</summary>' + table(displayed, [('Improvement action', 'Improvement action'), ('Responsibility', 'Responsibility'),
+                                    ('Implementation status', 'Implementation status'), ('Test result', 'Test result'),
+                                    ('Test date', 'Test date')], mobile_labels=True) + '</details>'
+        content += '<p>' + str(len(rows)) + ' imported action row(s). All rows, original fields and source references are in the AI Baseline Actions, AI Baseline Review Queue and AI Baseline Sources workbook tabs. Separate exports remain separate dated snapshots.</p>'
+    else:
+        content += '<p>No AI Baseline action rows were imported. This optional reference does not add a readiness failure. In Purview Compliance Manager, open the AI Baseline assessment and choose Export actions. Retain the original assessment metadata, dates and tenant GUID when supplied. Provide the resulting Excel workbook with the other reports.</p>'
+    content += '<p><a href="https://learn.microsoft.com/en-us/purview/compliance-manager-assessments">Microsoft AI Baseline and Export actions guidance</a>. DSPM policy recommendations are reviewed separately in the portal; this import does not enumerate them.</p>'
+    return '<details class="domain-evidence admin-review" id="ai-baseline-review"><summary>Compliance Manager AI Baseline reference</summary><div class="guide-body">' + content + '</div></details>'
+
+
 def _remaining_portal_review(bundle):
+    requests = bundle.get('evidence_requests') or []
+    content = ''
+    if requests:
+        content = ('<details class="domain-evidence admin-review" open><summary>Evidence to obtain next</summary>'
+                   '<div class="guide-body"><p>Request the specific missing fields below. Retry supported collectors '
+                   'before asking for exports. Copilot Usage, Security and Optimize PDFs are optional context; '
+                   'their highlights do not establish control results.</p>'
+                   + table(requests, [('Evidence source', 'Topic'), ('Missing fields', 'Missing evidence'),
+                                      ('Collection route', 'Collection route'), ('Next step', 'Next step')], mobile_labels=True)
+                   + '</div></details>')
+    billing = bundle.get('purview_billing_guidance') or {}
+    if billing:
+        content += ('<details class="domain-evidence admin-review"><summary>DSPM scope and billing</summary>'
+                    '<div class="guide-body"><p>' + prose(billing.get('qualification')) + '</p><p>'
+                    + prose(billing.get('assessment_scope')) + '</p>'
+                    + table(billing.get('rows', []), [('Capability', 'Capability'), ('Billing basis', 'Billing basis'),
+                                                    ('Before requesting more evidence', 'Before requesting more evidence')], mobile_labels=True)
+                    + '<p>Guidance checked: ' + prose(billing.get('checked_on'))
+                    + '. <a href="https://learn.microsoft.com/en-us/purview/purview-billing-models">Microsoft billing models</a>'
+                    + ' | <a href="https://learn.microsoft.com/en-us/purview/purview-billing-usage">Purview Usage center</a>'
+                    + ' | <a href="https://learn.microsoft.com/en-us/purview/on-demand-classification">On-demand classification</a>'
+                    + '</p></div></details>')
+    content += _ai_baseline_review(bundle)
     rows = (bundle.get('copilot_admin_review') or {}).get('manual_checks') or []
     if not rows:
-        return ''
-    return '<details class="domain-evidence admin-review"><summary>Portal details that still need a review</summary><div class="guide-body"><p>Review these items when relevant to the agreed scope. The tool does not request a full PDF for data already collected. An unavailable optional dashboard metric does not add a readiness failure.</p>' + table(rows, [('Portal detail', 'Topic'), ('Why it is separate', 'Reason'), ('When to request it', 'When needed')], mobile_labels=True) + '</div></details>'
+        return content
+    return content + '<details class="domain-evidence admin-review"><summary>Portal details that still need a review</summary><div class="guide-body"><p>Optional review: request these details only when the agreed scope calls for them. The tool does not request a full PDF for data already collected. An unavailable optional dashboard metric does not add a readiness failure.</p>' + table(rows, [('Portal detail', 'Topic'), ('Why it is separate', 'Reason'), ('When to request it', 'When needed')], mobile_labels=True) + '</div></details>'
 
 
 def _getting_started(result, action_numbers):
