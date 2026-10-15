@@ -8,7 +8,7 @@ from .repository_provenance import capture_revision, publication_policy, runtime
 VERSION='1.0.0'
 INPUTS=('collection_input','sam_report','dspm_report','reports_dir','copilot_readiness_export',
         'copilot_dashboard_export','power_platform_inventory','assessment_profile','provider_evidence',
-        'prior_report','purview_cache','portal_review','baseline')
+        'prior_report','purview_cache','portal_review','ai_baseline_export','baseline')
 
 
 def build_run_plan(args, *, revision=None, generated_at=None):

@@ -40,6 +40,9 @@ def render_snapshot(snapshot_path, output_directory, *, tenant_name=None, report
         'collection_context':{'mode':'snapshot render','identity':result.get('identity'),
                               'evaluation_date':result.get('evaluation_date')}}
     rows = result.get('recommendations',[])
+    for key in ('ai_baseline_review', 'copilot_admin_review', 'evidence_requests', 'purview_billing_guidance'):
+        if key in (result.get('supplemental_reviews') or {}):
+            bundle[key] = result['supplemental_reviews'][key]
     excel = export_to_excel(rows,filename='Assessment.xlsx',tenant_name=tenant_name,
                            evidence_bundle=bundle,output_dir=folder) if report_format in {'both','excel'} else None
     csv = export_to_csv(rows,filename='Assessment.csv',tenant_name=tenant_name,output_dir=folder,assessment_result=result

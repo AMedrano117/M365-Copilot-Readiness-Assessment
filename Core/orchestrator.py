@@ -178,6 +178,7 @@ async def orchestrate(
     save_collection_path=None,
     reports_dirs=None,
     copilot_readiness_export=None,
+    ai_baseline_exports=None,
     evaluation_date=None,
     lifecycle_report_max_age_days=None,
     lifecycle_report_dates=None,
@@ -209,7 +210,7 @@ async def orchestrate(
             from .pdf_report_import import prepare_pdf_review
             if snapshot_json:
                 target = Path(snapshot_json).resolve()
-                for value in list(reports_dirs or []) + ([portal_review] if portal_review else []):
+                for value in list(reports_dirs or []) + list(ai_baseline_exports or []) + ([portal_review] if portal_review else []):
                     original = Path(value).resolve()
                     if target == original or (original.is_dir() and target.is_relative_to(original)):
                         raise ValueError('Snapshot output cannot overwrite an original report or reviewed capture. Choose a new output path.')
@@ -453,6 +454,7 @@ async def orchestrate(
             supplemental_inputs={
                 'sam_report': sam_report_paths, 'dspm_report': dspm_report_paths,
                 'reports_dir': reports_dirs, 'copilot_readiness_export': copilot_readiness_export,
+                'ai_baseline_export': ai_baseline_exports,
                 'copilot_dashboard_export': copilot_dashboard_export,
                 'power_platform_inventory': power_platform_inventory,
                 'assessment_profile': assessment_profile, 'provider_evidence': provider_evidence,
@@ -623,6 +625,7 @@ async def orchestrate(
             connection_results=connection_results,
             reports_dirs=packaged_inputs.get('reports_dir', []),
             copilot_readiness_export=packaged('copilot_readiness_export'),
+            ai_baseline_exports=packaged_inputs.get('ai_baseline_export', []),
             include_user_usage_detail=include_user_usage_detail,
             offline_copilot_dashboard_export=packaged('copilot_dashboard_export'),
             offline_power_platform_inventory=packaged('power_platform_inventory'),

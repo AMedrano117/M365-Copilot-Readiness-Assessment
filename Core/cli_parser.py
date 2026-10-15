@@ -148,6 +148,8 @@ Examples:
                         help='Optional reviewed JSON manifest or PDF folder. Normally PDFs are imported automatically with --reports-dir; captures do not score controls.')
     parser.add_argument('--copilot-readiness-export', metavar='PATH',
                         help='Microsoft 365 admin center Copilot Readiness CSV; app readiness is separate from actual Copilot usage.')
+    parser.add_argument('--ai-baseline-export', action='append', default=[], metavar='PATH',
+                        help='Compliance Manager AI Baseline Export actions XLSX. Repeat for dated snapshots; preserves Microsoft statuses as reference evidence. Also discovered through --reports-dir.')
     parser.add_argument(
         '--dspm-report',
         action='append',

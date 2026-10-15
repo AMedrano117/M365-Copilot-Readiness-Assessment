@@ -938,6 +938,9 @@ def split_workbook_layout(source_workbook, result, bundle, assessment_path, tech
     # PDF excerpts span health, adoption and security without a finding ID or
     # affected-record population. Keep this optional context sheet visible in
     # both books, rather than forcing them into a per-finding evidence layout.
+    for title in ('Evidence Requests', 'DSPM Billing Guidance', 'AI Baseline Actions', 'AI Baseline Review Queue', 'AI Baseline Sources'):
+        if title in technical:
+            _clone(technical[title], assessment)
     if 'PDF Highlights' in technical:
         _clone(technical['PDF Highlights'], assessment)
         pages = {(row.get('Capture ID'), row.get('Page')): number

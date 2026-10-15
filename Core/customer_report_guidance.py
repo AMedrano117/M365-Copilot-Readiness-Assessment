@@ -1,4 +1,4 @@
-"""Contextual portal guidance, verified against Microsoft Learn on 2026-09-15."""
+"""Contextual portal guidance; evidence/billing distinctions reviewed 2026-10-12."""
 
 
 GUIDES = {
@@ -13,7 +13,10 @@ GUIDES = {
         ),
         'steps': [
             'Open SharePoint admin center > Reports > Data access governance. Check completed '
-            'reports, dates and filters first. Re-download a completed report if only its export failed.',
+            'reports, dates and filters first. Standard live collection downloads existing completed '
+            'results automatically. Check download outcomes and scope; if a download failed, retry '
+            'collection or manually export that result. Let running reports finish without duplicating scans. '
+            'Restricted collection uses owner-provided exports.',
             'Permission baseline: open Site permissions across your organization > View reports. '
             'Download the SharePoint and OneDrive CSVs separately. Compare Site IDs and filters '
             'with earlier exports; ask owners to confirm omitted sites. If a new baseline is '
@@ -56,7 +59,8 @@ GUIDES = {
             'A Compliance Administrator can create assessments. Purview Security Reader or '
             'Data Security Viewer can review results. File details additionally require '
             'Content Explorer List Viewer/Content Viewer access. Confirm the required Purview '
-            'licenses for the capabilities and users in scope.'
+            'licenses for the capabilities and users in scope. Reusing existing results does not '
+            'require activating PAYG; verify entitlement and billing before additional scans or protections.'
         ),
         'steps': [
             'Open Microsoft Purview > Solutions > DSPM > Discover > Data risk assessments > '
@@ -66,13 +70,14 @@ GUIDES = {
             'CSV with its headers intact; Microsoft also offers Excel, JSON and TSV. Retain '
             'the assessment date, scope and completion status alongside the export.',
             'If no suitable completed result exists, the compliance administrator can select '
-            'Create custom assessment, choose the users and data sources or sites to scan, '
-            'and run the assessment. The weekly default covers the top '
-            '100 SharePoint sites; its first results can take four days. Custom assessment '
+            'Create custom assessment after agreeing the missing scope and confirming entitlement. '
+            'The weekly default covers the top 100 SharePoint sites by usage; '
+            'its first results can take four days. Custom assessment '
             'results take at least 48 hours. Wait for Completed before exporting.',
-            'Use item-level scanning only when that detail is needed and its additional '
-            'application setup is arranged. Microsoft currently limits it to ten SharePoint '
-            'sites and excludes OneDrive. Record that narrower scope.',
+            'Additional on-demand classification is separate from an existing data risk assessment '
+            'and can be metered. Confirm applicable per-user or PAYG entitlement, setup, '
+            'estimate and Usage center before initiating it. Record its actual supported '
+            'locations and coverage; the assessment tool does not initiate scans.',
         ],
         'completion': (
             'Provide the original export, assessment date, selected users/sites/workloads, '
@@ -81,6 +86,8 @@ GUIDES = {
         ),
         'sources': [
             ('Data risk assessment instructions', 'https://learn.microsoft.com/en-us/purview/data-security-posture-management-oversharing'),
+            ('Billing models', 'https://learn.microsoft.com/en-us/purview/purview-billing-models'),
+            ('On-demand classification', 'https://learn.microsoft.com/en-us/purview/on-demand-classification'),
             ('DSPM permissions', 'https://learn.microsoft.com/en-us/purview/data-security-posture-management-permissions'),
             ('Purview licensing', 'https://learn.microsoft.com/en-us/office365/servicedescriptions/microsoft-365-service-descriptions/microsoft-365-tenantlevel-services-licensing-guidance/microsoft-purview-service-description'),
         ],

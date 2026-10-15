@@ -111,6 +111,7 @@ def summarize_copilot_dlp(client):
         detail.append({**row, 'Raw policy': json.dumps(policy, ensure_ascii=False, default=str),
                        'Raw matched rules': json.dumps(matched, ensure_ascii=False, default=str)})
     return {'rows': rows, 'detail': detail, 'available': policies_complete,
+            'complete': policies_complete and rules_complete, 'rules_complete': rules_complete,
             'reason': '' if policies_complete else 'DLP policy collection was unavailable or incomplete.'}
 
 

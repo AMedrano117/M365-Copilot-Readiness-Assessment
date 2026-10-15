@@ -8,7 +8,7 @@ from pathlib import Path
 from uuid import UUID
 
 INPUTS = ('sam_report','dspm_report','reports_dir','copilot_readiness_export','copilot_dashboard_export',
-          'power_platform_inventory','assessment_profile','provider_evidence','prior_report','purview_cache','portal_review','baseline')
+          'power_platform_inventory','assessment_profile','provider_evidence','prior_report','purview_cache','portal_review','ai_baseline_export','baseline')
 AGES = {'provider_evidence_max_age_days':('PROVIDER_EVIDENCE_MAX_AGE_DAYS',90),
         'sam_report_max_age_days':('SAM_REPORT_MAX_AGE_DAYS',35), 'dspm_report_max_age_days':('DSPM_REPORT_MAX_AGE_DAYS',8)}
 
