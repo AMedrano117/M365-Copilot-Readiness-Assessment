@@ -20,6 +20,7 @@ from .orchestrator_setup import (
 from .orchestrator_powershell import collect_power_platform_data, collect_sharepoint_governance_via_powershell
 from .orchestrator_pipelines import create_pipelines
 from . import console_reporting as console
+from .run_progress import phase
 from .offline_collection import CollectionPackagingError
 from .sharepoint_configuration import SHAREPOINT_ADMIN_URL_REQUIRED, is_valid_sharepoint_admin_url
 from .tenant_identity import TenantMismatchError, confirm_tenant_identity
