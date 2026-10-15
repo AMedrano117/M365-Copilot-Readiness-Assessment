@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from Core.get_purview_client import hydrate_purview_client
 from Core.purview_graph_labels import (
-    REQUIRED_POWERSHELL_SOURCES, collect_sensitivity_labels_graph, map_graph_label, merge_purview_payloads,
+    LABELS_PATH, REQUIRED_POWERSHELL_SOURCES, collect_sensitivity_labels_graph, map_graph_label, merge_purview_payloads,
 )
 from Core.saved_control_checks import assess_purview_configuration, qualify_saved_recommendations
 
@@ -27,6 +27,7 @@ class FakeGraph:
         self.result = result
 
     async def get_collection(self, path, params=None, headers=None, max_pages=1000):
+        assert path == '/beta/security/dataSecurityAndGovernance/sensitivityLabels'
         return self.result
 
 
@@ -40,6 +41,17 @@ def graph_labels(values=LABELS):
 
 
 class GraphLabelTests(unittest.TestCase):
+    def test_current_tenant_endpoint_maps_enabled_labels_and_nested_sublabels(self):
+        state = graph_labels([{'id': 'parent', 'name': 'Confidential', 'isEnabled': True,
+                               'toolTip': 'For internal use', 'priority': 10, 'applicableTo': 'email,teamwork,file',
+                               'sublabels': [{'id': 'child', 'name': 'Finance', 'isEnabled': True}]}])
+        self.assertEqual('/beta/security/dataSecurityAndGovernance/sensitivityLabels', LABELS_PATH)
+        self.assertEqual(2, state['active_count'])
+        self.assertEqual('parent', state['labels'][1]['ParentId'])
+        self.assertEqual('For internal use', state['labels'][0]['Tooltip'])
+        self.assertEqual(10, state['labels'][0]['Priority'])
+        self.assertEqual(['email', 'teamwork', 'file'], state['labels'][0]['ContentFormats'])
+
     def test_mapping_uses_powershell_label_shape(self):
         mapped = map_graph_label(LABELS[2])
         self.assertEqual({"Name": "Old", "DisplayName": "Old", "Enabled": False, "ParentId": "2", "Guid": "3"},
@@ -59,7 +71,7 @@ class GraphLabelTests(unittest.TestCase):
             state = asyncio.run(collect_sensitivity_labels_graph(FakeGraph(
                 {"available": False, "availability_status": "unavailable", "value": [], "status_code": 403})))
         self.assertFalse(state["available"])
-        self.assertIn("InformationProtectionPolicy.Read.All", state["reason"])
+        self.assertIn("SensitivityLabels.Read.All", state["reason"])
 
 
 class MergeTests(unittest.TestCase):

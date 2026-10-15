@@ -14,6 +14,25 @@ from Core.console_reporting import configure_console, print_paragraph, print_sou
 
 @fictional_publication
 class ConsoleReportingTests(unittest.TestCase):
+    def test_connection_summary_explains_planned_sign_in_and_uses_copyable_separator(self):
+        from Core.connection_validation import print_connection_results
+        configure_console(verbose=False, color='never')
+        self.addCleanup(configure_console)
+        output = io.StringIO()
+        with redirect_stdout(output):
+            print_connection_results([
+                {'collector': 'Microsoft Graph', 'status': 'Ready', 'reason': ''},
+                {'collector': 'Usage reports', 'status': 'Connection failed', 'reason': 'Report download failed.'},
+                {'collector': 'SharePoint', 'status': 'Sign-in required',
+                 'reason': 'Browser sign-in will be requested during collection.'},
+            ])
+        text = ' '.join(output.getvalue().split())
+        self.assertIn('1 successful, 1 warning, 1 failed', text)
+        self.assertIn('--check-connections does not complete those sign-ins', text)
+        self.assertIn('Connection failed - Report download failed.', text)
+        self.assertIn('Warning - SharePoint: Sign-in planned during collection.', text)
+        self.assertIn('Failed - Usage reports: Report download failed.', text)
+
     def test_old_pdf_package_notices_are_explained_without_rewriting_receipts(self):
         configure_console(verbose=False, color='never')
         self.addCleanup(configure_console)

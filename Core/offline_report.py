@@ -3,6 +3,7 @@
 from .offline_collection import collection_context, empty_service_results, load_collection, refresh_saved_freshness
 from uuid import UUID
 from pathlib import Path
+from .run_progress import phase
 
 
 def run_offline_report(args):
@@ -12,8 +13,10 @@ def run_offline_report(args):
     args, _, resolution_errors = resolve_effective(args)
     if resolution_errors:
         raise ValueError("Offline configuration blocked: " + ", ".join(resolution_errors))
+    phase('inputs')
     if getattr(args, 'replay_snapshot', None):
         from .assessment_replay import render_snapshot
+        phase('reports')
         render_snapshot(args.replay_snapshot,
             args.render_output_dir or Path(args.replay_snapshot).resolve().parent / 'Rendered',
             tenant_name=args.tenant_name, report_format=args.report_format,
@@ -37,6 +40,7 @@ def run_offline_report(args):
         if changed_options & getattr(args, '_provided_options', set()):
             raise ValueError('Adding evidence or changing evaluation date requires an explicit new --run-type; use snapshot replay for rendering.')
         from .assessment_replay import render_snapshot
+        phase('reports')
         outputs = render_snapshot(payload['completed_run_snapshot'], payload['package_directory'],
                                   tenant_name=args.tenant_name or payload.get('tenant_name'), report_format=args.report_format,
                                   snapshot_output=args.snapshot_json,extra_exports=getattr(args,'extra_exports',None),
@@ -186,6 +190,7 @@ def run_offline_report(args):
     if explicit_type:
         recipe = save_rebuild_recipe(package_directory,args,settings,tenant_id=expected_tenant_id,tenant_name=tenant_name,
             methodology_migration=migration,identity=run_execution.identity)
+    phase('reports')
     result = render_with_failure_receipt(
         process_and_print_all_information, receipt=receipt,
         **results, tenant_name=tenant_name, open_html_report=args.open_html_report,

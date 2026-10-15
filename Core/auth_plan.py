@@ -286,6 +286,7 @@ def plan_rows(plan):
             "Will use": auth_path_label(selected) if selected else "Not available",
             "Identity": credential_kind_label(entry.get("credential_type")) if selected else "",
             "Coverage": entry.get("coverage") or ("none" if not selected else ""),
+            "Coverage note": AUTH_PATHS.get(selected, {}).get("coverage_note", ""),
             "Evidence quality": entry.get("evidence_quality", ""),
             "Fallbacks": ", ".join(auth_path_label(path) for path in entry.get("fallbacks", [])),
             "Next better option": next_better_option(entry),
@@ -300,8 +301,8 @@ def print_auth_plan(plan, detailed=True):
     if not detailed:
         limited = [row for row in rows if row["Will use"] == "Not available" or row["Coverage"] == "partial"]
         if limited:
-            console.status(f"Evidence plan: {len(limited)} dataset(s) are limited or unavailable with the current access. "
-                           "Run --check-connections for unlock steps.", tone='warning')
+            console.status(f"Evidence plan: {len(limited)} dataset(s) have limited scope or are unavailable. "
+                           "Run --check-connections for scope details and unlock steps.", tone='warning')
         return
     console.section('Evidence collection plan')
     console.status('Application permissions are used first; delegated sign-in only adds data Microsoft does not expose to applications.')
@@ -317,6 +318,8 @@ def print_auth_plan(plan, detailed=True):
         message = f"{row['Dataset']:<{width}}  {detail}"
         tone = 'success' if row["Coverage"] == "full" else 'warning'
         console.status(message, tone=tone)
+        if row["Coverage note"]:
+            console.status(f"{'':<{width}}  Scope: {row['Coverage note']}", tone='muted')
         if row["Next better option"]:
             console.status(f"{'':<{width}}  To improve: {row['Next better option']}", tone='warning')
 

@@ -34,6 +34,20 @@ in the relevant assessment areas. The workbook adds **Copilot Admin Data**, **Co
 and **Portal Review Remaining**. Missing values are not treated as zero or as a new readiness
 failure. Configuration observations alone do not approve a pilot or broader rollout.
 
+The HTML also shows **Evidence to obtain next**, grouped by source and missing fields.
+The **Evidence Requests** tab appears in both workbooks. A collected zero remains a known
+value; missing fields remain unknown. Complete policy reads without an identified
+Copilot policy call for targeting review rather than another export of the same data.
+Incomplete rule reads still request the missing rules. The separate optional portal
+review is scoped to relevant Chat, agents, Search, credits, dashboard totals and Optimize
+topics instead of routinely asking for three PDFs.
+
+SharePoint collection downloads existing completed DAG reports; administrators produce
+only missing reports. DSPM data-risk results still require existing structured results or
+scoped owner evidence. See [scope, billing and AI Baseline import](RUN.md#compliance-manager-ai-baseline-actions).
+Compliance Manager action statuses are reference evidence and do not change technical
+readiness. DSPM recommended-policy completion still needs a separate portal review.
+
 ## Access, privacy and saved assessments
 
 Standard setup adds read access for automatic recommendations, discovery and audit. Existing application and device detail reuse the established read permissions. The usage collector reads

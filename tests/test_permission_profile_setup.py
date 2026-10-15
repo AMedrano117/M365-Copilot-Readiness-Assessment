@@ -125,8 +125,21 @@ function Get-MgApplication {
     if ($Filter) { $global:mockSetupApplicationFilter = $Filter }
     if ($Scenario -eq 'new_app') { return }
     $requested = @()
-    if ($Scenario -eq 'excess_requested') {
-        $requested = @([pscustomobject]@{ResourceAppId = $registry.resource_app_ids.graph; ResourceAccess = @([pscustomobject]@{Id='role-Sites.Read.All';Type='Role'})})
+    if ($Scenario -in @('excess_requested', 'excess_unresolved')) {
+        $excessId = if ($Scenario -eq 'excess_unresolved') { 'unknown-role-id' } else { 'role-Sites.Read.All' }
+        $requested = @([pscustomobject]@{ResourceAppId = $registry.resource_app_ids.graph; ResourceAccess = @([pscustomobject]@{Id=$excessId;Type='Role'})})
+    }
+    if ($Scenario -in @('existing_selected', 'existing_with_extras')) {
+        foreach ($resourceName in $registry.resource_app_ids.PSObject.Properties.Name) {
+            $names = @($registry.collectors | Where-Object { $_.default_setup } | ForEach-Object { $_.permission_resources.$resourceName } | Where-Object { $_ } | Sort-Object -Unique)
+            if ($names.Count) {
+                $requested += [pscustomobject]@{ResourceAppId=$registry.resource_app_ids.$resourceName;ResourceAccess=@($names | ForEach-Object { [pscustomobject]@{Id="role-$_";Type='Role'} })}
+            }
+        }
+        if ($Scenario -eq 'existing_with_extras') {
+            ($requested | Where-Object ResourceAppId -eq $registry.resource_app_ids.graph).ResourceAccess += [pscustomobject]@{Id='role-NetworkAccess.Read.All';Type='Role'}
+        }
+        $global:mockSetupPermissions = $requested
     }
     $keys = @()
     if ($certificateTest -and $certificateTest.registered) {
@@ -158,7 +171,10 @@ function Update-MgApplication {
     if ($PublicClient) { $global:mockPublicClient = @($PublicClient.RedirectUris) }
 }
 function Get-MgServicePrincipal {
-    param($Filter, $Property, $ErrorAction)
+    param($Filter, $Property, $ErrorAction, $ServicePrincipalId)
+    if ($ServicePrincipalId) {
+        return $global:mockSetupResources.Values | Where-Object Id -eq $ServicePrincipalId | Select-Object -First 1
+    }
     if ($Filter -match "appId eq '([^']+)'") {
         $appId = $Matches[1]
         if ($global:mockSetupResources.ContainsKey($appId)) { return $global:mockSetupResources[$appId] }
@@ -243,7 +259,7 @@ class PermissionRegistryTests(unittest.TestCase):
         # Narrow tenant-setting reads replace part of the excluded SharePoint administration.
         self.assertTrue({"SharePointTenantSettings.Read.All", "ReportSettings.Read.All"} <= graph)
         self.assertFalse({"Sites.Read.All", "Group.Read.All", "Directory.Read.All", "UserAuthenticationMethod.Read.All",
-                          "InformationProtectionPolicy.Read.All", "AuditLogsQuery.Read.All"} & graph)
+                          "SensitivityLabels.Read.All", "AuditLogsQuery.Read.All"} & graph)
         self.assertEqual({"Machine.Read.All"}, resources[RESOURCE_APP_IDS["defender"]])
         for name in ("sites", "groups", "oauth_grants", "purview", "purview_labels_graph", "copilot_admin_settings",
                      "copilot_audit", "sharepoint_governance", "power_platform", "legacy_power_platform"):
@@ -472,6 +488,28 @@ class OfflineSetupProfileTests(unittest.TestCase):
                 self.assertNotIn("PERMISSION_PROFILE", result["restricted_env"])
                 if scenario == "excess_consented":
                     self.assertIn("excess requested or consented", result["error"])
+
+    def test_existing_selected_requests_and_consent_do_not_warn_or_reconsent(self):
+        result = self.run_setup('existing_selected', profile='Standard')
+        self.assertEqual('', result['error'])
+        self.assertNotIn('outside the selected setup permissions', result['output'])
+        self.assertNotIn('ConsentBrowser', result['calls'])
+        self.assertIn('All selected collector application permissions were already consented', result['output'])
+        self.assertIn('Connection checks: not run by setup', result['output'])
+
+    def test_excess_access_names_requested_and_consented_permissions_on_separate_lines(self):
+        result = self.run_setup('existing_with_extras', profile='Standard')
+        self.assertEqual('', result['error'])
+        self.assertIn('Requested: graph / NetworkAccess.Read.All (application)\n', result['output'])
+        self.assertIn('Consented: graph / NetworkAccess.Read.All (application)\n', result['output'])
+        self.assertIn('(2 request/grant entries)', result['output'])
+        self.assertIn('not missing collector permissions', result['output'])
+        self.assertNotIn('ConsentBrowser', result['calls'])
+
+    def test_unresolved_permissions_remain_visible_when_name_lookup_is_unavailable(self):
+        result = self.run_setup('excess_unresolved')
+        self.assertIn('Requested: graph / unresolved permission unknown-role-id (application)', result['output'])
+        self.assertIn('excess requested or consented', result['error'])
 
     def test_forbidden_combinations_stop_before_modules_or_graph(self):
         for mode, preview in (("Unattended", "None"), ("Standard", "All")):

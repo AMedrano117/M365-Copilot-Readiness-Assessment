@@ -3,7 +3,7 @@ import sys
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from Core.collector_registry import selected_collector_ids
 from Core.connection_validation import (
@@ -12,11 +12,13 @@ from Core.connection_validation import (
     NOT_SELECTED,
     PERMISSION,
     READY,
+    FAILED,
     _classify_http,
     connection_exit_code,
     connection_status_to_availability,
+    run_connection_checks,
 )
-from Core.get_graph_client import GraphRestClient
+from Core.get_graph_client import GraphRequestError, GraphRestClient
 from Core.orchestrator import is_valid_sharepoint_admin_url, resolve_sharepoint_admin_url
 from Core.orchestrator_setup import prepare_interactive_collection_plan
 
@@ -84,6 +86,45 @@ class GraphRestClientTests(unittest.IsolatedAsyncioTestCase):
         sleep.assert_awaited_once()
 
 
+class UsageConnectionProbeTests(unittest.IsolatedAsyncioTestCase):
+    async def check_usage(self, request, roles=None):
+        client = SimpleNamespace(credential=FakeCredential(), request=AsyncMock(side_effect=request))
+        with patch('Core.connection_validation.selected_collector_ids', return_value=['m365_usage']), \
+                patch('Core.connection_validation._decode_roles', return_value=(
+                    {'Reports.Read.All', 'Sites.Read.All'} if roles is None else roles)):
+            results = await run_connection_checks(client, {}, {}, preview_collectors='none')
+        return next(result for result in results if result['collector_id'] == 'm365_usage'), client
+
+    async def test_unreadable_unused_active_users_does_not_fail_working_apps_connection(self):
+        async def request(method, path, **kwargs):
+            if 'getOffice365ActiveUserCounts' in path:
+                raise GraphRequestError(0, 'ReadError', failure_stage='download', failure_host='reportsncu.office.com')
+            return FakeResponse(text='Report Refresh Date,Report Date,Report Period,Word\n2026-10-12,2026-10-10,30,2\n')
+        result, client = await self.check_usage(request)
+        self.assertEqual(READY, result['status'])
+        self.assertIn('Microsoft 365 Apps D30 CSV read succeeded', result['reason'])
+        self.assertIn('verified during collection', result['reason'])
+        client.request.assert_awaited_once_with(
+            'GET', "/v1.0/reports/getM365AppUserCounts(period='D30')",
+            params={'$format': 'text/csv'}, headers={'Accept': 'text/csv'})
+
+    async def test_used_apps_download_failure_is_still_reported(self):
+        async def request(method, path, **kwargs):
+            raise GraphRequestError(0, 'ReadError', failure_stage='download', failure_host='reportsncu.office.com')
+        result, client = await self.check_usage(request)
+        self.assertEqual(FAILED, result['status'])
+        self.assertEqual('download', result['failure_stage'])
+        self.assertIn('reportsncu.office.com', result['reason'])
+        self.assertNotIn('CSV read succeeded', result['reason'])
+        self.assertEqual(1, client.request.await_count)
+
+    async def test_missing_reports_permission_does_not_attempt_or_pass_probe(self):
+        result, client = await self.check_usage(lambda *args, **kwargs: FakeResponse(), roles={'Sites.Read.All'})
+        self.assertEqual(PERMISSION, result['status'])
+        self.assertIn('Reports.Read.All', result['reason'])
+        client.request.assert_not_awaited()
+
+
 class CollectorPolicyTests(unittest.TestCase):
     def _services(self):
         return {
@@ -124,9 +165,9 @@ class CollectorPolicyTests(unittest.TestCase):
         self.assertEqual("not_requested", connection_status_to_availability(NOT_SELECTED))
         self.assertEqual("unavailable", connection_status_to_availability(PERMISSION))
 
-    def test_entra_risk_403_is_license_only_when_permission_is_present(self):
+    def test_entra_risk_403_requires_a_licensing_response_to_confirm_license_status(self):
         licensed_limit = _classify_http(
-            "entra_risk", 403, "Forbidden",
+            "entra_risk", 403, "Tenant is not licensed for premium risk data",
             {"IdentityRiskyUser.Read.All"}, {"IdentityRiskyUser.Read.All"},
         )
         missing_permission = _classify_http(
@@ -138,6 +179,10 @@ class CollectorPolicyTests(unittest.TestCase):
         self.assertEqual(LICENSE, licensed_limit["status"])
         self.assertEqual(PERMISSION, missing_permission["status"])
         self.assertNotEqual(LICENSE, conditional_access["status"])
+        unknown_denial = _classify_http('entra_risk', 403, 'Forbidden',
+                                       {'IdentityRiskyUser.Read.All'}, {'IdentityRiskyUser.Read.All'})
+        self.assertEqual('Connection failed', unknown_denial['status'])
+        self.assertIn('does not confirm a licensing cause', unknown_denial['reason'])
 
 
 class SharePointResolutionTests(unittest.IsolatedAsyncioTestCase):

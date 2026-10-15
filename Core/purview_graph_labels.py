@@ -1,8 +1,8 @@
 """Sensitivity labels through Microsoft Graph (application permission).
 
-``GET /beta/security/informationProtection/sensitivityLabels`` returns the
+``GET /beta/security/dataSecurityAndGovernance/sensitivityLabels`` returns the
 organization's label definitions to an application with
-``InformationProtectionPolicy.Read.All``; a client secret is sufficient. It is
+``SensitivityLabels.Read.All``; a client secret is sufficient. It is
 a beta API and does not return label publishing policies, DLP, retention or
 audit configuration, so the evidence is marked preview quality and partial
 coverage. It never proves that labels are published to users.
@@ -12,7 +12,7 @@ from .auth_plan import credential_kind_for_path, graph_credential_kind
 
 AUTH_PATH = "graph_sensitivity_labels"
 SOURCE = "Microsoft Graph sensitivity labels (beta)"
-LABELS_PATH = "/beta/security/informationProtection/sensitivityLabels"
+LABELS_PATH = "/beta/security/dataSecurityAndGovernance/sensitivityLabels"
 
 # Datasets that only Purview/Exchange PowerShell returns.
 REQUIRED_POWERSHELL_SOURCES = ("dlp_policies", "dlp_rules", "retention_policies", "label_policies",
@@ -36,13 +36,13 @@ def map_graph_label(item):
     return {
         "Name": item.get("name") or "",
         "DisplayName": item.get("name") or "",
-        "Tooltip": item.get("tooltip") or "",
-        "Enabled": bool(item.get("isActive")),
+        "Tooltip": item.get("toolTip") or item.get("tooltip") or "",
+        "Enabled": bool(item.get("isEnabled", item.get("isActive"))),
         "Guid": item.get("id") or "",
         "ParentId": parent.get("id") or "",
-        "Priority": item.get("sensitivity"),
+        "Priority": item.get("priority", item.get("sensitivity")),
         "HasProtection": item.get("hasProtection"),
-        "ContentFormats": item.get("contentFormats") or [],
+        "ContentFormats": item.get("contentFormats") or [value.strip() for value in (item.get("applicableTo") or "").split(',') if value.strip()],
         "IsAppliable": item.get("isAppliable"),
     }
 
@@ -61,11 +61,19 @@ async def collect_sensitivity_labels_graph(graph_client):
         reason = result.get("reason") or "Microsoft Graph did not return sensitivity labels."
         if result.get("status_code") == 403:
             reason = ("Microsoft Graph denied sensitivity labels (HTTP 403). Grant and consent the "
-                      "InformationProtectionPolicy.Read.All application permission.")
+                      "SensitivityLabels.Read.All application permission. If already consented, check workload access.")
         return {**base, "available": False, "availability_status": "unavailable", "count": 0, "labels": [],
                 "reason": reason, "error_category": "permission_denied" if result.get("status_code") == 403 else "collection_error",
                 "status_code": result.get("status_code")}
-    labels = [map_graph_label(item) for item in result.get("value", []) if isinstance(item, dict)]
+    def flatten(items, parent_id=""):
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            label = map_graph_label(item)
+            label["ParentId"] = label["ParentId"] or parent_id
+            yield label
+            yield from flatten(item.get("sublabels") or [], label["Guid"])
+    labels = list(flatten(result.get("value", [])))
     return {
         **base,
         "available": True,

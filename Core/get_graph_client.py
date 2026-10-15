@@ -125,11 +125,13 @@ def _model(value):
 class GraphRequestError(RuntimeError):
     """HTTP failure with fields used by connection and license classification."""
 
-    def __init__(self, status_code, message, response=None):
+    def __init__(self, status_code, message, response=None, *, failure_stage="", failure_host=""):
         super().__init__(message or f"Microsoft Graph returned HTTP {status_code}")
         self.status_code = status_code
         self.message = message
         self.response = response
+        self.failure_stage = failure_stage
+        self.failure_host = failure_host
 
 
 class _Endpoint:
@@ -197,7 +199,18 @@ class GraphRestClient:
                 method=method, max_retries=self.max_retries,
             )
         except RequestRetryError as exc:
-            raise GraphRequestError(exc.status_code, str(exc), exc.response) from exc
+            transport = exc.__cause__
+            try:
+                failed_request = transport.request if isinstance(transport, httpx.TransportError) else None
+            except RuntimeError:
+                failed_request = None
+            stage = ""
+            host = ""
+            if failed_request is not None:
+                # Record only stage/hostname; report URLs contain temporary credentials.
+                stage = "graph" if failed_request.url.host == "graph.microsoft.com" else "download"
+                host = failed_request.url.host or ""
+            raise GraphRequestError(exc.status_code, str(exc), exc.response, failure_stage=stage, failure_host=host) from exc
 
         if last_response is None:
             raise GraphRequestError(0, "Microsoft Graph returned no response")

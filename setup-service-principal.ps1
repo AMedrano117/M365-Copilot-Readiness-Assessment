@@ -116,6 +116,12 @@ function Write-Success { param($Message) Write-Host "[OK] $Message" -ForegroundC
 function Write-Info { param($Message) Write-Host "[INFO] $Message" -ForegroundColor Cyan }
 function Write-Warn { param($Message) Write-Host "[WARN] $Message" -ForegroundColor Yellow }
 function Write-Fail { param($Message) Write-Host "[FAIL] $Message" -ForegroundColor Red }
+function Write-SetupSection {
+    param([int]$Step, [string]$Title)
+    $heading = "[$Step/7] $Title"
+    Write-Host "`n$heading" -ForegroundColor Cyan
+    Write-Host ('-' * $heading.Length) -ForegroundColor Cyan
+}
 
 function Get-ResourceAccessByName {
     param(
@@ -490,19 +496,41 @@ function Test-SavedClientSecret {
 function Get-ExcessApplicationAccess {
     param([object[]]$Requested, [object[]]$Assignments, [object[]]$Desired)
     $excess = @()
+    $resourceCache = @{}
+    function Format-Access {
+        param([string]$ResourceId, [string]$PermissionId, [string]$Type, [switch]$ObjectId)
+        $cacheKey = "$ObjectId/$ResourceId"
+        if (-not $resourceCache.ContainsKey($cacheKey)) {
+            try {
+                $properties = @('Id','AppId','DisplayName','AppRoles','Oauth2PermissionScopes')
+                $resourceCache[$cacheKey] = if ($ObjectId) {
+                    Get-MgServicePrincipal -ServicePrincipalId $ResourceId -Property $properties -ErrorAction Stop
+                } else {
+                    Get-MgServicePrincipal -Filter "appId eq '$ResourceId'" -Property $properties -ErrorAction Stop | Select-Object -First 1
+                }
+            } catch { $resourceCache[$cacheKey] = $null }
+        }
+        $resolved = $resourceCache[$cacheKey]
+        $resourceName = if ($resolved.DisplayName) { $resolved.DisplayName } else { "API $ResourceId" }
+        $definitions = if ($Type -eq 'Scope') { $resolved.Oauth2PermissionScopes } else { $resolved.AppRoles }
+        $definition = @($definitions | Where-Object { [string]$_.Id -eq $PermissionId }) | Select-Object -First 1
+        $permissionName = if ($definition.Value) { $definition.Value } else { "unresolved permission $PermissionId" }
+        $accessType = if ($Type -eq 'Scope') { 'delegated' } else { 'application' }
+        return "$resourceName / $permissionName ($accessType)"
+    }
     foreach ($resource in @($Requested)) {
         foreach ($permission in @($resource.ResourceAccess)) {
             $allowed = @($Desired | Where-Object { [string]$_.ResourceAppId -eq [string]$resource.ResourceAppId } | ForEach-Object { $_.ResourceAccess } | Where-Object {
                 [string]$_.Id -eq [string]$permission.Id -and [string]$_.Type -eq [string]$permission.Type
             })
-            if (-not $allowed) { $excess += "Requested $($resource.ResourceAppId):$($permission.Id) ($($permission.Type))" }
+            if (-not $allowed) { $excess += 'Requested: ' + (Format-Access -ResourceId $resource.ResourceAppId -PermissionId $permission.Id -Type $permission.Type) }
         }
     }
     foreach ($assignment in @($Assignments)) {
         $allowed = @($Desired | Where-Object { [string]$_.ResourceObjectId -eq [string]$assignment.ResourceId } | ForEach-Object { $_.ResourceAccess } | Where-Object {
             [string]$_.Id -eq [string]$assignment.AppRoleId -and $_.Type -eq 'Role'
         })
-        if (-not $allowed) { $excess += "Consented $($assignment.ResourceId):$($assignment.AppRoleId)" }
+        if (-not $allowed) { $excess += 'Consented: ' + (Format-Access -ResourceId $assignment.ResourceId -PermissionId $assignment.AppRoleId -Type 'Role' -ObjectId) }
     }
     return $excess
 }
@@ -686,6 +714,8 @@ function Set-ApplicationWorkloadRoleGroup {
 Write-Host "`n=============================================================================" -ForegroundColor Cyan
 Write-Host " AI Readiness Assessment - Application Reconciliation" -ForegroundColor Cyan
 Write-Host "=============================================================================" -ForegroundColor Cyan
+Write-SetupSection -Step 1 -Title 'Preparing dependencies'
+Write-Info 'Checking local certificates and required PowerShell modules.'
 
 $certificate = Get-SetupCertificate -Path $CertificatePath -Thumbprint $CertificateThumbprint
 if ($certificate -and ($certificate.NotAfter.ToUniversalTime() -le (Get-Date).ToUniversalTime() -or $certificate.NotBefore.ToUniversalTime() -gt (Get-Date).ToUniversalTime())) {
@@ -726,6 +756,7 @@ if ($explicitEnvironmentFile) {
     if (-not $targetApplicationId) { $targetApplicationId = Get-DotEnvValue -Path $envPath -Name 'CLIENT_ID' }
 }
 
+Write-SetupSection -Step 2 -Title 'Connecting'
 Write-Info 'Connecting to Microsoft Graph for application administration...'
 $graphScopes = @('Application.ReadWrite.All','Organization.Read.All')
 if ($assignDirectoryRole) { $graphScopes += 'RoleManagement.ReadWrite.Directory' }
@@ -735,6 +766,9 @@ if ($UseDeviceCode) { $connectParameters['UseDeviceCode'] = $true }
 Connect-MgGraph @connectParameters
 $context = Get-MgContext
 if (-not $context -or -not $context.TenantId) { throw 'Microsoft Graph authentication did not return a tenant.' }
+Write-Success 'Connected to Microsoft Graph for application administration.'
+Write-SetupSection -Step 3 -Title 'Checking configuration'
+Write-Info 'Checking the selected tenant, application, saved credentials and collector permissions.'
 $targetTenantGuid = [guid]::Empty
 if ($targetTenant -and [guid]::TryParse($targetTenant, [ref]$targetTenantGuid) -and ([string]$context.TenantId -ne $targetTenantGuid.ToString())) {
     throw "The administrator session belongs to tenant $($context.TenantId), not the requested tenant $targetTenant. Setup stopped before any change."
@@ -826,7 +860,7 @@ foreach ($collector in $enabledCollectors) {
 
 $graphPermissions = @($permissionsByResource.graph | Sort-Object -Unique)
 if ($graphPermissions -contains 'Directory.Read.All') {
-    Write-Warn 'Standard includes Directory.Read.All for delegated consent-grant inventory. Existing applications may require new administrator consent; Restricted omits this inventory and permission.'
+    Write-Info 'Standard requests Directory.Read.All for delegated consent-grant inventory. Setup checks existing consent below; Restricted omits this inventory and permission.'
 }
 $desired = @()
 foreach ($resourceName in @($permissionsByResource.Keys | Sort-Object)) {
@@ -876,10 +910,16 @@ if ($app) {
     }
     $excess = @(Get-ExcessApplicationAccess -Requested $app.RequiredResourceAccess -Assignments $assignments -Desired $desired)
     if ($excess.Count -gt 0) {
-        Write-Warn "Existing access outside the selected setup permissions: $($excess -join '; ')"
+        Write-Warn "Existing access outside the selected setup permissions ($($excess.Count) request/grant entries):"
+        foreach ($entry in $excess) { Write-Host "  $entry" -ForegroundColor Yellow }
+        if ($profileName -eq 'standard') { Write-Info 'These entries are existing access, not missing collector permissions. Standard preserves them unless manifest pruning is requested; setup never revokes existing consent.' }
         Write-Warn 'Review App registrations > API permissions AND Enterprise applications > Permissions. Manifest pruning does not revoke prior admin consent. Remove excess requests and grants manually, or use a clean dedicated application.'
         if ($profileName -eq 'restricted') { throw 'Restricted setup stopped before changing the application: excess requested or consented permissions remain.' }
     }
+}
+
+Write-SetupSection -Step 4 -Title 'Applying updates'
+if ($app) {
     Write-Success "Reusing application $($app.AppId); it will not be deleted or recreated."
 } else {
     $app = New-MgApplication -DisplayName $AppName -SignInAudience 'AzureADMyOrg' -PublicClient @{ RedirectUris = @('http://localhost') }
@@ -905,7 +945,7 @@ if ($requestDelegatedEnrichment -and @($desired | Where-Object { $_.Delegated })
         Write-Warn "The public-client redirect for delegated sign-in could not be verified: $($_.Exception.Message)"
     }
 }
-Write-Success "Reconciled permissions for $($enabledCollectors.Count) selected collectors from collector-registry.json."
+Write-Success "Updated requested API permissions for $($enabledCollectors.Count) selected collectors. Tenant-wide consent is checked after saving the configuration."
 
 if ($EnableSharePointAppOnly -and -not $certificate) {
     # Exchange/Purview certificate authentication requires a CSP (not CNG) key;
@@ -1012,7 +1052,8 @@ Write-Success "Saved the complete configuration atomically to $envFileName befor
 $assignments = @(Get-MgServicePrincipalAppRoleAssignment -ServicePrincipalId $servicePrincipal.Id -All)
 $missingConsent = Get-MissingApplicationConsent -Assignments $assignments -Desired $desired
 if ($missingConsent.Count -gt 0) {
-    Write-Info "Opening tenant admin consent for $($missingConsent.Count) missing application permission(s)..."
+    Write-Info "Opening tenant admin consent for $($missingConsent.Count) missing selected application permission(s)..."
+    Write-Warn 'The browser consent screen covers the entire application manifest, including preserved permissions outside the selected collectors. Review the named permissions before accepting.'
     $adminConsentUrl = "https://login.microsoftonline.com/$($context.TenantId)/adminconsent?client_id=$($app.AppId)"
     Write-Info "If no browser opens, sign in and go to: $adminConsentUrl"
     try { Start-Process $adminConsentUrl } catch { Write-Warn 'Could not open a browser; open the link above manually.' }
@@ -1021,12 +1062,12 @@ if ($missingConsent.Count -gt 0) {
     $assignments = @(Get-MgServicePrincipalAppRoleAssignment -ServicePrincipalId $servicePrincipal.Id -All)
     $missingConsent = Get-MissingApplicationConsent -Assignments $assignments -Desired $desired
 } else {
-    Write-Success 'All requested application permissions were already consented; no consent browser was opened.'
+    Write-Success 'All selected collector application permissions were already consented; no consent browser was opened.'
 }
 if ($missingConsent.Count -gt 0) {
     Write-Fail "$($missingConsent.Count) requested application permission(s) are still missing tenant-wide consent."
     Write-Warn 'Rerun setup after consent propagation or inspect Enterprise applications > Permissions.'
-} else { Write-Success 'Verified every requested application role on the service principal.' }
+} else { Write-Success 'Verified every selected collector application role on the service principal.' }
 $missingDelegated = @(Get-MissingDelegatedConsent -ServicePrincipalObjectId $servicePrincipal.Id -Desired $desired)
 if ($missingDelegated.Count -gt 0) {
     Write-Warn "Optional delegated enrichment is not consented yet: $($missingDelegated -join ', '). Application-permission collection is unaffected; a signed-in administrator can consent at first use."
@@ -1073,7 +1114,7 @@ if ($PreviewCollectors -in @('PowerPlatform','All')) {
     Write-Host '  If the caller lacks assignment authority, use a Manage > Inventory CSV export instead.'
 }
 
-Write-Host "`nSetup result" -ForegroundColor Cyan
+Write-SetupSection -Step 5 -Title 'Setup result'
 Write-Host "  Application: $($app.DisplayName)"
 Write-Host "  Application ID: $($app.AppId)"
 Write-Host "  Service principal object ID: $($servicePrincipal.Id)"
@@ -1090,12 +1131,14 @@ if ($profileName -eq 'standard') {
         Write-Host "  SharePoint admin URL: $configuredSharePointAdminUrl (syntax checked; tenant connection not verified)"
     } else {
         Write-Warn 'SHAREPOINT_ADMIN_URL is blank. SharePoint administrative checks need an operator-confirmed URL; core identity and security assessment can still run.'
-        Write-Host '  Open Microsoft 365 admin center > Admin centers > SharePoint and copy the origin of the actual admin-center URL.'
-        Write-Host '  Set SHAREPOINT_ADMIN_URL in the selected environment file, or rerun setup with -SharePointAdminUrl https://<actual-prefix>-admin.sharepoint.com.'
     }
 }
 if ($missingConsent.Count -gt 0) { Write-Host '  Consent: incomplete' -ForegroundColor Yellow } else { Write-Host '  Consent: verified' -ForegroundColor Green }
 Write-Host "  Workload access: $WorkloadRbac"
+Write-Host '  Connection checks: not run by setup. The command below verifies representative reads.'
+if ($profileName -eq 'standard' -and $Mode -eq 'Standard' -and -not $EnableSharePointAppOnly) {
+    Write-Host '  SharePoint per-site settings and governance reports: administrator sign-in unless a workload certificate is already configured.'
+}
 if ($WorkloadRbac -ne 'None') {
     if ($purviewRoleConfigurationComplete) { Write-Host '  Purview application roles: configured' -ForegroundColor Green }
     else { Write-Host '  Purview application roles: incomplete' -ForegroundColor Yellow }
@@ -1105,13 +1148,23 @@ if ($EnableSharePointAppOnly -or $Mode -eq 'Unattended') {
 }
 if ($SkipCredential) {
     Write-Host '  Credentials: unchanged (-SkipCredential)'
+}
+
+Write-SetupSection -Step 6 -Title 'Next steps'
+if ($SkipCredential) {
     Write-Host "`nNext: the assessor runs python main.py --env-file <their environment file for this tenant> --check-connections"
 } elseif ($profileName -eq 'restricted') {
     Write-Host "`nNext: python main.py --env-file `"$envPath`" --permission-profile restricted --check-connections"
 } else {
     Write-Host "`nNext: python main.py --env-file `"$envPath`" --check-connections"
 }
-Write-Host "`nAfter the engagement, follow docs/CLEANUP.md to archive evidence and retire dedicated assessment access."
+if ($profileName -eq 'standard' -and -not $configuredSharePointAdminUrl) {
+    Write-Host '  Open Microsoft 365 admin center > Admin centers > SharePoint and copy the origin of the actual admin-center URL.'
+    Write-Host '  Set SHAREPOINT_ADMIN_URL in the selected environment file, or rerun setup with -SharePointAdminUrl https://<actual-prefix>-admin.sharepoint.com.'
+}
+
+Write-SetupSection -Step 7 -Title 'Cleanup guidance'
+Write-Host 'After the engagement, follow docs/CLEANUP.md to archive evidence and retire dedicated assessment access.'
 $cleanupPreview = ".\cleanup-service-principal.ps1 -PermissionProfile $PermissionProfile -TenantId $($context.TenantId) -ClientId $($app.AppId)"
 if ($WorkloadRbac -ne 'None') { $cleanupPreview += " -IncludeWorkloadRbac -ServicePrincipalObjectId $($servicePrincipal.Id)" }
 Write-Host "  Cleanup preview (no deletions): $cleanupPreview"
