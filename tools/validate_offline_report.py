@@ -119,7 +119,8 @@ def _split_investigation_issues(workbook, technical):
             match = RANGE.fullmatch(cell.hyperlink.target[1:])
             if match:
                 sheet = workbook[match[1].replace("''", "'")]
-                if any(sheet.cell(row, 1).value != identifier for row in range(int(match[3]), int(match[5] or match[3]) + 1)):
+                id_column = next((cell.column for cell in sheet[1] if cell.value == 'ID'), 1)
+                if any(sheet.cell(row, id_column).value != identifier for row in range(int(match[3]), int(match[5] or match[3]) + 1)):
                     issues.append(f'{identifier}: evidence block contains another finding.')
     actions = workbook['Action Plan']
     headers = {cell.value: cell.column for cell in actions[1]}

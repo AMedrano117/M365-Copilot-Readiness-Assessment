@@ -39,7 +39,8 @@ def run_offline_report(args):
         from .assessment_replay import render_snapshot
         outputs = render_snapshot(payload['completed_run_snapshot'], payload['package_directory'],
                                   tenant_name=args.tenant_name or payload.get('tenant_name'), report_format=args.report_format,
-                                  snapshot_output=args.snapshot_json,extra_exports=getattr(args,'extra_exports',None))
+                                  snapshot_output=args.snapshot_json,extra_exports=getattr(args,'extra_exports',None),
+                                  retained_package=payload['package_directory'])
         record_package_run(payload['package_directory'], mode='snapshot render', tenant_id=payload.get('tenant_id'),
             collected_at=payload.get('collected_at'), evaluation_date=payload.get('evaluation_date'), outputs=outputs)
         return 0

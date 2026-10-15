@@ -6,13 +6,17 @@ from .assessment_runs import run_context_rows
 
 
 def render_snapshot(snapshot_path, output_directory, *, tenant_name=None, report_format='both',
-                    snapshot_output=None, extra_exports=None):
+                    snapshot_output=None, extra_exports=None, retained_package=None):
     from .repository_provenance import require_publication
     require_publication()
     source = Path(snapshot_path).resolve()
     result = read_assessment_result(source)
     from .repository_provenance import current_revision
     result['replay_tool_revision'] = current_revision()
+    from .retained_workbook_sources import package_native_sources
+    retained_sheets = {}
+    retained_selection = {}
+    sources = package_native_sources(retained_package or source.parent, result, retained_sheets, retained_selection)
     if snapshot_output:
         target = Path(snapshot_output).resolve()
         if target.exists():
@@ -28,6 +32,10 @@ def render_snapshot(snapshot_path, output_directory, *, tenant_name=None, report
         'replay_tool_revision':result['replay_tool_revision'],'tenant_recollected':False,
         'source_snapshot_sha256':hashlib.sha256(source.read_bytes()).hexdigest()}, immutable=True)
     bundle = {'assessment_result':result,'control_results':result.get('control_results',[]),
+        'assessment_sources': sources,
+        'sheets': retained_sheets,
+        'retained_investigations': 'investigation_items' in retained_sheets,
+        'retained_record_selection': retained_selection,
         'run_manifest':{'rows':run_context_rows(result)},
         'collection_context':{'mode':'snapshot render','identity':result.get('identity'),
                               'evaluation_date':result.get('evaluation_date')}}

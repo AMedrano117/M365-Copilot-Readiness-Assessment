@@ -68,7 +68,7 @@ def _write(workbook, title, rows, columns=None):
         rows = [OrderedDict((name, row.get(name)) for name in columns) for row in rows]
     if title in {'Findings', 'Action Plan', *EVIDENCE_COLUMNS}:
         from datetime import datetime, timezone
-        date_columns = {'Observed', 'Last reported', 'Last sign-in or observed', 'Target date', 'Target Date'}
+        date_columns = {'Observed', 'Last reported', 'Last sign-in or observed', 'Target date', 'Target Date', 'Due date'}
         rows = [dict(row) for row in rows]
         for row in rows:
             for name in date_columns & row.keys():
@@ -199,7 +199,11 @@ def _projection(row, record, devices):
             current = _detail(fields, [('State', ('enabled', 'isEnabled', 'state', 'Mode')),
                                       ('Result', ('result', 'review_result'))]) or 'Unknown'
         return title, dict(common, Setting=setting, Current=_label(current), Recommended=recommended,
-                           Status=status, Observed=observed)
+                           Status=status, Observed=observed,
+                           Scope=_value(fields, 'Scope') or ('tenant' if dataset in {'sharepoint_tenant_settings', 'sharepoint_graph_settings', 'security_defaults', 'authorization_policy', 'consent_policies'} else 'site' if dataset == 'sharepoint_site_settings' else 'policy' if dataset == 'ca_policies' else None),
+                           **{'Object ID': _value(fields, 'Object ID', 'SiteId', 'site_id') or (_value(fields, 'id') if dataset == 'ca_policies' else None),
+                              'Object name': _value(fields, 'Object name', 'Title', 'displayName'),
+                              'Locator': _value(fields, 'Locator', 'siteUrl', 'Url')})
     if title == 'Devices':
         parent = _value(fields, 'ParentId', 'managedDeviceId', 'deviceId', 'id')
         inventory = devices.get(_text(parent).casefold(), {})
@@ -632,11 +636,13 @@ def split_workbook_layout(source_workbook, result, bundle, assessment_path, tech
     # missing relationship without copying the native evidence registers.
     config_targets = {}
     config_evidence_ids = defaultdict(set)
+    detail_rows = []
     if configuration['members']:
-        detail_rows = []
         for member in sorted(configuration['members'], key=lambda m:(m['group_id'], m.get('object_id') or '', m.get('primary_evidence_id') or '')):
             config_evidence_ids[member['group_id']].update(member['evidence_ids'])
             detail_rows.append({'FindingId':member['finding_id'], 'Group ID':member['group_id'],
+                'Setting':member['configuration'], 'Scope':member['scope'], 'Current value':member['observed'],
+                'Source reference':member.get('source_refs'),
                 'Object type':member['object_type'], 'Object ID':member.get('object_id'), 'Object name':member.get('object_name'),
                 'Locator':member.get('locator'), 'Configuration key':member['configuration_key'],
                 'Raw observed':member.get('raw_observed'), 'Observed':member['observed'], 'Recommended':member['recommended'],
@@ -657,6 +663,8 @@ def split_workbook_layout(source_workbook, result, bundle, assessment_path, tech
         groups_by_finding[group['finding_id']].append(group)
     reconciliation = []
     issues = []
+    extra_config_details = []
+    config_source_links = {}
     for row in result['recommendations']:
         identifier = row['RecommendationId']
         row['AssessmentEvidenceRange'] = ''
@@ -677,6 +685,7 @@ def split_workbook_layout(source_workbook, result, bundle, assessment_path, tech
                 'Affected objects link':'View '+str(group['affected_object_count'])+' objects', 'Technical evidence link':'Configuration membership',
                 'Group ID':group['group_id'], 'Evidence ID':ids[0] if len(ids)==1 else str(len(ids))+' evidence records; see detail'})
             evidence_links[('Configuration',len(assessment_rows['Configuration'])+1)] = target
+            config_source_links[len(assessment_rows['Configuration'])+1] = target
         for record in records:
             title, projected = _projection(row, record, devices)
             if title == 'Configuration' and groups_by_finding[identifier] and record.get('dataset') in {
@@ -686,6 +695,15 @@ def split_workbook_layout(source_workbook, result, bundle, assessment_path, tech
             destination = evidence_targets.get(record['evidence_id'])
             if destination:
                 evidence_links[(title, len(assessment_rows[title]) + 1)] = Path(technical_path).name + '#' + _ref(destination[0], destination[1], destination[1], 1)
+                if title == 'Configuration':
+                    extra_config_details.append((len(assessment_rows[title]) + 1, {
+                        'FindingId':identifier, 'Group ID':None, 'Setting':projected.get('Setting'),
+                        'Scope':projected.get('Scope'), 'Current value':projected.get('Current'),
+                        'Source reference':_ref(destination[0], destination[1], destination[1], 1),
+                        'Object ID':projected.get('Object ID'), 'Object name':projected.get('Object name'),
+                        'Locator':projected.get('Locator'), 'Observed':projected.get('Current'),
+                        'Recommended':projected.get('Recommended'), 'Assessment':projected.get('Status'),
+                        'Qualification':row.get('Qualification'), 'Native Evidence ID':record['evidence_id']}))
             else:
                 issues.append(f'{identifier}: unmatched evidence record {record["evidence_id"]}.')
         for dataset, number in full_members[identifier]:
@@ -700,15 +718,39 @@ def split_workbook_layout(source_workbook, result, bundle, assessment_path, tech
                 row['TechnicalEvidenceRanges'].extend(remap(location))
         row['TechnicalEvidenceRanges'] = list(dict.fromkeys(row['TechnicalEvidenceRanges']))
 
+    if extra_config_details:
+        # Append non-grouped configurations to the same supporting register;
+        # group membership remains keyed exclusively by CFG, not by finding.
+        if 'Configuration Detail' not in technical:
+            detail_rows.extend(item for _, item in extra_config_details)
+            sheet = _write(technical, 'Configuration Detail', detail_rows)
+            first = 2
+        else:
+            sheet = technical['Configuration Detail']
+            first = sheet.max_row + 1
+            headers = [cell.value for cell in sheet[1]]
+            for _, item in extra_config_details:
+                sheet.append([item.get(key) for key in headers])
+            for table in sheet.tables.values():
+                table.ref = sheet.dimensions
+            detail_rows.extend(item for _, item in extra_config_details)
+        for offset, (assessment_number, item) in enumerate(extra_config_details):
+            number = first + offset
+            config_source_links[assessment_number] = Path(technical_path).name + '#' + _ref(sheet.title, number, number, sheet.max_column)
+            _cell_link(sheet, number, 'Native Evidence ID', '#' + item['Source reference'])
+    from .workbook_readers import CONFIGURATION_COLUMNS, configuration_rows
     for title in EVIDENCE_COLUMNS:
         if not assessment_rows[title]:
             continue
-        sheet = _write(assessment, title, assessment_rows[title], EVIDENCE_COLUMNS[title])
+        rows = configuration_rows(assessment_rows[title], detail_rows) if title == 'Configuration' else assessment_rows[title]
+        columns = tuple(dict.fromkeys(CONFIGURATION_COLUMNS + EVIDENCE_COLUMNS[title])) if title == 'Configuration' else EVIDENCE_COLUMNS[title]
+        sheet = _write(assessment, title, rows, columns)
         blocks = OrderedDict()
         for number, row in enumerate(assessment_rows[title], 2):
             blocks.setdefault(row['ID'], []).append(number)
             _cell_link(sheet, number, 'Evidence ID', evidence_links.get((title, number)))
             if title == 'Configuration':
+                _cell_link(sheet, number, 'Source detail', config_source_links.get(number))
                 for field in ('Affected objects link', 'Technical evidence link'):
                     _cell_link(sheet, number, field, evidence_links.get((title, number)))
         for identifier, numbers in blocks.items():
@@ -767,10 +809,19 @@ def split_workbook_layout(source_workbook, result, bundle, assessment_path, tech
                             if row.get('InvestigationCount') else ': '.join(dict.fromkeys(_text(row.get(key)) for key in
                             ('InvestigationStatus', 'InvestigationSummary') if row.get(key)))})
         action_rows[-1].update(treatment_fields(result,row))
-    actions = _write(assessment, 'Action Plan', action_rows or [{'What We Found': 'No deployment actions were identified from the evidence collected.',
-                                                               'Recommended Action': 'Continue monitoring the tenant as conditions and intended AI use cases change.'}])
-    for number, action in enumerate(result.get('actions') or [], 2):
+    from .workbook_readers import ACTION_COLUMNS, action_rows as reader_actions, coverage_rows, evidence_discrepancies, write_coverage
+    discrepancies = evidence_discrepancies(result)
+    reader_rows, action_details = reader_actions(result.get('actions') or [], result.get('recommendations') or [], action_rows, discrepancies)
+    from .assessment_serialization import plain_data
+    detail_sheet = _write(technical, 'Action Detail', plain_data(action_details), None if action_details else ('RecommendationId', 'Full recommendation'))
+    columns = tuple(dict.fromkeys(ACTION_COLUMNS + tuple(key for row in action_rows for key in row)))
+    actions = _write(assessment, 'Action Plan', reader_rows, columns)
+    for number, action in enumerate(reader_rows, 2):
+        detail_number = action['_detail_row']
+        _cell_link(actions, number, 'Source record', Path(technical_path).name + '#' + _ref('Action Detail', detail_number, detail_number, detail_sheet.max_column))
         location = action.get('AssessmentEvidenceRange')
+        if not location:
+            location = action.get('Evidence') if RANGE.fullmatch(_text(action.get('Evidence'))) else None
         _cell_link(actions, number, 'Evidence', '#' + location if location else None)
         _cell_link(actions, number, 'Investigation Details', '#' + location if location else None)
         from openpyxl.comments import Comment
@@ -778,9 +829,13 @@ def split_workbook_layout(source_workbook, result, bundle, assessment_path, tech
             column = next((cell.column for cell in actions[1] if cell.value == 'Investigation Details'), None)
             if column:
                 actions.cell(number, column).comment = Comment(action['InvestigationNote'], 'Assessment')
-    _write(assessment, 'Coverage', _coverage(result, bundle),
-           ('Check ID', 'Check', 'Area', 'Evidence state', 'Applicability', 'Readiness effect', 'Configuration',
-            'Operational result', 'Result', 'Missing evidence', 'Owner'))
+    topics, controls, coverage_details, topic_positions = coverage_rows(result, bundle, discrepancies)
+    _write(technical, 'Coverage Detail', plain_data(coverage_details), None if coverage_details else ('Row type', 'Source ID', 'Original record'))
+    write_coverage(assessment, topics, controls, Path(technical_path).name)
+    for number, action in enumerate(result.get('actions') or [], 2):
+        discrepancy = discrepancies.get(action.get('RecommendationId'))
+        if discrepancy:
+            _cell_link(detail_sheet, number, 'Reconciliation', f"#'Coverage Detail'!A{topic_positions[discrepancy['topic_id']]}")
 
     lineage_rows = []
     legacy = {row.get('RecommendationId'): row for row in _rows(source_workbook['Findings Register'])} if 'Findings Register' in source_workbook else {}
@@ -901,6 +956,8 @@ def split_workbook_layout(source_workbook, result, bundle, assessment_path, tech
     bundle['assessment_excel_path'] = str(assessment_path)
     for book, role, other in ((assessment, 'assessment', technical_path), (technical, 'technical', assessment_path)):
         apply_workbook_navigation(book, result, bundle, role=role, companion_path=other, tenant_name=tenant_name)
+    from .workbook_readers import format_reader_sheets
+    format_reader_sheets(assessment)
     validation = validate_workbook_layout(assessment, technical, result, assessment_path, technical_path)
     issues.extend(validation)
     if issues:
@@ -969,7 +1026,8 @@ def validate_workbook_layout(assessment, technical, result, assessment_path, tec
             if title not in assessment:
                 issues.append(f'{row["RecommendationId"]}: missing assessment evidence sheet.')
                 continue
-            if any(assessment[title].cell(number, 1).value != row['RecommendationId']
+            id_column = next((cell.column for cell in assessment[title][1] if cell.value == 'ID'), 1)
+            if any(assessment[title].cell(number, id_column).value != row['RecommendationId']
                    for number in range(int(match[3]), int(match[5] or match[3]) + 1)):
                 issues.append(f'{row["RecommendationId"]}: assessment evidence link targets another finding.')
     return list(dict.fromkeys(issues))

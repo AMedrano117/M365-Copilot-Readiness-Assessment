@@ -105,8 +105,9 @@ class WorkbookLayoutTests(unittest.TestCase):
                 title, cells = location.rsplit('!', 1)
                 sheet = self.assessment[title.strip("'")]
                 _, first, _, last = range_boundaries(cells)
-                self.assertTrue(all(sheet.cell(number, 1).value == identifier for number in range(first, last + 1)))
-                self.assertEqual(sum(sheet.cell(number, 1).value == identifier for number in range(2, sheet.max_row + 1)), last - first + 1)
+                id_column = next(cell.column for cell in sheet[1] if cell.value == 'ID')
+                self.assertTrue(all(sheet.cell(number, id_column).value == identifier for number in range(first, last + 1)))
+                self.assertEqual(sum(sheet.cell(number, id_column).value == identifier for number in range(2, sheet.max_row + 1)), last - first + 1)
                 for number in range(first, last + 1):
                     cell = sheet.cell(number, sheet.max_column)
                     filename, target = cell.hyperlink.target.split('#', 1)
@@ -164,7 +165,7 @@ class WorkbookLayoutTests(unittest.TestCase):
             self.assertEqual(len(names), len(set(names)))
             for sheet in book:
                 self.assertFalse(sheet.merged_cells)
-                self.assertEqual(sheet.freeze_panes, 'A2')
+                self.assertIsNone(sheet.freeze_panes)
                 for row in sheet:
                     for cell in row:
                         if not cell.hyperlink or '#' not in cell.hyperlink.target:

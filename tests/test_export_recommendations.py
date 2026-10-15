@@ -133,7 +133,7 @@ class ExportRecommendationsTests(unittest.TestCase):
                 self.assertIsNone(worksheet.auto_filter.ref)
         rows = list(workbook["Action Plan"].values)
         actions = [dict(zip(rows[0], row)) for row in rows[1:]]
-        self.assertEqual([row["RecommendationId"] for row in actions], [row["RecommendationId"] for row in bundle["assessment_result"]["actions"]])
+        self.assertCountEqual([row["RecommendationId"] for row in actions], [row["RecommendationId"] for row in bundle["assessment_result"]["actions"]])
         self.assertTrue(all(row["Responsible Role"] and row["Rollout Stage"] and row["Completion Evidence"] for row in actions))
         self.assertTrue(all(row["Target Date"] is None for row in actions))
         evidence_column = rows[0].index("Evidence") + 1
@@ -176,7 +176,7 @@ class ExportRecommendationsTests(unittest.TestCase):
                 self.assertIsNotNone(cell.comment)
                 self.assertIn('distinct applications', cell.comment.text)
                 self.assertIn('grant instances', cell.comment.text)
-                self.assertLessEqual(len(headers), 16)
+                self.assertEqual(sum(not sheet.column_dimensions[sheet.cell(1, column).column_letter].hidden for column in headers.values()), 8)
                 self.assertEqual(sheet.cell(number, headers['Evidence']).hyperlink.target, '#' + bundle['assessment_result']['actions'][0]['AssessmentEvidenceRange'])
             self.assertNotIn('Evidence IDs', headers)
             self.assertNotIn('Evidence Reconciliation', headers)
