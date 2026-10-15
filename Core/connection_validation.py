@@ -65,11 +65,16 @@ def _classify_http(collector_id, status_code, detail, roles, required_permission
         missing = [name for name in required_permissions if name not in roles]
         if missing:
             return _result(collector_id, PERMISSION, "Grant and consent: " + ", ".join(missing))
-        if collector_id == "entra_risk":
+        if collector_id == "entra_risk" and any(marker in (detail or "").lower() for marker in ("license", "licence", "premium", "aad_premium")):
             return _result(
                 collector_id, LICENSE,
-                "The required Graph permission is present, but full risky-user evidence requires Entra ID P2. Entra ID P1 provides only limited risk visibility.",
+                "The service reported a licensing restriction. Full risky-user evidence requires Entra ID P2. " + (detail or ""),
             )
+        if collector_id == "entra_risk":
+            return _result(collector_id, FAILED,
+                           "Risky-user access was denied (HTTP 403) despite the required token permission. "
+                           "Check Entra ID P2 entitlement and workload access; this response does not confirm a licensing cause. "
+                           + (detail or ""))
         if collector_id == "power_platform":
             return _result(collector_id, ROLE, "Assign Power Platform Reader RBAC at tenant scope.")
         return _result(collector_id, NOT_PROVISIONED, detail or "The API is authorized but the workload may not be provisioned.")
@@ -85,6 +90,18 @@ async def _graph_probe(client, collector_id, path, roles, required, params=None,
         await client.request("GET", path, params=params, headers={"Accept": accept} if accept else None)
         return _result(collector_id, READY)
     except GraphRequestError as exc:
+        if collector_id == "m365_usage" and exc.status_code == 0:
+            stage = getattr(exc, "failure_stage", "")
+            download_host = getattr(exc, "failure_host", "") if stage == 'download' else ''
+            download_host = download_host or 'reports.office.com'
+            location = {"graph": "The Microsoft Graph report request failed before download.",
+                        "download": f"The redirected report download from {download_host} failed after Graph accepted the request."}.get(
+                            stage, "The report request or its redirected download failed.")
+            return _result(collector_id, FAILED,
+                           f"{location} Reports.Read.All is present in the token. "
+                           f"Check network/proxy access to graph.microsoft.com and {download_host}, then rerun "
+                           "--check-connections. For a guided comparison, run python tools/diagnose-usage-report.py "
+                           f"--env-file <same environment file>. {exc}", failure_stage=stage, failure_host=download_host if stage == 'download' else '')
         return _classify_http(collector_id, exc.status_code, str(exc), roles, required)
     except Exception as exc:
         return _result(collector_id, FAILED, f"{type(exc).__name__}: {exc}")
@@ -250,14 +267,16 @@ async def run_connection_checks(
 
     probes = {
         "graph_core": ("/v1.0/organization", {"$select": "id,displayName"}, None),
-        "m365_usage": ("/v1.0/reports/getOffice365ActiveUserCounts(period='D7')", None, "text/csv"),
+        # Probe a report the usage collector actually consumes. Active Users is
+        # diagnostic-only and can fail while Apps and Copilot downloads work.
+        "m365_usage": ("/v1.0/reports/getM365AppUserCounts(period='D30')", {"$format": "text/csv"}, "text/csv"),
         "entra_controls": ("/v1.0/identity/conditionalAccess/policies", {"$top": "1"}, None),
         "entra_risk": ("/v1.0/identityProtection/riskyUsers", {"$top": "1"}, None),
         "external_connections": ("/v1.0/external/connections", {"$top": "1"}, None),
         "graph_security": ("/v1.0/security/alerts_v2", {"$top": "1"}, None),
         "report_settings": ("/v1.0/admin/reportSettings", None, None),
         "sharepoint_tenant_settings": ("/v1.0/admin/sharepoint/settings", None, None),
-        "purview_labels_graph": ("/beta/security/informationProtection/sensitivityLabels", None, None),
+        "purview_labels_graph": ("/beta/security/dataSecurityAndGovernance/sensitivityLabels", None, None),
         "copilot_audit": ("/v1.0/security/auditLog/queries", {"$top": "1"}, None),
         "shadow_ai": ("/beta/security/dataDiscovery/cloudAppDiscovery/uploadedStreams", {"$top": "1"}, None),
         "entra_recommendations": ("/beta/directory/recommendations", {"$select": "id,status"}, None),
@@ -317,6 +336,11 @@ async def run_connection_checks(
 
     values = await asyncio.gather(*tasks.values()) if tasks else []
     results = {name: value for name, value in zip(tasks, values)}
+    if probe_endpoints and results.get('m365_usage', {}).get('status') == READY:
+        results['m365_usage']['reason'] = (
+            'Microsoft 365 Apps D30 CSV read succeeded. Individual Apps and Copilot datasets '
+            'are verified during collection; use the usage diagnostic --matrix to test each report.'
+        )
 
     modules = interactive_plan.get("modules", {}) or {}
     if "sharepoint_governance" in selected:
@@ -502,6 +526,58 @@ def connection_status_to_availability(status):
     return "unavailable"
 
 
+def _planned_sign_in(item):
+    return item.get('status') == SIGN_IN and 'will be requested' in item.get('reason', '').lower()
+
+
+def summarize_connections(results):
+    """Separate expected coverage warnings from failed reads and required setup."""
+    ready, warnings, failures, setup = [], [], [], []
+    for item in results:
+        status = item.get('status')
+        if status == NOT_SELECTED:
+            continue
+        if status == READY:
+            ready.append(item)
+        elif status == FAILED:
+            failures.append(item)
+        elif status in {LICENSE, NOT_PROVISIONED, PARTIAL, DELEGATED_OPTIONAL} or _planned_sign_in(item):
+            warnings.append(item)
+        else:
+            setup.append(item)
+    issues = bool(failures or setup)
+    return {
+        'ready': ready, 'warnings': warnings, 'failures': failures, 'setup': setup,
+        'title': ('CONNECTION CHECKS COMPLETE WITH ISSUES' if issues else
+                  'CONNECTION CHECKS COMPLETE WITH WARNINGS' if warnings else 'CONNECTION CHECKS COMPLETE'),
+        'tone': 'error' if failures else 'warning' if setup or warnings else 'success',
+        'stage_state': 'done with issues' if issues else 'done with warnings' if warnings else 'done',
+    }
+
+
+def print_connection_summary(summary):
+    warning_count = len(summary['warnings'])
+    counts = (f"{len(summary['ready'])} successful, {warning_count} {'warning' if warning_count == 1 else 'warnings'}, "
+              f"{len(summary['failures'])} failed")
+    if summary['setup']:
+        setup_count = len(summary['setup'])
+        counts += f", {setup_count} setup {'item' if setup_count == 1 else 'items'}"
+    console.status('Connection summary: ' + counts + '.', tone=summary['tone'])
+    for category, items in (('Warning', summary['warnings']), ('Failed', summary['failures']),
+                            ('Setup required', summary['setup'])):
+        for item in items:
+            detail = ('Sign-in planned during collection.' if _planned_sign_in(item) else
+                      item.get('reason') or item.get('status'))
+            console.print_paragraph(f"{category} - {item['collector']}: {detail}", indent='  ',
+                                    tone='error' if category == 'Failed' else 'warning')
+    if any(_planned_sign_in(item) for item in summary['warnings']):
+        console.status('Planned browser sign-ins occur during collection; --check-connections does not complete those sign-ins.')
+    if summary['failures'] or summary['setup']:
+        console.status('Next: review failed checks and required setup before collecting the affected sources.', 'warning')
+    elif summary['ready'] or summary['warnings']:
+        console.status('Next: continue with the full assessment and review dataset coverage. Listed warnings may limit evidence.')
+
+
 def print_connection_results(results, detailed=True):
     if detailed:
         console.section('Collector connections')
@@ -509,16 +585,19 @@ def print_connection_results(results, detailed=True):
                        'The live run reports whether each dataset was collected successfully.')
         width = max((len(item["collector"]) for item in results), default=20)
         for item in results:
-            detail = f" — {item['reason']}" if item.get("reason") else ""
+            detail = f" - {item['reason']}" if item.get("reason") else ""
             message = f"{item['collector']:<{width}}  {item['status']}{detail}"
             if item['status'] == NOT_SELECTED:
                 console.detail(message)
             else:
                 console.status(message, tone='success' if item['status'] == READY else 'warning')
+        from .run_progress import record_connection_results
+        if not record_connection_results(results):
+            print_connection_summary(summarize_connections(results))
     else:
         expected_sign_ins = [
             item for item in results
-            if item.get("status") == SIGN_IN and "will be requested" in item.get("reason", "").lower()
+            if _planned_sign_in(item)
         ]
         actionable = [
             item for item in results

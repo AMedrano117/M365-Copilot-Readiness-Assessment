@@ -4,7 +4,7 @@
 
 Preview existing portal exports immediately, or combine a saved tenant collection with Microsoft-generated portal reports without signing into the tenant again. The report builder does not start Microsoft scans or change sharing or compliance policies. Application setup is a separate operation that configures permissions and credentials.
 
-Microsoft portal references were checked on September 15, 2026. Navigation and entitlements can differ between the current DSPM experience and DSPM for AI (classic).
+Microsoft portal references were checked on September 15, 2026; the DSPM billing distinctions and AI Baseline export guidance were checked on October 12, 2026. Navigation and entitlements can differ between the current DSPM experience and DSPM for AI (classic).
 
 ## Preview now with distributed fixtures
 
@@ -122,6 +122,11 @@ Admin-center PDFs can supplement the report through `--reports-dir`, including P
 
 ## What the importer understands
 
+Start with **Evidence to obtain next** in the report and **Evidence Requests** in either
+workbook. Request only missing fields and scope. Copilot PDFs are optional; supported
+usage, policy and configuration reads should be retried before requesting a dashboard
+capture of those same fields.
+
 Report recognition uses column headers, not filenames. Keep the original exports and headers. Explicit `--sam-report PATH` and `--dspm-report PATH` options remain available and can be repeated. SAM/DSPM readers support CSV, TSV, JSON, XLSX and supported ZIP contents; automatic `--reports-dir` discovery scans CSV, TSV, XLSX and ZIP. Copilot readiness requires CSV. Power Platform inventory and Copilot Dashboard exports use their separate existing switches.
 
 ### Sample compatibility matrix
@@ -136,6 +141,7 @@ Checked against supplied local CSVs and repository fixtures on September 15, 202
 | Copilot readiness user export | `Report Refresh Date`, `User Principal Name`, `Has Copilot license assigned`, `Report Period`, `Uses eligible update channel`, `Uses Teams meetings`, `Uses Teams chat`, `Uses Outlook email`, `Uses Office docs`; optional `Suggested candidate for Copilot` | **Supplied real exports:** nine- and ten-column Copilot Readiness CSVs. An absent candidate column remains unknown for every exported row; other required columns must be present. True, false and unknown remain distinct; the actual report period is preserved. Exported licensed rows are not a tenant-wide license total. |
 | Detailed Everyone/EEEU permissions | Recipient plus item identity/type or role-definition fields | **Documented/synthetic fixture only:** supported with Microsoft-documented headers; a representative tenant export is still needed to confirm that variant. |
 | Sharing activity/details and DSPM exposure | Explicit sharing-link/recipient fields or sensitive/overshared-item counts | **Synthetic fixture only:** supported schemas and regression tests exist. Representative exports are still needed; a successful file read alone does not establish full coverage. |
+| Compliance Manager AI Baseline action export | Native Action Update + Improvement Action Details + Customer Managed + Microsoft Managed sheets; also supported action tables with AI Baseline assessment metadata | Customer actions are reconciled across three views; Microsoft-managed actions remain a separate population. Original IDs, solution, points, statuses and dated source references are retained. Blank/Unknown results and year-0001 dates remain unverified. The review queue separates Microsoft failures from unverified actions, without changing technical readiness. No tenant GUID/export date is supplied in this layout. Use `--ai-baseline-export PATH` or `--reports-dir`. [Import instructions](RUN.md#compliance-manager-ai-baseline-actions). |
 
 | Copilot Usage portal export; other unrecognized exports | Varies by portal experience | **Unsupported pending a sample/schema review:** do not route arbitrary Usage exports into the Readiness or Dashboard importer. Keep the file for review and record the unmet evidence question. |
 
@@ -163,7 +169,7 @@ For Standard's Purview configuration collection, arrange access to DLP, labels, 
 
 ## Reports to obtain next
 
-1. **DSPM sensitive-data exposure assessment.** In Microsoft Purview, open **DSPM > Discover > Data risk assessments > Microsoft 365**. Check the latest completed default/custom result and use its Export option; retain assessment scope and date. The default assessment covers the top 100 SharePoint sites, not the whole tenant. Initial default results can take four days; custom results can take at least 48 hours. Choose a custom scope when the default omits the pilot's sites. Optional item-level scanning requires additional setup and permissions and currently has narrower SharePoint scope; arrange that separately with the team. [Assessment instructions](https://learn.microsoft.com/en-us/purview/data-security-posture-management-oversharing).
+1. **DSPM sensitive-data exposure assessment.** In Microsoft Purview, open **DSPM > Discover > Data risk assessments > Microsoft 365**. Reuse the latest completed default/custom result and its Export option; retain scope and date. The default runs weekly over the top 100 SharePoint sites by usage. Initial default results can take four days; custom results can take at least 48 hours. If the default omits pilot content, agree the missing scope and verify entitlement before requesting a custom assessment. Additional on-demand classification is separate and potentially metered; reviewing existing assessment results does not require activating that scan. [Assessment instructions](https://learn.microsoft.com/en-us/purview/data-security-posture-management-oversharing).
 
 2. **Sharing-link activity reports.** In the SharePoint admin center, open **Reports > Data access governance > Sharing links**. Run/export the Anyone, People in the organization, and Specific people shared externally reports. Wait for completion, which can take 24 hours. The portal reports SharePoint; OneDrive activity reporting uses PowerShell. These show recent activity and complement the permission baseline. [Sharing-link instructions](https://learn.microsoft.com/en-us/sharepoint/data-access-governance-sharing-links-report).
 
@@ -181,11 +187,37 @@ For label distribution, use **Reports > Data access governance > Sensitivity lab
 
 For recent EEEU changes, use **Data access governance > Activity reports > Shared with 'Everyone except external users' > View reports**. Retain filters for site template, privacy, sensitivity and report type. Allow up to 24 hours; the portal covers SharePoint, with OneDrive available through the documented PowerShell path. This activity evidence is distinct from the item-permission snapshot. [EEEU activity instructions](https://learn.microsoft.com/en-us/sharepoint/data-access-governance-everyone-except-external-user-report).
 
+### DSPM subscriptions and PAYG
+
+DSPM is a view across capabilities with different licensing and billing models. Existing
+audit, DLP, labels and Microsoft 365 posture evidence use the applicable subscriptions;
+advanced features still require their own entitlements. The report does not verify active
+billing meters. Check **Purview Usage center > Pay-as-you-go and Premium usage** with
+the service owner. [Usage center](https://learn.microsoft.com/en-us/purview/purview-billing-usage).
+
+| Capability | Billing distinction |
+|---|---|
+| Microsoft 365 Copilot interactions | Excluded from the AI consumption charges described in the billing guide; applicable Copilot and Purview subscriptions still apply. |
+| Other AI interaction management | Applicable configurations use PAYG. Purview management of Security Copilot interactions requires PAYG; do not assume every AI application has Copilot's treatment. |
+| Network data security and inline cloud-app protection in Edge | PAYG capabilities, separate from regular licensed Endpoint DLP. |
+| On-demand classification of historical content | A separate potentially metered scan. The billing overview lists PAYG; current feature guidance permits PAYG, per-user licensing or both. Verify the entitlement and any estimate before initiation. |
+| Non-Microsoft 365 sources | Applicable protection/governance capabilities for Azure, Fabric and third-party data use their meters. |
+
+Microsoft references: [billing models](https://learn.microsoft.com/en-us/purview/purview-billing-models),
+[on-demand classification](https://learn.microsoft.com/en-us/purview/on-demand-classification),
+[Security Copilot interaction management](https://learn.microsoft.com/en-us/purview/ai-security-copilot).
+Reuse completed evidence first. A missing result is not a direction to enable PAYG or
+purchase every DSPM capability. Both workbooks retain this guidance and its checked date.
+
 ### When a report is unavailable
 
 Record the exact report and question it would answer, affected users/sites/workloads, latest completed date if any, and the portal's reason: missing role, unavailable entitlement, unprovisioned feature, still running, export failure or unsupported schema. Have the workload owner confirm the reason and any alternative evidence. Do not relabel a lifecycle report as DSPM, infer exposure from sharing defaults, or enter zero for an unavailable metric. Retain completed empty exports with their scope/status; a header-only file cannot establish assurance. Unavailable required evidence qualifies the readiness conclusion; it is not itself a confirmed control failure or a purchase recommendation.
 
 ## Customer email draft
+
+Tailor the request below to the generated **Evidence Requests** tab. Remove items already
+collected or outside the agreed scope. Collecting existing reports does not require
+activating PAYG, and the assessment does not start new scans or policies.
 
 **Subject: Copilot readiness assessment — remaining reports and access checks**
 
@@ -208,15 +240,16 @@ For an agreed Restricted assessment, use `--env-file .env.restricted` on both co
 
 The assessment automatically saves `collection.json` in `Reports/<customer>/<date>/` and prints its location. Use `--customer-name "Example Customer"` to choose the customer folder name. No save option is required. The access check alone does not create a collection.
 
-Please collect the following using the instructions above:
+For the remaining evidence identified in the report, please return only the applicable items:
 
-- **SharePoint and OneDrive permission baselines**, plus Sharing links and Everyone/EEEU reports. Use SharePoint admin center > Reports > Data access governance. Item-level Everyone/EEEU detail needs the additional SharePoint Advanced Management Administrator role.
-- **Purview data risk assessment**, including the completed result, scope and date. Use Purview > DSPM > Discover > Data risk assessments. Viewing an assessment and viewing its file details can require different permissions.
-- **Copilot Readiness** and, if paid Copilot is already deployed, **Copilot Usage**, from Microsoft 365 admin center > Reports > Usage > Microsoft Copilot. Please export them separately; readiness does not measure actual usage.
+- **Missing SharePoint/OneDrive reports:** first reuse results downloaded by the live collector. For a missing result, use SharePoint admin center > Reports > Data access governance. Let running reports finish; generate only missing/stale reports. After completion we can retry automatic download, with manual export as the fallback. Item-level Everyone/EEEU detail needs the additional SharePoint Advanced Management Administrator role.
+- **Existing Purview data risk assessment:** include the completed result, scope and date from Purview > DSPM > Discover > Data risk assessments. The weekly default covers the top 100 SharePoint sites by usage. Confirm the intended scope and entitlement before any extra assessment or classification; this request does not ask you to enable PAYG. Viewing an assessment and its file details can require different permissions.
+- **Copilot Readiness**, if the technical-app evidence is missing. Paid usage is collected automatically; we will identify specific missing usage or portal fields separately. Usage and Readiness measure different things. Full Usage, Security and Optimize PDFs are optional.
+- **Compliance Manager AI Baseline**, if that reference is in scope: open the AI Baseline assessment and select Export actions. Preserve the Excel workbook's dates and assessment metadata. DSPM recommended-policy completion is a separate portal review.
 
 SAM and advanced Purview features depend on your licensing. We can review your existing subscriptions and any unavailable options before recommending changes. Missing reports will be recorded as limitations so that we can distinguish an access issue, a licensing gap and a finding that needs remediation.
 
-Please upload the entire portable assessment folder and any later original portal exports through [secure transfer location]. Include the report date, selected users/sites/workloads, any filters, and completion status. If an export is empty, include its completion/scope details; if an operation fails, provide the error with secrets removed. Initial Microsoft scans can take several days, so please start missing reports ahead of our review session.
+Please upload the entire portable assessment folder and any later original portal exports through [secure transfer location]. Include the report date, selected users/sites/workloads, any filters, and completion status. If an export is empty, include its completion/scope details; if an operation fails, provide the error with secrets removed. New reports can take several days, so allow time only for the missing reports the owner agrees to generate.
 
 With the saved collection and exports, we can rebuild the HTML assessment and evidence workbook offline without another tenant sign-in. We will identify the original collection date and any remaining evidence gaps in the updated report.
 

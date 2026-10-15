@@ -202,6 +202,7 @@ async def orchestrate(
                   "Purview", "Power Platform", "Copilot Studio". Empty list or None = all services.
     """
     try:
+        phase('access')
         from .cli_parser import resolve_live_permission_profile
         permission_profile = resolve_live_permission_profile(
             permission_profile, preview_collectors, legacy_power_platform_collector
@@ -461,6 +462,7 @@ async def orchestrate(
                 'baseline': baseline, 'portal_review': portal_review,
             },
         )
+        phase('collection')
         checkpoint.save()
         sharepoint_data = {"available": False, "reason": "SharePoint governance collection was not attempted."}
         if permission_profile == 'restricted':
@@ -577,6 +579,7 @@ async def orchestrate(
         # cross-service Copilot data-governance recommendation.
         saved = await run_checkpointed_pipelines(pipelines, checkpoint)
         collection_progress.stop()
+        phase('reports')
         
         from .console_reporting import detail, status, print_collection_handoff
         detail(f"[{get_timestamp()}] Collection tasks finished.")

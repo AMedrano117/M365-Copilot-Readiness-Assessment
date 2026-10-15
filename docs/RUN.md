@@ -112,7 +112,13 @@ The live run saves progress before workload collection and updates it as each se
 
 Graph, Entra, Defender and AI usage read requests retry transient failures up to four times. Retry sleeps total at most 120 seconds per request, excluding HTTP request timeouts. Server `Retry-After` values are honored; a delay beyond the remaining budget stops the read with an explanation. Successfully collected pages are retained as partial evidence, never represented as a complete inventory.
 
+The final `--check-connections` banner distinguishes **COMPLETE**, **COMPLETE WITH WARNINGS** and **COMPLETE WITH ISSUES**. License limitations, partial or unavailable feature coverage, optional delegated access and browser sign-ins planned during collection are warnings. Failed reads and missing permissions, roles, modules, configuration or an unavailable required sign-in remain issues. A short receipt after the evidence plan counts successful checks, warnings, failures and required setup, then names the affected sources. Preflight does not complete planned browser sign-ins or establish full dataset coverage. These display categories do not change connection exit codes or collection policy.
+
 ### Read the console and copy the next command
+
+Numbered stages show how far the script has progressed through setup, access verification, tenant collection and report generation. Offline runs use three stages: setup, input loading and report generation. The final **RUN COMPLETE**, **RUN FAILED** or **RUN INTERRUPTED** block shows total elapsed time, finish time and each started stage's duration. During live collection, interactive terminals also show dataset progress bars with a running timer. Use `--no-progress` to hide the bars; numbered stages and timings still appear in plain or redirected output. Stage counts describe execution progress; the assessment decision and source gaps describe readiness and evidence coverage.
+
+Connection checks use **CONNECTION CHECKS COMPLETE** or **CONNECTION CHECKS NEED ATTENTION** for their final summary. A nonzero check result retains its exit code for automation; review the individual collector rows for failed probes, missing access or required sign-ins. Startup errors and unexpected exceptions still show **RUN FAILED**.
 
 The default console shows collection progress, warnings or failures, the deployment decision and action counts, report locations, and the final **COLLECTION INPUT** handoff. Each default build writes four primary deliverables: the one-page pilot readiness **Summary** (`Readiness Summary - <company>.html`, the file `--open-html-report` opens), the full **HTML** report, the **Assessment workbook**, and the **Technical evidence workbook**. The summary links to the full report's actions, and the full report links back to the summary and directly to the workbooks. Linked evidence pages require `--extra-exports evidence-pages`; select them explicitly for each run. Copy the collection input's entire path into `--collection-input`, or copy the offline command printed immediately below it and add `--reports-dir` for new exports. Use the file shown there: a live package has `collection.json`; a build made only from exports or earlier reports has `rebuild.json`. Neither the HTML report, Excel workbook nor an assessment JSON is a collection input. Preflight-only runs do not create one.
 
@@ -174,6 +180,26 @@ The package saves the lifecycle window and each confirmed date against the file'
 
 ### Admin-center PDFs and screenshots
 
+Use **Evidence to obtain next** in the HTML, or **Evidence Requests** in either workbook,
+to request specific missing fields after collection. Retry the supported live collector
+when its data is missing. Usage, Security and Optimize PDFs remain optional context;
+request only relevant portal details that the collectors do not supply.
+
+For SharePoint DAG, Standard collection reads the report inventory and downloads existing
+completed results automatically. It does not create new reports. Check download outcomes,
+dates and workload/site scope; a Completed inventory entry alone is insufficient. Let
+running reports finish before retrying. Ask an administrator to generate only missing or
+stale reports, then rerun collection. Manually exporting those specific results is the
+fallback. Restricted collection uses owner-provided exports and preserves its exclusions.
+
+For DSPM, request existing completed data risk assessment results with scope and date.
+The default assessment runs weekly over the top 100 SharePoint sites by usage; that scope
+may not cover the pilot content. A custom assessment, on-demand classification and added
+protections are separate operations. The report's **DSPM scope and billing** panel and
+**DSPM Billing Guidance** workbook tab explain subscriptions and potentially metered
+capabilities; confirm the tenant's entitlement before starting more work. Collection
+does not activate PAYG or verify the customer's billing configuration.
+
 Run live collection first. Paid Copilot activity aggregates, subscription seats and returned
 Copilot DLP details are collected automatically with existing access. Request screenshots only
 for relevant remaining portal details or optional visual context; see the [coverage table](COPILOT_AUTOMATIC_COLLECTION.md).
@@ -187,6 +213,58 @@ Include PDFs in `--reports-dir`; PDF subfolders are included and duplicate conte
 ```
 
 The saved package includes the generated JSON and assets, so subsequent rebuilds restore them without OCR. Review the embedded contents before distributing the HTML. `--portal-review` remains available for a curated JSON manifest and accepts a PDF folder for compatibility. Input validation and PDF preparation happen before live authentication. If later packaging fails, the error prints the saved collection path for offline recovery.
+
+### Compliance Manager AI Baseline actions
+
+In Purview **Compliance Manager**, open the **AI Baseline** assessment and select
+**Export actions**. Microsoft describes this Excel export as including Microsoft and
+customer improvement actions, implementation status, test results and dates.
+[Microsoft assessment and export instructions](https://learn.microsoft.com/en-us/purview/compliance-manager-assessments).
+
+Put the `.xlsx` in `--reports-dir`, or select it explicitly:
+
+```powershell
+python main.py --mode offline `
+  --run-type Standalone `
+  --collection-input "<collection-input>" `
+  --ai-baseline-export ".\output\customer\exports\ai-baseline.xlsx"
+```
+
+Repeat `--ai-baseline-export` for separate snapshots. Recognized action tables retain
+Microsoft's statuses verbatim in the HTML and **AI Baseline Actions** / **AI Baseline Sources**
+tabs in both workbooks. **AI Baseline Review Queue** orders customer actions for owner
+review: reported high-risk failures and source conflicts first, then unverified actions
+by remaining Microsoft compliance points. Passed actions and Microsoft-managed actions
+are kept outside this queue. These statuses do not pass technical controls, close local actions
+or change readiness. Dates are retained, identical exports are included once, and distinct
+dated exports remain separate. Packaged inputs restore on offline rebuild; snapshot
+renders retain the original reference review.
+
+`Standalone` explicitly creates a new review with the added evidence, without claiming
+reassessment continuity. For a linked reassessment, use the run ownership/history options
+in [assessment runs](ASSESSMENT_RUNS.md). A completed run otherwise renders its retained
+snapshot and requires an explicit run type when adding evidence.
+
+Keep the original assessment/regulation metadata and tenant GUID when supplied. Tenant
+GUID mismatches are rejected. Missing identity or dates remain unverified; filenames,
+display names and filesystem timestamps cannot supply them. The native multi-sheet
+layout is validated against a supplied demo-tenant export and synthetic regression
+workbooks. **Action Update**, **Improvement Action Details** and **Customer Managed** are
+reconciled into one customer action per scoped action, retaining IDs, solution, points,
+control mappings and original source records. **Microsoft Managed** remains separate.
+Ambiguous joins are rejected; conflicting statuses/dates are preserved for review.
+The instruction sheet is not applied; no workbook edits are submitted to Microsoft.
+
+Native month/day timestamps are parsed, with year-0001 sentinel dates left unset.
+When the update sheet omits the timezone but its printed clock matches an offset-bearing
+customer record, the explicit timestamp is retained with that qualification. This
+layout supplies no tenant GUID or export date; those remain unverified even when a
+tenant GUID is supplied separately. Unknown layouts still require schema review.
+
+Compliance Manager AI Baseline is separate from DSPM's recommended policies. The live
+collectors read supported policy configuration, but do not enumerate the complete DSPM
+recommendation catalog or its completion states. Review those in the portal for the
+specific unresolved topics; the AI Baseline import does not replace that review.
 
 ### More than one Copilot readiness export
 
@@ -205,7 +283,7 @@ it. A PDF skipped warning does not stop other imports; consult the warning and i
 
 ## Portable assessment folder
 
-A default live assessment keeps its collection, original inputs and reports together under the customer's folder. Assessments use a short UTC date, adding ` (2)` for another assessment on the same date. Builds are numbered `1`, `2`, and so on; replay retains earlier reports. To move the assessment, copy the whole assessment folder and replay the copy's `collection.json`:
+A default live assessment keeps its collection, original inputs and reports together under the customer's folder. Initial assessments use a short UTC date, adding ` (2)` for another Initial assessment on the same date. Reassessments stay under the original assessment folder in numbered `Runs` subfolders, each with its own collection and report builds. Builds are numbered `1`, `2`, and so on; replay retains earlier reports. Use `--env-file customer.env --reassess '<original assessment-history.json>'` to select and confirm a completed comparison baseline. History is maintained automatically. See [assessment runs](ASSESSMENT_RUNS.md#reassessment-shortcut). To move the assessment, copy the whole assessment folder and replay the copy's `collection.json`:
 
 ```text
 Reports/<customer>/<date>/

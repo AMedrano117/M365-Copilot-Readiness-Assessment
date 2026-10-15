@@ -511,7 +511,7 @@ GAP_GUIDANCE = {
     "CONTENT.OWNERSHIP": ("Site ownership and activity were not collected.",
                           "Run with a SharePoint administrator sign-in or certificate, or review SharePoint admin center > Active sites for sites without owners and sites with no recent activity."),
     "DATA.LABELS": ("Sensitivity label definitions were not collected.",
-                    "Grant InformationProtectionPolicy.Read.All or enable Purview PowerShell collection, or confirm the labels in the Microsoft Purview portal."),
+                    "Grant SensitivityLabels.Read.All or enable Purview PowerShell collection, or confirm the labels in the Microsoft Purview portal."),
     "DATA.PUBLISHING": ("Sensitivity label publishing policies were not collected.",
                         "Enable Purview PowerShell collection (setup-service-principal.ps1 -WorkloadRbac GlobalReader), or confirm in the Microsoft Purview portal that labels are published to users."),
     "DATA.DLP": ("Data loss prevention policies were not collected.",

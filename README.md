@@ -47,7 +47,15 @@ The normal full run collects supported evidence for:
 - SharePoint and OneDrive sharing defaults, anonymous-link behavior, site deviations, legacy authentication, and existing Data Access Governance report status.
 - Purview DLP policies and rules, sensitivity labels and policies, retention, rights management, and audit configuration.
 
-The assessment never starts a Microsoft scan, report, site review, export, or remediation action.
+The assessment reads and downloads existing completed reports. It never starts a new
+Microsoft scan, report or site review, or changes tenant policies.
+
+The report requests specific missing evidence after collection. Copilot admin-center
+PDFs remain optional. Both workbooks include **Evidence Requests** and **DSPM Billing Guidance**;
+an optional Compliance Manager **AI Baseline Export actions** workbook adds Microsoft-reported
+action statuses as reference evidence without changing readiness.
+See [collection coverage](docs/COPILOT_AUTOMATIC_COLLECTION.md) and
+[AI Baseline import](docs/RUN.md#compliance-manager-ai-baseline-actions).
 
 The identity section includes [MFA method strength and defaults](docs/MFA_METHODS.md): registered methods, phone-only MFA registration, phishing-resistant registrations, user-selected defaults, system preferences, and member/guest/administrator breakdowns. These use the existing Graph registration report; no PDF export or additional endpoint is needed.
 
@@ -96,7 +104,7 @@ The report also includes a **Getting started** section: a 30/60/90-day roadmap t
 
 An explicitly selected `--env-file` must exist and be readable. Before authentication, the console shows the effective tenant, application, profile, authentication method and configured SharePoint URL without credential values. Setup verifies reused secrets, records their key ID/expiry, and saves new credentials before consent or workload configuration. See [setup recovery and rotation](docs/prereq.md).
 
-These commands retain the existing Standard default. Existing Standard apps need new administrator consent for `SharePointTenantSettings.Read.All`, `ReportSettings.Read.All`, `InformationProtectionPolicy.Read.All`, `Exchange.ManageAsApp`, `Directory.Read.All` and `SecurityAlert.Read.All` when those grants are absent; Restricted apps need the first two. Neither profile requests `UserAuthenticationMethod.Read.All`; the MFA registration report uses `AuditLog.Read.All`. Setup's delegated administrator scopes are separate from runtime application grants. `--services` limits collection without revoking consent, and removing manifest entries does not revoke earlier grants. Restricted setup and preflight stop on excess requested or granted application permissions; see [cleanup guidance](docs/PERMISSIONS.md#existing-applications-and-credentials).
+These commands retain the existing Standard default. Existing Standard apps need new administrator consent for `SharePointTenantSettings.Read.All`, `ReportSettings.Read.All`, `SensitivityLabels.Read.All`, `Exchange.ManageAsApp`, `Directory.Read.All` and `SecurityAlert.Read.All` when those grants are absent; Restricted apps need the first two. Neither profile requests `UserAuthenticationMethod.Read.All`; the MFA registration report uses `AuditLog.Read.All`. Setup's delegated administrator scopes are separate from runtime application grants. `--services` limits collection without revoking consent, and removing manifest entries does not revoke earlier grants. Restricted setup and preflight stop on excess requested or granted application permissions; see [cleanup guidance](docs/PERMISSIONS.md#existing-applications-and-credentials).
 
 Use [RUN.md](docs/RUN.md) as the canonical operator runbook: prepare, collect and save, add exports, rebuild and review. [prereq.md](docs/prereq.md) covers connected access and setup; [the portal guide](docs/PORTAL_REPORTS_AND_OFFLINE.md) covers report requests and validated export schemas.
 
@@ -144,6 +152,8 @@ Live collection includes paid Copilot prompt aggregates, subscription seat count
 ### Console detail and colors
 
 Default output keeps progress, warnings, the decision, action counts and output paths visible. Add `--verbose` (or `-v`) for processing details, source provenance, actions by assessment area and input receipts. The workbook and structured operator log retain detailed results in either mode.
+
+Numbered stages show where the run is in setup, access verification, collection and report generation. Offline runs show input loading and report generation. Every run ends with total elapsed time, finish time and durations for each started stage; failures and interruptions retain their timings. Interactive collection bars continue to show dataset progress and elapsed time. `--no-progress` hides those bars while keeping stage messages and the timing summary visible, including in redirected logs.
 
 Color defaults to `--color auto`: interactive terminals use color; redirected output and `NO_COLOR` use plain text. `--color never` disables it, and `--color always` explicitly forces it. See [the console workflow](docs/RUN.md#read-the-console-and-copy-the-next-command) for examples.
 

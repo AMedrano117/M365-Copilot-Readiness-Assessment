@@ -52,10 +52,21 @@ function Test-ModuleInstalled {
     param([string]$ModuleName, [version]$MinimumVersion = [version]'0.0')
     $manifestPath = Find-ModuleManifest -ModuleName $ModuleName
     if ([string]::IsNullOrWhiteSpace($manifestPath)) { return $false }
+    $manifestWarnings = @()
     try {
-        $manifest = Test-ModuleManifest -Path $manifestPath -ErrorAction Stop
+        $manifest = Test-ModuleManifest -Path $manifestPath -ErrorAction Stop -WarningAction SilentlyContinue -WarningVariable manifestWarnings
         return $manifest.Version -ge $MinimumVersion
     } catch { return $false }
+    finally {
+        foreach ($manifestWarning in $manifestWarnings) {
+            if ([string]$manifestWarning -eq "The module manifest member 'ModuleToProcess' has been deprecated. Use the 'RootModule' member instead.") {
+                Write-Host "  [INFO] $ModuleName uses the older ModuleToProcess manifest field (now called RootModule). This is a module packaging notice; validation and minimum-version checks still apply." -ForegroundColor Cyan
+            } else {
+                # Keep all other warnings visible, including compatibility warnings.
+                Write-Warning ([string]$manifestWarning)
+            }
+        }
+    }
 }
 
 function Show-ModuleStatus {

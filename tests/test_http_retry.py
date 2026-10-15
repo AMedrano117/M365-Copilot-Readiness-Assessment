@@ -103,6 +103,63 @@ class CollectorRetryTests(unittest.IsolatedAsyncioTestCase):
     def raw_client(self, responder, base='https://graph.microsoft.com'):
         return httpx.AsyncClient(base_url=base, transport=httpx.MockTransport(responder))
 
+    async def test_report_probe_distinguishes_graph_and_download_transport_failures(self):
+        from Core.connection_validation import _graph_probe, FAILED
+        for stage in ('graph', 'download'):
+            with self.subTest(stage=stage):
+                seen = []
+                def respond(request):
+                    seen.append(request)
+                    if request.url.host == 'graph.microsoft.com' and stage == 'download':
+                        return httpx.Response(302, headers={'Location': 'https://reportsncu.office.com/data/download/private-token'})
+                    raise httpx.ReadError('private-token network failure', request=request)
+                graph = GraphRestClient.__new__(GraphRestClient)
+                graph.credential = SimpleNamespace(get_token=lambda scope: SimpleNamespace(token='synthetic'))
+                graph.max_retries = 1
+                graph._http = httpx.AsyncClient(base_url='https://graph.microsoft.com', follow_redirects=True,
+                                              transport=httpx.MockTransport(respond))
+                try:
+                    result = await _graph_probe(graph, 'm365_usage',
+                                                "/v1.0/reports/getOffice365ActiveUserCounts(period='D7')",
+                                                {'Reports.Read.All'}, {'Reports.Read.All'}, accept='text/csv')
+                finally:
+                    await graph.aclose()
+                self.assertEqual(FAILED, result['status'])
+                self.assertEqual(stage, result['failure_stage'])
+                self.assertEqual('reportsncu.office.com' if stage == 'download' else '', result['failure_host'])
+                self.assertIn('Reports.Read.All is present', result['reason'])
+                self.assertIn('reportsncu.office.com' if stage == 'download' else 'reports.office.com', result['reason'])
+                self.assertNotIn('private-token', str(result))
+                if stage == 'download':
+                    self.assertIn('after Graph accepted', result['reason'])
+                    downloads = [request for request in seen if request.url.host == 'reportsncu.office.com']
+                    self.assertEqual(2, len(downloads))
+                    self.assertTrue(all('Authorization' not in request.headers for request in downloads))
+                else:
+                    self.assertIn('before download', result['reason'])
+
+    async def test_report_redirect_download_succeeds_without_forwarding_graph_token(self):
+        from Core.connection_validation import _graph_probe, READY
+        seen = []
+        def respond(request):
+            seen.append(request)
+            if request.url.host == 'graph.microsoft.com':
+                return httpx.Response(302, headers={'Location': 'https://reports.office.com/data/download/private-token'})
+            return httpx.Response(200, text='Report Date,Office 365\n2026-10-01,2\n')
+        graph = GraphRestClient.__new__(GraphRestClient)
+        graph.credential = SimpleNamespace(get_token=lambda scope: SimpleNamespace(token='synthetic'))
+        graph.max_retries = 1
+        graph._http = httpx.AsyncClient(base_url='https://graph.microsoft.com', follow_redirects=True,
+                                      transport=httpx.MockTransport(respond))
+        try:
+            result = await _graph_probe(graph, 'm365_usage', '/v1.0/reports/report',
+                                        {'Reports.Read.All'}, {'Reports.Read.All'}, accept='text/csv')
+        finally:
+            await graph.aclose()
+        self.assertEqual(READY, result['status'])
+        self.assertEqual('Bearer synthetic', seen[0].headers['Authorization'])
+        self.assertNotIn('Authorization', seen[1].headers)
+
     async def test_defender_preflight_retries_temporary_throttling(self):
         from Core.connection_validation import _defender_probe, READY
         client = SimpleNamespace(get=AsyncMock(side_effect=[
