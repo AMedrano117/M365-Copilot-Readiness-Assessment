@@ -402,8 +402,15 @@ async def orchestrate(
         run_package_directory = None
         if run_type:
             from .assessment_runs import prepare_run
-            from .export_paths import new_assessment_directory
-            if save_collection_path is None:
+            from .export_paths import new_assessment_directory, new_reassessment_directory
+            if run_type == 'Reassessment' and save_collection_path is None:
+                run_execution = prepare_run(run_type,tenant_id,evaluated_at=evaluation_date,
+                    history_path=assessment_history,assessment_id=assessment_id,
+                    baseline_run_id=baseline_run_id,purpose=assessment_purpose,
+                    environment_id=primary_environment_id,delta_enabled=delta_mode!='disabled')
+                run_package_directory = new_reassessment_directory(run_execution)
+                save_collection_path = str(run_package_directory / 'collection.json')
+            elif save_collection_path is None:
                 run_package_directory = new_assessment_directory(customer_name=customer_name,
                     tenant_name=tenant_name,tenant_id=tenant_id)
                 save_collection_path = str(run_package_directory / 'collection.json')
@@ -413,11 +420,12 @@ async def orchestrate(
                 run_package_directory = selected_path.with_name(selected_path.stem + '_package')
                 if run_package_directory.exists():
                     run_package_directory = selected_path.with_name(selected_path.stem + '_package_' + uuid4().hex[:8])
-            run_execution = prepare_run(run_type,tenant_id,evaluated_at=evaluation_date,
-                history_path=assessment_history or (run_package_directory / 'assessment-history.json'
-                                                   if run_type=='Initial' else None),
-                assessment_id=assessment_id,baseline_run_id=baseline_run_id,purpose=assessment_purpose,
-                environment_id=primary_environment_id,delta_enabled=delta_mode!='disabled')
+            if run_execution is None:
+                run_execution = prepare_run(run_type,tenant_id,evaluated_at=evaluation_date,
+                    history_path=assessment_history or (run_package_directory / 'assessment-history.json'
+                                                       if run_type=='Initial' else None),
+                    assessment_id=assessment_id,baseline_run_id=baseline_run_id,purpose=assessment_purpose,
+                    environment_id=primary_environment_id,delta_enabled=delta_mode!='disabled')
         else:
             console.status('Legacy run intent is unclassified; no Initial run or baseline-run identity is inferred.', 'warning')
         from .lifecycle_report_settings import lifecycle_settings

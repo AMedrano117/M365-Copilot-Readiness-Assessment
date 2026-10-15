@@ -118,9 +118,18 @@ class LiveRunExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(history['Runs']),1,self.fixture.output.getvalue())
         self.assertTrue((history_path.parent / 'collection.json').is_file())
         self.assertTrue((history_path.parent / 'run-seed.json').is_file())
+        initial_collection = (history_path.parent / 'collection.json').read_bytes()
+        initial_snapshot = (history_path.parent / history['Runs'][0]['SnapshotLocator']).read_bytes()
         await self.fixture.run_assessment(run_type='Reassessment',assessment_id=history['AssessmentId'],
             baseline_run_id=history['InitialRunId'],assessment_history=history_path,evaluation_date='2026-09-16')
         self.assertEqual(len(read_history(history_path)['Runs']),2,self.fixture.output.getvalue())
+        current = read_history(history_path)['Runs'][-1]
+        package = (history_path.parent / current['PackageLocator']).resolve()
+        self.assertEqual(package, history_path.resolve().parent / 'Runs' / '1')
+        self.assertTrue((package / 'collection.json').is_file())
+        self.assertTrue((package / 'Builds' / '1').is_dir())
+        self.assertEqual((history_path.parent / 'collection.json').read_bytes(), initial_collection)
+        self.assertEqual((history_path.parent / history['Runs'][0]['SnapshotLocator']).read_bytes(), initial_snapshot)
 
     async def test_explicit_live_save_destination_retains_one_owned_package(self):
         from Core.offline_collection import load_collection

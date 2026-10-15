@@ -26,6 +26,62 @@ and emit a diagnostic. They do not infer Initial intent or a baseline-run identi
 The narrow direct identity API retains its prior diagnostics interface. Shared
 builder results and serialized snapshots carry `run_workflow_diagnostics`.
 
+## Reassessment shortcut
+
+For a new assessment, `python main.py --env-file customer.env --run-type Initial`
+creates the history automatically. Then use the same customer's environment file
+and that history for subsequent reassessments:
+
+```powershell
+python main.py --env-file customer.env --reassess 'Reports/<customer>/<initial-date>/assessment-history.json'
+```
+
+The history is created and updated by the tool; do not populate or edit it manually.
+The shortcut reads the AssessmentId from validated history. In an interactive
+terminal, select a completed run and confirm it (a single candidate still needs
+confirmation). Blank input cancels. For unattended execution, add
+`--baseline-run-id '<completed RUN>'`. Delta calculation is enabled by default.
+The environment file provides tenant configuration and credentials; history does
+not supply credentials or restore collection scope. Keep compatible scope and settings.
+Offline reassessment uses `--collection-input '<newer saved collection.json>'`
+instead of an environment file. Replaying old evidence cannot verify remediation.
+
+`--reassess` cannot be combined with `--run-type`, `--replay-snapshot`,
+`--assessment-id`, `--assessment-history` or legacy `--baseline`.
+The explicit Reassessment command below remains supported.
+
+## Assessment folders and report builds
+
+By default, each reassessment stays under the original assessment package in a
+new numbered `Runs` folder. The Initial collection and builds remain unchanged:
+
+```text
+Reports/<customer>/<initial-date>/
+  assessment-history.json
+  collection.json
+  assessment-results/
+  Builds/1/
+  Runs/1/
+    collection.json
+    assessment-run.json
+    assessment-results/
+    Builds/1/
+  Runs/2/
+    ...
+```
+
+Report builds render a run; they do not append assessment history. Each completed
+reassessment appends one new run to the selected history. Different customers
+use separate histories. Independent Initial assessments for one customer also
+have separate histories; select the assessment you intend to continue.
+External histories use their recorded Initial package as the folder anchor
+(or the first completed package when the history starts with Standalone).
+Selecting a later baseline does not change the original folder anchor.
+An explicit live `--save-collection` retains its destination override.
+Existing packages are not moved. When history lives in the original package,
+moving that whole assessment tree preserves the nested runs' relative references.
+External history and its packages must move together within their common tree.
+
 ## Noninteractive examples
 
 Use fictional placeholders below with an explicitly verified tenant GUID.
@@ -50,7 +106,8 @@ The older `--baseline PATH` remains a legacy change-tracking compatibility
 interface. It cannot be combined with explicit Stage A run intent. Stage A never
 calls that legacy comparison path or emits its delta rows.
 
-New explicit runs create a new package. Saved collections and original inputs
+New explicit runs create a new package; reassessments default to nested `Runs`
+folders under the original package. Saved collections and original inputs
 are retained without rewriting their evidence. Supplemental recipe references
 and hashes remain portable. A completed explicit package's ordinary
 `--collection-input` path renders its retained snapshot without control evaluation.

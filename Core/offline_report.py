@@ -92,6 +92,8 @@ def run_offline_report(args):
     if len(tenant_guids) > 1:
         raise ValueError('The saved evidence identifies different tenants. Use one tenant per offline build.')
     expected_tenant_id = next(iter(tenant_guids), None) or next((value for value in candidates if value), None)
+    from .reassessment_cli import resolve_reassessment
+    args = resolve_reassessment(args, expected_tenant_id)
     from .pdf_report_import import prepare_pdf_review
     args.portal_review = prepare_pdf_review(args.reports_dir, getattr(args, 'portal_review', None),
                                             tenant_id=expected_tenant_id, evaluation_date=args.evaluation_date)
@@ -107,21 +109,25 @@ def run_offline_report(args):
     package_directory = None
     if explicit_type:
         from .assessment_runs import prepare_run
-        package_directory = new_offline_package((payload or {}).get('tenant_name') or args.tenant_name,
-            customer_name=getattr(args, 'customer_name', None), tenant_id=expected_tenant_id)
+        if explicit_type != 'Reassessment':
+            package_directory = new_offline_package((payload or {}).get('tenant_name') or args.tenant_name,
+                customer_name=getattr(args, 'customer_name', None), tenant_id=expected_tenant_id)
         run_execution = prepare_run(explicit_type, expected_tenant_id, evaluated_at=context['evaluation_date'],
             history_path=getattr(args,'assessment_history',None) or
                 (Path(package_directory) / 'assessment-history.json' if explicit_type=='Initial' else None),
             assessment_id=getattr(args,'assessment_id',None),baseline_run_id=getattr(args,'baseline_run_id',None),
             purpose=getattr(args,'assessment_purpose',None),environment_id=getattr(args,'primary_environment_id',None),
             delta_enabled=getattr(args,'delta_mode',None)!='disabled')
+        if explicit_type == 'Reassessment':
+            from .export_paths import new_reassessment_directory
+            package_directory = new_reassessment_directory(run_execution)
         context['identity'] = run_execution.identity
         if payload and payload.get('package_directory') and (Path(payload['package_directory']) / 'collection.json').is_file():
             # Retain raw evidence and its immutable input manifest for the new
             # execution. Prior semantic snapshots and render artifacts stay out.
             import shutil
             shutil.copytree(payload['package_directory'], package_directory, dirs_exist_ok=True,
-                ignore=shutil.ignore_patterns('Builds','Rebuilds','deliverables','assessment-results',
+                ignore=shutil.ignore_patterns('Builds','Rebuilds','Runs','Renders','deliverables','assessment-results',
                     'assessment-run.json','run-seed.json','assessment-history.json','run-seeds','rebuild.json','operator-log.jsonl'))
     else:
         from .console_reporting import status

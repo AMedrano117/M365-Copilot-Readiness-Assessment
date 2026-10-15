@@ -85,6 +85,24 @@ def new_deliverables_directory(package_directory):
     return new_numbered_directory(Path(package_directory) / BUILDS_FOLDER)
 
 
+def new_reassessment_directory(execution):
+    """Keep new evidence under the first completed package in owned history."""
+    from .assessment_history import read_history, select_baseline
+    history_path = Path(execution.history_path).resolve()
+    history = read_history(history_path)
+    if history['Integrity'] != execution.expected_hash:
+        raise ValueError('Assessment history changed since run preparation; retry explicitly.')
+    anchor_id = history.get('InitialRunId') or history['Runs'][0]['RunId']
+    select_baseline(history_path, assessment_id=execution.identity['AssessmentId'],
+                    environment_id=execution.identity['PrimaryEnvironmentId'], baseline_run_id=anchor_id)
+    anchor = next(row for row in history['Runs'] if row['RunId'] == anchor_id)
+    original_package = (history_path.parent / anchor['PackageLocator']).resolve()
+    runs = original_package / 'Runs'
+    if not runs.resolve().is_relative_to(original_package):
+        raise ValueError('Reassessment Runs directory must stay within the original assessment package.')
+    return new_numbered_directory(runs)
+
+
 def report_directory(output_dir=None, *, customer_name=None, tenant_name=None, tenant_id=None):
     """Direct exporters use the customer folder; report builds supply their run folder."""
     from .repository_provenance import require_publication

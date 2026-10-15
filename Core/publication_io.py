@@ -12,6 +12,12 @@ def linked_path(path):
     except FileNotFoundError: return False
 
 
+def nested_run_path(relative):
+    """A numbered child execution, distinct from its completed parent package."""
+    parts = Path(relative).parts
+    return len(parts)>=3 and parts[0]=='Runs' and parts[1].isascii() and parts[1].isdecimal() and int(parts[1])>0
+
+
 def validate_destination(path, *, artifact_kind=None):
     target = Path(os.path.abspath(path))
     for part in (target, *target.parents):
@@ -25,6 +31,11 @@ def validate_destination(path, *, artifact_kind=None):
             allowed={'Renders', 'Builds', 'deliverables', 'Rebuilds'}
             if artifact_kind=='run-seed':allowed.add('run-seeds')
             if artifact_kind=='operator-log' and relative.parts==('operator-log.jsonl',):continue
+            if relative.parts[0]=='Runs':
+                if relative.parts==('Runs','.publication-boundary'):
+                    continue
+                if nested_run_path(relative):
+                    continue
             if relative.parts[0] not in allowed:
                 raise ValueError('Publication cannot modify a completed assessment package.')
     return target

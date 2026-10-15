@@ -32,6 +32,7 @@ Examples:
   python main.py --services M365 Entra Defender
   python main.py --tenant-id "your-tenant-id" --services Purview
   python main.py --env-file .env.prod --services Purview
+  python main.py --env-file customer.env --reassess '<assessment-history.json>'
   python main.py --sam-report sam-permissions.csv --dspm-report dspm-assessment.csv
   python main.py --copilot-dashboard-export copilot-metrics.csv
   python main.py --power-platform-inventory power-platform-inventory.csv
@@ -238,6 +239,8 @@ Examples:
     )
     
     intent = parser.add_mutually_exclusive_group()
+    intent.add_argument('--reassess', metavar='HISTORY',
+        help='Reassess an existing assessment using its history. Reads the AssessmentId and asks you to select and confirm a completed baseline; unattended runs require --baseline-run-id. Use --env-file for the customer configuration.')
     intent.add_argument('--run-type', choices=['Initial','Reassessment','Standalone'],
         help='Explicit new semantic execution. Reassessment requires explicit --baseline-run-id; rendering preserves an existing run.')
     intent.add_argument('--replay-snapshot', metavar='PATH',
@@ -253,9 +256,18 @@ Examples:
     if sum(value=='--run-type' or value.startswith('--run-type=') for value in sys.argv[1:])>1:
         parser.error('Select one explicit --run-type per execution.')
     args = parser.parse_args()
+    if args.reassess is not None:
+        if not args.reassess.strip():
+            parser.error('--reassess requires a nonblank history path.')
+        if sum(value=='--reassess' or value.startswith('--reassess=') for value in sys.argv[1:])>1:
+            parser.error('Select one --reassess history per execution.')
+        if args.assessment_id or args.assessment_history:
+            parser.error('--reassess obtains ownership from history; omit --assessment-id and --assessment-history.')
+        args.run_type = 'Reassessment'
+        args.assessment_history = args.reassess
     if args.delta_mode and args.run_type!='Reassessment':
         parser.error('--delta-mode requires an explicit Reassessment run.')
-    if args.run_type=='Reassessment' and not (args.assessment_id and args.baseline_run_id and args.assessment_history):
+    if args.run_type=='Reassessment' and not args.reassess and not (args.assessment_id and args.baseline_run_id and args.assessment_history):
         parser.error('Reassessment requires --assessment-id, --baseline-run-id and --assessment-history.')
     if args.run_type!='Reassessment' and args.baseline_run_id:
         parser.error('--baseline-run-id requires explicit Reassessment intent.')

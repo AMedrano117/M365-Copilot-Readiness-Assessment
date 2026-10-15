@@ -127,6 +127,11 @@ def build_run_plan(args, *, revision=None, generated_at=None):
             try:validate_destination(get(role))
             except (ValueError,OSError):errors.append('protected_output_destination')
     output=get('render_output_dir') or get('save_collection') or get('snapshot_json') or 'Reports/<customer>/<date>/Builds/<new-number>'
+    if intent=='Reassessment' and baseline['completion']=='completed' and not any((get('render_output_dir'),get('save_collection'),get('snapshot_json'))):
+        anchor_id=history.get('InitialRunId') or history['Runs'][0]['RunId']
+        anchor=next(row for row in history['Runs'] if row['RunId']==anchor_id)
+        package=(Path(get('assessment_history')).resolve().parent/anchor['PackageLocator']).resolve()
+        output=package/'Runs'/'<new-number>'/'Builds'/'<new-number>'
     from .repository_provenance import input_selection_count
     supplied={key:input_selection_count(key,get(key)) for key in INPUTS if get(key)}
     for key,values in (saved.get('inputs') or {}).items():

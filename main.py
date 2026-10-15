@@ -46,6 +46,14 @@ def main():
             sys.exit(1)
     from Core.effective_configuration import resolve_effective
     args, _, resolution_errors = resolve_effective(args)
+    if getattr(args, 'reassess', None):
+        from Core.reassessment_cli import resolve_reassessment
+        try:
+            args = resolve_reassessment(args, args.tenant_id)
+            args, _, resolution_errors = resolve_effective(args)
+        except (ValueError, OSError) as exc:
+            status(f'Reassessment error: {exc}', 'error')
+            sys.exit(2)
     plan = build_run_plan(args)
     print_run_plan(plan)
     if not plan['execution_eligible']:

@@ -296,7 +296,7 @@ Review the customer report in this order:
 
 Use the technical workbook to verify source dates, selected/superseded files, coverage, detailed objects and prior evidence. Missing and unknown values differ from measured zero. A complete report can still conclude that readiness is unconfirmed. Adoption opportunities and unavailable optional capabilities do not become security blockers.
 
-For an integrity warning, review the workbook and `.cache/collector_diagnostics.log` before using the report for deployment approval. After remediation, a **new live collection** verifies changed tenant settings; replaying old evidence cannot do that. Use `--baseline` to compare with a prior workbook or assessment snapshot.
+For an integrity warning, review the workbook and `.cache/collector_diagnostics.log` before using the report for deployment approval. After remediation, a **new live collection** verifies changed tenant settings; replaying old evidence cannot do that. Use `--env-file customer.env --reassess '<assessment-history.json>'` for an evidence-derived delta pass. Select and confirm the completed baseline, or provide `--baseline-run-id` for unattended execution. The older `--baseline` retains a prior workbook or snapshot as historical context.
 
 ## Preview and recovery workflows
 
@@ -385,6 +385,7 @@ Run `.\.venv\Scripts\python.exe main.py --help` for the implemented CLI. Keep `-
 | `--power-platform-inventory PATH` | Import an optional Manage > Inventory CSV. |
 | `--assessment-profile PATH`, `--provider-evidence PATH` | Scope use cases and agents/external providers. The assessment profile also accepts dated control-owner reviews and pilot/expansion records; see [Readiness reviews](READINESS_REVIEWS.md). |
 | `--baseline PATH`, `--snapshot-json PATH` | Compare with an earlier result and optionally write the existing shared assessment result as one JSON file to a chosen path. This does not enable extra export folders; assessment JSON is not a replayable collection. |
+| `--reassess HISTORY`, `--baseline-run-id RUN` | Read assessment ownership from history, select and confirm a completed baseline, and save new evidence beneath the original package in `Runs/`. Unattended execution requires the exact baseline RUN. Use the customer's `--env-file` for live collection. |
 | `--extra-exports evidence-pages` | Add linked HTML evidence pages in `Evidence/`. Default builds omit this companion folder. |
 | `--preview-collectors auto\|none\|entra-recommendations\|power-platform\|shadow-ai\|network-access\|copilot-audit\|all` | Default `auto`: Standard attempts Entra recommendations, Shadow AI discovery and Copilot audit; Restricted resolves to none. Explicit selections preserve compatibility. Audit waits up to `COPILOT_AUDIT_MAX_WAIT_MINUTES` (default 8) and retains bounded metadata rows. Beta sources cannot independently pass foundation controls. |
 | `--sharepoint-admin-url URL` | Actual SharePoint admin-center HTTPS origin; overrides the selected environment's `SHAREPOINT_ADMIN_URL`. No tenant-domain inference. |
