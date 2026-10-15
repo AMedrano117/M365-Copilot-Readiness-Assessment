@@ -22,6 +22,11 @@ def apply_workbook_navigation(workbook, result, bundle, *, role='assessment', co
         sheet.sheet_view.showGridLines = False
         sheet.sheet_properties.tabColor = ('007F85' if sheet.title in {'Action Plan', 'Findings', 'Findings Lineage'} else
                                           'C49943' if 'Coverage' in sheet.title else '102B40')
+        if role == 'assessment':
+            if sheet.title == 'Configuration':
+                sheet.sheet_properties.tabColor = 'ED7D31'
+            elif 'Coverage' in sheet.title:
+                sheet.sheet_properties.tabColor = None
         sheet.freeze_panes = 'A2'
         sheet.row_dimensions[1].height = 32
         for cell in sheet[1]:
