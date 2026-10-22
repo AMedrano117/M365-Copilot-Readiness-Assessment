@@ -28,7 +28,8 @@ def normalize_reassessment(args):
             return result, ['reassessment_history_environment_mismatch']
         result._reassessment_candidates = [
             {'run_id': row['RunId'], 'run_type': row['RunType'],
-             'evaluation_date': row['EvaluatedAt'], 'sequence': row['Sequence']}
+             'evaluation_date': row['EvaluatedAt'], 'sequence': row['Sequence'],
+             'historical_import': bool(row.get('HistoricalImport'))}
             for row in history['Runs'] if row['Status'] == 'completed'
         ]
         if not result._reassessment_candidates:
@@ -56,7 +57,8 @@ def select_reassessment_baseline(args):
     print_paragraph('Choose the completed run to compare against:')
     for number, candidate in enumerate(candidates, 1):
         print_paragraph(f"{number}. {candidate['run_id']} | {candidate['run_type']} | "
-                        f"{candidate['evaluation_date']}")
+                        f"{candidate['evaluation_date']}" +
+                        (' | Historical reports only; technical delta unavailable' if candidate.get('historical_import') else ''))
     try:
         if len(candidates) == 1:
             selected = candidates[0]

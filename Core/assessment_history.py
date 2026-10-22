@@ -242,6 +242,9 @@ def select_baseline(path, *, assessment_id, environment_id, baseline_run_id,
         result = read_assessment_result(snapshot)
     except (OSError, ValueError):
         raise ValueError('Baseline snapshot is unreadable, invalid or has an integrity mismatch.') from None
+    if result.get('historical_import'):
+        from .historical_import import validate_archives
+        validate_archives(result, package)
     meta = result.get('identity') or {}
     for field in ('AssessmentId','RunId','PrimaryEnvironmentId'):
         if meta.get(field) != entry[field]:
@@ -292,6 +295,8 @@ def append_run(path, result, *, snapshot_path, package_path, expected_hash=None)
             IdentitySchemaVersion=meta['SchemaVersion'],ReconciliationVersion=context['ReconciliationVersion'],
             Comparability=deepcopy(context['Comparability']), Purpose=context.get('Purpose'),
             RunBoundaries=deepcopy(result.get('run_boundaries',{})))
+        if result.get('historical_import'):
+            entry['HistoricalImport'] = deepcopy(result['historical_import'])
         lifecycle=result.get('lifecycle')
         if lifecycle:
             entry['Lifecycle']={key:deepcopy(lifecycle.get(key)) for key in

@@ -1,5 +1,7 @@
 ﻿# Operator runbook
 
+For existing workbook/HTML reports without collection JSON, use the [historical Initial import](HISTORICAL_IMPORT.md).
+
 [Documentation index](README.md) | [Project overview](../README.md)
 
 This is the canonical workflow for Microsoft 365 Copilot readiness: **prepare → collect and save → add exports → rebuild and review**. Use one tenant per assessment folder. Collection reads supported configuration and existing reports; it does not start Microsoft scans or change tenant policies. Application setup is a separate operation.

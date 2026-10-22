@@ -1,5 +1,7 @@
 # Assessment runs, explicit baselines and comparison eligibility
 
+For existing workbook/HTML reports without collection JSON, use the [historical Initial import](HISTORICAL_IMPORT.md).
+
 [Documentation index](README.md) | [Methodology](METHODOLOGY.md) | [Persistent identity](PERSISTENT_IDENTITY.md)
 
 Stage A records run intent and comparison eligibility. The additive

@@ -11,6 +11,8 @@ def render_snapshot(snapshot_path, output_directory, *, tenant_name=None, report
     require_publication()
     source = Path(snapshot_path).resolve()
     result = read_assessment_result(source)
+    if result.get('historical_import') or (result.get('run_context') or {}).get('HistoricalImport'):
+        raise ValueError('Historical import snapshots are qualified history records. Use the archived original XLSX/HTML reports; they cannot be rendered as newly scored assessments.')
     from .repository_provenance import current_revision
     result['replay_tool_revision'] = current_revision()
     from .retained_workbook_sources import package_native_sources

@@ -8,7 +8,7 @@ from .repository_provenance import capture_revision, publication_policy, runtime
 VERSION='1.0.0'
 INPUTS=('collection_input','sam_report','dspm_report','reports_dir','copilot_readiness_export',
         'copilot_dashboard_export','power_platform_inventory','assessment_profile','provider_evidence',
-        'prior_report','purview_cache','portal_review','ai_baseline_export','baseline')
+        'prior_report','purview_cache','portal_review','ai_baseline_export','baseline','import_historical','historical_html')
 
 
 def build_run_plan(args, *, revision=None, generated_at=None):
@@ -48,6 +48,9 @@ def build_run_plan(args, *, revision=None, generated_at=None):
             from .assessment_serialization import read_assessment_result
             stored_result=read_assessment_result(get('replay_snapshot'))
         except (ValueError,OSError,KeyError,TypeError):metadata_errors.append('replay_snapshot_invalid')
+    historical = get('_historical_import')
+    if stored_result and (stored_result.get('historical_import') or (stored_result.get('run_context') or {}).get('HistoricalImport')):
+        metadata_errors.append('historical_import_use_archived_original_reports')
     baseline_id=get('baseline_run_id'); assessment_id=get('assessment_id'); errors=metadata_errors; warnings=[]
     baseline={'run_id':baseline_id,'completion':'not_selected','integrity':'not_evaluated','ownership':'not_evaluated'}
     if replay:
@@ -73,6 +76,10 @@ def build_run_plan(args, *, revision=None, generated_at=None):
         errors.append('invalid_run_type')
     else:
         warnings.append('Legacy run intent is unclassified; Initial and a baseline are not inferred.')
+    if get('import_historical'):
+        from .historical_import import NOTICE
+        warnings.append(NOTICE)
+        if get('_historical_error'):warnings.append(get('_historical_error'))
     env=None
     if not (get('offline') or replay) and not get('tenant_id'):
         errors.append('live_tenant_selection_required')
@@ -100,6 +107,9 @@ def build_run_plan(args, *, revision=None, generated_at=None):
             for key in ('taxonomy_version','import_adapters'):
                 if old_revision.get(key) and old_revision[key]!=revision.get(key):changes.append(key)
             baseline['version_changes']=changes
+            if selected.get('historical_import') or old_context.get('HistoricalImport'):
+                baseline['technical_delta_eligible'] = False
+                warnings.append('Historical report baseline: technical delta will be NotComparable; no improvement or resolution claims.')
             if changes:warnings.append('Baseline versions differ: comparison eligibility will be evaluated at completion.')
         except (ValueError,OSError,KeyError):
             baseline.update(completion='not_validated',integrity='failed',ownership='not_validated')
@@ -118,15 +128,24 @@ def build_run_plan(args, *, revision=None, generated_at=None):
             'Reassessment baseline or run validation is incomplete.' if intent=='Reassessment' else
             'Replay displays retained lifecycle without recalculating delta.' if replay else
             'No explicit reassessment baseline; technical delta is not evaluated.')
+    if baseline.get('technical_delta_eligible') is False and delta_enabled:
+        delta_expected=False
+        reason='Historical report baseline: technical delta is NotComparable; no improvement, regression or resolution claims.'
     if get('delta_mode')=='enabled' and intent!='Reassessment':errors.append('delta_requested_without_reassessment')
     if get('delta_mode')=='disabled' and intent not in {None,'Reassessment'}:errors.append('delta_setting_requires_reassessment')
     if get('baseline') and intent in {'Initial','Reassessment','Standalone'}:errors.append('legacy_baseline_cannot_mix_with_explicit_run')
     from .publication_io import validate_destination
-    for role in ('snapshot_json','save_collection'):
+    for role in ('snapshot_json','save_collection','historical_output_dir'):
         if get(role):
             try:validate_destination(get(role))
             except (ValueError,OSError):errors.append('protected_output_destination')
-    output=get('render_output_dir') or get('save_collection') or get('snapshot_json') or 'Reports/<customer>/<date>/Builds/<new-number>'
+    if get('historical_output_dir') and historical:
+        target = Path(get('historical_output_dir')).resolve()
+        if any(target.is_relative_to(source['path'].parent) for source in historical['sources']):
+            errors.append('historical_output_inside_source_folder')
+    output=get('historical_output_dir') or get('render_output_dir') or get('save_collection') or get('snapshot_json') or 'Reports/<customer>/<date>/Builds/<new-number>'
+    if get('import_historical') and not get('historical_output_dir'):
+        output='Reports/<customer>/<import-date-new-package>'
     if intent=='Reassessment' and baseline['completion']=='completed' and not any((get('render_output_dir'),get('save_collection'),get('snapshot_json'))):
         anchor_id=history.get('InitialRunId') or history['Runs'][0]['RunId']
         anchor=next(row for row in history['Runs'] if row['RunId']==anchor_id)
@@ -152,14 +171,18 @@ def build_run_plan(args, *, revision=None, generated_at=None):
         baseline=baseline,delta={'enabled':delta_enabled,'expected':delta_expected,'reason':reason},
         methodology_version=revision.get('methodology_version'),taxonomy_version=revision.get('taxonomy_version'),
         catalog_version=revision.get('catalog_version'),benchmark_catalog_version=revision.get('benchmark_catalog_version'),
-        sources={'mode':'offline' if get('offline') or replay else 'live','services':sorted(get('services',[]) or ['default selected collectors']),
+        sources={'mode':'offline' if get('offline') or replay else 'live','services':[] if get('import_historical') else sorted(get('services',[]) or ['default selected collectors']),
                  'preview_collectors':get('preview_collectors','auto'),'permission_profile':get('permission_profile') or saved.get('assessment_settings',{}).get('permission_profile') or 'standard',
                  'imports_supplied':supplied,'optional_imports_not_supplied':[key for key in INPUTS if key not in supplied],
                  'tenant_collection':not bool(get('offline') or replay)},
         output_destination=str(output),overwrite_behavior='Completed snapshots and original inputs cannot be overwritten; numbered derivative outputs.',
-        producing_revision=revision,publication_eligible=policy['customer_publication_eligible'] and not errors and not replay,
+        producing_revision=revision,publication_eligible=policy['customer_publication_eligible'] and not errors and not replay and not bool(get('import_historical')),
         original_producing_revision=(stored_result or {}).get('producing_revision'),
-        source_revision_role='replay_tool' if replay else 'producing_assessment',
+        source_revision_role='historical_importer' if get('import_historical') else 'replay_tool' if replay else 'producing_assessment',
+        historical_import=({'recommendation_count':len(historical['prior']['recommendations']),
+            'source_count':len(historical['sources']), 'tenant_identity_basis':historical['tenant_identity_basis'],
+            'evaluation_date_basis':historical['date_basis'], 'technical_delta_eligible':False}
+            if get('import_historical') and historical else None),
         retained_run_id=((stored_result or {}).get('identity') or {}).get('RunId'),
         effective_configuration={'evaluation_date':args.evaluation_date,'report_format':get('report_format'),
             'settings':args._effective_settings,'interactive_auth':args.interactive_auth,
@@ -185,9 +208,16 @@ def plan_lines(plan):
         ('Effective configuration',json.dumps(plan['effective_configuration'],sort_keys=True)),
         ('Source policy',rev['publication']['policy']),('Output qualification',rev['publication']['output_qualification']),
         ('Optional imports absent',', '.join(plan['sources']['optional_imports_not_supplied'])),('Output',plan['output_destination']),
-        ('Overwrite behavior',plan['overwrite_behavior']),('Replay tool commit' if plan['replay'] else 'Producing commit',rev.get('commit_sha') or 'Unavailable'),
+        ('Overwrite behavior',plan['overwrite_behavior']),('Importer commit' if plan.get('historical_import') else 'Replay tool commit' if plan['replay'] else 'Producing commit',rev.get('commit_sha') or 'Unavailable'),
         ('Source state',rev['source_state']),('Dirty fingerprint',rev.get('dirty_tree_fingerprint') or 'None'),
         ('Customer publication eligible',plan['publication_eligible']),('Execution eligible',plan['execution_eligible'])]
+    if plan.get('historical_import'):
+        info=plan['historical_import']
+        rows += [('Historical source count',info['source_count']),
+                 ('Historical recommendations',info['recommendation_count']),
+                 ('Historical tenant identity basis',info['tenant_identity_basis']),
+                 ('Historical evaluation date basis',info['evaluation_date_basis']),
+                 ('Historical technical delta eligible',False)]
     if plan['replay']:
         original=plan.get('original_producing_revision') or {}
         rows.append(('Original producing commit',original.get('commit_sha') or 'Unrecorded'))

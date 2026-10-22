@@ -40,10 +40,13 @@ def record_connection_results(results):
 
 
 class RunProgress:
-    def __init__(self, *, offline=False, check_connections=False):
+    def __init__(self, *, offline=False, check_connections=False, historical_import=False):
         self._check_connections = check_connections and not offline
         self.stages = [('startup', 'Check configuration and dependencies')]
-        if offline:
+        if historical_import:
+            self.stages += [('inputs', 'Validate historical report sources'),
+                            ('reports', 'Archive sources and register historical Initial')]
+        elif offline:
             self.stages += [('inputs', 'Load saved evidence and exports'),
                             ('reports', 'Build reports')]
         else:

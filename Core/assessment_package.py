@@ -343,8 +343,9 @@ def restore_arguments(args, payload):
     settings = (payload or {}).get('assessment_settings', {})
     if '--report-format' not in getattr(args, '_provided_options', set()) and settings.get('report_format'):
         restored.report_format = settings['report_format']
-    restored.evaluation_date = evaluation_day(
-        getattr(args, 'evaluation_date', None) or (payload or {}).get('evaluation_date'))
+    selected_day = getattr(args, 'evaluation_date', None) or (payload or {}).get('evaluation_date')
+    restored.evaluation_date = (selected_day if getattr(args, 'import_historical', None)
+                                else evaluation_day(selected_day))
     # User-level evidence is included by default; the existing CLI option is an alias.
     return restored
 

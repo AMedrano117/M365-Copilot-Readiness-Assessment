@@ -130,6 +130,10 @@ def evaluate_comparability(current, baseline, *, control_mapping=None):
         reasons.append(reason(code,area,detail))
         blocked |= blocking
         qualified |= not blocking
+    if any(snapshot.get('historical_import') or (snapshot.get('run_context') or {}).get('HistoricalImport')
+           for snapshot in (current, baseline)):
+        add('historical_report_baseline', 'evidence',
+            'Report-only historical imports retain conclusions without comparable raw collection; technical transitions are not established.', blocking=True)
     a, b = current.get('identity') or {}, baseline.get('identity') or {}
     for field in ('AssessmentId','PrimaryEnvironmentId'):
         if not a.get(field) or not b.get(field) or a[field]!=b[field]:
