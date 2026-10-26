@@ -287,7 +287,7 @@ class OfflineSetupProfileTests(unittest.TestCase):
             (root / "Core").mkdir()
             shutil.copyfile(ROOT / "Core/certificate_validation.py", root / "Core/certificate_validation.py")
             (root / "Check-PSModules.ps1").write_text(
-                "param($ScriptType)\nfunction Test-RequiredModules { param($ScriptType,[switch]$InstallMissing) $global:mockSetupCalls.Add(\"Modules:$ScriptType\"); return $true }\n",
+                "param($ScriptType,[switch]$Summary)\nfunction Test-RequiredModules { param($ScriptType,[switch]$InstallMissing,[switch]$Summary) $global:mockSetupCalls.Add(\"Modules:$ScriptType\"); return $true }\n",
                 encoding="utf-8",
             )
             (root / "harness.ps1").write_text(HARNESS, encoding="utf-8")
@@ -399,9 +399,9 @@ class OfflineSetupProfileTests(unittest.TestCase):
                 target.setdefault(entry["ResourceAppId"], set()).add(permission["Id"].removeprefix("role-").removeprefix("scope-"))
         self.assertEqual(expected, actual)
         self.assertIn('DirectoryRecommendations.Read.All', actual[RESOURCE_APP_IDS['graph']])
-        self.assertIn('Entra recommendations permission: DirectoryRecommendations.Read.All', result['output'])
+        self.assertNotIn('Entra recommendations permission:', result['output'])
         self.assertIn('Default supplemental collectors: Entra recommendations, Shadow AI discovery, Copilot audit', result['output'])
-        self.assertIn('Additional preview packs: None', result['output'])
+        self.assertNotIn('Additional preview packs: None', result['output'])
         expected_delegated = {}
         for collector_id, collector in COLLECTOR_REGISTRY.items():
             if collector.get("default_setup"):
@@ -498,13 +498,25 @@ class OfflineSetupProfileTests(unittest.TestCase):
         self.assertIn('Connection checks: not run by setup', result['output'])
 
     def test_excess_access_names_requested_and_consented_permissions_on_separate_lines(self):
-        result = self.run_setup('existing_with_extras', profile='Standard')
+        result = self.run_setup('existing_with_extras', profile='Standard', extra={'Verbose':True})
         self.assertEqual('', result['error'])
         self.assertIn('Requested: graph / NetworkAccess.Read.All (application)\n', result['output'])
         self.assertIn('Consented: graph / NetworkAccess.Read.All (application)\n', result['output'])
         self.assertIn('(2 request/grant entries)', result['output'])
         self.assertIn('not missing collector permissions', result['output'])
         self.assertNotIn('ConsentBrowser', result['calls'])
+
+    def test_standard_excess_access_is_summarized_without_permission_dump(self):
+        result = self.run_setup('existing_with_extras', profile='Standard')
+        self.assertEqual('', result['error'])
+        self.assertIn('1 requested, 1 consented (2 request/grant entries)', result['output'])
+        self.assertIn('Use -Verbose to list permission names', result['output'])
+        self.assertNotIn('Requested: graph / NetworkAccess.Read.All', result['output'])
+        self.assertNotIn('Consented: graph / NetworkAccess.Read.All', result['output'])
+        self.assertNotIn('ConsentBrowser', result['calls'])
+        verbose = self.run_setup('existing_with_extras', profile='Standard', extra={'Verbose':True})
+        self.assertEqual(result['permissions'], verbose['permissions'])
+        self.assertEqual(result['calls'], verbose['calls'])
 
     def test_unresolved_permissions_remain_visible_when_name_lookup_is_unavailable(self):
         result = self.run_setup('excess_unresolved')

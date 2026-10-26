@@ -4,7 +4,8 @@
 param(
     [Parameter(Mandatory=$false)]
     [ValidateSet("Purview", "PowerPlatform", "LegacyPowerPlatform", "SharePoint", "Setup", "All")]
-    [string]$ScriptType = "All"
+    [string]$ScriptType = "All",
+    [switch]$Summary
 )
 
 function Find-ModuleManifest {
@@ -49,7 +50,7 @@ function Find-ModuleManifest {
 }
 
 function Test-ModuleInstalled {
-    param([string]$ModuleName, [version]$MinimumVersion = [version]'0.0')
+    param([string]$ModuleName, [version]$MinimumVersion = [version]'0.0', [switch]$Quiet)
     $manifestPath = Find-ModuleManifest -ModuleName $ModuleName
     if ([string]::IsNullOrWhiteSpace($manifestPath)) { return $false }
     $manifestWarnings = @()
@@ -60,7 +61,8 @@ function Test-ModuleInstalled {
     finally {
         foreach ($manifestWarning in $manifestWarnings) {
             if ([string]$manifestWarning -eq "The module manifest member 'ModuleToProcess' has been deprecated. Use the 'RootModule' member instead.") {
-                Write-Host "  [INFO] $ModuleName uses the older ModuleToProcess manifest field (now called RootModule). This is a module packaging notice; validation and minimum-version checks still apply." -ForegroundColor Cyan
+                $notice = "$ModuleName uses the older ModuleToProcess manifest field (now called RootModule). This is a module packaging notice; validation and minimum-version checks still apply."
+                if ($Quiet) { Write-Verbose $notice } else { Write-Host "  [INFO] $notice" -ForegroundColor Cyan }
             } else {
                 # Keep all other warnings visible, including compatibility warnings.
                 Write-Warning ([string]$manifestWarning)
@@ -96,6 +98,7 @@ function Test-RequiredModules {
     param(
         [string]$ScriptType,
         [switch]$Quiet,
+        [switch]$Summary,
         [switch]$InstallMissing
     )
     
@@ -142,13 +145,13 @@ function Test-RequiredModules {
     $missingModules = @()
     $allInstalled = $true
     
-    if (-not $Quiet) {
+    if (-not $Quiet -and -not $Summary) {
         Write-Host "Checking PowerShell module dependencies..." -ForegroundColor Cyan
     }
     
     foreach ($module in $modules) {
         $minimumVersion = if ($module.MinimumVersion) { $module.MinimumVersion } else { [version]'0.0' }
-        $isInstalled = Test-ModuleInstalled -ModuleName $module.Name -MinimumVersion $minimumVersion
+        $isInstalled = Test-ModuleInstalled -ModuleName $module.Name -MinimumVersion $minimumVersion -Quiet:($Quiet -or $Summary)
         if (-not $isInstalled -and $InstallMissing) {
             if (-not $Quiet) {
                 Write-Host "  Installing $($module.Name) for the current user..." -ForegroundColor Yellow
@@ -156,14 +159,14 @@ function Test-RequiredModules {
             try {
                 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
                 Install-Module -Name $module.Name -Scope CurrentUser -Force -AllowClobber -Repository PSGallery -ErrorAction Stop
-                $isInstalled = Test-ModuleInstalled -ModuleName $module.Name -MinimumVersion $minimumVersion
+                $isInstalled = Test-ModuleInstalled -ModuleName $module.Name -MinimumVersion $minimumVersion -Quiet:($Quiet -or $Summary)
             } catch {
                 if (-not $Quiet) {
                     Write-Host "    Installation failed: $($_.Exception.Message)" -ForegroundColor Red
                 }
             }
         }
-        Show-ModuleStatus -ModuleName $module.Name -IsInstalled $isInstalled -InstallCommand $module.Install -Quiet:$Quiet
+        Show-ModuleStatus -ModuleName $module.Name -IsInstalled $isInstalled -InstallCommand $module.Install -Quiet:($Quiet -or ($Summary -and $isInstalled))
         
         if (-not $isInstalled) {
             $allInstalled = $false
@@ -192,7 +195,7 @@ function Test-RequiredModules {
         return $false
     }
     
-    if (-not $Quiet) {
+    if (-not $Quiet -and -not $Summary) {
         Write-Host "All required PowerShell modules are installed" -ForegroundColor Green
     }
     return $true
@@ -200,7 +203,7 @@ function Test-RequiredModules {
 
 # If script is run directly (not dot-sourced)
 if ($MyInvocation.InvocationName -ne '.') {
-    $result = Test-RequiredModules -ScriptType $ScriptType -InstallMissing
+    $result = Test-RequiredModules -ScriptType $ScriptType -InstallMissing -Summary:$Summary
     
     if (-not $result) {
         exit 1

@@ -27,6 +27,8 @@ For connected collection, complete [prereq.md](prereq.md). Reuse an existing con
 
 The Standard permission profile assigns Global Reader by default in both Standard and Unattended modes, granting broad tenant read access. `-WorkloadRbac SecurityReader`, `RoleGroups` and `None` remain explicit alternatives; review their coverage and access in the [workload role guide](PERMISSIONS.md#workload-roles-for-app-only-purview-and-exchange).
 
+Setup uses concise dependency and access summaries by default. Add PowerShell's `-Verbose` to the same setup command for individual module checks and readable permission names, listed separately as requested or consented access. Standard preserves existing access outside the selected collector permissions; Restricted still stops and shows the individual entries. Missing dependencies, unexpected compatibility warnings and incomplete consent remain visible in the default output.
+
 For customers choosing reduced application access, use the [Restricted profile](PERMISSIONS.md) instead:
 
 ```powershell
