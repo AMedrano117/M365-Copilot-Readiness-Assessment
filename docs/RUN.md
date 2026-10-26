@@ -1,5 +1,7 @@
 ﻿# Operator runbook
 
+For existing workbook/HTML reports without collection JSON, use the [historical Initial import](HISTORICAL_IMPORT.md).
+
 [Documentation index](README.md) | [Project overview](../README.md)
 
 This is the canonical workflow for Microsoft 365 Copilot readiness: **prepare → collect and save → add exports → rebuild and review**. Use one tenant per assessment folder. Collection reads supported configuration and existing reports; it does not start Microsoft scans or change tenant policies. Application setup is a separate operation.
@@ -24,6 +26,8 @@ For connected collection, complete [prereq.md](prereq.md). Reuse an existing con
 ```
 
 The Standard permission profile assigns Global Reader by default in both Standard and Unattended modes, granting broad tenant read access. `-WorkloadRbac SecurityReader`, `RoleGroups` and `None` remain explicit alternatives; review their coverage and access in the [workload role guide](PERMISSIONS.md#workload-roles-for-app-only-purview-and-exchange).
+
+Setup uses concise dependency and access summaries by default. Add PowerShell's `-Verbose` to the same setup command for individual module checks and readable permission names, listed separately as requested or consented access. Standard preserves existing access outside the selected collector permissions; Restricted still stops and shows the individual entries. Missing dependencies, unexpected compatibility warnings and incomplete consent remain visible in the default output.
 
 For customers choosing reduced application access, use the [Restricted profile](PERMISSIONS.md) instead:
 
@@ -121,6 +125,18 @@ Numbered stages show how far the script has progressed through setup, access ver
 Connection checks use **CONNECTION CHECKS COMPLETE** or **CONNECTION CHECKS NEED ATTENTION** for their final summary. A nonzero check result retains its exit code for automation; review the individual collector rows for failed probes, missing access or required sign-ins. Startup errors and unexpected exceptions still show **RUN FAILED**.
 
 The default console shows collection progress, warnings or failures, the deployment decision and action counts, report locations, and the final **COLLECTION INPUT** handoff. Each default build writes four primary deliverables: the one-page pilot readiness **Summary** (`Readiness Summary - <company>.html`, the file `--open-html-report` opens), the full **HTML** report, the **Assessment workbook**, and the **Technical evidence workbook**. The summary links to the full report's actions, and the full report links back to the summary and directly to the workbooks. Linked evidence pages require `--extra-exports evidence-pages`; select them explicitly for each run. Copy the collection input's entire path into `--collection-input`, or copy the offline command printed immediately below it and add `--reports-dir` for new exports. Use the file shown there: a live package has `collection.json`; a build made only from exports or earlier reports has `rebuild.json`. Neither the HTML report, Excel workbook nor an assessment JSON is a collection input. Preflight-only runs do not create one.
+
+The **PRE-EXECUTION RUN PLAN** shows a short summary of run intent, collection mode, selected scope or imports, baseline/comparison when applicable, destination, source revision and publication qualification. Blockers and important warnings remain visible. **Plan check: Passed** covers local plan validation; it does not verify tenant access or promise a successful collection. Add `--verbose` for identities, versions, hashes, effective configuration and absent optional imports. Use `--plan --plan-format json` for the complete structured plan; `--plan` does not collect evidence or allocate run identities.
+
+Default source-gap messages distinguish explicit licensing denials from retry exhaustion. A licensing denial is an evidence limitation, not a passing security result. Full service responses and HTTP retry details remain in the package's `operator-log.jsonl`; `--verbose` shows the original source explanations. The log also records report-build timings for the assessment model, evidence selection and exports. Report CSV reads allow up to four retries and 240 seconds of cumulative waiting per request, respecting `Retry-After`; other Graph reads retain the 120-second wait budget. Successful requests are not repeated as part of another request's recovery.
+
+For exports without a tenant identifier, add `--confirm-export-tenant '<assessed tenant GUID>'` only after confirming that **all selected exports** belong to that customer. This records operator confirmation against each file's SHA-256 hash. It does not insert a tenant ID into source evidence, establish tenant-wide completeness, or override a conflicting declared tenant. Confirmations survive portable-package replay for unchanged file bytes; new or changed files remain unverified. For a completed run, confirmation requires a new explicit run (for example `--run-type Standalone`); rendering a completed snapshot preserves its original receipt. No history JSON needs manual editing.
+
+```powershell
+python main.py --env-file customer.env --run-type Initial --reports-dir '.\exports' --confirm-export-tenant '<assessed tenant GUID>'
+```
+
+Copy the generated handoff commands exactly: they retain the interpreter and source checkout used for the run, including execution from a worktree. Paths and commands are printed without line wrapping.
 
 Use `--verbose` (or `-v`) when troubleshooting to also see authentication/configuration provenance, processing details, actions by assessment area, and input receipt details:
 
@@ -283,7 +299,7 @@ it. A PDF skipped warning does not stop other imports; consult the warning and i
 
 ## Portable assessment folder
 
-A default live assessment keeps its collection, original inputs and reports together under the customer's folder. Initial assessments use a short UTC date, adding ` (2)` for another Initial assessment on the same date. Reassessments stay under the original assessment folder in numbered `Runs` subfolders, each with its own collection and report builds. Builds are numbered `1`, `2`, and so on; replay retains earlier reports. Use `--env-file customer.env --reassess '<original assessment-history.json>'` to select and confirm a completed comparison baseline. History is maintained automatically. See [assessment runs](ASSESSMENT_RUNS.md#reassessment-shortcut). To move the assessment, copy the whole assessment folder and replay the copy's `collection.json`:
+A default live assessment keeps its collection, original inputs and reports together under the customer's folder. Initial assessments use a short UTC date, adding ` (2)` for another Initial assessment on the same date. Reassessments stay under the original assessment folder in numbered `Runs` subfolders, each with its own collection and one `Deliverables` folder. Rebuilds use that same folder and add ` (2)`, ` (3)` and so on to report filenames; replay retains earlier reports. Existing packages with `Builds` or `Renders` keep their original layout. Use `--env-file customer.env --reassess '<original assessment-history.json>'` to select and confirm a completed comparison baseline. History is maintained automatically. See [assessment runs](ASSESSMENT_RUNS.md#reassessment-shortcut). To move the assessment, copy the whole assessment folder and replay the copy's `collection.json`:
 
 ```text
 Reports/<customer>/<date>/
@@ -291,7 +307,7 @@ Reports/<customer>/<date>/
   inputs/                  original reports and supplemental inputs, grouped by source
   rebuild.json             latest successful offline build's inputs/settings
   Rebuilds/<number>/        retained build recipes and subsequently added input files
-  Builds/<number>/          generated report artifacts, written once per build
+  Deliverables/            generated reports; rebuild filenames receive numbered suffixes
   operator-log.jsonl        build receipts and output locations
 ```
 
@@ -325,7 +341,7 @@ Offline console output labels failed or partial saved sources as **Saved collect
 
 ## 4. Review the deliverables
 
-The default build writes the HTML report, readiness summary and both Excel workbooks together in `Reports/<customer>/<date>/Builds/<build>/`. The workflow records these files in place without creating a second report tree. `--report-format both` adds CSV, while `--report-format csv` selects CSV instead of Excel. `--snapshot-json PATH` writes the existing shared assessment result as one JSON file without enabling the other extra exports.
+The default build writes the HTML report, readiness summary and both Excel workbooks together in `Reports/<customer>/<date>/Deliverables/`. The workflow records these files in place without creating a second report tree. `--report-format both` adds CSV, while `--report-format csv` selects CSV instead of Excel. `--snapshot-json PATH` writes the existing shared assessment result as one JSON file without enabling the other extra exports.
 
 Select optional linked evidence pages per run with `--extra-exports evidence-pages`. This adds `Evidence/` beside the reports. Saved collection inputs and rebuild recipes remain available regardless of this output choice. See [Supported outputs](OUTPUTS.md).
 
@@ -334,7 +350,7 @@ The navy and teal executive HTML report includes stacked action counts by assess
 Document names include the short company label from the customer folder (`--customer-name` overrides the tenant name). Dates stay in the folders:
 
 ```text
-Reports/<customer>/<date>/Builds/<build>/
+Reports/<customer>/<date>/Deliverables/
   AI Readiness and M365 Hardening - <company>.html  full executive report (aggregate-only)
   AI Readiness and M365 Hardening - <company>.xlsx  assessment workbook
   Technical Evidence - <company>.xlsx              complete source records and lineage
@@ -400,7 +416,7 @@ This preview uses invented data and intentionally leaves tenant controls unasses
 
 Use actual same-tenant files; either historical input may be omitted. The cache supplies Purview configuration only. Historical findings retain their source dates and require confirmation when their underlying facts cannot be reassessed. The workbook preserves the complete original register. A partial Purview cache cannot overwrite a full `--collection-input`. [Recovery details](PORTAL_REPORTS_AND_OFFLINE.md#combine-an-existing-tenant-report-with-new-exports).
 
-A build without a collection creates a portable assessment under `Reports/<customer>/<date>/`. It contains the original inputs, `Builds/<build>/`, an operator log and `rebuild.json`. The tool prints its location. No tenant collection is invented or saved. Copy that whole folder, then replay the recipe:
+A build without a collection creates a portable assessment under `Reports/<customer>/<date>/`. It contains the original inputs, `Deliverables/`, an operator log and `rebuild.json`. The tool prints its location. No tenant collection is invented or saved. Copy that whole folder, then replay the recipe:
 
 ```powershell
 .\.venv\Scripts\python.exe main.py --mode offline `

@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 from Core.data_exposure_assessment import _scan_reports, detect_sharepoint_report, sharing_link_type
+from Core.assessment_result import build_assessment_result
 from Core.portal_report_import import validate_report_tenants
 from Core.sharepoint_governance import build_sharepoint_recommendations, setting_label, setting_name
 
@@ -80,6 +81,47 @@ class SharingLinkReportTests(unittest.TestCase):
         observation = next(row for row in result["observations"] if row["source_schema"] == "sharing_links_activity")
         self.assertEqual((observation["label"], observation["value"], observation["unit"]),
                          ("Anyone links created in the report period", 4, "links"))
+
+    def test_link_activity_without_tenant_guid_builds_as_qualified_evidence(self):
+        tenant = "11111111-1111-1111-1111-111111111111"
+        with tempfile.TemporaryDirectory() as folder:
+            path = self.write(folder, "Anyone_links_2026-09-16.csv", [
+                "site-1,https://contoso.sharepoint.com/sites/finance,Finance,4,Owner,owner@contoso.com,No,Team,,,,Anyone,Private"])
+            validate_report_tenants([str(path)], tenant)
+            scan = _scan_reports([path], "sam", "2026-09-23", None)
+            result = build_assessment_result([], {"observations": scan["observations"]},
+                evaluation_date="2026-09-23", expected_tenant_id=tenant)
+        fact = next(row for row in result["evidence"] if row["source_schema"] == "sharing_links_activity")
+        self.assertEqual(fact["tenant_id"], "")
+        self.assertEqual(fact["value"], 4)
+        self.assertEqual(fact["scope"], "https://contoso.sharepoint.com/sites/finance")
+        self.assertIn("Tenant identity is not recorded in this source.", fact["qualifications"])
+        self.assertFalse(fact["complete"])
+
+    def test_link_activity_declared_guid_is_preserved_and_mismatch_blocks(self):
+        tenant = "11111111-1111-1111-1111-111111111111"
+        other = "22222222-2222-2222-2222-222222222222"
+        with tempfile.TemporaryDirectory() as folder:
+            for declared in (tenant, other):
+                with self.subTest(declared=declared):
+                    path = Path(folder) / "Anyone_links_2026-09-16.csv"
+                    path.write_text(LINK_HEADER + ",Tenant ID\n" +
+                        "site-1,https://contoso.sharepoint.com/sites/finance,Finance,4,Owner,owner@contoso.com,No,Team,,,,Anyone,Private," + declared + "\n",
+                        encoding="utf-8")
+                    scan = _scan_reports([path], "sam", "2026-09-23", None)
+                    self.assertEqual(scan["observations"][0]["tenant_id"], declared)
+                    if declared != tenant:
+                        with self.assertRaisesRegex(ValueError, "portal report tenant ID does not match"):
+                            validate_report_tenants([str(path)], tenant)
+                        with self.assertRaisesRegex(ValueError, "Evidence tenant ID does not match"):
+                            build_assessment_result([], {"observations": scan["observations"]},
+                                evaluation_date="2026-09-23", expected_tenant_id=tenant)
+                    else:
+                        validate_report_tenants([str(path)], tenant)
+                        result = build_assessment_result([], {"observations": scan["observations"]},
+                            evaluation_date="2026-09-23", expected_tenant_id=tenant)
+                        fact = next(row for row in result["evidence"] if row["source_schema"] == "sharing_links_activity")
+                        self.assertEqual(fact["tenant_id"], tenant)
 
 
 if __name__ == "__main__":

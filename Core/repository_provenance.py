@@ -28,7 +28,7 @@ ROOT_SOURCE = {'main.py', 'params.py', 'collector-registry.json', 'requirements.
                '.gitignore', '.gitattributes', '.env.example', 'README.md', 'LICENSE'}
 IMPORT_MODULES = ('portal_report_import', 'data_exposure_assessment', 'copilot_readiness_import',
                   'power_platform_inventory', 'prior_report_import', 'purview_cache_import',
-                  'portal_review', 'pdf_report_import', 'ai_baseline_import', 'ai_baseline_native')
+                  'portal_review', 'pdf_report_import', 'ai_baseline_import', 'ai_baseline_native', 'historical_import')
 
 
 def digest(value):

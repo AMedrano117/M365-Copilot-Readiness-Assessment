@@ -233,7 +233,7 @@ class NestedReassessmentExecutionTests(RunFixture):
             folder = original / 'Runs' / str(number)
             self.assertEqual((self.history.parent / current['PackageLocator']).resolve(), folder)
             self.assertEqual(len(read_history(self.history)['Runs']), number + 1)
-            self.assertTrue((folder / 'Builds' / '1').is_dir())
+            self.assertTrue((folder / 'Deliverables').is_dir())
             self.assertFalse((folder / 'Runs').exists())
             self.assertFalse((folder / 'assessment-history.json').exists())
             self.assertEqual(load_collection(folder / 'collection.json')['identity']['RunId'], current['RunId'])

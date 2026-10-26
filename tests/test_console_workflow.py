@@ -154,7 +154,9 @@ class ConsoleWorkflowTests(unittest.TestCase):
                    {'Source': 'rejected.csv', 'Status': 'rejected', 'Reason': 'The required headers are missing.'},
                    {'Source': 'unsupported.csv', 'Status': 'unsupported', 'Reason': 'This schema is not supported.'},
                    {'Source': 'empty.csv', 'Status': 'empty', 'Reason': 'No data rows.'},
-                   {'Source': 'unverified.csv', 'Status': 'identity_unverified', 'Reason': 'Confirm the export tenant.'}]
+                   {'Source': 'unverified.csv', 'Status': 'identity_unverified', 'Reason': 'Confirm the export tenant.'},
+                   {'Source': 'unverified-2.csv', 'Status': 'identity_unverified', 'Reason': 'Confirm the export tenant.'},
+                   {'Source': 'unverified-3.csv', 'Status': 'identity_unverified', 'Reason': 'Confirm the export tenant.'}]
         with tempfile.TemporaryDirectory() as temp:
             output = io.StringIO()
             with redirect_stdout(output):
@@ -165,7 +167,9 @@ class ConsoleWorkflowTests(unittest.TestCase):
             self.assertIn('The required headers are missing.', text)
             self.assertIn('Input unsupported.csv: unsupported', text)
             self.assertIn('Input empty.csv: empty', text)
-            self.assertIn('Confirm the export tenant.', text)
+            self.assertIn('3 file(s) need customer confirmation', text)
+            self.assertEqual(text.count('Export ownership:'), 1)
+            self.assertNotIn('Input unverified', text)
             self.assertNotIn('\x1b[', text)
             receipt = json.loads((Path(temp) / 'operator-log.jsonl').read_text(encoding='utf-8'))
             self.assertEqual(receipt['import_receipt'], imports)

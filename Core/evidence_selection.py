@@ -300,6 +300,7 @@ def build_evidence_selection(result, bundle, *, tenant_name=None, generated_at=N
             'source_record_index': None, 'source_record_id': _native_id(row),
             'raw': {key: value for key, value in row.items() if key not in {'Evidence Record ID', 'Source dataset'} and value is not None}})
     enriched, findings = [], []
+    mfa_detail = None
     for original in result.get('recommendations') or []:
         row = _plain(original)
         identifier = row.get('RecommendationId')
@@ -314,8 +315,17 @@ def build_evidence_selection(result, bundle, *, tenant_name=None, generated_at=N
                       'limitations': [row.get('InvestigationQualification') or
                                      ('Historical summaries cannot recreate named records.' if historical else 'A planning decision does not assert an affected record population.')]}
         else:
-            detail = expand_finding_records(row, sources, evaluation_date=result.get('evaluation_date'), tenant_id=tenant_id,
-                                           privileged_assessment=result.get('privileged_assessment'))
+            # MFA findings share the same retained population. Reuse it only
+            # within this selection call, never across runs or source changes.
+            finding_key = str(row.get('FindingKey') or '')
+            shared_mfa = 'mfa_registration' in finding_key and not finding_key.startswith('entra.privileged.')
+            if shared_mfa and mfa_detail is not None:
+                detail = mfa_detail
+            else:
+                detail = expand_finding_records(row, sources, evaluation_date=result.get('evaluation_date'), tenant_id=tenant_id,
+                                               privileged_assessment=result.get('privileged_assessment'))
+                if shared_mfa:
+                    mfa_detail = detail
             specialized = detail.get('record_type') != 'unsupported'
             if not specialized:
                 detail = _generic(row, bundle, registry)

@@ -187,7 +187,7 @@ class GraphRestClient:
         token = await asyncio.to_thread(self.credential.get_token, *scopes)
         return {"Authorization": f"Bearer {token.token}"}
 
-    async def request(self, method, path, *, params=None, headers=None, content=None, json=None):
+    async def request(self, method, path, *, params=None, headers=None, content=None, json=None, max_retry_wait=120.0):
         request_headers = await self._authorization_header()
         request_headers.update(headers or {})
         try:
@@ -196,7 +196,7 @@ class GraphRestClient:
                     method, path, params=params, headers=request_headers,
                     content=content, json=json,
                 ),
-                method=method, max_retries=self.max_retries,
+                method=method, max_retries=self.max_retries, max_retry_wait=max_retry_wait,
             )
         except RequestRetryError as exc:
             transport = exc.__cause__
@@ -210,7 +210,9 @@ class GraphRestClient:
                 # Record only stage/hostname; report URLs contain temporary credentials.
                 stage = "graph" if failed_request.url.host == "graph.microsoft.com" else "download"
                 host = failed_request.url.host or ""
-            raise GraphRequestError(exc.status_code, str(exc), exc.response, failure_stage=stage, failure_host=host) from exc
+            error = GraphRequestError(exc.status_code, str(exc), exc.response, failure_stage=stage, failure_host=host)
+            error.retry_details = exc.retry_details
+            raise error from exc
 
         if last_response is None:
             raise GraphRequestError(0, "Microsoft Graph returned no response")
@@ -220,7 +222,13 @@ class GraphRestClient:
                 message = last_response.json().get("error", {}).get("message", "")
             except Exception:
                 message = last_response.text[:500]
-            raise GraphRequestError(last_response.status_code, message, last_response)
+            error = GraphRequestError(last_response.status_code, message, last_response)
+            # Preserve the status and server delay even when the attempt limit
+            # rather than the wait budget ends recovery. Never log download URLs.
+            from .http_retry import retry_after_seconds
+            error.retry_details = {**(getattr(last_response, 'extensions', None) or {}).get('assessment_retry', {}), 'status_code': last_response.status_code,
+                'retry_after_seconds': retry_after_seconds(last_response.headers.get('Retry-After'))}
+            raise error
         return last_response
 
     async def get_json(self, path, *, params=None, headers=None):
@@ -230,7 +238,9 @@ class GraphRestClient:
     async def get_csv(self, path, *, params=None, headers=None):
         csv_headers = {"Accept": "text/csv"}
         csv_headers.update(headers or {})
-        response = await self.request("GET", path, params=params, headers=csv_headers)
+        from .http_retry import REPORT_MAX_RETRY_WAIT
+        response = await self.request("GET", path, params=params, headers=csv_headers,
+                                      max_retry_wait=REPORT_MAX_RETRY_WAIT)
         text = response.content.decode("utf-8-sig", errors="replace")
         return list(csv.DictReader(io.StringIO(text)))
 

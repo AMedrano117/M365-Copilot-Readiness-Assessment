@@ -27,7 +27,7 @@ DATA_SUFFIXES = {'.csv', '.tsv', '.xlsx', '.zip', '.json'}
 SETTING_KEYS = {'report_format', 'data_exposure_enabled', 'preview_collectors', 'permission_profile',
                 'include_user_usage_detail', 'provider_evidence_max_age_days',
                 'sam_report_max_age_days', 'dspm_report_max_age_days',
-                'lifecycle_report_max_age_days', 'lifecycle_report_dates'}
+                'lifecycle_report_max_age_days', 'lifecycle_report_dates', 'export_tenant_confirmations'}
 
 _METHODOLOGY_MIGRATIONS = {
     ('2.0.0', '2.1.0'): (
@@ -343,8 +343,9 @@ def restore_arguments(args, payload):
     settings = (payload or {}).get('assessment_settings', {})
     if '--report-format' not in getattr(args, '_provided_options', set()) and settings.get('report_format'):
         restored.report_format = settings['report_format']
-    restored.evaluation_date = evaluation_day(
-        getattr(args, 'evaluation_date', None) or (payload or {}).get('evaluation_date'))
+    selected_day = getattr(args, 'evaluation_date', None) or (payload or {}).get('evaluation_date')
+    restored.evaluation_date = (selected_day if getattr(args, 'import_historical', None)
+                                else evaluation_day(selected_day))
     # User-level evidence is included by default; the existing CLI option is an alias.
     return restored
 
@@ -418,22 +419,30 @@ def render_with_failure_receipt(processor, *, receipt, **arguments):
     """Record rejected imports or rendering errors while retaining collected facts."""
     from .repository_provenance import require_publication
     require_publication()
-    try:
-        return processor(**arguments)
-    except Exception as exc:
-        record_package_run(**receipt, outputs={'report_directory': arguments.get('output_dir')},
-                           status='failed', error=str(exc))
-        raise
+    from .export_paths import capture_report_build
+    with capture_report_build() as outputs:
+        try:
+            return processor(**arguments)
+        except Exception as exc:
+            outputs.setdefault('report_directory', arguments.get('output_dir'))
+            record_package_run(**receipt, outputs=outputs, status='failed', error=str(exc))
+            raise
 
 
 def _retain_snapshot(source, report_directory):
     """Retain a shared-result snapshot without changing its contents."""
     from .repository_provenance import require_publication
     require_publication()
-    destination = report_directory / source.name
-    if destination.exists():
-        destination = report_directory / (source.stem + '-snapshot-' + uuid4().hex[:8] + source.suffix)
-    copy_file(source, destination)
+    number = 1
+    while True:
+        suffix = '' if number == 1 else f' ({number})'
+        destination = report_directory / (source.stem + suffix + source.suffix)
+        try:
+            copy_file(source, destination)
+        except FileExistsError:
+            number += 1
+            continue
+        return destination
 
 
 def record_package_run(folder, *, mode, tenant_id, collected_at, evaluation_date,
@@ -442,7 +451,7 @@ def record_package_run(folder, *, mode, tenant_id, collected_at, evaluation_date
     """Keep generated artifacts and a receipt without rewriting saved evidence."""
     from .repository_provenance import require_publication
     require_publication()
-    from .console_reporting import detail, detail_path, is_verbose, print_collection_handoff, print_paragraph, section
+    from .console_reporting import detail, detail_path, display_path, is_verbose, print_collection_handoff, print_paragraph, section
     if not folder:
         if collection_input and Path(collection_input).is_file():
             print_collection_handoff(collection_input)
@@ -452,30 +461,47 @@ def record_package_run(folder, *, mode, tenant_id, collected_at, evaluation_date
     delivered = []
     report_directory = outputs.get('report_directory') if isinstance(outputs, dict) else None
     retained_directory = None
-    from .export_paths import BUILDS_FOLDER, new_deliverables_directory
+    from .export_paths import BUILDS_FOLDER, DELIVERABLES_FOLDER, new_numbered_directory
     if isinstance(report_directory, (str, Path)):
         candidate = Path(report_directory).resolve()
-        deliverables_roots = [(folder / name).resolve() for name in (BUILDS_FOLDER, 'deliverables')]
-        if candidate.is_dir() and any(candidate != root and candidate.is_relative_to(root)
-                                      for root in deliverables_roots):
+        flat = candidate == (folder / DELIVERABLES_FOLDER).resolve()
+        deliverables_roots = [(folder / name).resolve() for name in (BUILDS_FOLDER, 'deliverables', 'Renders')]
+        if candidate.is_dir() and (flat or any(candidate != root and candidate.is_relative_to(root)
+                                               for root in deliverables_roots)):
             retained_directory = candidate
-            run_id = candidate.name
+            run_id = str(outputs.get('build_number') or run_id) if flat else candidate.name
+            retained_snapshot = None
             # The processor already rendered into the portable package. Retain an
             # explicitly requested external snapshot, then list each artifact once.
             snapshot = outputs.get('snapshot_path')
             if isinstance(snapshot, (str, Path)) and Path(snapshot).is_file():
                 source = Path(snapshot).resolve()
                 if not source.is_relative_to(candidate):
-                    _retain_snapshot(source, candidate)
-            delivered = [source.relative_to(folder.resolve()).as_posix()
-                         for source in sorted(candidate.rglob('*'))
-                         if source.is_file() and source.resolve().is_relative_to(candidate)]
+                    retained_snapshot = _retain_snapshot(source, candidate)
+                else:
+                    retained_snapshot = source
+            if flat:
+                current = [Path(outputs[key]).resolve() for key in ('html_path','summary_html_path','excel_path',
+                    'technical_excel_path','csv_path') if isinstance(outputs.get(key), (str,Path))]
+                companion = outputs.get('html_evidence_folder_path')
+                if companion:
+                    current.extend(Path(companion).rglob('*'))
+                if retained_snapshot:
+                    current.append(retained_snapshot)
+                delivered = sorted({path.relative_to(folder.resolve()).as_posix() for path in current
+                    if path.is_file() and path.resolve().is_relative_to(candidate)})
+            else:
+                delivered = [source.relative_to(folder.resolve()).as_posix()
+                             for source in sorted(candidate.rglob('*'))
+                             if source.is_file() and source.resolve().is_relative_to(candidate)]
     if isinstance(outputs, dict) and retained_directory is None:
         copied_directory = None
         def copied_destination(relative):
             nonlocal copied_directory, run_id
             if copied_directory is None:
-                copied_directory = new_deliverables_directory(folder)
+                # Preserve relative links from external/legacy renderers. The
+                # in-process renderers already write directly into Deliverables.
+                copied_directory = new_numbered_directory(folder / BUILDS_FOLDER)
                 run_id = copied_directory.name
             return copied_directory / relative
         copied_sources = set()
@@ -521,6 +547,10 @@ def record_package_run(folder, *, mode, tenant_id, collected_at, evaluation_date
     receipt['package_diagnostics'] = diagnostics or []
     bundle = outputs.get('evidence_bundle', {}) if isinstance(outputs, dict) else {}
     if isinstance(bundle, dict):
+        receipt['build_timings_seconds'] = dict(bundle.get('build_timings_seconds') or {})
+        receipt['source_statuses'] = {name: {key:value for key,value in state.items()
+            if key in {'availability_status','available','complete','truncated','reason','error','status_code','retry_details'}}
+            for name,state in (bundle.get('source_statuses') or {}).items() if isinstance(state,dict)}
         receipt['import_receipt'] = bundle.get('import_receipt', [])
         assessment = bundle.get('assessment_result', {}) or {}
         if isinstance(assessment, dict) and assessment:
@@ -537,6 +567,7 @@ def record_package_run(folder, *, mode, tenant_id, collected_at, evaluation_date
         receipt['error'] = str(error)
     from .publication_io import append_receipt
     append_receipt(folder / 'operator-log.jsonl',receipt)
+    print('Operator log: ' + display_path(folder / 'operator-log.jsonl'))
     detail(f'Assessment receipt: tenant {tenant_id or "not identified"}; collected {collected_at or "not supplied"}; evaluation date {evaluation_date}.')
     detail_path('Portable assessment folder', folder)
     # One readable receipt per file; the full individual records stay in JSON/workbook.
@@ -546,15 +577,26 @@ def record_package_run(folder, *, mode, tenant_id, collected_at, evaluation_date
         for field, value in (('statuses', item.get('Status', 'unknown')), ('reasons', item.get('Reason', ''))):
             if value and str(value) not in entry[field]:
                 entry[field].append(str(value))
+    unverified = []
+    confirmed = []
     for source, entry in imported.items():
+        if not is_verbose() and 'identity_unverified' in entry['statuses']:
+            unverified.append(source)
+        if not is_verbose() and 'identity_operator_confirmed' in entry['statuses']:
+            confirmed.append(source)
         needs_attention = any(value.lower() in {
             'rejected', 'unsupported', 'error', 'failed', 'missing', 'unreadable', 'tenant_mismatch',
-            'empty', 'unavailable', 'partial', 'identity_unverified',
+            'empty', 'unavailable', 'partial',
         } for value in entry['statuses'])
         if is_verbose() or needs_attention:
             print_paragraph(f"Input {source}: {', '.join(entry['statuses'])}", tone='warning' if needs_attention else 'muted')
             for reason in entry['reasons']:
                 print_paragraph(reason, indent='  ', tone='warning' if needs_attention else 'muted')
+    if unverified:
+        print_paragraph(f'Export ownership: {len(unverified)} file(s) need customer confirmation; no tenant ID in the source. '
+                        'Details: operator log or --verbose.', tone='warning')
+    if confirmed:
+        print_paragraph(f'Export identity: {len(confirmed)} file(s) operator-confirmed; not source-verified.', tone='muted')
     pdf_references = []
     included_pdfs = {item.get('Source') for item in receipt.get('import_receipt', [])
                      if item.get('Status') in {'automated_reference', 'reviewed_reference'}}
@@ -594,7 +636,7 @@ def record_package_run(folder, *, mode, tenant_id, collected_at, evaluation_date
                     any(row['RunId'] == context.get('RunId') for row in history.get('Runs', []))):
                 from .reassessment_cli import reassessment_command
                 section('REASSESS WITH NEW EVIDENCE')
-                print_paragraph(reassessment_command(history_path, context['RunId']))
+                print(reassessment_command(history_path, context['RunId']), flush=True)
                 print_paragraph('Add --env-file for this customer and use compatible collection scope and settings.', tone='muted')
         except (ValueError, OSError):
             print_paragraph('Reassessment handoff unavailable: verify the retained history.', tone='warning')

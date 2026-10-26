@@ -63,6 +63,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$showSetupDetails = $VerbosePreference -in @('Continue', 'Inquire')
 $profileName = $PermissionProfile.ToLowerInvariant()
 if ($profileName -eq 'restricted' -and ($Mode -ne 'Standard' -or $PreviewCollectors -ne 'None')) {
     throw 'Restricted rejects Unattended mode and preview collectors. Use Standard mode with -PreviewCollectors None.'
@@ -116,6 +117,7 @@ function Write-Success { param($Message) Write-Host "[OK] $Message" -ForegroundC
 function Write-Info { param($Message) Write-Host "[INFO] $Message" -ForegroundColor Cyan }
 function Write-Warn { param($Message) Write-Host "[WARN] $Message" -ForegroundColor Yellow }
 function Write-Fail { param($Message) Write-Host "[FAIL] $Message" -ForegroundColor Red }
+function Write-SetupDetail { param($Message) if ($showSetupDetails) { Write-Info $Message } }
 function Write-SetupSection {
     param([int]$Step, [string]$Title)
     $heading = "[$Step/7] $Title"
@@ -730,17 +732,20 @@ if ($Mode -eq 'Unattended' -and -not $certificate) {
 }
 
 . "$PSScriptRoot\Check-PSModules.ps1"
-if (-not (Test-RequiredModules -ScriptType 'Setup' -InstallMissing)) { exit 1 }
+if (-not (Test-RequiredModules -ScriptType 'Setup' -InstallMissing -Summary:(-not $showSetupDetails))) { exit 1 }
 if ($profileName -eq 'standard') {
-    if (-not (Test-RequiredModules -ScriptType 'Purview' -InstallMissing)) { exit 1 }
+    if (-not (Test-RequiredModules -ScriptType 'Purview' -InstallMissing -Summary:(-not $showSetupDetails))) { exit 1 }
     $windowsPowerShell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
     if (Test-Path -LiteralPath $windowsPowerShell) {
-        & $windowsPowerShell -NoProfile -ExecutionPolicy Bypass -File "$PSScriptRoot\Check-PSModules.ps1" -ScriptType SharePoint
+        $moduleCheckArguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "$PSScriptRoot\Check-PSModules.ps1", '-ScriptType', 'SharePoint')
+        if (-not $showSetupDetails) { $moduleCheckArguments += '-Summary' }
+        & $windowsPowerShell @moduleCheckArguments
         if ($LASTEXITCODE -ne 0) { throw 'SharePoint Online module setup failed in Windows PowerShell.' }
-    } elseif (-not (Test-RequiredModules -ScriptType 'SharePoint' -InstallMissing)) {
+    } elseif (-not (Test-RequiredModules -ScriptType 'SharePoint' -InstallMissing -Summary:(-not $showSetupDetails))) {
         throw 'SharePoint Online module setup failed in the available PowerShell host.'
     }
 }
+Write-Success 'Required PowerShell modules are ready.'
 
 Import-Module Microsoft.Graph.Authentication -Force
 Import-Module Microsoft.Graph.Applications -Force
@@ -860,7 +865,7 @@ foreach ($collector in $enabledCollectors) {
 
 $graphPermissions = @($permissionsByResource.graph | Sort-Object -Unique)
 if ($graphPermissions -contains 'Directory.Read.All') {
-    Write-Info 'Standard requests Directory.Read.All for delegated consent-grant inventory. Setup checks existing consent below; Restricted omits this inventory and permission.'
+    Write-SetupDetail 'Standard requests Directory.Read.All for delegated consent-grant inventory. Setup checks existing consent below; Restricted omits this inventory and permission.'
 }
 $desired = @()
 foreach ($resourceName in @($permissionsByResource.Keys | Sort-Object)) {
@@ -910,10 +915,16 @@ if ($app) {
     }
     $excess = @(Get-ExcessApplicationAccess -Requested $app.RequiredResourceAccess -Assignments $assignments -Desired $desired)
     if ($excess.Count -gt 0) {
-        Write-Warn "Existing access outside the selected setup permissions ($($excess.Count) request/grant entries):"
-        foreach ($entry in $excess) { Write-Host "  $entry" -ForegroundColor Yellow }
-        if ($profileName -eq 'standard') { Write-Info 'These entries are existing access, not missing collector permissions. Standard preserves them unless manifest pruning is requested; setup never revokes existing consent.' }
-        Write-Warn 'Review App registrations > API permissions AND Enterprise applications > Permissions. Manifest pruning does not revoke prior admin consent. Remove excess requests and grants manually, or use a clean dedicated application.'
+        $extraRequested = @($excess | Where-Object { $_ -like 'Requested:*' }).Count
+        $extraConsented = @($excess | Where-Object { $_ -like 'Consented:*' }).Count
+        Write-Warn "Existing access outside the selected setup permissions: $extraRequested requested, $extraConsented consented ($($excess.Count) request/grant entries)."
+        if ($showSetupDetails -or $profileName -eq 'restricted') {
+            foreach ($entry in $excess) { Write-Host "  $entry" -ForegroundColor Yellow }
+        } else { Write-Info 'Use -Verbose to list permission names, grouped as requested or consented access.' }
+        if ($profileName -eq 'standard') { Write-Info 'This is existing access, not missing collector permissions. Standard preserves it; setup does not revoke existing consent.' }
+        if ($showSetupDetails -or $profileName -eq 'restricted') {
+            Write-Warn 'Review App registrations > API permissions AND Enterprise applications > Permissions. Manifest pruning does not revoke prior admin consent. Remove excess requests and grants manually, or use a clean dedicated application.'
+        }
         if ($profileName -eq 'restricted') { throw 'Restricted setup stopped before changing the application: excess requested or consented permissions remain.' }
     }
 }
@@ -1047,7 +1058,8 @@ if (-not $SkipCredential -and ($RotateCredential -or (-not $graphCertificatePath
         Write-Success "Verified and kept the existing $envFileName client secret for the matching tenant/application; no credential was rotated."
     } else { Write-Success 'Certificate authentication is configured; no client secret was created.' }
 }
-Write-Success "Saved the complete configuration atomically to $envFileName before consent and workload role setup. If setup is interrupted, rerun with the same profile/mode without -RotateCredential to reuse the saved secret and finish consent/workload roles."
+Write-Success "Saved configuration to $envFileName before checking consent and workload roles."
+Write-SetupDetail 'If setup is interrupted, rerun with the same profile/mode without -RotateCredential to reuse the saved secret and finish consent/workload roles.'
 
 $assignments = @(Get-MgServicePrincipalAppRoleAssignment -ServicePrincipalId $servicePrincipal.Id -All)
 $missingConsent = Get-MissingApplicationConsent -Assignments $assignments -Desired $desired
@@ -1117,13 +1129,13 @@ if ($PreviewCollectors -in @('PowerPlatform','All')) {
 Write-SetupSection -Step 5 -Title 'Setup result'
 Write-Host "  Application: $($app.DisplayName)"
 Write-Host "  Application ID: $($app.AppId)"
-Write-Host "  Service principal object ID: $($servicePrincipal.Id)"
+if ($showSetupDetails) { Write-Host "  Service principal object ID: $($servicePrincipal.Id)" }
 Write-Host "  Mode: $Mode"
 Write-Host "  Permission profile: $PermissionProfile"
-Write-Host "  Additional preview packs: $PreviewCollectors"
+if ($showSetupDetails -or $PreviewCollectors -ne 'None') { Write-Host "  Additional preview packs: $PreviewCollectors" }
 if ($profileName -eq 'standard') {
     Write-Host '  Default supplemental collectors: Entra recommendations, Shadow AI discovery, Copilot audit'
-    Write-Host '  Entra recommendations permission: DirectoryRecommendations.Read.All (recommendations and impacted resources)'
+    if ($showSetupDetails) { Write-Host '  Entra recommendations permission: DirectoryRecommendations.Read.All (recommendations and impacted resources)' }
 }
 Write-Host "  Environment file: $envPath"
 if ($profileName -eq 'standard') {

@@ -149,7 +149,7 @@ class OfflineReportTests(unittest.TestCase):
                                    key=lambda path: path.stat().st_mtime_ns)
                 package = receipt_path.parent
             receipt = json.loads((package / 'operator-log.jsonl').read_text(encoding='utf-8').splitlines()[-1])
-            report_directory = package / BUILDS_FOLDER / receipt['run_id']
+            report_directory = package / 'Deliverables'
             summary_paths = [package / name for name in receipt['deliverables']
                              if (package / name).parent == report_directory and name.endswith('.html')
                              and (Path(name).stem == SUMMARY_STEM or Path(name).stem.startswith(SUMMARY_STEM + ' - '))]
@@ -266,8 +266,8 @@ class OfflineReportTests(unittest.TestCase):
                          '--evaluation-date', '2026-09-15']
             first = self.run_cli(arguments, runner)
             second = self.run_cli(arguments, runner)
-            self.assertNotEqual(first.parent, second.parent)
-            self.assertEqual({first.parent.parent, second.parent.parent}, {package / BUILDS_FOLDER})
+            self.assertNotEqual(first.name, second.name)
+            self.assertEqual({first.parent, second.parent}, {package / 'Deliverables'})
             self.assertTrue(first.is_file(), 'Rebuilding must retain the previous report.')
             self.assertEqual(collection.read_bytes(), original_collection)
             self.assertFalse((runner / 'Reports').exists())
@@ -280,7 +280,9 @@ class OfflineReportTests(unittest.TestCase):
                 self.assertEqual(len(own_receipt), len(set(own_receipt)))
                 self.assertFalse(list(report.parent.glob('*.zip')))
                 body = report.read_text(encoding='utf-8')
-                self.assertIn('href="' + report.with_suffix('.xlsx').name.replace(' ', '%20') + '"', body)
+                targets = [unquote(urlsplit(unescape(link)).path)
+                           for link in re.findall(r'href="([^"]+)"', body)]
+                self.assertIn(report.with_suffix('.xlsx').name, targets)
                 self.assertNotIn(str(root), body)
 
     def test_portal_only_customer_name_organizes_one_report_package(self):
@@ -297,7 +299,7 @@ class OfflineReportTests(unittest.TestCase):
             self.assertTrue(html.is_relative_to(customer))
             self.assertEqual(len(list(customer.glob('*/rebuild.json'))), 1)
             package = next(customer.glob('*/rebuild.json')).parent
-            self.assertTrue(html.is_relative_to(package / BUILDS_FOLDER))
+            self.assertTrue(html.is_relative_to(package / 'Deliverables'))
             self.assertFalse((root / 'output').exists())
 
     def test_complete_synthetic_build_fits_repository_paths_and_preserves_links_on_rebuild(self):
@@ -330,28 +332,29 @@ class OfflineReportTests(unittest.TestCase):
             first = self.run_cli(args, root)
             preserved = {path: path.read_bytes() for path in first.parent.rglob('*') if path.is_file()}
             second = self.run_cli(args, root)
-            self.assertEqual(first.parent.name, '1')
-            self.assertEqual(second.parent.name, '2')
+            self.assertEqual(first.parent.name, 'Deliverables')
+            self.assertEqual(second.parent, first.parent)
+            self.assertNotEqual(first.name, second.name)
             self.assertEqual(collection.read_bytes(), original)
             for path, data in preserved.items():
                 self.assertEqual(path.read_bytes(), data, path)
-            for report in (first, second):
-                self.assertTrue((report.parent / EVIDENCE_FOLDER / 'index.html').is_file())
-                for path in report.parent.rglob('*'):
-                    if not path.is_file():
-                        continue
-                    relative = path.relative_to(root)
-                    actual_repository_path = ROOT / relative
-                    self.assertLessEqual(len(str(actual_repository_path).encode('utf-16-le')) // 2, 255, actual_repository_path)
-                    self.assertTrue(all('_' not in part for part in relative.parts), relative)
-                    if path.suffix == '.html':
-                        source = path.read_text(encoding='utf-8')
-                        for href in re.findall(r'href="([^"]+)"', source):
-                            uri = urlsplit(unescape(href))
-                            if uri.scheme or uri.netloc or not uri.path:
-                                continue
-                            target = (path.parent / unquote(uri.path)).resolve()
-                            self.assertTrue(target.is_file(), f'{path.name}: {href}')
+            for report, evidence_folder in ((first, EVIDENCE_FOLDER), (second, EVIDENCE_FOLDER + ' (2)')):
+                self.assertTrue((report.parent / evidence_folder / 'index.html').is_file())
+            for path in first.parent.rglob('*'):
+                if not path.is_file():
+                    continue
+                relative = path.relative_to(root)
+                actual_repository_path = ROOT / relative
+                self.assertLessEqual(len(str(actual_repository_path).encode('utf-16-le')) // 2, 255, actual_repository_path)
+                self.assertTrue(all('_' not in part for part in relative.parts), relative)
+                if path.suffix == '.html':
+                    source = path.read_text(encoding='utf-8')
+                    for href in re.findall(r'href="([^"]+)"', source):
+                        uri = urlsplit(unescape(href))
+                        if uri.scheme or uri.netloc or not uri.path:
+                            continue
+                        target = (path.parent / unquote(uri.path)).resolve()
+                        self.assertTrue(target.is_file(), f'{path.name}: {href}')
     def test_portal_only_without_a_name_uses_each_tenant_id_for_organization(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

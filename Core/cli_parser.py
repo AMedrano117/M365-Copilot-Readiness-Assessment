@@ -28,6 +28,8 @@ Examples:
   python main.py --mode offline --reports-dir tests/fixtures/microsoft_reports
   python main.py --mode offline --collection-input output/tenant-collection.json --reports-dir exports
   python main.py --mode offline --prior-report Reports/prior.xlsx --purview-cache .cache/purview/saved.json --reports-dir exports
+  python main.py --import-historical 'C:/Private/PreviousAssessment' --plan
+  python main.py --import-historical 'C:/Private/PreviousAssessment'
   python main.py --services M365
   python main.py --services M365 Entra Defender
   python main.py --tenant-id "your-tenant-id" --services Purview
@@ -142,6 +144,8 @@ Examples:
     parser.add_argument('--tenant-name', help='Display name for portal-only offline reports.')
     parser.add_argument('--customer-name', metavar='NAME',
                         help='Customer folder label under Reports/. Defaults to the tenant display name or tenant ID; saved packages retain the label for replay.')
+    parser.add_argument('--confirm-export-tenant', metavar='TENANT_GUID',
+                        help='Explicitly confirm ownership of supplied exports without tenant IDs. Records file hashes and operator confirmation; never overrides a conflicting tenant ID.')
     parser.add_argument('--reports-dir', action='append', default=[], metavar='PATH',
                         help='Directory of structured portal exports and PDFs. PDFs in subfolders are also extracted locally into JSON and report previews. Repeat for multiple directories.')
     parser.add_argument('--portal-review', metavar='PATH',
@@ -241,6 +245,12 @@ Examples:
     )
     
     intent = parser.add_mutually_exclusive_group()
+    intent.add_argument('--import-historical', metavar='WORKBOOK_OR_FOLDER',
+        help='Register a report-only historical Initial offline. Preserves XLSX/HTML originals; no collection or technical delta claims.')
+    parser.add_argument('--historical-html', action='append', metavar='PATH',
+        help='HTML companion to archive verbatim; repeat for multiple files. Requires --import-historical.')
+    parser.add_argument('--historical-output-dir', metavar='PATH',
+        help='New historical import package directory, outside source report folders. Default: a new dated customer Reports package.')
     intent.add_argument('--reassess', metavar='HISTORY',
         help='Reassess an existing assessment using its history. Reads the AssessmentId and asks you to select and confirm a completed baseline; unattended runs require --baseline-run-id. Use --env-file for the customer configuration.')
     intent.add_argument('--run-type', choices=['Initial','Reassessment','Standalone'],
@@ -258,6 +268,21 @@ Examples:
     if sum(value=='--run-type' or value.startswith('--run-type=') for value in sys.argv[1:])>1:
         parser.error('Select one explicit --run-type per execution.')
     args = parser.parse_args()
+    if args.import_historical is not None:
+        allowed = {'--import-historical', '--historical-html', '--historical-output-dir',
+            '--tenant-id', '--evaluation-date', '--customer-name', '--assessment-purpose',
+            '--plan', '--plan-format', '--source-policy', '--source-reason',
+            '--acknowledge-dirty-source', '--verbose', '--color', '--no-progress', '--mode'}
+        provided = {value.split('=', 1)[0] for value in sys.argv[1:] if value.startswith('--')}
+        if provided - allowed or args.mode == 'live':
+            parser.error('Historical import is offline and cannot be mixed with collection, credentials, replay, baseline or other evidence options.')
+        if sum(value=='--import-historical' or value.startswith('--import-historical=') for value in sys.argv[1:]) > 1:
+            parser.error('Select one historical assessment per import.')
+        if not args.import_historical.strip():
+            parser.error('--import-historical requires a nonblank workbook or folder path.')
+        args.mode, args.run_type = 'offline', 'Initial'
+    elif args.historical_html or args.historical_output_dir:
+        parser.error('--historical-html and --historical-output-dir require --import-historical.')
     if args.reassess is not None:
         if not args.reassess.strip():
             parser.error('--reassess requires a nonblank history path.')

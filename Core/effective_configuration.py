@@ -8,7 +8,7 @@ from pathlib import Path
 from uuid import UUID
 
 INPUTS = ('sam_report','dspm_report','reports_dir','copilot_readiness_export','copilot_dashboard_export',
-          'power_platform_inventory','assessment_profile','provider_evidence','prior_report','purview_cache','portal_review','ai_baseline_export','baseline')
+          'power_platform_inventory','assessment_profile','provider_evidence','prior_report','purview_cache','portal_review','ai_baseline_export','baseline','import_historical','historical_html')
 AGES = {'provider_evidence_max_age_days':('PROVIDER_EVIDENCE_MAX_AGE_DAYS',90),
         'sam_report_max_age_days':('SAM_REPORT_MAX_AGE_DAYS',35), 'dspm_report_max_age_days':('DSPM_REPORT_MAX_AGE_DAYS',8)}
 
@@ -36,7 +36,9 @@ def metadata(path):
     result = dict(collection_metadata, **value)
     result['package_directory']=str(folder)
     if recipe:
-        result.update({key:recipe[key] for key in ('tenant_id','evaluation_date','assessment_settings') if key in recipe})
+        # A new explicit offline run reuses raw collection bytes but records its
+        # own execution identity in the recipe, as load_collection does.
+        result.update({key:recipe[key] for key in ('tenant_id','evaluation_date','assessment_settings','identity') if key in recipe})
     result['resolved_inputs'] = {role:[str(confined_path(folder,p)) for p in paths]
         for role,paths in selected.get('inputs',{}).items() if role in INPUTS}
     return result
@@ -48,6 +50,14 @@ def resolve_effective(args, saved=None):
         value=getattr(result,key,None)
         if hasattr(result,key):setattr(result,key,value.strip() if isinstance(value,str) else None)
     errors = []
+    if getattr(result, 'import_historical', None):
+        from .historical_import import normalize_historical
+        try:
+            result = normalize_historical(result)
+            result._historical_error = None
+        except (ValueError, OSError) as exc:
+            result._historical_error = str(exc) if isinstance(exc, ValueError) else 'Historical source is inaccessible.'
+            errors.append('historical_import_invalid')
     environment = dict(os.environ)
     if not getattr(args,'offline',False):
         from .credentials_check import read_env_file
@@ -71,7 +81,7 @@ def resolve_effective(args, saved=None):
         except (ValueError,TypeError,AttributeError): pass
     if len(tenants)>1: errors.append('saved_tenant_conflict')
     result.tenant_id = getattr(result,'tenant_id',None) or saved.get('tenant_id') or (environment.get('TENANT_ID') if not getattr(result,'offline',False) else None)
-    result.evaluation_date = getattr(result,'evaluation_date',None) or date.today().isoformat()
+    result.evaluation_date = getattr(result,'evaluation_date',None) or (None if getattr(result,'import_historical',None) else date.today().isoformat())
     result.services = sorted(set(getattr(result,'services',[]) or []))
     if not getattr(result,'offline',False):
         from .collector_registry import normalize_permission_profile
@@ -116,6 +126,22 @@ def resolve_effective(args, saved=None):
         if not getattr(result,key,None) and not getattr(result,'offline',False):
             variable='SAM_DAG_REPORT_PATHS' if key=='sam_report' else 'DSPM_REPORT_PATHS'
             setattr(result,key,[p.strip() for p in environment_values.get(variable,'').split(';') if p.strip()])
+    confirmation_tenant = getattr(result, 'confirm_export_tenant', None)
+    if confirmation_tenant:
+        try:
+            if str(UUID(confirmation_tenant)) != str(UUID(str(result.tenant_id))):
+                raise ValueError('Export confirmation must match the assessed tenant.')
+            from .portal_report_import import export_confirmations
+            paths = [path for role in ('sam_report','dspm_report','reports_dir','copilot_readiness_export',
+                     'copilot_dashboard_export','power_platform_inventory')
+                     for path in (getattr(result,role,None) if isinstance(getattr(result,role,None),(list,tuple))
+                                  else [getattr(result,role,None)]) if path]
+            selected = export_confirmations(paths, confirmation_tenant)
+            if not selected:
+                raise ValueError('Select at least one export to confirm.')
+            settings['export_tenant_confirmations'] = {**settings.get('export_tenant_confirmations', {}), **selected}
+        except (ValueError, TypeError, OSError):
+            errors.append('export_tenant_confirmation_invalid')
     settings.setdefault('data_exposure_enabled', True if getattr(result,'offline',False) else not result.services or bool({'M365','Purview'} & set(result.services)))
     if getattr(result,'offline',False):
         result.permission_profile=getattr(result,'permission_profile',None) or settings.get('permission_profile')
@@ -134,14 +160,14 @@ def portable_configuration(config):
     source = vars(config) if hasattr(config,'__dict__') else dict(config or {})
     excluded = {'plan','plan_format','verbose','color','no_progress','open_html_report','customer_name','tenant_name',
         'save_collection','snapshot_json','render_output_dir','env_file','replay_snapshot','collection_input',
-        'assessment_history','reassess','lifecycle_report_date','client_secret','password','access_token','refresh_token',
+        'assessment_history','reassess','historical_output_dir','lifecycle_report_date','client_secret','password','access_token','refresh_token',
         'certificate_path','certificate_password','_provided_options','snapshot','log','input','output','history','policy'}
     values = {k:v for k,v in source.items() if k not in excluded and k not in INPUTS and not k.startswith('_')
         and not any(word in k.lower() for word in ('secret','password','token','credential'))}
     for key,value in list(values.items()):
         if isinstance(value,(list,tuple,set)): values[key]=sorted(set(value))
     values['effective_settings'] = {key:value for key,value in source.get('_effective_settings',{}).items()
-        if key in {*AGES,'lifecycle_report_max_age_days','lifecycle_report_dates','data_exposure_enabled','source_windows'}}
+        if key in {*AGES,'lifecycle_report_max_age_days','lifecycle_report_dates','data_exposure_enabled','source_windows','export_tenant_confirmations'}}
     values['recorded_collectors'] = source.get('_recorded_collectors',[])
     values['effective_authentication'] = source.get('_effective_authentication',{})
     if source.get('lifecycle_report_date') and not source.get('_effective_settings'):

@@ -1,5 +1,7 @@
 # Assessment runs, explicit baselines and comparison eligibility
 
+For existing workbook/HTML reports without collection JSON, use the [historical Initial import](HISTORICAL_IMPORT.md).
+
 [Documentation index](README.md) | [Methodology](METHODOLOGY.md) | [Persistent identity](PERSISTENT_IDENTITY.md)
 
 Stage A records run intent and comparison eligibility. The additive
@@ -53,22 +55,27 @@ The explicit Reassessment command below remains supported.
 ## Assessment folders and report builds
 
 By default, each reassessment stays under the original assessment package in a
-new numbered `Runs` folder. The Initial collection and builds remain unchanged:
+new numbered `Runs` folder. Each run keeps its reports together in one
+`Deliverables` folder. The Initial collection and reports remain unchanged:
 
 ```text
 Reports/<customer>/<initial-date>/
   assessment-history.json
   collection.json
   assessment-results/
-  Builds/1/
+  Deliverables/
   Runs/1/
     collection.json
     assessment-run.json
     assessment-results/
-    Builds/1/
+    Deliverables/
   Runs/2/
     ...
 ```
+
+Rebuilds use the same `Deliverables` folder and add ` (2)`, ` (3)` and so on
+to report filenames, preserving earlier files and their links. Existing packages
+with `Builds` or `Renders` keep their original layout; no reports are moved.
 
 Report builds render a run; they do not append assessment history. Each completed
 reassessment appends one new run to the selected history. Different customers

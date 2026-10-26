@@ -407,7 +407,7 @@ class AssessmentPackageTests(unittest.TestCase):
             finally:
                 os.chdir(previous)
             self.assertEqual(first, second)
-            self.assertEqual(len(list(copied.glob('Builds/*/shared-result.json'))), 2,
+            self.assertEqual(len(list(copied.glob('Deliverables/shared-result*.json'))), 2,
                              'The copied package must retain both shared-result snapshots even when their filenames coincide.')
             self.assertEqual(len(list((root / 'Reports').rglob('shared-result.json'))), 1,
                              'The replay adds its build to the copied package instead of duplicating it in Reports.')
@@ -482,10 +482,10 @@ class AssessmentPackageTests(unittest.TestCase):
             finally:
                 os.chdir(previous)
             self.assertEqual(first, second)
-            self.assertEqual(len(list(moved.glob('Builds/*'))), 2,
-                             'Replay must add one build while preserving the copied original deliverables.')
-            self.assertTrue(list(moved.glob('Builds/*/*.xlsx')))
-            self.assertTrue(list(moved.glob('Builds/*/*.html')))
+            self.assertEqual(len(list(moved.glob('Deliverables/* (2).html'))), 2,
+                             'Replay must add numbered reports while preserving the copied originals.')
+            self.assertTrue(list(moved.glob('Deliverables/*.xlsx')))
+            self.assertTrue(list(moved.glob('Deliverables/*.html')))
 
 
 if __name__ == '__main__':

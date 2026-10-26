@@ -219,7 +219,7 @@ def package_native_sources(folder, result, retained_sheets=None, retained_select
         if (receipt.get('semantic_run') or {}).get('RunId') != (result.get('identity') or {}).get('RunId'):
             continue
         for locator in receipt.get('deliverables') or []:
-            if Path(locator).name.startswith('Technical Evidence') and Path(locator).suffix.lower() == '.xlsx':
+            if (Path(locator).name.startswith('Technical Evidence') or Path(locator).name == 'Assessment Technical Evidence.xlsx') and Path(locator).suffix.lower() == '.xlsx':
                 path = confined_path(folder, locator)
                 if path.is_file() and path not in candidates:
                     candidates.append(path)

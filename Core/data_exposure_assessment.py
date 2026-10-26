@@ -573,7 +573,10 @@ def _scan_reports(paths, source_kind, evaluation_date=None, max_age_days=None, *
                         'metric_id': 'sam.links_created.' + _normalized_key(link_type).replace(' ', '_'),
                         'label': link_type + ' created in the report period', 'domain_id': 'content',
                         'control_id': 'CONTENT.PERMISSIONS', 'value': max(0, count), 'unit': 'links',
-                        'availability': 'available', 'tenant_id': tenant, 'population': workload,
+                        # The grouping key may be a site hostname. Only a
+                        # declared tenant identifier belongs in tenant_id;
+                        # the URL remains in scope and affected_objects.
+                        'availability': 'available', 'tenant_id': _text(_value(record, 'Tenant ID')), 'population': workload,
                         'scope': object_identity or 'Exported row', 'affected_objects': [object_identity] if object_identity else [],
                         'observed_at': date.isoformat() if date else '', 'complete': False,
                         'source_type': 'portal_export', 'source_file': source_file, 'source_schema': report_type,

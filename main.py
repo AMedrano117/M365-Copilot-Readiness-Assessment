@@ -28,7 +28,8 @@ def main():
     status('Mode: offline — saved evidence and local exports.' if args.offline else
            'Mode: live — tenant evidence collection.')
     from Core.run_progress import RunProgress
-    with RunProgress(offline=args.offline, check_connections=args.check_connections):
+    with RunProgress(offline=args.offline, check_connections=args.check_connections,
+                     historical_import=bool(args.import_historical)):
         # Show the startup receipt before dependency imports and any live collectors.
         # Console helpers flush explicitly, including when stdout is redirected.
         from Core.check_dependencies import check_dependencies
@@ -60,6 +61,16 @@ def main():
         if not plan['execution_eligible']:
             sys.exit(2)
         set_execution_revision(plan['producing_revision'])
+
+        if args.import_historical:
+            from Core.historical_import import run_historical_import
+            try:
+                run_historical_import(args)
+                sys.exit(0)
+            except (ValueError, OSError) as exc:
+                status(f'Historical import failed: {exc}' if isinstance(exc, ValueError) else
+                       'Historical import failed: local source or output is inaccessible.', 'error')
+                sys.exit(2)
 
         if args.offline:
             from Core.offline_report import run_offline_report

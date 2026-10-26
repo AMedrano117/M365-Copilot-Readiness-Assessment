@@ -50,7 +50,7 @@ class RunExecutionTests(RunFixture):
             self.run_offline('--collection-input',package / 'collection.json')
         self.assertEqual(self.history.read_bytes(),before)
         self.assertEqual((package / 'collection.json').read_bytes(),original_collection)
-        self.assertTrue(list((package / 'Renders').rglob('Assessment.html')))
+        self.assertTrue(list((package / 'Deliverables').glob('*.html')))
 
     def test_default_initial_history_moves_with_package_and_preserves_replay(self):
         from Core.offline_collection import load_collection
@@ -127,7 +127,7 @@ class LiveRunExecutionTests(unittest.IsolatedAsyncioTestCase):
         package = (history_path.parent / current['PackageLocator']).resolve()
         self.assertEqual(package, history_path.resolve().parent / 'Runs' / '1')
         self.assertTrue((package / 'collection.json').is_file())
-        self.assertTrue((package / 'Builds' / '1').is_dir())
+        self.assertTrue((package / 'Deliverables').is_dir())
         self.assertEqual((history_path.parent / 'collection.json').read_bytes(), initial_collection)
         self.assertEqual((history_path.parent / history['Runs'][0]['SnapshotLocator']).read_bytes(), initial_snapshot)
 

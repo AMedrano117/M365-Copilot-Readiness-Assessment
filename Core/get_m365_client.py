@@ -206,6 +206,8 @@ async def get_m365_client(
                     'availability_status': 'unavailable', 'records_collected': 0,
                     'pages_collected': 0, 'truncated': False,
                     'reason': str(response) if isinstance(response, Exception) else 'No response returned',
+                    'status_code': getattr(response, 'status_code', None),
+                    'retry_details': getattr(response, 'retry_details', None),
                 }
                 continue
             if isinstance(response, dict) and 'value' in response:

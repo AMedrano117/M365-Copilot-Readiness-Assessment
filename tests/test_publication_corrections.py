@@ -222,7 +222,7 @@ class PublicationCorrections(unittest.TestCase):
             self.assertEqual(plan['effective_configuration']['evaluation_date'],effective.evaluation_date)
             self.assertEqual(plan['effective_configuration']['report_format'],effective.report_format)
             self.assertEqual(json.loads(plan_json(plan)),plan)
-            self.assertIn('Effective configuration: '+json.dumps(plan['effective_configuration'],sort_keys=True),plan_lines(plan))
+            self.assertIn('Effective configuration: '+json.dumps(plan['effective_configuration'],sort_keys=True),plan_lines(plan,verbose=True))
             args.tenant_id='22222222-2222-2222-2222-222222222222'
             self.assertIn('saved_tenant_conflict',build_run_plan(args,revision=fictional_revision())['validation_errors'])
             args.collection_input=None

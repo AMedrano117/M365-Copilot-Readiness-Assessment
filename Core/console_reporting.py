@@ -92,6 +92,12 @@ def _ps_quote(value):
     return "'" + str(value).replace("'", "''") + "'"
 
 
+def cli_command():
+    """Use the interpreter and source checkout that produced this handoff."""
+    script = Path(__file__).resolve().parents[1] / 'main.py'
+    return f"& {_ps_quote(display_path(sys.executable))} {_ps_quote(display_path(script))}"
+
+
 def print_collection_handoff(collection_input):
     if not collection_input:
         return
@@ -100,15 +106,24 @@ def print_collection_handoff(collection_input):
     # Never wrap or shorten paths/commands: the entire value must remain copyable.
     print(style(path, 'path'))
     print('Use this saved file to rebuild or add admin exports.')
-    script = Path(__file__).resolve().parents[1] / 'main.py'
-    command = f"& {_ps_quote(display_path(sys.executable))} {_ps_quote(display_path(script))} --mode offline `"
+    command = f"{cli_command()} --mode offline `"
     section('REBUILD OFFLINE')
     print(command)
     print(f"  --collection-input {_ps_quote(path)} `")
     print('  --open-html-report')
-    print("To add exports, append: --reports-dir 'path-to-your-exports-folder'")
+    detail("To add exports, append: --reports-dir 'path-to-your-exports-folder'")
     print('More detail: --verbose')
-    print_paragraph('After the engagement, follow docs/CLEANUP.md to retain the final package, retire dedicated application access, and remove selected working copies.')
+    detail('After the engagement, follow docs/CLEANUP.md to retain the final package and retire application access.')
+
+
+def source_gap_kind(reason):
+    """Classify explicit service explanations, never a bare HTTP 403."""
+    text = str(reason).lower()
+    if any(value in text for value in ('not licensed for this feature', 'aadpremiumlicenserequired')):
+        return 'license'
+    if any(value in text for value in ('retry wait budget', 'retry limit', 'http 429', 'too many requests')):
+        return 'retry'
+    return 'unavailable'
 
 
 def print_paragraph(message, *, indent='', tone=None):
@@ -158,9 +173,19 @@ def print_source_gaps(source_statuses, *, mode='live', collected_at=None):
             message = f'{", ".join(names)}: {status}'
             if offline and not is_verbose():
                 message += ' in saved evidence.'
-            else:
+            elif is_verbose():
                 message += f'. {reason}'
+            else:
+                kind = source_gap_kind(reason)
+                message = f'{", ".join(names)}: ' + {
+                    'license': 'license required; evidence unavailable.',
+                    'retry': 'retry allowance exhausted; collect this source again later.',
+                    'unavailable': f'{status}. {reason}' if len(str(reason)) <= 150 else
+                                   f'{status}; review the operator log for details.',
+                }[kind]
             print_paragraph(message, indent='  ', tone='muted' if offline else 'warning')
+        if not offline and not is_verbose():
+            print_paragraph('Unavailable evidence is not a passing result. Details: --verbose and operator-log.jsonl.', tone='muted')
         if offline and not is_verbose():
             print_paragraph('The saved gaps still limit evidence coverage. Use --verbose to show the original service responses.',
                             tone='muted')
