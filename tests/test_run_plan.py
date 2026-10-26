@@ -51,7 +51,7 @@ class PlanTests(unittest.TestCase):
     def test_new_assessment_output_is_one_deliverables_folder(self):
         self.assertEqual(plan()['output_destination'],'Reports/<customer>/<date>/Deliverables')
     def test_output_visible(self):self.assertEqual(plan(save_collection='output/fictional.json')['output_destination'],'output/fictional.json')
-    def test_source_visible(self):self.assertIn('Source state: CleanCommitted',plan_lines(plan()))
+    def test_source_visible(self):self.assertIn('Source: Clean committed checkout (aaaaaaa)',plan_lines(plan()))
     def test_skip_reason_visible(self):self.assertIn('No explicit reassessment',plan()['delta']['reason'])
     def test_disabled_reason_visible(self):self.assertEqual(plan(run_type='Reassessment',delta_mode='disabled')['delta']['reason'],'Delta explicitly disabled.')
     def test_delta_enabled_without_mode_rejected(self):self.assertIn('delta_requested_without_reassessment',plan(delta_mode='enabled')['validation_errors'])

@@ -203,7 +203,87 @@ def build_run_plan(args, *, revision=None, generated_at=None):
 def plan_json(plan): return json.dumps(plan,sort_keys=True,ensure_ascii=True,indent=2,allow_nan=False)
 
 
-def plan_lines(plan):
+def _output_qualification(plan):
+    if not plan['execution_eligible']:
+        return 'Blocked'
+    policy = plan['producing_revision']['publication']
+    if policy['policy'] == 'engineering-validation':
+        return policy['output_qualification']
+    if plan.get('source_revision_role') == 'historical_importer':
+        return 'Historical context only; not a newly scored customer deliverable'
+    if plan['replay']:
+        original = (plan.get('original_producing_revision') or {}).get('publication') or {}
+        if not original.get('customer_publication_eligible'):
+            return 'Snapshot replay; ' + original.get('output_qualification', 'original publication eligibility unverified')
+        return 'Snapshot replay; original output qualification retained'
+    if plan['publication_eligible']:
+        return 'Eligible, subject to assessment validation'
+    return 'Not eligible for customer publication'
+
+
+def plan_lines(plan, *, verbose=False):
+    if verbose:
+        return _detailed_plan_lines(plan)
+    sources = plan['sources']
+    historical = plan.get('source_revision_role') == 'historical_importer'
+    mode = ('Historical import; no tenant collection' if historical else
+            'Snapshot replay; no tenant collection or re-evaluation' if plan['replay'] else
+            'Live tenant collection' if sources['tenant_collection'] else
+            'Offline saved evidence; no tenant collection')
+    rows = [('Run type', plan['requested_run_type']), ('Mode', mode)]
+    if sources['tenant_collection']:
+        services = ', '.join(sources['services']) or 'Default selected collectors'
+        rows.append(('Scope', services + '; ' + sources['permission_profile'] + ' permissions'))
+    baseline = plan['baseline']
+    if plan['requested_run_type'] == 'Reassessment' or baseline['run_id']:
+        validated = all(baseline[key] == value for key, value in
+                        (('completion', 'completed'), ('integrity', 'validated'), ('ownership', 'validated')))
+        rows.append(('Baseline', (baseline['run_id'] or 'Not selected') +
+                     (' (validated)' if validated else ' (not validated)')))
+    if plan['requested_run_type'] == 'Reassessment':
+        delta = plan['delta']
+        comparison = ('Disabled' if not delta['enabled'] else
+                      'Not comparable; historical report baseline' if baseline.get('technical_delta_eligible') is False else
+                      'Eligibility checked at completion' if delta['expected'] else
+                      'Blocked by plan validation')
+        rows.append(('Comparison', comparison))
+    supplied = sources['imports_supplied']
+    if supplied:
+        rows.append(('Imports', str(sum(supplied.values())) + ' selected input(s)'))
+    historical_info = plan.get('historical_import') or {}
+    if historical_info:
+        rows.append(('Historical tenant identity', historical_info['tenant_identity_basis']))
+    evaluation_date = plan['effective_configuration'].get('evaluation_date')
+    if evaluation_date:
+        if historical_info:
+            evaluation_date += ' (' + historical_info['evaluation_date_basis'] + ')'
+        rows.append(('Evaluation date', evaluation_date))
+    revision = plan['producing_revision']
+    state = revision['source_state']
+    source = 'Clean committed checkout' if state == 'CleanCommitted' else state
+    commit = revision.get('commit_sha')
+    if commit:
+        source += ' (' + commit[:7] + ')'
+    rows += [('Output', plan['output_destination']), ('Source', source),
+             ('Publication', _output_qualification(plan)),
+             ('Plan check', 'Passed' if plan['execution_eligible'] else 'Blocked')]
+    lines = [f'{label}: {value}' for label, value in rows]
+    from .historical_import import NOTICE
+    for warning in plan['warnings']:
+        if warning == 'Original producing revision is retained; current source identifies the replay tool only.':
+            continue  # Already stated by the replay mode and publication qualification.
+        if warning == revision['publication']['output_qualification']:
+            continue  # Keep the engineering-only qualification once, above.
+        if warning == NOTICE:
+            warning = ('Historical conclusions are unverified. No raw collection was imported; '
+                       'technical changes cannot be established. Use the archived original reports.')
+        lines.append('Warning: ' + warning)
+    lines += ['Error: ' + value for value in plan['validation_errors']]
+    lines.append('Details: --verbose or --plan --plan-format json')
+    return lines
+
+
+def _detailed_plan_lines(plan):
     rev=plan['producing_revision']; baseline=plan['baseline']; delta=plan['delta']
     rows=[('Run type',plan['requested_run_type']),('Assessment',plan['assessment_id'] or plan['assessment_id_behavior']),
         ('Run identity',plan.get('retained_run_id') or plan['run_id_behavior']),('Baseline',baseline['run_id'] or 'None'),
@@ -215,7 +295,7 @@ def plan_lines(plan):
         ('Run configuration hash',rev.get('run_configuration_hash')),('Collector configuration hash',rev.get('collector_configuration_hash')),
         ('Imports supplied',json.dumps(plan['sources']['imports_supplied'],sort_keys=True)),
         ('Effective configuration',json.dumps(plan['effective_configuration'],sort_keys=True)),
-        ('Source policy',rev['publication']['policy']),('Output qualification',rev['publication']['output_qualification']),
+        ('Source policy',rev['publication']['policy']),('Output qualification',_output_qualification(plan)),
         ('Optional imports absent',', '.join(plan['sources']['optional_imports_not_supplied'])),('Output',plan['output_destination']),
         ('Overwrite behavior',plan['overwrite_behavior']),('Importer commit' if plan.get('historical_import') else 'Replay tool commit' if plan['replay'] else 'Producing commit',rev.get('commit_sha') or 'Unavailable'),
         ('Source state',rev['source_state']),('Dirty fingerprint',rev.get('dirty_tree_fingerprint') or 'None'),
@@ -235,6 +315,8 @@ def plan_lines(plan):
 
 
 def print_run_plan(plan):
-    from .console_reporting import section,print_paragraph
+    from .console_reporting import section,print_paragraph,is_verbose
     section('PRE-EXECUTION RUN PLAN')
-    for line in plan_lines(plan):print_paragraph(line)
+    for line in plan_lines(plan, verbose=is_verbose()):
+        tone = 'error' if line.startswith('Error:') else 'warning' if line.startswith('Warning:') else 'info'
+        print_paragraph(line, tone=tone)
