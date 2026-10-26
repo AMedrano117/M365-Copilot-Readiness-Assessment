@@ -45,7 +45,7 @@ The importer does not reconstruct missing raw collector data from a workbook or 
 
 Tenant GUIDs are compared wherever saved sources record them. Older workbooks may contain only a display name, so their tenant identity cannot be verified automatically. Cache input is explicit: offline mode never searches for or silently reuses another tenant's cache. A partial Purview cache cannot be combined with `--collection-input` to overwrite a full saved collection.
 
-A recovery build creates `Reports/<customer>/<date>/` containing the original inputs, `rebuild.json`, a `Builds/<build>/` folder and an operator log. Use `--customer-name "Example Customer"` to choose the organizational folder name; otherwise it uses the tenant display name, then tenant ID. Copy the whole assessment folder and replay with `--mode offline --collection-input PATH\rebuild.json`; resupplying the original workbook/cache/export paths is unnecessary after the first successful build. Portal-only builds use this recipe format too. This preserves the evidence that exists without creating a tenant collection or promoting historical conclusions.
+A recovery build creates `Reports/<customer>/<date>/` containing the original inputs, `rebuild.json`, a `Deliverables/` folder and an operator log. Use `--customer-name "Example Customer"` to choose the organizational folder name; otherwise it uses the tenant display name, then tenant ID. Copy the whole assessment folder and replay with `--mode offline --collection-input PATH\rebuild.json`; resupplying the original workbook/cache/export paths is unnecessary after the first successful build. Portal-only builds use this recipe format too. This preserves the evidence that exists without creating a tenant collection or promoting historical conclusions.
 
 ## Choose the execution mode
 
@@ -69,7 +69,7 @@ Follow [RUN.md](RUN.md) for the canonical prepare, collect, add exports and revi
   --reports-dir ".\output\customer\exports" --open-html-report
 ```
 
-Create the exports folder before the offline command. If exports already exist, include `--reports-dir` in the live run. Every live assessment automatically saves `collection.json` in its portable `Reports/<customer>/<date>/` folder, alongside original supplemental files, settings, `Builds/<build>/` and an operator log. Preflight does not save a collection; offline mode does not create or overwrite one. `--save-collection PATH` overrides the live collection destination and retains an adjacent companion package.
+Create the exports folder before the offline command. If exports already exist, include `--reports-dir` in the live run. Every live assessment automatically saves `collection.json` in its portable `Reports/<customer>/<date>/` folder, alongside original supplemental files, settings, `Deliverables/` and an operator log. Preflight does not save a collection; offline mode does not create or overwrite one. `--save-collection PATH` overrides the live collection destination and retains an adjacent companion package.
 
 Copy the entire assessment folder to move the evidence, then use its `collection.json` with `--collection-input`. For a custom save destination or an older collection, copy the entire `<collection-stem>_package` companion folder. Packaged report/profile/provider inputs restore automatically. Repeated report options add inputs; explicit single-file options override their packaged counterpart. Successful offline builds preserve new external inputs in `Rebuilds/` and save the latest replay recipe in `rebuild.json`, leaving the original collection unchanged. Legacy collections that predate packaging still require their original exports and settings. See [package layout and replay rules](RUN.md#portable-assessment-folder).
 
@@ -79,7 +79,7 @@ Structured-export discovery is not recursive. Repeat `--reports-dir` for separat
 
 Without a saved collection, `--mode offline --reports-dir PATH` produces a portal-only assessment with missing tenant controls identified. `--prior-report` and `--purview-cache` are recovery inputs; `--snapshot-json` and `--baseline` are assessment comparison inputs, not raw collection replacements.
 
-HTML, Excel and all companion files appear together in the assessment folder's `Builds/<build>/`. The default workflow records them in place, keeping one generated copy. `--report-format both` adds CSV. User-level Copilot detail is included by default in each workbook build and remains excluded from HTML. Protect the full package, including original exports, as confidential evidence; keep credentials and private certificates outside it.
+HTML, Excel and all companion files appear together in the assessment folder's `Deliverables/`. The default workflow records them in place, keeping one generated copy. `--report-format both` adds CSV. User-level Copilot detail is included by default in each workbook build and remains excluded from HTML. Protect the full package, including original exports, as confidential evidence; keep credentials and private certificates outside it.
 
 At closeout, retain the complete agreed package and verify its offline replay before removing local
 working copies. [CLEANUP.md](CLEANUP.md) separates dedicated application removal from local artifact

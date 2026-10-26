@@ -2,6 +2,7 @@
 from contextlib import contextmanager
 import os
 from pathlib import Path
+import re
 
 
 def linked_path(path):
@@ -28,9 +29,12 @@ def validate_destination(path, *, artifact_kind=None):
     for parent in target.parents:
         if (parent / 'assessment-run.json').is_file():
             relative = target.relative_to(parent)
-            allowed={'Renders', 'Builds', 'deliverables', 'Rebuilds'}
+            allowed={'Renders', 'Builds', 'deliverables', 'Deliverables', 'Rebuilds'}
             if artifact_kind=='run-seed':allowed.add('run-seeds')
             if artifact_kind=='operator-log' and relative.parts==('operator-log.jsonl',):continue
+            if (artifact_kind=='build-reservation' and len(relative.parts)==1
+                    and re.fullmatch(r'build-[1-9][0-9]*\.json', relative.name)):
+                continue
             if relative.parts[0]=='Runs':
                 if relative.parts==('Runs','.publication-boundary'):
                     continue

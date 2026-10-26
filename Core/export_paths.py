@@ -1,6 +1,8 @@
 """Shared destinations for customer assessments and their report builds."""
 
 import re
+from contextlib import contextmanager
+from contextvars import ContextVar
 from hashlib import sha256
 from datetime import datetime, timezone
 from pathlib import Path
@@ -9,6 +11,18 @@ REPORT_STEM = 'AI Readiness and M365 Hardening'
 SUMMARY_STEM = 'Readiness Summary'
 EVIDENCE_FOLDER = 'Evidence'
 BUILDS_FOLDER = 'Builds'
+DELIVERABLES_FOLDER = 'Deliverables'
+_REPORT_BUILD = ContextVar('report_build', default=None)
+
+
+@contextmanager
+def capture_report_build():
+    outputs = {}
+    token = _REPORT_BUILD.set(outputs)
+    try:
+        yield outputs
+    finally:
+        _REPORT_BUILD.reset(token)
 
 
 def customer_folder_name(customer_name=None, tenant_name=None, tenant_id=None):
@@ -82,7 +96,65 @@ def new_assessment_directory(*, customer_name=None, tenant_name=None, tenant_id=
 
 
 def new_deliverables_directory(package_directory):
-    return new_numbered_directory(Path(package_directory) / BUILDS_FOLDER)
+    """New packages have one flat report folder; legacy packages keep their layout."""
+    package = Path(package_directory)
+    if legacy_report_layout(package):
+        return new_numbered_directory(package / BUILDS_FOLDER)
+    from .repository_provenance import require_publication
+    from .publication_io import validate_container
+    require_publication()
+    folder = package / DELIVERABLES_FOLDER
+    validate_container(folder)
+    folder.mkdir(parents=True, exist_ok=True)
+    return folder.resolve()
+
+
+def legacy_report_layout(package):
+    return any((Path(package) / name).is_dir() for name in (BUILDS_FOLDER, 'Renders'))
+
+
+def report_package_directory(folder):
+    folder = Path(folder).resolve()
+    return folder.parent if folder.name.casefold() == DELIVERABLES_FOLDER.casefold() else folder.parent.parent
+
+
+def reserve_report_names(folder, *, customer_name=None, tenant_name=None, tenant_id=None, provenance=None):
+    """Reserve a whole report family atomically, keeping rebuilds in one folder."""
+    import json
+    from .publication_io import write_text
+    from .workbook_layout import technical_workbook_path
+    folder = Path(folder)
+    base = report_file_stem(REPORT_STEM, customer_name=customer_name, tenant_name=tenant_name, tenant_id=tenant_id)
+    summary = report_file_stem(SUMMARY_STEM, customer_name=customer_name, tenant_name=tenant_name, tenant_id=tenant_id)
+    number = 1
+    while True:
+        suffix = '' if number == 1 else f' ({number})'
+        stem = base + suffix
+        summary_name = summary + suffix + '.html'
+        evidence_name = EVIDENCE_FOLDER + suffix
+        destinations = [folder / (stem + extension) for extension in ('.html', '.xlsx', '.csv')]
+        destinations += [technical_workbook_path(folder / (stem + '.xlsx')), folder / summary_name, folder / evidence_name]
+        if any(path.exists() for path in destinations):
+            number += 1
+            continue
+        reservation = None
+        if folder.name.casefold() == DELIVERABLES_FOLDER.casefold():
+            reservation = folder.parent / f'build-{number}.json'
+            try:
+                write_text(reservation, json.dumps({'schema_version':'1.0.0', 'state':'reserved',
+                    'build_number':number, 'report_stem':stem, **(provenance or {})}, indent=2) + '\n',
+                    artifact_kind='build-reservation')
+            except FileExistsError:
+                number += 1
+                continue
+        captured = _REPORT_BUILD.get()
+        if captured is not None:
+            captured.update(report_directory=folder, build_number=number, html_path=folder/(stem+'.html'),
+                excel_path=folder/(stem+'.xlsx'), csv_path=folder/(stem+'.csv'),
+                technical_excel_path=technical_workbook_path(folder/(stem+'.xlsx')),
+                summary_html_path=folder/summary_name, html_evidence_folder_path=folder/evidence_name)
+        return {'report_stem':stem, 'summary_name':summary_name, 'evidence_folder_name':evidence_name,
+                'number':number, 'reservation':reservation}
 
 
 def new_reassessment_directory(execution):

@@ -48,6 +48,8 @@ class PlanTests(unittest.TestCase):
     def test_json_deterministic(self):self.assertEqual(plan_json(plan()),plan_json(plan()))
     def test_human_json_agree(self):
         p=plan();parsed=json.loads(plan_json(p));self.assertIn('Run type: '+parsed['requested_run_type'],plan_lines(p))
+    def test_new_assessment_output_is_one_deliverables_folder(self):
+        self.assertEqual(plan()['output_destination'],'Reports/<customer>/<date>/Deliverables')
     def test_output_visible(self):self.assertEqual(plan(save_collection='output/fictional.json')['output_destination'],'output/fictional.json')
     def test_source_visible(self):self.assertIn('Source state: CleanCommitted',plan_lines(plan()))
     def test_skip_reason_visible(self):self.assertIn('No explicit reassessment',plan()['delta']['reason'])
@@ -115,6 +117,7 @@ class BaselinePlanTests(RunFixture):
         self.assertEqual(p['retained_run_id'],execution.identity['RunId'])
         self.assertEqual(p['assessment_id'],execution.identity['AssessmentId'])
         self.assertFalse(p['sources']['tenant_collection'])
+        self.assertEqual(Path(p['output_destination']),collection.parent/'Deliverables')
         self.assertIsNotNone(p['original_producing_revision'])
         self.assertEqual(before,{str(f):f.read_bytes() for f in self.root.rglob('*') if f.is_file()})
     def test_failed_source_policy_prevents_expected_delta(self):

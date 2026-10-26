@@ -419,22 +419,30 @@ def render_with_failure_receipt(processor, *, receipt, **arguments):
     """Record rejected imports or rendering errors while retaining collected facts."""
     from .repository_provenance import require_publication
     require_publication()
-    try:
-        return processor(**arguments)
-    except Exception as exc:
-        record_package_run(**receipt, outputs={'report_directory': arguments.get('output_dir')},
-                           status='failed', error=str(exc))
-        raise
+    from .export_paths import capture_report_build
+    with capture_report_build() as outputs:
+        try:
+            return processor(**arguments)
+        except Exception as exc:
+            outputs.setdefault('report_directory', arguments.get('output_dir'))
+            record_package_run(**receipt, outputs=outputs, status='failed', error=str(exc))
+            raise
 
 
 def _retain_snapshot(source, report_directory):
     """Retain a shared-result snapshot without changing its contents."""
     from .repository_provenance import require_publication
     require_publication()
-    destination = report_directory / source.name
-    if destination.exists():
-        destination = report_directory / (source.stem + '-snapshot-' + uuid4().hex[:8] + source.suffix)
-    copy_file(source, destination)
+    number = 1
+    while True:
+        suffix = '' if number == 1 else f' ({number})'
+        destination = report_directory / (source.stem + suffix + source.suffix)
+        try:
+            copy_file(source, destination)
+        except FileExistsError:
+            number += 1
+            continue
+        return destination
 
 
 def record_package_run(folder, *, mode, tenant_id, collected_at, evaluation_date,
@@ -453,30 +461,47 @@ def record_package_run(folder, *, mode, tenant_id, collected_at, evaluation_date
     delivered = []
     report_directory = outputs.get('report_directory') if isinstance(outputs, dict) else None
     retained_directory = None
-    from .export_paths import BUILDS_FOLDER, new_deliverables_directory
+    from .export_paths import BUILDS_FOLDER, DELIVERABLES_FOLDER, new_numbered_directory
     if isinstance(report_directory, (str, Path)):
         candidate = Path(report_directory).resolve()
-        deliverables_roots = [(folder / name).resolve() for name in (BUILDS_FOLDER, 'deliverables')]
-        if candidate.is_dir() and any(candidate != root and candidate.is_relative_to(root)
-                                      for root in deliverables_roots):
+        flat = candidate == (folder / DELIVERABLES_FOLDER).resolve()
+        deliverables_roots = [(folder / name).resolve() for name in (BUILDS_FOLDER, 'deliverables', 'Renders')]
+        if candidate.is_dir() and (flat or any(candidate != root and candidate.is_relative_to(root)
+                                               for root in deliverables_roots)):
             retained_directory = candidate
-            run_id = candidate.name
+            run_id = str(outputs.get('build_number') or run_id) if flat else candidate.name
+            retained_snapshot = None
             # The processor already rendered into the portable package. Retain an
             # explicitly requested external snapshot, then list each artifact once.
             snapshot = outputs.get('snapshot_path')
             if isinstance(snapshot, (str, Path)) and Path(snapshot).is_file():
                 source = Path(snapshot).resolve()
                 if not source.is_relative_to(candidate):
-                    _retain_snapshot(source, candidate)
-            delivered = [source.relative_to(folder.resolve()).as_posix()
-                         for source in sorted(candidate.rglob('*'))
-                         if source.is_file() and source.resolve().is_relative_to(candidate)]
+                    retained_snapshot = _retain_snapshot(source, candidate)
+                else:
+                    retained_snapshot = source
+            if flat:
+                current = [Path(outputs[key]).resolve() for key in ('html_path','summary_html_path','excel_path',
+                    'technical_excel_path','csv_path') if isinstance(outputs.get(key), (str,Path))]
+                companion = outputs.get('html_evidence_folder_path')
+                if companion:
+                    current.extend(Path(companion).rglob('*'))
+                if retained_snapshot:
+                    current.append(retained_snapshot)
+                delivered = sorted({path.relative_to(folder.resolve()).as_posix() for path in current
+                    if path.is_file() and path.resolve().is_relative_to(candidate)})
+            else:
+                delivered = [source.relative_to(folder.resolve()).as_posix()
+                             for source in sorted(candidate.rglob('*'))
+                             if source.is_file() and source.resolve().is_relative_to(candidate)]
     if isinstance(outputs, dict) and retained_directory is None:
         copied_directory = None
         def copied_destination(relative):
             nonlocal copied_directory, run_id
             if copied_directory is None:
-                copied_directory = new_deliverables_directory(folder)
+                # Preserve relative links from external/legacy renderers. The
+                # in-process renderers already write directly into Deliverables.
+                copied_directory = new_numbered_directory(folder / BUILDS_FOLDER)
                 run_id = copied_directory.name
             return copied_directory / relative
         copied_sources = set()
@@ -568,8 +593,8 @@ def record_package_run(folder, *, mode, tenant_id, collected_at, evaluation_date
             for reason in entry['reasons']:
                 print_paragraph(reason, indent='  ', tone='warning' if needs_attention else 'muted')
     if unverified:
-        print_paragraph(f'Export identity: {len(unverified)} file(s) lack a tenant ID; ownership needs confirmation. '
-                        'Use --confirm-export-tenant TENANT_GUID for explicitly selected exports. Details: operator log.', tone='warning')
+        print_paragraph(f'Export ownership: {len(unverified)} file(s) need customer confirmation; no tenant ID in the source. '
+                        'Details: operator log or --verbose.', tone='warning')
     if confirmed:
         print_paragraph(f'Export identity: {len(confirmed)} file(s) operator-confirmed; not source-verified.', tone='muted')
     pdf_references = []

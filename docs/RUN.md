@@ -297,7 +297,7 @@ it. A PDF skipped warning does not stop other imports; consult the warning and i
 
 ## Portable assessment folder
 
-A default live assessment keeps its collection, original inputs and reports together under the customer's folder. Initial assessments use a short UTC date, adding ` (2)` for another Initial assessment on the same date. Reassessments stay under the original assessment folder in numbered `Runs` subfolders, each with its own collection and report builds. Builds are numbered `1`, `2`, and so on; replay retains earlier reports. Use `--env-file customer.env --reassess '<original assessment-history.json>'` to select and confirm a completed comparison baseline. History is maintained automatically. See [assessment runs](ASSESSMENT_RUNS.md#reassessment-shortcut). To move the assessment, copy the whole assessment folder and replay the copy's `collection.json`:
+A default live assessment keeps its collection, original inputs and reports together under the customer's folder. Initial assessments use a short UTC date, adding ` (2)` for another Initial assessment on the same date. Reassessments stay under the original assessment folder in numbered `Runs` subfolders, each with its own collection and one `Deliverables` folder. Rebuilds use that same folder and add ` (2)`, ` (3)` and so on to report filenames; replay retains earlier reports. Existing packages with `Builds` or `Renders` keep their original layout. Use `--env-file customer.env --reassess '<original assessment-history.json>'` to select and confirm a completed comparison baseline. History is maintained automatically. See [assessment runs](ASSESSMENT_RUNS.md#reassessment-shortcut). To move the assessment, copy the whole assessment folder and replay the copy's `collection.json`:
 
 ```text
 Reports/<customer>/<date>/
@@ -305,7 +305,7 @@ Reports/<customer>/<date>/
   inputs/                  original reports and supplemental inputs, grouped by source
   rebuild.json             latest successful offline build's inputs/settings
   Rebuilds/<number>/        retained build recipes and subsequently added input files
-  Builds/<number>/          generated report artifacts, written once per build
+  Deliverables/            generated reports; rebuild filenames receive numbered suffixes
   operator-log.jsonl        build receipts and output locations
 ```
 
@@ -339,7 +339,7 @@ Offline console output labels failed or partial saved sources as **Saved collect
 
 ## 4. Review the deliverables
 
-The default build writes the HTML report, readiness summary and both Excel workbooks together in `Reports/<customer>/<date>/Builds/<build>/`. The workflow records these files in place without creating a second report tree. `--report-format both` adds CSV, while `--report-format csv` selects CSV instead of Excel. `--snapshot-json PATH` writes the existing shared assessment result as one JSON file without enabling the other extra exports.
+The default build writes the HTML report, readiness summary and both Excel workbooks together in `Reports/<customer>/<date>/Deliverables/`. The workflow records these files in place without creating a second report tree. `--report-format both` adds CSV, while `--report-format csv` selects CSV instead of Excel. `--snapshot-json PATH` writes the existing shared assessment result as one JSON file without enabling the other extra exports.
 
 Select optional linked evidence pages per run with `--extra-exports evidence-pages`. This adds `Evidence/` beside the reports. Saved collection inputs and rebuild recipes remain available regardless of this output choice. See [Supported outputs](OUTPUTS.md).
 
@@ -348,7 +348,7 @@ The navy and teal executive HTML report includes stacked action counts by assess
 Document names include the short company label from the customer folder (`--customer-name` overrides the tenant name). Dates stay in the folders:
 
 ```text
-Reports/<customer>/<date>/Builds/<build>/
+Reports/<customer>/<date>/Deliverables/
   AI Readiness and M365 Hardening - <company>.html  full executive report (aggregate-only)
   AI Readiness and M365 Hardening - <company>.xlsx  assessment workbook
   Technical Evidence - <company>.xlsx              complete source records and lineage
@@ -414,7 +414,7 @@ This preview uses invented data and intentionally leaves tenant controls unasses
 
 Use actual same-tenant files; either historical input may be omitted. The cache supplies Purview configuration only. Historical findings retain their source dates and require confirmation when their underlying facts cannot be reassessed. The workbook preserves the complete original register. A partial Purview cache cannot overwrite a full `--collection-input`. [Recovery details](PORTAL_REPORTS_AND_OFFLINE.md#combine-an-existing-tenant-report-with-new-exports).
 
-A build without a collection creates a portable assessment under `Reports/<customer>/<date>/`. It contains the original inputs, `Builds/<build>/`, an operator log and `rebuild.json`. The tool prints its location. No tenant collection is invented or saved. Copy that whole folder, then replay the recipe:
+A build without a collection creates a portable assessment under `Reports/<customer>/<date>/`. It contains the original inputs, `Deliverables/`, an operator log and `rebuild.json`. The tool prints its location. No tenant collection is invented or saved. Copy that whole folder, then replay the recipe:
 
 ```powershell
 .\.venv\Scripts\python.exe main.py --mode offline `

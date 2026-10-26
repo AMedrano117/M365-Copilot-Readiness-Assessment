@@ -16,10 +16,12 @@ def run_offline_report(args):
     phase('inputs')
     if getattr(args, 'replay_snapshot', None):
         from .assessment_replay import render_snapshot
+        source = Path(args.replay_snapshot).resolve()
+        default_output = source.parent.parent if source.parent.name == 'assessment-results' else source.parent
         phase('reports')
         render_snapshot(args.replay_snapshot,
-            args.render_output_dir or Path(args.replay_snapshot).resolve().parent / 'Rendered',
-            tenant_name=args.tenant_name, report_format=args.report_format,
+            args.render_output_dir or default_output,
+            tenant_name=args.tenant_name, customer_name=getattr(args, 'customer_name', None), report_format=args.report_format,
             snapshot_output=args.snapshot_json,extra_exports=getattr(args,'extra_exports',None))
         return 0
     from .processor import process_and_print_all_information
@@ -43,6 +45,7 @@ def run_offline_report(args):
         phase('reports')
         outputs = render_snapshot(payload['completed_run_snapshot'], payload['package_directory'],
                                   tenant_name=args.tenant_name or payload.get('tenant_name'), report_format=args.report_format,
+                                  customer_name=getattr(args, 'customer_name', None) or payload.get('customer_name'),
                                   snapshot_output=args.snapshot_json,extra_exports=getattr(args,'extra_exports',None),
                                   retained_package=payload['package_directory'])
         record_package_run(payload['package_directory'], mode='snapshot render', tenant_id=payload.get('tenant_id'),
@@ -130,9 +133,18 @@ def run_offline_report(args):
             # Retain raw evidence and its immutable input manifest for the new
             # execution. Prior semantic snapshots and render artifacts stay out.
             import shutil
+            import re
+            source_package = Path(payload['package_directory']).resolve()
+            original_inputs = {Path(value).resolve() for paths in payload.get('resolved_inputs', {}).values() for value in paths}
+            def ignore_generated(directory, entries):
+                if Path(directory).resolve() != source_package:
+                    return set()
+                excluded = {'Builds','Rebuilds','Runs','Renders','deliverables','Deliverables','assessment-results',
+                    'assessment-run.json','run-seed.json','assessment-history.json','run-seeds','rebuild.json','operator-log.jsonl'}
+                return {name for name in entries if (name in excluded or re.fullmatch(r'build-[1-9][0-9]*\.json', name))
+                        and (source_package / name).resolve() not in original_inputs}
             shutil.copytree(payload['package_directory'], package_directory, dirs_exist_ok=True,
-                ignore=shutil.ignore_patterns('Builds','Rebuilds','Runs','Renders','deliverables','assessment-results',
-                    'assessment-run.json','run-seed.json','assessment-history.json','run-seeds','rebuild.json','operator-log.jsonl'))
+                ignore=ignore_generated)
     else:
         from .console_reporting import status
         status('Legacy run intent is unclassified; no Initial run or baseline-run identity is inferred.', 'warning')

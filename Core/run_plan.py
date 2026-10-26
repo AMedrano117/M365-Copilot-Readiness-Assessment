@@ -144,14 +144,22 @@ def build_run_plan(args, *, revision=None, generated_at=None):
         target = Path(get('historical_output_dir')).resolve()
         if any(target.is_relative_to(source['path'].parent) for source in historical['sources']):
             errors.append('historical_output_inside_source_folder')
-    output=get('historical_output_dir') or get('render_output_dir') or get('save_collection') or get('snapshot_json') or 'Reports/<customer>/<date>/Builds/<new-number>'
+    output=get('historical_output_dir') or get('render_output_dir') or get('save_collection') or get('snapshot_json') or 'Reports/<customer>/<date>/Deliverables'
     if get('import_historical') and not get('historical_output_dir'):
         output='Reports/<customer>/<import-date-new-package>'
     if intent=='Reassessment' and baseline['completion']=='completed' and not any((get('render_output_dir'),get('save_collection'),get('snapshot_json'))):
         anchor_id=history.get('InitialRunId') or history['Runs'][0]['RunId']
         anchor=next(row for row in history['Runs'] if row['RunId']==anchor_id)
         package=(Path(get('assessment_history')).resolve().parent/anchor['PackageLocator']).resolve()
-        output=package/'Runs'/'<new-number>'/'Builds'/'<new-number>'
+        output=package/'Runs'/'<new-number>'/'Deliverables'
+    if replay:
+        from .export_paths import legacy_report_layout
+        package = get('render_output_dir') or saved.get('package_directory')
+        if not package and get('replay_snapshot'):
+            source = Path(get('replay_snapshot')).resolve()
+            package = source.parent.parent if source.parent.name == 'assessment-results' else source.parent
+        if package:
+            output = Path(package) / ('Renders/<new-number>' if legacy_report_layout(package) else 'Deliverables')
     from .repository_provenance import input_selection_count
     supplied={key:input_selection_count(key,get(key)) for key in INPUTS if get(key)}
     for key,values in (saved.get('inputs') or {}).items():

@@ -474,7 +474,8 @@ def process_and_print_all_information(m365_result, entra_info,
             from .assessment_runs import complete_run
             from .run_comparability import collection_state_summary
             assessment_result['collection_source_states'] = collection_state_summary(evidence_bundle)
-            complete_run(assessment_result, run_execution, Path(output_dir).resolve().parent.parent)
+            from .export_paths import report_package_directory
+            complete_run(assessment_result, run_execution, report_package_directory(output_dir))
         from .assessment_references import require_valid_assessment
         assessment_result['identity_validation'] = require_valid_assessment(assessment_result)
         evidence_bundle['assessment_result'] = assessment_result
@@ -540,14 +541,11 @@ def process_and_print_all_information(m365_result, entra_info,
         from pathlib import Path
         from .evidence_selection import build_evidence_selection
         from .assessment_serialization import write_assessment_result
-        from .export_recommendations import build_report_filename
         from .finding_evidence import build_finding_evidence
         from .html_evidence_pages import write_html_evidence_pages
         from .technical_guidance import attach_technical_guidance
         from .workbook_evidence import add_evidence_sheets, sync_workbook_locations
-        from .export_paths import (new_assessment_directory, new_deliverables_directory, report_directory, report_file_stem,
-                                  SUMMARY_STEM, EVIDENCE_FOLDER)
-        from .workbook_layout import technical_workbook_path
+        from .export_paths import new_assessment_directory, new_deliverables_directory, report_directory
         extra_exports = set(extra_exports or ())
         include_evidence_pages = 'evidence-pages' in extra_exports
         if output_dir is None:
@@ -557,23 +555,12 @@ def process_and_print_all_information(m365_result, entra_info,
         reports_root = report_directory(output_dir)
         filename_context = dict(customer_name=customer_name, tenant_name=report_tenant_name,
                                 tenant_id=expected_tenant_id)
-        base_stem = Path(build_report_filename('json', **filename_context)).stem
-        summary_stem = report_file_stem(SUMMARY_STEM, **filename_context)
-        suffix, number = '', 1
-        while True:
-            report_stem = base_stem + suffix
-            summary_name = summary_stem + suffix + '.html'
-            evidence_folder_name = EVIDENCE_FOLDER + suffix
-            destinations = [
-                reports_root / f'{report_stem}.html', reports_root / f'{report_stem}.xlsx', reports_root / f'{report_stem}.csv',
-                technical_workbook_path(reports_root / f'{report_stem}.xlsx'),
-                reports_root / summary_name]
-            if include_evidence_pages:
-                destinations.append(reports_root / evidence_folder_name)
-            if not any(path.exists() for path in destinations):
-                break
-            number += 1
-            suffix = f' ({number})'
+        from .export_paths import reserve_report_names
+        names = reserve_report_names(reports_root, **filename_context,
+            provenance={'producing_revision':assessment_result.get('producing_revision'),
+                        'RunId':assessment_result.get('identity', {}).get('RunId')})
+        report_stem, summary_name, evidence_folder_name = (names[key] for key in
+            ('report_stem', 'summary_name', 'evidence_folder_name'))
         # Retained deliverables share the same native rows, IDs and counts.
         selection_started = perf_counter()
         selection = attach_technical_guidance(build_evidence_selection(assessment_result, evidence_bundle,
@@ -643,6 +630,7 @@ def process_and_print_all_information(m365_result, entra_info,
         from .console_reporting import detail
         detail('Report build timings (seconds): ' + str(evidence_bundle['build_timings_seconds']))
     return {'report_directory': str(reports_root) if all_recommendations else None,
+            'build_number': names['number'] if all_recommendations else None,
             'html_path': html_path if all_recommendations else None,
             'summary_html_path': (evidence_bundle or {}).get('summary_html_path') if all_recommendations else None,
             'excel_path': excel_path if all_recommendations else None,

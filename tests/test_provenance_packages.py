@@ -36,7 +36,7 @@ class ProvenancePackageTests(RunFixture):
         r,path=self.completed();before=path.read_bytes();history=self.history.read_bytes();tool=dict(fictional_revision(),commit_sha='c'*40)
         with producing_context(tool),patch('Core.assessment_result.build_assessment_result',side_effect=AssertionError('reevaluation')):
             outputs=render_snapshot(path,self.root/'renders',report_format='html')
-        metadata=json.loads((Path(outputs['report_directory'])/'render-provenance.json').read_text())
+        metadata=json.loads(Path(outputs['render_provenance_path']).read_text())
         self.assertEqual(metadata['original_producing_revision']['commit_sha'],'a'*40);self.assertEqual(metadata['replay_tool_revision']['commit_sha'],'c'*40)
         self.assertFalse(metadata['tenant_recollected']);self.assertEqual(path.read_bytes(),before);self.assertEqual(self.history.read_bytes(),history)
     def test_qualified_output_banner(self):
