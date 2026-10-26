@@ -18,7 +18,7 @@ from openpyxl.utils.cell import range_boundaries
 from tests.synthetic_package_fixture import create_synthetic_package
 from tools.audit_report_signal import parse_report, summarize
 from tools.audit_workbook import _compatibility_issues
-from Core.export_paths import EVIDENCE_FOLDER, SUMMARY_STEM
+from Core.export_paths import DELIVERABLES_FOLDER, EVIDENCE_FOLDER, SUMMARY_STEM
 from Core.offline_collection import load_collection
 
 
@@ -34,7 +34,8 @@ def _companion_folders(reports, name, legacy_pattern):
 def _report_paths(package, receipt):
     """Use the latest receipt so copied earlier builds do not become extra reports."""
     files = [Path(package) / name for name in receipt['deliverables']
-             if (Path(package) / name).parent.name == receipt['run_id']]
+             if Path(name).parent == Path(DELIVERABLES_FOLDER)
+             or (Path(package) / name).parent.name == receipt['run_id']]
     summaries = [path for path in files if path.suffix.lower() == '.html'
                  and (path.stem == SUMMARY_STEM or path.stem.startswith(SUMMARY_STEM + ' - ') or path.stem.endswith('_summary')
                       or (path.stem.startswith(SUMMARY_STEM + ' (') and path.stem.endswith(')')))]

@@ -41,6 +41,19 @@ class ExportToolPathTests(unittest.TestCase):
                          ([package / 'deliverables/old/report.html'], [package / 'deliverables/old/report_summary.html'],
                           [package / 'deliverables/old/report.xlsx']))
 
+    def test_validation_reads_current_flat_build_without_scanning_prior_reports(self):
+        with tempfile.TemporaryDirectory() as directory:
+            package = Path(directory)
+            folder = package / 'Deliverables'
+            folder.mkdir()
+            (folder / 'previous.html').write_text('previous report')
+            report = 'Deliverables/AI Readiness and M365 Hardening - Example (2)'
+            summary = 'Deliverables/Readiness Summary - Example (2).html'
+            receipt = {'run_id':'2', 'deliverables':[report+'.html', report+'.xlsx', summary,
+                'Deliverables/Technical Evidence - Example (2).xlsx', 'Deliverables/Evidence (2)/index.html']}
+            self.assertEqual(_report_paths(package, receipt),
+                ([package/(report+'.html')], [package/summary], [package/(report+'.xlsx')]))
+
 
 if __name__ == '__main__':
     unittest.main()
