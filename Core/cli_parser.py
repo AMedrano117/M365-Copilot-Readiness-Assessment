@@ -144,6 +144,8 @@ Examples:
     parser.add_argument('--tenant-name', help='Display name for portal-only offline reports.')
     parser.add_argument('--customer-name', metavar='NAME',
                         help='Customer folder label under Reports/. Defaults to the tenant display name or tenant ID; saved packages retain the label for replay.')
+    parser.add_argument('--confirm-export-tenant', metavar='TENANT_GUID',
+                        help='Explicitly confirm ownership of supplied exports without tenant IDs. Records file hashes and operator confirmation; never overrides a conflicting tenant ID.')
     parser.add_argument('--reports-dir', action='append', default=[], metavar='PATH',
                         help='Directory of structured portal exports and PDFs. PDFs in subfolders are also extracted locally into JSON and report previews. Repeat for multiple directories.')
     parser.add_argument('--portal-review', metavar='PATH',

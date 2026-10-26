@@ -36,7 +36,7 @@ def run_offline_report(args):
     explicit_type = getattr(args, 'run_type', None)
     if (payload or {}).get('completed_run_snapshot') and not explicit_type:
         from .assessment_package import INPUT_KEYS
-        changed_options = {'--' + key.replace('_','-') for key in INPUT_KEYS} | {'--evaluation-date'}
+        changed_options = {'--' + key.replace('_','-') for key in INPUT_KEYS} | {'--evaluation-date', '--confirm-export-tenant'}
         if changed_options & getattr(args, '_provided_options', set()):
             raise ValueError('Adding evidence or changing evaluation date requires an explicit new --run-type; use snapshot replay for rendering.')
         from .assessment_replay import render_snapshot

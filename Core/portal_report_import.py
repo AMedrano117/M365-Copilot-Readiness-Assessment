@@ -86,7 +86,25 @@ def select_readiness_report(paths, preferred=None):
     return [selected], receipt
 
 
-def validate_report_tenants(paths, expected_tenant_id=None, receipt=None):
+def export_files(paths):
+    seen = set()
+    for raw_path in paths or []:
+        path = Path(raw_path)
+        candidates = sorted(path.iterdir()) if path.is_dir() else [path]
+        for candidate in candidates:
+            if (candidate.is_file() and candidate.suffix.lower() in {'.csv', '.tsv', '.xlsx', '.json', '.zip'}
+                    and candidate.resolve() not in seen):
+                seen.add(candidate.resolve())
+                yield candidate
+
+
+def export_confirmations(paths, tenant_id):
+    """An explicit operator statement, bound to bytes rather than filenames."""
+    tenant = str(UUID(str(tenant_id)))
+    return {hashlib.sha256(path.read_bytes()).hexdigest(): tenant for path in export_files(paths)}
+
+
+def validate_report_tenants(paths, expected_tenant_id=None, receipt=None, *, confirmations=None):
     """Prevent accidental combinations of different customers' tenant-tagged reports."""
     found = set()
     sources = {}
@@ -121,11 +139,18 @@ def validate_report_tenants(paths, expected_tenant_id=None, receipt=None):
                                 'Reason': 'The export has column headers only, so it adds no tenant data.'})
                 continue
             verified = bool(identifiers and expected and identifiers == {expected})
+            source_hash = hashlib.sha256(Path(source).read_bytes()).hexdigest()
+            confirmed = bool(not identifiers and expected and
+                             (confirmations or {}).get(source_hash) == expected)
             receipt.append({
                 'Source': Path(source).name,
-                'Status': 'identity_verified' if verified else 'identity_unverified',
+                'Status': 'identity_verified' if verified else 'identity_operator_confirmed' if confirmed else 'identity_unverified',
+                'SourceHash': source_hash,
+                'TenantId': expected if verified or confirmed else '',
+                'IdentityBasis': 'source-verified' if verified else 'operator-confirmed' if confirmed else 'unverified',
                 'Original Date': '', 'Scope': '',
                 'Reason': 'The report tenant identifier matches the assessed tenant.' if verified else
+                    'Ownership confirmed by the operator for these file bytes; the source contains no tenant identifier.' if confirmed else
                     'No tenant identifier is present; confirm this export belongs to the assessed customer.' if not identifiers else
                     'The export identifies a tenant; an independently identified assessed tenant is needed for comparison.',
             })

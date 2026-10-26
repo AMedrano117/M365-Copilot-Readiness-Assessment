@@ -124,6 +124,16 @@ Connection checks use **CONNECTION CHECKS COMPLETE** or **CONNECTION CHECKS NEED
 
 The default console shows collection progress, warnings or failures, the deployment decision and action counts, report locations, and the final **COLLECTION INPUT** handoff. Each default build writes four primary deliverables: the one-page pilot readiness **Summary** (`Readiness Summary - <company>.html`, the file `--open-html-report` opens), the full **HTML** report, the **Assessment workbook**, and the **Technical evidence workbook**. The summary links to the full report's actions, and the full report links back to the summary and directly to the workbooks. Linked evidence pages require `--extra-exports evidence-pages`; select them explicitly for each run. Copy the collection input's entire path into `--collection-input`, or copy the offline command printed immediately below it and add `--reports-dir` for new exports. Use the file shown there: a live package has `collection.json`; a build made only from exports or earlier reports has `rebuild.json`. Neither the HTML report, Excel workbook nor an assessment JSON is a collection input. Preflight-only runs do not create one.
 
+Default source-gap messages distinguish explicit licensing denials from retry exhaustion. A licensing denial is an evidence limitation, not a passing security result. Full service responses and HTTP retry details remain in the package's `operator-log.jsonl`; `--verbose` shows the original source explanations. The log also records report-build timings for the assessment model, evidence selection and exports. Report CSV reads allow up to four retries and 240 seconds of cumulative waiting per request, respecting `Retry-After`; other Graph reads retain the 120-second wait budget. Successful requests are not repeated as part of another request's recovery.
+
+For exports without a tenant identifier, add `--confirm-export-tenant '<assessed tenant GUID>'` only after confirming that **all selected exports** belong to that customer. This records operator confirmation against each file's SHA-256 hash. It does not insert a tenant ID into source evidence, establish tenant-wide completeness, or override a conflicting declared tenant. Confirmations survive portable-package replay for unchanged file bytes; new or changed files remain unverified. For a completed run, confirmation requires a new explicit run (for example `--run-type Standalone`); rendering a completed snapshot preserves its original receipt. No history JSON needs manual editing.
+
+```powershell
+python main.py --env-file customer.env --run-type Initial --reports-dir '.\exports' --confirm-export-tenant '<assessed tenant GUID>'
+```
+
+Copy the generated handoff commands exactly: they retain the interpreter and source checkout used for the run, including execution from a worktree. Paths and commands are printed without line wrapping.
+
 Use `--verbose` (or `-v`) when troubleshooting to also see authentication/configuration provenance, processing details, actions by assessment area, and input receipt details:
 
 ```powershell

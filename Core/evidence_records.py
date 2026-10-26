@@ -130,10 +130,35 @@ def _latest(candidates):
     return max(dated, key=lambda pair: _date(pair[0])) if dated else (None, None)
 
 
+def _user_positions(rows, *, signins=False):
+    """Index the existing ID-first join, including UPN fallback for absent IDs."""
+    from collections import defaultdict
+    by_id, by_upn, upn_without_id = defaultdict(list), defaultdict(list), defaultdict(list)
+    for position, (row, _) in enumerate(rows):
+        identifier = row.get('userId') if signins else _value(row, 'id', 'userId')
+        upn = row.get('userPrincipalName') if signins else _value(row, 'userPrincipalName', 'upn', 'User Principal Name')
+        if identifier:
+            by_id[_text(identifier).casefold()].append(position)
+        if upn:
+            by_upn[_text(upn).casefold()].append(position)
+            if not identifier:
+                upn_without_id[_text(upn).casefold()].append(position)
+
+    def matches(identifier, upn):
+        if identifier:
+            positions = by_id.get(_text(identifier).casefold(), [])
+            fallback = upn_without_id.get(_text(upn).casefold(), []) if upn else []
+            return sorted([*positions, *fallback])
+        return by_upn.get(_text(upn).casefold(), []) if upn else []
+    return matches
+
+
 def _mfa(sources):
     output = []
     users = list(_rows(sources, 'users', 'license_users', 'user_signin_activity'))
     signins = list(_rows(sources, 'signin_logs'))
+    user_positions = _user_positions(users)
+    signin_positions = _user_positions(signins, signins=True)
     from .authentication_methods import reconcile_registration_population
     registrations = list(_rows(sources, 'auth_methods', 'auth_methods_registration'))
     population = reconcile_registration_population([row for row, _ in registrations], users=[row for row, _ in users])
@@ -145,7 +170,7 @@ def _mfa(sources):
         ref = registration_refs[0]
         identifier = _value(row, 'id', 'userId')
         upn = _value(row, 'userPrincipalName', 'upn')
-        matches = [(user, user_ref) for user, user_ref in users if _matches_user(user, identifier, upn)]
+        matches = [users[position] for position in user_positions(identifier, upn)]
         refs = registration_refs + [user_ref for _, user_ref in matches]
         display_name = _value(row, 'userDisplayName', 'displayName')
         if not display_name:
@@ -173,8 +198,8 @@ def _mfa(sources):
         last, last_ref = _latest(history)
         basis = 'Retained user signInActivity' if last else None
         if not last:
-            candidates = [(event.get('createdDateTime'), event_ref) for event, event_ref in signins
-                          if _matches_user({'id': event.get('userId'), 'userPrincipalName': event.get('userPrincipalName')}, identifier, upn)]
+            candidates = [(signins[position][0].get('createdDateTime'), signins[position][1])
+                          for position in signin_positions(identifier, upn)]
             last, last_ref = _latest(candidates)
             if last:
                 basis = 'Latest observed sign-in within the retained sign-in collection window; full-history last sign-in is unavailable.'

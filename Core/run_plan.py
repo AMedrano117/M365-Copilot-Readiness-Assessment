@@ -55,6 +55,7 @@ def build_run_plan(args, *, revision=None, generated_at=None):
     baseline={'run_id':baseline_id,'completion':'not_selected','integrity':'not_evaluated','ownership':'not_evaluated'}
     if replay:
         intent='Replay'
+        if get('confirm_export_tenant'):errors.append('replay_cannot_confirm_export_identity')
         if baseline_id or assessment_id or get('assessment_history'):errors.append('replay_cannot_change_ownership_or_baseline')
         if stored_result:
             identity=stored_result.get('identity') or {}

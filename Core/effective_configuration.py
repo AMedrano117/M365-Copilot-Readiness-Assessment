@@ -36,7 +36,9 @@ def metadata(path):
     result = dict(collection_metadata, **value)
     result['package_directory']=str(folder)
     if recipe:
-        result.update({key:recipe[key] for key in ('tenant_id','evaluation_date','assessment_settings') if key in recipe})
+        # A new explicit offline run reuses raw collection bytes but records its
+        # own execution identity in the recipe, as load_collection does.
+        result.update({key:recipe[key] for key in ('tenant_id','evaluation_date','assessment_settings','identity') if key in recipe})
     result['resolved_inputs'] = {role:[str(confined_path(folder,p)) for p in paths]
         for role,paths in selected.get('inputs',{}).items() if role in INPUTS}
     return result
@@ -124,6 +126,22 @@ def resolve_effective(args, saved=None):
         if not getattr(result,key,None) and not getattr(result,'offline',False):
             variable='SAM_DAG_REPORT_PATHS' if key=='sam_report' else 'DSPM_REPORT_PATHS'
             setattr(result,key,[p.strip() for p in environment_values.get(variable,'').split(';') if p.strip()])
+    confirmation_tenant = getattr(result, 'confirm_export_tenant', None)
+    if confirmation_tenant:
+        try:
+            if str(UUID(confirmation_tenant)) != str(UUID(str(result.tenant_id))):
+                raise ValueError('Export confirmation must match the assessed tenant.')
+            from .portal_report_import import export_confirmations
+            paths = [path for role in ('sam_report','dspm_report','reports_dir','copilot_readiness_export',
+                     'copilot_dashboard_export','power_platform_inventory')
+                     for path in (getattr(result,role,None) if isinstance(getattr(result,role,None),(list,tuple))
+                                  else [getattr(result,role,None)]) if path]
+            selected = export_confirmations(paths, confirmation_tenant)
+            if not selected:
+                raise ValueError('Select at least one export to confirm.')
+            settings['export_tenant_confirmations'] = {**settings.get('export_tenant_confirmations', {}), **selected}
+        except (ValueError, TypeError, OSError):
+            errors.append('export_tenant_confirmation_invalid')
     settings.setdefault('data_exposure_enabled', True if getattr(result,'offline',False) else not result.services or bool({'M365','Purview'} & set(result.services)))
     if getattr(result,'offline',False):
         result.permission_profile=getattr(result,'permission_profile',None) or settings.get('permission_profile')
@@ -149,7 +167,7 @@ def portable_configuration(config):
     for key,value in list(values.items()):
         if isinstance(value,(list,tuple,set)): values[key]=sorted(set(value))
     values['effective_settings'] = {key:value for key,value in source.get('_effective_settings',{}).items()
-        if key in {*AGES,'lifecycle_report_max_age_days','lifecycle_report_dates','data_exposure_enabled','source_windows'}}
+        if key in {*AGES,'lifecycle_report_max_age_days','lifecycle_report_dates','data_exposure_enabled','source_windows','export_tenant_confirmations'}}
     values['recorded_collectors'] = source.get('_recorded_collectors',[])
     values['effective_authentication'] = source.get('_effective_authentication',{})
     if source.get('lifecycle_report_date') and not source.get('_effective_settings'):

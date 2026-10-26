@@ -12,15 +12,18 @@ import httpx
 TRANSIENT_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
 DEFAULT_MAX_RETRIES = 4
 DEFAULT_MAX_RETRY_WAIT = 120.0
+REPORT_MAX_RETRY_WAIT = 240.0
 
 
 class RequestRetryError(RuntimeError):
     """A read exhausted its retry allowance without discarding earlier pages."""
 
-    def __init__(self, message, response=None):
+    def __init__(self, message, response=None, *, attempts=0, waited=0.0, retry_after=None):
         super().__init__(message)
         self.response = response
         self.status_code = response.status_code if response is not None else 0
+        self.retry_details = {'attempts': attempts, 'waited_seconds': waited, 'retry_after_seconds': retry_after,
+                              'status_code': self.status_code}
 
 
 def retry_after_seconds(value, *, now=None):
@@ -61,10 +64,13 @@ async def request_with_retry(send, *, method="GET", max_retries=DEFAULT_MAX_RETR
             if attempt == retries:
                 raise RequestRetryError(
                     f"HTTP read failed after {attempt + 1} attempt(s): {type(exc).__name__}. "
-                    "The request retry limit was reached."
+                    "The request retry limit was reached.", attempts=attempt + 1, waited=waited,
                 ) from exc
         else:
             if response.status_code not in TRANSIENT_STATUS_CODES or attempt == retries:
+                extensions = getattr(response, 'extensions', None)
+                if isinstance(extensions, dict):
+                    extensions['assessment_retry'] = {'attempts':attempt + 1, 'waited_seconds':waited}
                 return response
 
         headers = (getattr(response, "headers", {}) or {}) if response is not None else {}
@@ -76,7 +82,7 @@ async def request_with_retry(send, *, method="GET", max_retries=DEFAULT_MAX_RETR
             raise RequestRetryError(
                 f"HTTP read stopped: the requested retry delay ({delay:g}s) exceeds "
                 f"the remaining retry wait budget ({remaining:g}s). Retry collection later.",
-                response,
+                response, attempts=attempt + 1, waited=waited, retry_after=delay,
             )
         await asyncio.sleep(delay)
         waited += delay

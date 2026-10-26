@@ -165,7 +165,7 @@ class ConsoleWorkflowTests(unittest.TestCase):
             self.assertIn('The required headers are missing.', text)
             self.assertIn('Input unsupported.csv: unsupported', text)
             self.assertIn('Input empty.csv: empty', text)
-            self.assertIn('Confirm the export tenant.', text)
+            self.assertIn('ownership needs confirmation', text)
             self.assertNotIn('\x1b[', text)
             receipt = json.loads((Path(temp) / 'operator-log.jsonl').read_text(encoding='utf-8'))
             self.assertEqual(receipt['import_receipt'], imports)

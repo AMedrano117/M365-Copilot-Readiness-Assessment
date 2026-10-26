@@ -27,7 +27,7 @@ DATA_SUFFIXES = {'.csv', '.tsv', '.xlsx', '.zip', '.json'}
 SETTING_KEYS = {'report_format', 'data_exposure_enabled', 'preview_collectors', 'permission_profile',
                 'include_user_usage_detail', 'provider_evidence_max_age_days',
                 'sam_report_max_age_days', 'dspm_report_max_age_days',
-                'lifecycle_report_max_age_days', 'lifecycle_report_dates'}
+                'lifecycle_report_max_age_days', 'lifecycle_report_dates', 'export_tenant_confirmations'}
 
 _METHODOLOGY_MIGRATIONS = {
     ('2.0.0', '2.1.0'): (
@@ -443,7 +443,7 @@ def record_package_run(folder, *, mode, tenant_id, collected_at, evaluation_date
     """Keep generated artifacts and a receipt without rewriting saved evidence."""
     from .repository_provenance import require_publication
     require_publication()
-    from .console_reporting import detail, detail_path, is_verbose, print_collection_handoff, print_paragraph, section
+    from .console_reporting import detail, detail_path, display_path, is_verbose, print_collection_handoff, print_paragraph, section
     if not folder:
         if collection_input and Path(collection_input).is_file():
             print_collection_handoff(collection_input)
@@ -522,6 +522,10 @@ def record_package_run(folder, *, mode, tenant_id, collected_at, evaluation_date
     receipt['package_diagnostics'] = diagnostics or []
     bundle = outputs.get('evidence_bundle', {}) if isinstance(outputs, dict) else {}
     if isinstance(bundle, dict):
+        receipt['build_timings_seconds'] = dict(bundle.get('build_timings_seconds') or {})
+        receipt['source_statuses'] = {name: {key:value for key,value in state.items()
+            if key in {'availability_status','available','complete','truncated','reason','error','status_code','retry_details'}}
+            for name,state in (bundle.get('source_statuses') or {}).items() if isinstance(state,dict)}
         receipt['import_receipt'] = bundle.get('import_receipt', [])
         assessment = bundle.get('assessment_result', {}) or {}
         if isinstance(assessment, dict) and assessment:
@@ -538,6 +542,7 @@ def record_package_run(folder, *, mode, tenant_id, collected_at, evaluation_date
         receipt['error'] = str(error)
     from .publication_io import append_receipt
     append_receipt(folder / 'operator-log.jsonl',receipt)
+    print('Operator log: ' + display_path(folder / 'operator-log.jsonl'))
     detail(f'Assessment receipt: tenant {tenant_id or "not identified"}; collected {collected_at or "not supplied"}; evaluation date {evaluation_date}.')
     detail_path('Portable assessment folder', folder)
     # One readable receipt per file; the full individual records stay in JSON/workbook.
@@ -547,15 +552,26 @@ def record_package_run(folder, *, mode, tenant_id, collected_at, evaluation_date
         for field, value in (('statuses', item.get('Status', 'unknown')), ('reasons', item.get('Reason', ''))):
             if value and str(value) not in entry[field]:
                 entry[field].append(str(value))
+    unverified = []
+    confirmed = []
     for source, entry in imported.items():
+        if not is_verbose() and 'identity_unverified' in entry['statuses']:
+            unverified.append(source)
+        if not is_verbose() and 'identity_operator_confirmed' in entry['statuses']:
+            confirmed.append(source)
         needs_attention = any(value.lower() in {
             'rejected', 'unsupported', 'error', 'failed', 'missing', 'unreadable', 'tenant_mismatch',
-            'empty', 'unavailable', 'partial', 'identity_unverified',
+            'empty', 'unavailable', 'partial',
         } for value in entry['statuses'])
         if is_verbose() or needs_attention:
             print_paragraph(f"Input {source}: {', '.join(entry['statuses'])}", tone='warning' if needs_attention else 'muted')
             for reason in entry['reasons']:
                 print_paragraph(reason, indent='  ', tone='warning' if needs_attention else 'muted')
+    if unverified:
+        print_paragraph(f'Export identity: {len(unverified)} file(s) lack a tenant ID; ownership needs confirmation. '
+                        'Use --confirm-export-tenant TENANT_GUID for explicitly selected exports. Details: operator log.', tone='warning')
+    if confirmed:
+        print_paragraph(f'Export identity: {len(confirmed)} file(s) operator-confirmed; not source-verified.', tone='muted')
     pdf_references = []
     included_pdfs = {item.get('Source') for item in receipt.get('import_receipt', [])
                      if item.get('Status') in {'automated_reference', 'reviewed_reference'}}
@@ -595,7 +611,7 @@ def record_package_run(folder, *, mode, tenant_id, collected_at, evaluation_date
                     any(row['RunId'] == context.get('RunId') for row in history.get('Runs', []))):
                 from .reassessment_cli import reassessment_command
                 section('REASSESS WITH NEW EVIDENCE')
-                print_paragraph(reassessment_command(history_path, context['RunId']))
+                print(reassessment_command(history_path, context['RunId']), flush=True)
                 print_paragraph('Add --env-file for this customer and use compatible collection scope and settings.', tone='muted')
         except (ValueError, OSError):
             print_paragraph('Reassessment handoff unavailable: verify the retained history.', tone='warning')

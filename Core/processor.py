@@ -147,6 +147,8 @@ def process_and_print_all_information(m365_result, entra_info,
                                       prior_report=None, portal_review=None, output_dir=None, customer_name=None,
                                       extra_exports=None, run_execution=None, ai_baseline_exports=None):
     """Process all service information and generate recommendations."""
+    from time import perf_counter
+    build_started = perf_counter()
     # Unpack M365 results
     (m365_info, m365_recommendations) = m365_result
     m365_info = dict(m365_info) if isinstance(m365_info, dict) else {}
@@ -191,6 +193,7 @@ def process_and_print_all_information(m365_result, entra_info,
         sam_report_paths + dspm_report_paths + readiness_inputs + [
             path for path in (offline_copilot_dashboard_export, offline_power_platform_inventory) if path
         ], expected_tenant_id, receipt=identity_receipt,
+        confirmations=(collection_context or {}).get('assessment_settings', {}).get('export_tenant_confirmations'),
     )
     expected_tenant_id = expected_tenant_id or imported_tenant_id
     from .ai_baseline_import import load_ai_baseline_exports
@@ -451,6 +454,7 @@ def process_and_print_all_information(m365_result, entra_info,
             evaluation_date=evaluation_date,tenant_id=expected_tenant_id))
         assessment_result = build_assessment_result(all_recommendations, evidence_bundle,
             evaluation_date=evaluation_date, expected_tenant_id=expected_tenant_id)
+        evidence_bundle['build_timings_seconds'] = {'assessment_model':round(perf_counter()-build_started,3)}
         from .repository_provenance import verify_execution_source
         verify_execution_source()
         from .copilot_admin_review import build_admin_review
@@ -571,9 +575,12 @@ def process_and_print_all_information(m365_result, entra_info,
             number += 1
             suffix = f' ({number})'
         # Retained deliverables share the same native rows, IDs and counts.
+        selection_started = perf_counter()
         selection = attach_technical_guidance(build_evidence_selection(assessment_result, evidence_bundle,
             tenant_name=report_tenant_name, generated_at=evidence_bundle['run_manifest']['generated_at']))
         finding_model = build_finding_evidence(selection)
+        evidence_bundle['build_timings_seconds']['evidence_selection'] = round(perf_counter()-selection_started,3)
+        exports_started = perf_counter()
         evidence_bundle['finding_evidence'] = finding_model
         if include_evidence_pages:
             evidence_bundle['html_evidence_folder'] = evidence_folder_name
@@ -630,6 +637,11 @@ def process_and_print_all_information(m365_result, entra_info,
             evidence_bundle=evidence_bundle,
         )
     
+    if evidence_bundle and 'build_timings_seconds' in evidence_bundle:
+        evidence_bundle['build_timings_seconds']['exports'] = round(perf_counter()-exports_started,3)
+        evidence_bundle['build_timings_seconds']['total'] = round(perf_counter()-build_started,3)
+        from .console_reporting import detail
+        detail('Report build timings (seconds): ' + str(evidence_bundle['build_timings_seconds']))
     return {'report_directory': str(reports_root) if all_recommendations else None,
             'html_path': html_path if all_recommendations else None,
             'summary_html_path': (evidence_bundle or {}).get('summary_html_path') if all_recommendations else None,
