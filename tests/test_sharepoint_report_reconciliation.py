@@ -174,9 +174,29 @@ class SharingCoverageTests(unittest.TestCase):
 
     def test_completed_inventory_is_not_parsed_evidence(self):
         original = gap('SharePoint permission state')
-        for reports in ([], [{'report_type':'permission_snapshot','workload':'SharePoint','status':'selected','freshness':'unknown'}],
+        for reports in ([], [{'report_type':'permission_snapshot','workload':'SharePoint','status':'unparsed','freshness':'unknown'}],
                         [{'report_type':'permission_snapshot','workload':'SharePoint','status':'error','freshness':'fresh'}]):
             self.assertEqual(reconcile_dag_coverage([original],reports)[0]['Disposition'], 'Coverage')
+
+    def test_old_or_undated_parsed_reports_do_not_keep_a_duplicate_high_gap(self):
+        for freshness in ('stale','unknown'):
+            with self.subTest(freshness=freshness):
+                reports = [{'report_type':'permission_snapshot','workload':'SharePoint','status':'selected','freshness':freshness}]
+                row = reconcile_dag_coverage([gap('SharePoint permission state')],reports)[0]
+                self.assertEqual(row['Disposition'],'Reference')
+                self.assertEqual(row['Priority'],'Low')
+                self.assertEqual(row['DagGaps'],[])
+                self.assertEqual(row['DagCoveredReports'],[])
+                self.assertEqual(row['DagDateReviewReports'],['SharePoint permission state'])
+                self.assertIn('separate report-date reminder',row['Observation'])
+
+    def test_truly_missing_family_remains_separate_from_date_review(self):
+        reports = [{'report_type':'permission_snapshot','workload':'SharePoint','status':'selected','freshness':'stale'}]
+        row = reconcile_dag_coverage([gap('SharePoint permission state','Everyone except external users activity')],reports)[0]
+        self.assertEqual(row['Priority'],'High')
+        self.assertEqual(row['Disposition'],'Coverage')
+        self.assertEqual([item['report'] for item in row['DagGaps']],['Everyone except external users activity'])
+        self.assertEqual(row['DagDateReviewReports'],['SharePoint permission state'])
 
     def test_all_parsed_activity_requirements_can_clear_remaining_family(self):
         reports = [{'collector_report_entity':entity,'report_type':'exposure_counts','workload':'SharePoint','freshness':'fresh','status':'selected'}

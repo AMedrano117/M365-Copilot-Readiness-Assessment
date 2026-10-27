@@ -511,10 +511,7 @@ def _dag_gaps(row):
     return [{"report": name.strip(), "status": status.strip()} for name, status in re.findall(r"([^,(]+)\(([^)]+)\)", text)]
 
 
-def reconcile_dag_coverage(recommendations, sam_reports):
-    """Close report families that supplied, current Microsoft exports already answer."""
-    usable = [report for report in sam_reports or []
-              if report.get("status") in {"selected", "no_activity"} and report.get("freshness") == "fresh"]
+def _parsed_dag_families(usable):
     covered = [label for label, answers in _EXPORT_COVERAGE if any(answers(report) for report in usable)]
     # Link counts in a permission snapshot are state, not sharing activity.
     entities = {str(report.get('collector_report_entity') or '').lower() for report in usable
@@ -526,7 +523,15 @@ def reconcile_dag_coverage(recommendations, sam_reports):
         covered.append('Anyone and guest sharing links')
     if {'everyoneexceptexternalusersatsite', 'everyoneexceptexternalusersforitems'} <= entities:
         covered.append('Everyone except external users activity')
-    if not covered:
+    return covered
+
+
+def reconcile_dag_coverage(recommendations, sam_reports):
+    """Separate missing report families from the SAM date-maintenance reminder."""
+    parsed = [report for report in sam_reports or [] if report.get('status') in {'selected', 'no_activity'}]
+    available = _parsed_dag_families(parsed)
+    covered = _parsed_dag_families([report for report in parsed if report.get('freshness') == 'fresh'])
+    if not available:
         return list(recommendations or [])
     reconciled = []
     for row in recommendations or []:
@@ -534,23 +539,26 @@ def reconcile_dag_coverage(recommendations, sam_reports):
             reconciled.append(row)
             continue
         gaps = _dag_gaps(row)
-        remaining = [gap for gap in gaps if gap["report"] not in covered]
-        answered = [gap["report"] for gap in gaps if gap["report"] in covered]
+        remaining = [gap for gap in gaps if gap["report"] not in available]
+        answered = [gap["report"] for gap in gaps if gap["report"] in available]
+        date_review = [name for name in answered if name not in covered]
+        date_note = (' Date confirmation or freshness review remains for: '+', '.join(date_review)+
+                     '; see the separate report-date reminder.') if date_review else ''
         if not answered:
             reconciled.append(row)
             continue
         if not remaining:
             reconciled.append(dict(row, Disposition="Reference", Status="Insight", Priority='Low',
                                    Observation="Parsed Data access governance reports from automatic collection and/or supplied exports answer the previously missing report families: "
-                                               + ", ".join(answered) + ". Conclusions remain limited to their retained dates, objects and scope.", Recommendation="", DagGaps=[],
-                                   DagCoveredReports=answered))
+                                               + ", ".join(answered) + ". Conclusions remain limited to their retained dates, objects and scope."+date_note, Recommendation="", DagGaps=[],
+                                   DagCoveredReports=[name for name in answered if name in covered], DagDateReviewReports=date_review))
             continue
         reconciled.append(dict(
             row, DagGaps=remaining,
             Observation=("SharePoint Data Access Governance evidence is incomplete for: "
                          + ", ".join(f"{gap['report']} ({gap['status'].lower()})" for gap in remaining)
-                         + ". Parsed collected/imported reports answer: " + ", ".join(answered) + ". Conclusions apply to the exported scope."),
-            DagCoveredReports=answered,
+                         + ". Parsed collected/imported reports answer: " + ", ".join(answered) + ". Conclusions apply to the exported scope."+date_note),
+            DagCoveredReports=[name for name in answered if name in covered], DagDateReviewReports=date_review,
             Recommendation='Review only the remaining report families: '+', '.join(gap['report'] for gap in remaining)+'. '
                 'Reuse completed results through automatic collection. Check failed downloads, unrecognized formats, report dates and selected scope before requesting new reports. '
                 'Use a structured manual export only where automatic collection remains unavailable.',
