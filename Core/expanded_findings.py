@@ -23,7 +23,12 @@ def expanded_findings(bundle, *, profile=None, evaluation_date=None, tenant_id=N
             status='Action Required' if disposition=='Action' else 'Not Assessed', priority=priority, disposition=disposition,
             finding_key='expanded.'+name, evidence_key='defender_device_detail' if domain=='endpoints' else 'app_access_detail',
             evidence_basis='Returned operational records', confidence='High' if disposition=='Action' else 'Unknown')
+        if name.startswith(('compliance_setting_states', 'windows_protection', 'antivirus_health')):
+            dataset = name.split('.')[0]
+            row['EvidenceKey'] = {'compliance_setting_states':'compliance_setting_detail',
+                'windows_protection':'windows_protection_detail', 'antivirus_health':'antivirus_health_detail'}[dataset]
         row.update(ControlId=control,DomainId=domain,ObservationDate=date,EvidenceComplete=bool(selected),
+            EvidenceAvailable='Yes' if selected else 'No',
             EvidenceScope=state.get('scope') or 'Returned tenant records',SourceType='live_api',EvidenceLevel='observed_operation',
             InvestigationEvidence={'kind':'records','records':selected,'source':state,
                 'reason':explanation,'reconciliation':{'operation':'count','expected':len(selected)}})

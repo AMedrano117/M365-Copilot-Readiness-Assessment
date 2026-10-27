@@ -2,6 +2,7 @@
 from collections import defaultdict
 from copy import deepcopy
 from html import escape
+import re
 
 from .privileged_assignments import instant, source_current
 from .source_evidence import envelope_complete
@@ -18,13 +19,16 @@ REVIEW_ACTION = ('Confirm business need, owner, purpose, dependencies, assignmen
 def privilege_summary(model):
     counts = model.get('counts') or {}
     states = counts.get('temporal_states') or {}
+    units = '; '.join(f"{r['Metric']}: {r['Value']} {r['Unit']}" for r in model.get('metric_reconciliation', [])
+                      if r['Metric'] in {'Native role assignments','Assignment schedules','Eligibility schedules',
+                        'Unique human users','Unique groups','Unique service principals','Global Administrator identities','Unresolved principals'})
     return (f"{counts.get('active_user_identities', 0)} unique users with current active privilege; "
             f"{counts.get('eligible_user_identities', 0)} unique users with current eligibility (populations can overlap). "
             f"{counts.get('assignments', 0)} semantic assignments: {counts.get('active_assignments', 0)} active, "
             f"{counts.get('eligible_assignments', 0)} eligible, {states.get('FuturePending', 0)} future, "
             f"{states.get('Expired', 0)} expired, {states.get('UnknownTemporalState', 0)} temporal state unknown. "
             f"{states.get('ActivePermanent', 0)} permanent active; {states.get('DirectActiveDurationUnverified', 0)} active duration unverified. "
-            + ('Population coverage is complete for the retained source scope. ' if model.get('population_complete') else
+            + (units + '. ' if units else '') + ('Population coverage is complete for the retained source scope. ' if model.get('population_complete') else
                'Effective privileged-user population completeness is not established. ') + model.get('qualification', ''))
 
 
@@ -45,7 +49,9 @@ def privileged_summary_html(result):
               f"{purpose.get('ServiceOrAutomationAccountCandidate', 0)} service candidates. "
               'MFA registration states: ' + ', '.join(f'{k}: {v}' for k, v in counts.get('mfa_states', {}).items()) + '. '
               'Inactivity candidates require an explicit policy and qualified successful activity. Special-purpose candidates require validation.')
-    return '<section id="privileged-identity-observations"><h2>Privileged identity review</h2><p>' + escape(text) + '</p><p>' + escape(detail) + '</p></section>'
+    metrics = '<ul>' + ''.join('<li>' + escape(f"{r['Metric']}: {r['Value']} {r['Unit']}. {r['Source']}.") + '</li>'
+                              for r in model.get('metric_reconciliation', [])) + '</ul>'
+    return '<section id="privileged-identity-observations"><h2>Privileged identity review</h2><p>' + escape(text) + '</p><p>' + escape(detail) + '</p>' + metrics + '</section>'
 
 
 def assignment_sheet(model):
@@ -164,6 +170,17 @@ def qualify_privileged_recommendations(rows, model):
     for original in rows or []:
         row = deepcopy(original)
         keys = str(row.get('EvidenceKey') or '')
+        observation = str(row.get('Observation') or '')
+        legacy_user_claim = re.search(r'\b\d+\s+users?\b', observation, re.I) and re.search(
+            r'privileged|administrative roles|admin roles', observation, re.I)
+        if legacy_user_claim and not row.get('PrivilegedObservationIds') and row.get('Historical') != 'Yes':
+            row.setdefault('OriginalObservation', observation)
+            row['PrivilegedMetricReconciliation'] = {'status':'unresolved_legacy_user_aggregate',
+                'original_observation':observation, 'original_evidence_key':keys,
+                'qualification':'The legacy aggregate has no reconciled principal population; it is not a confirmed user count.'}
+            row['Observation'] = privilege_summary(model) + ' The legacy user aggregate is unresolved and is not published as a confirmed user count.'
+            if row.get('Disposition') == 'Assurance':
+                row.update(Disposition='Reference', Confidence='Low', Status='Insight')
         if ('admin_role_detail' in keys and not row.get('PrivilegedObservationIds')
                 and row.get('Historical') != 'Yes' and not row.get('BaselineCheck')
                 and row.get('Disposition') not in {'Assurance', 'Reference'}):
@@ -190,5 +207,6 @@ def prepare_privileged_sheets(bundle, result):
         sheet.setdefault('appendix_title', 'Restricted administrative role detail'); sheet.setdefault('default_note', REVIEW_ACTION)
         bundle.setdefault('sheets', {})['admin_role_detail'] = sheet
         bundle['sheets']['privileged_identity_detail'] = identity_sheet(model)
+        bundle['sheets']['privileged_metrics'] = {'title':'Privileged Metrics', 'rows':deepcopy(model.get('metric_reconciliation', []))}
     # Previous previews may contain names; only protected technical sheets retain them.
     bundle['appendix_sections'] = [s for s in bundle.get('appendix_sections', []) if s.get('key') != 'admin_role_detail']

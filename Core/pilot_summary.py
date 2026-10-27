@@ -112,6 +112,8 @@ def _more(rows, limit=8):
 
 
 def render_pilot_summary(result, bundle, tenant_name, report_path=None, workbook_path=None, technical_workbook_path=None):
+    from .evidence_reconciliation import require_supported_confidence
+    require_supported_confidence(result)
     from .identity_finding_taxonomy import ensure_identity_result
     result = ensure_identity_result(result, bundle)
     from .report_presentation import decision_groups

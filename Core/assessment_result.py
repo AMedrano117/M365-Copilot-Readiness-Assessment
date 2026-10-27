@@ -287,6 +287,19 @@ def _qualify_record(original, bundle, day, expected_tenant_id, *, historical=Fal
             row["CollectedWith"] = label
     if status != "supported" and row.get("Disposition") in {"Action", "Assurance"}:
         row["Confidence"] = "Unknown" if fact["freshness"] in {"unknown", "future"} else "Low"
+    if not historical and row.get('Disposition') == 'Coverage' and row.get('ControlId') in {
+            'LICENSE.ASSIGNMENT','DATA.LABELS','DATA.PUBLISHING','DATA.AUDIT'}:
+        from .evidence_reconciliation import qualify_gap
+        qualify_gap(row,bundle)
+    from .evidence_reconciliation import declared_support
+    if declared_support(row) or (status == 'supported' and fact.get('complete') and fact.get('source_file')
+                                 and fact.get('scope') and fact.get('tenant_id') and row.get('EvidenceId')):
+        row['EvidenceAvailable'] = 'Yes'
+    elif row.get('Confidence') == 'High' and row.get('EvidenceAvailable') == 'No':
+        row['Confidence'] = 'Low'
+        row['EvidenceStatus'] = 'limited'
+        row['Qualification'] = (row['Qualification'] +
+            ' Required supporting evidence references are missing; the conclusion requires confirmation.').strip()
     from .guidance_verification import qualify_guidance
     qualify_guidance(row)
     return row, fact
@@ -539,12 +552,12 @@ GAP_GUIDANCE = {
 }
 
 
-def _gap(question, day):
+def _gap(question, day, bundle=None):
     control, domain, title, keys, _, security_gate = question
     identifier = "GAP-" + control.replace(".", "-")
     observation, next_step = GAP_GUIDANCE.get(control, ("The collected evidence does not answer this check.",
                                                         "Confirm the tenant-wide setting and record the result and observation date."))
-    return {
+    row = {
         "RecommendationId": identifier, "FindingKey": "coverage." + control.lower(),
         "ControlId": control, "MethodologyVersion": METHODOLOGY_VERSION,
         "Service": DOMAIN_LOOKUP[domain][1], "Feature": title,
@@ -561,6 +574,8 @@ def _gap(question, day):
         "SourceType": "assessment_requirement", "SourceFile": "", "SecurityGate": security_gate,
         "EvidenceId": "", "EvidenceScope": "", "EvidenceComplete": False,
     }
+    from .evidence_reconciliation import qualify_gap
+    return qualify_gap(row, bundle or {})
 
 
 def _supports_question(row, control):
@@ -794,10 +809,11 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
                 if row.get('Disposition') == 'Assurance' and operation[control]['result'] != 'pass':
                     row['Qualification'] = (str(row.get('Qualification') or '') + ' Configuration component only; operational confirmation remains unresolved.').strip()
             if operation[control]['result'] != 'pass' and not any(row.get('Disposition') in {'Action','Coverage'} for row in matching):
-                gap = _gap(question, day)
+                gap = _gap(question, day, bundle)
                 gap.update(FindingKey='coverage.operation.' + control.lower(),
-                           Observation=(gap['Observation'] + ' ' if not matching else '') + operation[control]['reason'], EvidenceLevel='observed_operation',
-                           Recommendation='Provide current tenant-wide operational records or a dated tenant-wide check review documenting tested behavior and its scope.')
+                           Observation=(gap['Observation'] + ' ' if gap.get('ObservedEvidence') or not matching else '') + operation[control]['reason'], EvidenceLevel='observed_operation',
+                           Recommendation=gap['Recommendation'] if gap.get('ObservedEvidence') else
+                           'Provide current tenant-wide operational records or a dated tenant-wide check review documenting tested behavior and its scope.')
                 records.append(gap)
                 matching.append(gap)
         supported = [row for row in matching if _supports_question(row, control)]
@@ -810,7 +826,7 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
         existing_gap = [row for row in matching if row.get("Disposition") == "Coverage"
                         or (row.get('Disposition') == 'Action' and row.get('EvidenceStatus') != 'supported')]
         if not supported and not known_facts and not existing_gap:
-            gap = _gap(question, day)
+            gap = _gap(question, day, bundle)
             records.append(gap)
             matching.append(gap)
         controls.append({
@@ -849,7 +865,7 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
         if fact["selection"] == "conflict" and fact["domain_id"] in enabled:
             question = ("CONFLICT." + fact["metric_id"], fact["domain_id"], "Resolve conflicting evidence for " + fact.get("label", fact["metric_id"]), (), (), True)
             if not any(row.get("FindingKey") == "coverage." + question[0].lower() for row in records):
-                gap = _gap(question, day)
+                gap = _gap(question, day, bundle)
                 gap.update(EvidenceStatus="conflict", Qualification=fact["qualification"], EvidenceId=fact["evidence_id"])
                 records.append(gap)
     from .finding_reconciliation import allocate_display_ids

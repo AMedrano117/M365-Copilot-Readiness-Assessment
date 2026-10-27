@@ -111,6 +111,8 @@ def evidence_discrepancies(result):
         pair = mappings.get(gap.get('ControlId'))
         if not pair or not (gap.get('Disposition') == 'Coverage' or str(gap.get('FindingKey', '')).startswith('coverage.')):
             continue
+        if gap.get('ObservedEvidence'):
+            continue  # Component presence and unresolved control requirements are reconciled in the shared result.
         topic = topics.get(pair[0])
         if not topic or pair[1] not in (topic.get('Required sources') or []):
             continue
@@ -192,17 +194,28 @@ def _missing_text(row):
 
 def coverage_rows(result, bundle, discrepancies):
     topics, controls, details, topic_positions = [], [], [], {}
+    from .coverage_summary import GUID, coverage_text, coverage_projection
+    summaries = coverage_projection(result,bundle)['summary']
     for row in result.get('domain_coverage') or []:
         identifier = row.get('Check ID')
         interpretation = _missing_text(row) or row.get('Conclusion effect') or 'Review the retained evidence and its qualifications.'
         if not row.get('Owner'):
             interpretation += ' Owner assignment required.'
         metadata = row.get('Source metadata') or []
-        identities = sorted({_text(source.get('scope')) for source in metadata if source.get('scope')})
+        required = set(row.get('Required sources') or [])
+        selected = [summary for summary in summaries if summary['Dataset'] in required]
+        if selected:
+            interpretation += ' ' + ' '.join(coverage_text(summary) for summary in selected)
+        identities = sorted({_text(source.get('scope')) for source in metadata if source.get('scope')
+                             and not GUID.search(_text(source.get('scope'))) and 'http' not in _text(source.get('scope'))})
+        if len(identities) > 3:
+            identities = [f'{len(identities)} recorded scopes; see technical detail']
         if identities:
             interpretation += ' Retained scope: ' + '; '.join(identities) + '.'
-        named = sorted({_text(source.get('object_name') or source.get('locator') or source.get('object_id'))
-                        for source in metadata if source.get('object_name') or source.get('locator') or source.get('object_id')})
+        named = sorted({_text(source.get('object_name')) for source in metadata if source.get('object_name')
+                        and not GUID.search(_text(source.get('object_name'))) and 'http' not in _text(source.get('object_name'))})
+        if len(named) > 3:
+            named = [f'{len(named)} named objects; see technical detail']
         if named:
             interpretation += ' Retained identities: ' + '; '.join(named) + '.'
         details.append({'Row type': 'Assessment topic', 'Source ID': identifier, 'Original record': row,

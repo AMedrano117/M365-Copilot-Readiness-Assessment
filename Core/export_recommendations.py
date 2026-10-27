@@ -541,6 +541,8 @@ def export_to_excel(recommendations, filename=None, tenant_name=None, evidence_b
     evidence_bundle['assessment_result'] = result
     from .assessment_references import require_valid_assessment
     require_valid_assessment(result)
+    from .evidence_reconciliation import require_supported_confidence
+    require_supported_confidence(result)
     from .assessment_runs import add_run_manifest_context
     add_run_manifest_context(evidence_bundle, result)
     prepare_investigation_details(evidence_bundle, result)
@@ -823,6 +825,9 @@ def export_to_excel(recommendations, filename=None, tenant_name=None, evidence_b
             if integrity_issues
             else [{"Status": "Passed", "Issue": "No pre-export integrity issues were detected."}]
         )
+        integrity_rows.extend({'Status':'Warning', 'Issue':item.get('qualification'),
+            'Source':item.get('sheet'), 'Row':item.get('row'), 'Field':item.get('field'), 'Diagnostic':item.get('kind')}
+            for item in evidence_bundle.get('integrity', {}).get('diagnostics', []))
         for title, rows, table_name in (
             ("Control Results", evidence_bundle.get('control_results') or result.get('control_results', []), "ControlResults"),
             ("Provider Register", evidence_bundle.get('provider_evidence', {}).get('rows', []), "ProviderRegister"),

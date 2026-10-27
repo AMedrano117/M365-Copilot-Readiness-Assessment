@@ -61,6 +61,8 @@ _EVIDENCE_KEY_CONCERNS = {
     'app_consent_policy_detail': 'app-consent', 'app_access_detail': 'app-consent',
     'external_connection_detail': 'connectors-agents', 'power_platform_detail': 'connectors-agents',
     'entra_device_detail': 'devices-endpoint', 'defender_device_detail': 'devices-endpoint',
+    'compliance_setting_detail': 'devices-endpoint', 'windows_protection_detail': 'devices-endpoint',
+    'antivirus_health_detail': 'devices-endpoint',
     'defender_incident_detail': 'security-incidents',
     'sharepoint_governance_detail': 'content-sharing', 'data_exposure_detail': 'content-sharing',
     'sharepoint_lifecycle_detail': 'content-sharing', 'guest_access_detail': 'content-sharing',

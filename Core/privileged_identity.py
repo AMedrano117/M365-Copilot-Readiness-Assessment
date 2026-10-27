@@ -531,6 +531,32 @@ def build_privileged_assessment(sources, *, evaluation_timestamp=None, boundary=
         if any(ref in row.get('evidence_refs', []) for row in account_purposes): binding['purpose_record'] = safe_record(raw)
         if ref['dataset'] == 'auth_methods': binding['registration_record'] = safe_record(raw)
         bindings.append(binding)
+    # Native request rows, semantic assignments and distinct principals are
+    # different units. Keep the original assignment evidence unchanged.
+    metrics = []
+    def metric(name, value, unit, source):
+        metrics.append({'Metric':name, 'Value':value, 'Unit':unit, 'Source':source,
+            'Qualification':'Retained source scope; populations overlap. Incomplete identity resolution is not a tenant-wide count.'})
+    for name, label in (('role_assignments','Native role assignments'),
+                        ('role_assignment_schedules','Assignment schedules'),
+                        ('role_eligibility_schedules','Eligibility schedules')):
+        metric(label, sum(len(d.get('records') or []) for d in sources.get(name, [])),
+               'assignment records' if name == 'role_assignments' else 'schedule records', name)
+    for key, label in (('assignments','Reconciled assignments'), ('active_assignments','Active assignments'),
+                       ('eligible_assignments','Eligible assignments')):
+        metric(label, counts[key], 'assignments', 'Reconciled assignment keys')
+    for kind, label in (('user','Unique human users'), ('group','Unique groups'), ('serviceprincipal','Unique service principals')):
+        metric(label, sum(i['principal_type'] == kind for i in identities), 'distinct principals', 'Resolved principal types')
+    metric('Unique users with active privilege', counts['active_user_identities'], 'distinct human users', 'Current active assignment references')
+    metric('Unique effective privileged identities', sum(i['principal_type'] in {'user','serviceprincipal'} and
+        bool(i['active_assignments']) for i in identities), 'distinct active human or workload identities',
+        'Current active direct or evidenced group-mediated assignment references; eligibility excluded')
+    global_keys = {a['assignment_key'] for a in assignments if a['active'] and
+        (str(a.get('role_name') or '').lower() == 'global administrator' or
+         a.get('role_template_id') == '62e90394-69f5-4237-9190-012177145e10')}
+    metric('Global Administrator identities', sum(bool(global_keys.intersection(i['active_assignments']))
+        for i in identities), 'distinct active principals', 'Current Global Administrator assignment references')
+    metric('Unresolved principals', counts['unresolved_identities'], 'distinct unresolved principals', 'Principal resolution')
     return {'rule_version': RULE_VERSION, 'evaluation_timestamp': evaluation_time(evaluation_timestamp),
             'boundary': boundary, 'inactivity_policy': policy, 'policy_signature': policy['signature'],
             'assignments': assignments, 'identities': identities, 'observations': _observations(identities, assignments, boundary),
@@ -538,7 +564,7 @@ def build_privileged_assessment(sources, *, evaluation_timestamp=None, boundary=
             'evidence_bindings': bindings,
             'collection_sources': {name: [{'source': deepcopy(d.get('source') or {}), 'record_count': len(d.get('records') or [])}
                 for d in datasets] for name, datasets in sources.items()},
-            'counts': counts, 'population_complete': complete, 'diagnostics': diagnostics,
+            'counts': counts, 'metric_reconciliation':metrics, 'population_complete': complete, 'diagnostics': diagnostics,
             'qualification': QUALIFICATION, 'directional_metrics': [],
             'limitations': ([] if complete else ['Effective privileged-user population is incomplete or unresolved; counts are retained-evidence counts.'])}
 

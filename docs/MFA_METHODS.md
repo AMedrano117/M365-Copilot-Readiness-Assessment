@@ -58,6 +58,12 @@ percentages use users with known inventories. Missing fields and conflicting dup
 stay unknown. Member and guest counts are separate; administrators overlap those populations.
 Capability is distinct from registration: a registered method can be disabled by policy.
 
+Summary metrics retain source-field, population and denominator metadata. A false
+registration flag alongside resistant method inventory or a true capability flag
+produces a cross-field diagnostic; source values are not adjusted to agree.
+These metrics do not establish observed use or enforcement. See
+[evidence reconciliation](EVIDENCE_RECONCILIATION.md) for saved-result and projection rules.
+
 The [Pass A population rules](AUTHENTICATION_SEMANTICS.md) distinguish explicit
 registration, explicit nonregistration, unknown, conflicting and documented
 excluded states. Only eligible literal boolean registration flags enter the rate;

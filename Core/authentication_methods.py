@@ -164,6 +164,7 @@ def summarize_registrations(records, state=None, *, users=None):
                for entry in population['entries']]
     total = len(records)
     metrics = Counter()
+    field_conflicts = Counter()
     registered, chosen, system, current = Counter(), Counter(), Counter(), Counter()
     dates = []
     populations = {name: Counter() for name in ('Members', 'Guests', 'User type unknown', 'Administrators')}
@@ -171,6 +172,12 @@ def summarize_registrations(records, state=None, *, users=None):
         methods = _list(row.get('methodsRegistered'))
         groups = {_method(value)[1] for value in methods or []}
         has_resistant = 'resistant' in groups
+        if row.get('isMfaRegistered') is False:
+            field_conflicts['registered_method_with_false_mfa_flag'] += has_resistant
+            field_conflicts['passwordless_capability_with_false_mfa_flag'] += row.get('isPasswordlessCapable') is True
+            field_conflicts['mfa_capability_with_false_mfa_flag'] += row.get('isMfaCapable') is True
+            field_conflicts['users_with_cross_field_conflicts'] += bool(has_resistant or
+                row.get('isPasswordlessCapable') is True or row.get('isMfaCapable') is True)
         resistant_known = methods is not None and (has_resistant or 'review' not in groups)
         phone_only_known = methods is not None and type(row.get('isMfaRegistered')) is bool and 'review' not in groups
         # Only identify phone-only MFA where the returned inventory is understood.
@@ -249,12 +256,27 @@ def summarize_registrations(records, state=None, *, users=None):
                 dates.append(parsed.date().isoformat())
         except (ValueError, TypeError):
             pass
+    field_conflicts = +field_conflicts
     summary_rows = []
     def metric(label, key, known_key=None, note=''):
         known = metrics[known_key] if known_key else total
         value = metrics[key] if known else None
+        fields = {'mfa_registered':'isMfaRegistered', 'mfa_capable':'isMfaCapable',
+            'passwordless_capable':'isPasswordlessCapable', 'phone_only_mfa_registered':'methodsRegistered + isMfaRegistered',
+            'phone_preferred':'isSystemPreferredAuthenticationMethodEnabled + systemPreferredAuthenticationMethods + userPreferredMethodForSecondaryAuthentication',
+            'user_phone_preferred':'userPreferredMethodForSecondaryAuthentication',
+            'system_preferred_enabled':'isSystemPreferredAuthenticationMethodEnabled',
+            'system_preferred_unknown':'isSystemPreferredAuthenticationMethodEnabled',
+            'current_preference_needs_review':'systemPreferredAuthenticationMethods + userPreferredMethodForSecondaryAuthentication'}
+        source_field = fields.get(key, 'methodsRegistered' if key in {
+            'phishing_resistant_registered','phone_registered','email_registered','methods_need_review'} else key)
         summary_rows.append({'Metric ID':key, 'Metric': label, 'Value': value if value is not None else 'Unknown',
-                             'Known users': known, 'Unknown users': total - known, 'Interpretation': note})
+            'Known users':known, 'Unknown users':total-known, 'Source field':source_field,
+            'Numerator':value, 'Denominator':known or None,
+            'Population':'Returned eligible registration users with known ' + source_field,
+            'Scope':state.get('scope','Returned registration report'),
+            'Reconciliation':'Conflicting source fields; not directly comparable' if field_conflicts else 'Separate field semantics and known denominators',
+            'Interpretation':note})
     summary_rows.append({'Metric ID':'population.returned', 'Metric': 'Users in returned registration report', 'Value': total,
                          'Known users': total, 'Unknown users': 0, 'Interpretation': 'Members and guests; disabled/deleted users are outside this report.'})
     metric('MFA registered users', 'mfa_registered', 'mfa_registered_known', 'Registration does not establish enforcement or phishing resistance.')
@@ -289,6 +311,7 @@ def summarize_registrations(records, state=None, *, users=None):
     metric('Preferred methods needing classification review', 'current_preference_needs_review', 'current_preference_known')
     by_label = {label: (group, note) for label, group, note in METHODS.values()}
     method_rows = [{'Method': label, 'Registered users': count,
+                    'Source field':'methodsRegistered',
                     'Percent of known inventories': round(count / metrics['method_inventory_known'] * 100, 1),
                     'Numerator':count,'Denominator':metrics['method_inventory_known'],
                     'Population':'Users with a known method inventory','Scope':state.get('scope','Returned registration report'),
@@ -310,7 +333,33 @@ def summarize_registrations(records, state=None, *, users=None):
                         'Phone-only classification unknown': values['users'] - values['phone_only_known'],
                         'Preferences unknown': values['users'] - values['preference_known']}
                        for name, values in populations.items() if values['users']]
+    for item in summary_rows:
+        identifier = item.get('Metric ID', '')
+        field = ('isMfaRegistered' if identifier == 'mfa.rate' or identifier.startswith('registration.') else
+                 'id' if identifier.startswith('population.') else identifier)
+        item.setdefault('Source field', field)
+        item.setdefault('Numerator', item.get('Value') if isinstance(item.get('Value'), (int,float)) else None)
+        item.setdefault('Denominator', item.get('Known users') or total or None)
+        item.setdefault('Population', 'Returned reconciled registration report; known fields only')
+        item.setdefault('Reconciliation', 'Conflicting source fields; not directly comparable' if field_conflicts else 'Separate field semantics and known denominators')
+    metric_reconciliation = {'source':'userRegistrationDetails', 'conflicts':dict(field_conflicts),
+        'directly_comparable':False, 'cross_field_conflicts_detected':bool(field_conflicts),
+        'qualification':('Registration flags, method inventory and capability fields are retained separately. '
+            'Where fields conflict, they may reflect stale or inconsistent source values; no values were adjusted to force agreement. '
+            'Registration and capability do not establish observed use or policy enforcement.'),
+        'metrics':[{key:row.get(key) for key in ('Metric ID','Source field','Population','Numerator','Denominator','Reconciliation')}
+                   for row in summary_rows]}
+    if field_conflicts:
+        summary_rows.append({'Metric ID':'reconciliation.cross_field_conflicts',
+            'Metric':'Users with conflicting registration, capability or method fields',
+            'Value':field_conflicts['users_with_cross_field_conflicts'],
+            'Source field':'isMfaRegistered + isMfaCapable + isPasswordlessCapable + methodsRegistered',
+            'Population':'Eligible returned registration users', 'Denominator':total or None,
+            'Numerator':field_conflicts['users_with_cross_field_conflicts'],
+            'Reconciliation':'Conflicting source fields; not directly comparable',
+            'Interpretation':metric_reconciliation['qualification']})
     return {'available': bool(records), 'source_state': availability,
+            'metric_reconciliation':metric_reconciliation,
             'evidence_layer': 'registration', 'registration_population': {key: value for key, value in population.items() if key != 'entries'},
             'complete': availability == 'available' and not conflicts,
             'total_users': total, 'metrics': dict(metrics), 'summary_rows': summary_rows,
@@ -318,6 +367,7 @@ def summarize_registrations(records, state=None, *, users=None):
             'updated_from': min(dates) if dates else '', 'updated_to': max(dates) if dates else '',
             'dates_unknown': total - len(dates), 'duplicates_removed': duplicates, 'conflicting_users': conflicts,
             'details': [
+                metric_reconciliation['qualification'],
                 'Counts cover users returned by the authentication registration report, including members and guests. Administrators overlap those populations; do not add them to the total.',
                 'Users can register multiple methods. Method counts and percentages overlap; they do not add to 100%. Unknown fields are not measured zero.',
                 'Default/preferred fields describe second-factor preferences, not a complete ranking of passwordless sign-ins or methods actually used. System preference can override the user-selected default.',

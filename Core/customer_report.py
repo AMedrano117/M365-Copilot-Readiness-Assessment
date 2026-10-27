@@ -71,7 +71,8 @@ def plain(value):
 
 
 def prose(value):
-    safe = escape(plain(value))
+    from .evidence_reconciliation import customer_text
+    safe = escape(customer_text(plain(value)))
     safe = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', safe, flags=re.S)
     return safe.replace('\n', '<br>') or '<span class="muted">Not established</span>'
 
@@ -529,8 +530,10 @@ def _progress_requirements(result):
       <p class="qualification">These are this assessment’s criteria. Microsoft recommends a phased rollout with a defined strategy, protected data, a small initial group and a review of outcomes before expansion. <a href="https://learn.microsoft.com/en-us/microsoft-365/copilot/microsoft-365-copilot-minimum-requirements-rollout">Microsoft rollout guidance</a></p></section>'''
 
 
-def _authentication_methods(bundle):
-    data = bundle.get('authentication_methods') or {}
+def _authentication_methods(bundle, result=None):
+    model = result if result is not None else bundle.get('assessment_result') or {}
+    retained = (model.get('authentication_assessment') or {}).get('registration') or {}
+    data = retained.get('report') or bundle.get('authentication_methods') or {}
     if not data.get('available'):
         return '<div class="mfa-profile"><h3>MFA method strength and defaults</h3><p>Registered methods and preferred second-factor methods were not available in this evidence. Collect the Entra authentication registration report to assess them.</p></div>'
     metrics = data.get('metrics') or {}
@@ -550,6 +553,10 @@ def _authentication_methods(bundle):
         review_note += f"{metrics['current_preference_needs_review']} users have preferred methods needing classification review. "
     if data.get('conflicting_users'):
         review_note += f"{data['conflicting_users']} users have conflicting source rows and remain unknown. "
+    reconciliation = data.get('metric_reconciliation') or {}
+    if (reconciliation.get('conflicts') or {}).get('users_with_cross_field_conflicts'):
+        review_note += (str(reconciliation['conflicts']['users_with_cross_field_conflicts']) +
+            ' users have conflicting registration, capability or method fields. These metrics are not directly comparable; retained values were not normalized. ')
     population_columns = [('Population', 'Population'), ('Users', 'Users'),
         ('Phishing-resistant registered', 'Phishing-resistant registered'),
         ('Phone-only MFA', 'Phone-only MFA registration'), ('SMS / voice preferred', 'SMS/voice preferred')]
@@ -807,6 +814,8 @@ def context_has_collection(bundle):
 
 
 def render_customer_report(result, bundle, tenant_name, workbook_path=None, summary_path=None, technical_workbook_path=None):
+    from .evidence_reconciliation import require_supported_confidence
+    require_supported_confidence(result)
     from .identity_finding_taxonomy import ensure_identity_result, licensing_context
     result = ensure_identity_result(result, bundle)
     from .lifecycle_presentation import summary_html,technical_html,finding_html
@@ -926,7 +935,7 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None, summ
                  for r in domain.get('actions', []) if r.get('RecommendationId') in action_numbers]
         extra = ''
         if domain['id'] == 'identity':
-            extra = _authentication_methods(bundle)
+            extra = _authentication_methods(bundle, result)
         if domain['id'] == 'content':
             extra = _settings(bundle) + _lifecycle(bundle)
         if domain['id'] in {'data_protection','classification'}:
@@ -987,18 +996,21 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None, summ
             evidence_rows.append(f'<tr id="evidence-{slug(key)}"><td>{prose(key)}</td><td>{prose(_heading(row))}</td><td>{prose(_date_text(row))}</td><td>{prose(row.get("Qualification"))}</td><td>{prose(row.get("InvestigationRange") or row.get("EvidenceSheet") or "Supporting location not supplied")}</td><td><span class="muted">Not exported</span></td></tr>')
     source_rows = [r for source in (bundle.get('data_exposure') or {}).get('sources', {}).values() for r in source.get('reports', [])]
     sources = table(source_rows, [('Source file', 'source_file'), ('Report type', 'report_type'), ('Workload', 'workload'), ('Original date', 'report_date'), ('Date basis', 'date_basis'), ('Selection', 'status'), ('Rows', 'records_read'), ('Freshness', 'freshness')])
-    collection_rows = []
-    for name, state in (bundle.get('source_statuses') or {}).items():
-        if name.startswith('connection_') or not isinstance(state, dict):
-            continue
-        status = state.get('availability_status') or state.get('status') or ('available' if state.get('available') else 'unavailable')
-        from .auth_plan import collected_with_label
-        collection_rows.append({'source': name, 'status': status,
-                                'records': state.get('records_collected', state.get('record_count')),
-                                'collected_with': '' if name.startswith('pipeline_') else collected_with_label(state),
-                                'reason': state.get('reason') or state.get('error') or ('Read succeeded.' if status == 'available' else 'No additional detail recorded.'),
-                                'unlock': state.get('unlock', '')})
-    collection_table = table(collection_rows, [('Source', 'source'), ('Read status', 'status'), ('Rows returned', 'records'), ('Collected with', 'collected_with'), ('Reason or qualification', 'reason'), ('How to collect it', 'unlock')]) if collection_rows else ''
+    from .coverage_summary import coverage_projection
+    collection_projection = coverage_projection(result,bundle)
+    collection_rows = collection_projection['summary']
+    collection_columns = ('Dataset','Source','Parent objects queried',
+        'Successful queries','Zero-result queries','Failed queries','Partial queries','Returned records',
+        'Completeness','Truncation','Observation period','Qualification')
+    collection_table = ''
+    if collection_rows:
+        collection_table = '<div class="table-scroll"><table><thead><tr>' + ''.join(
+            '<th>' + escape(key) + '</th>' for key in (*collection_columns,'Technical detail')) + '</tr></thead><tbody>'
+        for row in collection_rows:
+            target = technical_url + "#'Collection Request Detail'!A" + str(row['Technical detail row'])
+            link = '<a href="' + escape(target, quote=True) + '">Detailed request register</a>' if technical_url else 'See Technical Evidence request register'
+            collection_table += '<tr data-collection-state="' + escape(row.get('Availability state','unknown'),quote=True) + '">' + ''.join('<td>' + prose(row.get(key)) + '</td>' for key in collection_columns) + '<td>' + link + '</td></tr>'
+        collection_table += '</tbody></table></div>'
     auth_plan = bundle.get('auth_plan') or {}
     identity_labels = []
     for identity in auth_plan.get('identities') or []:
@@ -1024,9 +1036,7 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None, summ
     ) if migration else ''
     prior = bundle.get('prior_report') or {}
     report_guides = _report_guides(actions) + _remaining_portal_review(bundle)
-    operator_handoff = '''<h3>Rebuild with additional exports</h3><p>From the assessment repository, replace both placeholder paths with the saved collection and the folder containing this tenant’s completed exports. The collection can be the portable package’s collection.json. Existing packaged evidence and settings are restored automatically.</p>
-      <pre class="operator-command"><code>.\\.venv\\Scripts\\python.exe main.py --mode offline --collection-input "&lt;saved collection.json&gt;" --reports-dir "&lt;exports folder&gt;"</code></pre>
-      <p>Check the imported source reports and remaining evidence in the rebuilt report. A successful rebuild does not mean every export format or evidence requirement was satisfied.</p>''' if report_guides else ''
+    operator_handoff = ('<h3>Additional evidence</h3><p>Provide the current completed exports requested below, including their report dates and assessed scope. Detailed import instructions are retained in the technical/operator documentation.</p>' if report_guides else '')
     from .assessment_runs import run_context_rows
     run_note = '<dl>' + ''.join('<dt>' + prose(row['Item']) + '</dt><dd>' + prose(row['Value']) + '</dd>'
                                for row in run_context_rows(result)) + '</dl>'
@@ -1098,7 +1108,7 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None, summ
     summary_name = Path(summary_path).name if summary_path else ''
     if summary_name:
         workbook_button = f'<a class="button button-secondary" href="{quote(summary_name)}">One-page summary</a>' + workbook_button
-    catalog_html = coverage_panels(result, table)
+    catalog_html = coverage_panels(result, table, technical_url, collection_projection)
     from .authentication_presentation import authentication_summary_html
     from .privileged_presentation import privileged_summary_html
     from .repository_provenance import provenance_html

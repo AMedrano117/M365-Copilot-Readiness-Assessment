@@ -183,6 +183,10 @@ def _projection(row, record, devices):
     observed = _value(fields, 'lastReportedDateTime', 'lastSeen', 'createdDateTime', 'Created UTC', 'Observed At', 'Report Date', 'lastUpdatedDateTime') or row.get('ObservationDate')
     common = {'ID': row['RecommendationId'], 'Evidence ID': record['evidence_id']}
     issue = _heading(row)
+    if dataset in {'risky_users','risk_detections'}:
+        return 'Users & Identity', dict(common, User='Restricted identity-risk record', UPN=None,
+            Issue=issue, Detail='Identity-level risk details are retained in the linked technical evidence only.',
+            **{'Last sign-in or observed':observed})
     if title == 'Configuration':
         key = _value(fields, 'setting', 'Setting Key', 'property')
         current = _value(fields, 'value', 'Current Value', 'Current', 'state', 'status')
@@ -209,6 +213,9 @@ def _projection(row, record, devices):
         inventory = devices.get(_text(parent).casefold(), {})
         merged = {**inventory, **fields}
         device = _value(merged, 'deviceName', 'computerDnsName', 'Device Name', 'Device', 'displayName')
+        from .coverage_summary import GUID
+        if GUID.fullmatch(str(device or '')):
+            device = 'Unresolved display name; identifier retained in technical evidence'
         primary_user = _value(merged, 'userPrincipalName', 'Primary User', 'userDisplayName')
         os_name = _value(merged, 'operatingSystem', 'osPlatform', 'OS')
         version = _value(merged, 'osVersion', 'OS Version')
@@ -325,6 +332,8 @@ def _coverage(result, bundle):
 
 def split_workbook_layout(source_workbook, result, bundle, assessment_path, technical_path, *, tenant_name=None):
     """Project the compact workbook and retain every source row in a visible companion."""
+    from .evidence_reconciliation import require_supported_confidence
+    require_supported_confidence(result)
     from openpyxl import Workbook
     from .evidence_selection import build_evidence_selection
     from .finding_evidence import build_finding_evidence
@@ -830,6 +839,11 @@ def split_workbook_layout(source_workbook, result, bundle, assessment_path, tech
             if column:
                 actions.cell(number, column).comment = Comment(action['InvestigationNote'], 'Assessment')
     topics, controls, coverage_details, topic_positions = coverage_rows(result, bundle, discrepancies)
+    from .export_recommendations import _excel_safe_rows
+    from .coverage_summary import coverage_projection
+    requests = coverage_projection(result,bundle)['requests']
+    _write(technical, 'Collection Request Detail', _excel_safe_rows(plain_data(requests), 'Collection Request Detail'),
+           None if requests else ('Dataset','Query','Parent object','Outcome','Returned records','Source metadata'))
     _write(technical, 'Coverage Detail', plain_data(coverage_details), None if coverage_details else ('Row type', 'Source ID', 'Original record'))
     write_coverage(assessment, topics, controls, Path(technical_path).name)
     for number, action in enumerate(result.get('actions') or [], 2):
@@ -961,6 +975,16 @@ def split_workbook_layout(source_workbook, result, bundle, assessment_path, tech
         apply_workbook_navigation(book, result, bundle, role=role, companion_path=other, tenant_name=tenant_name)
     from .workbook_readers import format_reader_sheets
     format_reader_sheets(assessment)
+    from .evidence_reconciliation import customer_text
+    for sheet in assessment:
+        for cells in sheet:
+            for cell in cells:
+                if isinstance(cell.value, str) and cell.data_type != 'f':
+                    projected = customer_text(cell.value)
+                    if projected != cell.value:
+                        cell.value = projected
+                if cell.comment:
+                    cell.comment.text = customer_text(cell.comment.text)
     validation = validate_workbook_layout(assessment, technical, result, assessment_path, technical_path)
     issues.extend(validation)
     if issues:

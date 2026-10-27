@@ -13,7 +13,11 @@ def assessment_authentication_summary(bundle, operation):
     datasets = (bundle.get('assessment_sources') or {}).get('signin_logs', [])
     records = [row for row in operation.get('IDENTITY.AUTH', {}).get('records', [])
                if row.get('AuthenticationRuleVersion')]
-    return {'registration': deepcopy((bundle.get('authentication_methods') or {}).get('registration_population') or {}),
+    report = bundle.get('authentication_methods') or {}
+    registration = deepcopy(report.get('registration_population') or {})
+    registration['metric_reconciliation'] = deepcopy(report.get('metric_reconciliation') or {})
+    registration['report'] = deepcopy({key:value for key,value in report.items() if key != 'registration_population'})
+    return {'registration': registration,
             'enforcement': {'operational_result': operation.get('IDENTITY.AUTH', {}).get('result', 'unknown'),
                             'qualification': 'Policy configuration and event-scoped policy results do not alone establish tenant-wide enforcement.'},
             'observed_authentication': {'event_count': len(records),
