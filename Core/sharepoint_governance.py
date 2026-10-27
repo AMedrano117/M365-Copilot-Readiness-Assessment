@@ -518,7 +518,7 @@ def _parsed_dag_families(usable):
                 if report.get('workload') == 'SharePoint'}
     from .data_exposure_assessment import sharing_link_type
     manual_links = {sharing_link_type(report.get('source_file', '')) for report in usable
-                    if report.get('report_type') == 'sharing_links_activity'}
+                    if report.get('report_type') == 'sharing_links_activity' and report.get('workload') == 'SharePoint'}
     if {'sharinglinks_anyone', 'sharinglinks_guests'} <= entities or {'Anyone links', 'Specific people links shared externally'} <= manual_links:
         covered.append('Anyone and guest sharing links')
     if {'everyoneexceptexternalusersatsite', 'everyoneexceptexternalusersforitems'} <= entities:

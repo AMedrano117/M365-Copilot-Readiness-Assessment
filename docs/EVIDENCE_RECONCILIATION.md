@@ -193,6 +193,7 @@ The SAM report-date reminder is Medium priority and is not itself a pilot gate.
 Parsed report families with older or unverified dates are retained as qualified
 reference context; their date review does not keep a duplicate High coverage alert.
 Missing or unparsed report families remain separate coverage gaps.
+OneDrive and unknown-workload link exports cannot close a SharePoint activity gap.
 An unknown date is described as a date to confirm, rather than proof of an old
 report. Independent content-control gaps and actual sharing-risk priorities are
 preserved. Rebuilds evaluate report inventory against the assessment date.

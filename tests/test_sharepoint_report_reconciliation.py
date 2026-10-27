@@ -164,6 +164,12 @@ class SharingCoverageTests(unittest.TestCase):
         reports = [{'report_type':'permission_snapshot','workload':'SharePoint','status':'selected','freshness':'fresh'}]
         self.assertEqual(reconcile_dag_coverage([gap('Anyone and guest sharing links')],reports)[0]['Disposition'], 'Coverage')
 
+    def test_onedrive_or_unknown_workload_does_not_answer_sharepoint_link_activity(self):
+        for workload in ('OneDrive','Unknown'):
+            reports = [{'report_type':'sharing_links_activity','workload':workload,'status':'selected','freshness':'fresh','source_file':name}
+                       for name in ('Anyone_links.csv','Specific_people_links_shared_externally.csv')]
+            self.assertEqual(reconcile_dag_coverage([gap('Anyone and guest sharing links')],reports)[0]['Disposition'],'Coverage')
+
     def test_bound_activity_entity_keeps_activity_separate_from_existing_permissions(self):
         with TemporaryDirectory() as folder:
             path = csv_file(folder,'arbitrary.csv',activity=True)
