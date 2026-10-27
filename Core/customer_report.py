@@ -110,6 +110,10 @@ def _heading(row):
         'data_exposure.freshness.sam': 'Refresh the older SharePoint permissions evidence',
         'purview.audit.state': 'Audit logging configuration',
     }
+    if row.get('FindingKey') == 'data_exposure.freshness.sam' and (
+            row.get('FreshnessIssue') in {'unknown', 'missing'} or
+            'freshness could not be verified' in str(row.get('Observation') or '')):
+        return 'Confirm the date of SharePoint permissions evidence'
     control_titles = {
         'coverage.content.ownership':'Confirm content owners and review dates',
         'coverage.data.dlp':'Validate DLP protection in operation',
@@ -173,7 +177,13 @@ def _action_text(row):
     # Keep the action brief; report procedures are linked from the action card.
     key = row.get('FindingKey')
     if key == 'sharepoint.dag.not_assessed':
-        return 'Review the permission exports already available, confirm they cover the sites that hold business content, and obtain any missing sharing-activity reports. The report guide below explains where to find them.'
+        if isinstance(row.get('DagGaps'), list):
+            if not row['DagGaps'] and row.get('Disposition') == 'Reference':
+                return ''
+            remaining = ', '.join(gap.get('report', '') for gap in row['DagGaps'] if gap.get('report'))
+            return ('Confirm the remaining report coverage: '+remaining+'. Reuse completed reports already collected or supplied, '
+                    'confirm they cover the business sites, and obtain only evidence that remains missing or unusable.')
+        return 'Review the listed report families and business-site scope. Reuse automatically collected reports and obtain only the results that remain missing or unusable.'
     if key == 'coverage.adoption.baseline':
         return 'Agree the pilot use cases, work tasks and success measures with the business sponsor, and reuse the available usage evidence as the baseline. This is a planning step; it does not change the readiness verdict.'
     if key == 'coverage.license.assignment':
@@ -208,14 +218,14 @@ def _observation(row, bundle):
         return 'User consent is enabled for applications. Review which permissions users can approve without individual administrator review; this setting alone does not establish which content an app can access.'
     permission_reports = [report for report in (bundle.get('data_exposure') or {}).get('sources', {}).get('sam', {}).get('reports', [])
                           if report.get('report_type') in {'permission_snapshot', 'special_group_permissions'} and report.get('records_read', 0)]
-    if row.get('FindingKey') == 'sharepoint.dag.not_assessed' and permission_reports:
+    if row.get('FindingKey') == 'sharepoint.dag.not_assessed' and permission_reports and 'DagGaps' not in row:
         return 'The saved collection recorded incomplete SharePoint report coverage. Permission exports were also supplied and assessed in the content findings. Confirm that the combined evidence covers the business sites and the remaining sharing activity.'
     return text
 
 
 def _completion(row):
     requested = {
-        'sharepoint.dag.not_assessed': 'Completed permission and sharing-activity exports, with their dates, workloads, selected sites and filters recorded; document any unavailable report.',
+        'sharepoint.dag.not_assessed': 'Parsed permission and sharing-activity results from automatic collection or structured exports, with original report dates, selected sites and filters recorded; document any remaining unavailable report.',
         'data_exposure.freshness.sam': 'Current permission evidence for the sites still represented only by older reports, or a dated administrator review explaining their present status.',
         'data_exposure.coverage.sensitive-data_exposure_evidence': 'A completed data-risk assessment or dated owner review of sensitive content and access, with the covered scope, findings and supporting evidence recorded.',
         'data_exposure.snapshot_scope': 'A dated comparison of the site populations and filters, with an explanation for each site omitted from the newer report.',

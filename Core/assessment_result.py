@@ -189,6 +189,10 @@ def _provenance(row, bundle, expected_tenant_id):
 
 def _qualify_record(original, bundle, day, expected_tenant_id, *, historical=False):
     row = enrich_assessment_record(original)
+    if not historical and original.get('SourceType') != 'prior_assessment' and row.get('FindingKey') == 'data_exposure.freshness.sam':
+        # A report-date maintenance request is separate from an independently
+        # unverified content control or a measured sharing exposure.
+        row.update(Priority='Medium', SecurityGate=False, ReadinessStage='Before broad rollout')
     if original.get("ActionType") == "Confirmation" and original.get("OriginalFeature"):
         row["Feature"] = original["OriginalFeature"]
         row["Recommendation"] = original.get("OriginalRecommendation", original.get("Recommendation", ""))

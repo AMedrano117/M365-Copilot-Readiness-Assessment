@@ -515,6 +515,8 @@ async def orchestrate(
         if sharepoint_graph is not None:
             from .sharepoint_governance import merge_sharepoint_payloads
             sharepoint_data = merge_sharepoint_payloads(sharepoint_graph, sharepoint_data)
+        from .sharepoint_report_provenance import capture_download_hashes
+        sharepoint_data = capture_download_hashes(sharepoint_data)
         exported_sam_paths = [
             item.get('path') for item in (sharepoint_data.get('exported_files', []) or [])
             if isinstance(item, dict) and item.get('path')

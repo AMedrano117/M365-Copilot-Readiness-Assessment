@@ -174,3 +174,24 @@ cannot supply settings they did not retain. These configuration rows neither pro
 effective enforcement nor change the separate assessment activity/reporting windows.
 See [Graph settings](https://learn.microsoft.com/graph/api/resources/intune-deviceconfig-devicemanagementsettings?view=graph-rest-1.0)
 and [supported read permissions](https://learn.microsoft.com/powershell/module/microsoft.graph.devicemanagement/get-mgdevicemanagement?view=graph-powershell-1.0).
+
+SharePoint report coverage reconciles parsed automatic downloads and supplied
+exports before rendering the remaining report-family gaps. Customer guidance
+names only the remaining checks and reuses available results. Permission-state
+link counts do not substitute for sharing-link activity. Completion inventory
+alone does not establish that an export was parsed or that its scope is complete.
+
+Downloaded files retain hashes alongside report IDs. Missing CSV dates can use
+the matching completed report's retained period end, or explicit completion date,
+with the date basis recorded. Exact packaged paths distinguish identical empty
+reports. Ambiguous IDs/hashes, failed reads and changed bytes cannot borrow dates;
+filenames, file modification times, download times and rebuild times never supply
+freshness. Report-period end takes precedence over a later generation completion.
+Older packages can recover this binding only from an exact retained input path.
+
+The SAM report-date reminder is Medium priority and is not itself a pilot gate.
+An unknown date is described as a date to confirm, rather than proof of an old
+report. Independent content-control gaps and actual sharing-risk priorities are
+preserved. Rebuilds evaluate report inventory against the assessment date.
+Microsoft documents the difference between report periods and completion in
+[DAG PowerShell guidance](https://learn.microsoft.com/sharepoint/powershell-for-data-access-governance#track-reports-by-using-powershell).
