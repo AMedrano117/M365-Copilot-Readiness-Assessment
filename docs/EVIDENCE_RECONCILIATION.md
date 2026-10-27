@@ -128,3 +128,23 @@ stay out of customer coverage. Technical request indexing does not discard zero 
 Outputs produced by merged main before this correction PR retain their original
 wording and producing revision. Updating the unmerged feature branch does not
 retroactively change existing assessment files or root main.
+
+Intune noncompliance detail now retains the failed setting and explicitly associated
+policy, last device sync, and reconciled activity. The default-policy **Is active**
+failure is reporting/lifecycle review, including its Graph setting identifier
+`DefaultDeviceCompliancePolicy.RequireRemainContact`. It does not establish a
+BitLocker or other security-setting failure. Assignment and enrolled-user checks
+also remain distinct from security settings. Missing reasons remain unknown.
+
+Explicit security-setting failures with recent device reports remain actionable;
+older, undated or ambiguously joined states require confirmation. Recent Entra or
+Defender activity can establish activity without refreshing an old Intune setting.
+Stale reporting neither proves retirement nor makes a device safe or compliant.
+Assessment activity/reporting windows do not establish the tenant's configured
+Intune compliance validity period. Raw compliance states and selected source rows
+are preserved, and setting-summary parent IDs cannot be inferred as device or
+policy IDs. Findings, workbook details and snapshot replay use the retained model.
+
+References: [Intune default-policy evaluation](https://learn.microsoft.com/intune/device-security/compliance/monitor-policy#how-intune-evaluates-the-default-compliance-policy),
+[compliance policy settings](https://learn.microsoft.com/intune/device-security/compliance/overview#compliance-policy-settings),
+and [Graph setting-state properties](https://learn.microsoft.com/graph/api/resources/intune-deviceconfig-devicecompliancesettingstate?view=graph-rest-1.0#properties).

@@ -174,7 +174,7 @@ def _category(row, fields, dataset, kind):
     return 'Other Evidence'
 
 
-def _projection(row, record, devices):
+def _projection(row, record, devices, compliance=None):
     from .customer_report import SHARING_SETTING_LABELS, _sharing_setting_value, _sharing_check, _heading
     fields = record['fields']
     dataset = record.get('dataset') or ''
@@ -209,13 +209,15 @@ def _projection(row, record, devices):
                               'Object name': _value(fields, 'Object name', 'Title', 'displayName'),
                               'Locator': _value(fields, 'Locator', 'siteUrl', 'Url')})
     if title == 'Devices':
-        parent = _value(fields, 'ParentId', 'managedDeviceId', 'deviceId', 'id')
+        parent = _value(fields, 'managedDeviceId', 'deviceId', 'ParentId', 'id')
         inventory = devices.get(_text(parent).casefold(), {})
+        if dataset == 'compliance_setting_states':
+            # Only the unambiguous retained compliance model may supply inventory.
+            inventory = {}
+            observed = _value(fields, 'lastReportedDateTime') or 'Not retained'
         merged = {**inventory, **fields}
         device = _value(merged, 'deviceName', 'computerDnsName', 'Device Name', 'Device', 'displayName')
         from .coverage_summary import GUID
-        if GUID.fullmatch(str(device or '')):
-            device = 'Unresolved display name; identifier retained in technical evidence'
         primary_user = _value(merged, 'userPrincipalName', 'Primary User', 'userDisplayName')
         os_name = _value(merged, 'operatingSystem', 'osPlatform', 'OS')
         version = _value(merged, 'osVersion', 'OS Version')
@@ -227,6 +229,28 @@ def _projection(row, record, devices):
                                   ('Signatures current', ('avIsSignatureUpToDate',)),
                                   ('State', ('state', 'Status')), ('Risk', ('riskScore',)),
                                   ('Protection', ('healthStatus',)), ('Policy', ('policyName', 'Policy'))])
+        if compliance and dataset == 'compliance_setting_states':
+            candidates = compliance['_settings_by_id'].get(str(_value(fields, 'id') or ''), [])
+            matches = [item for item in candidates if all(fields.get(key) == item_value for key, item_value in item['record'].items())]
+            if len(matches) == 1:
+                item = matches[0]
+                linked = compliance['_devices_by_id'].get(item['device_id'], []) if item['device_id'] else []
+                inventory = linked[0]['device'] if len(linked) == 1 else {}
+                device = _value(inventory, 'deviceName') or _value(fields, 'deviceName') or 'Unknown'
+                primary_user = _value(inventory, 'userPrincipalName') or _value(fields, 'userPrincipalName')
+                os_name = _value(inventory, 'operatingSystem')
+                version = _value(inventory, 'osVersion')
+                merged = {**inventory, **fields}
+                device_issue = item['setting']
+                details = f"{item['reason']}; activity: {item['activity']}; {item['qualification']} Date basis: {item['date_basis']}."
+                observed = item['last_reported'] or 'Not retained'
+        elif _value(fields, 'Compliance reason'):
+            device_issue = _value(fields, 'Compliance reason')
+            details = _detail(fields, [('Activity', ('Device activity',)), ('Latest activity', ('Latest activity UTC',)),
+                                      ('Qualification', ('Compliance qualification',))])
+            observed = _value(fields, 'Last Sync UTC') or 'Not retained'
+        if GUID.fullmatch(str(device or '')):
+            device = 'Unresolved display name; identifier retained in technical evidence'
         return title, dict(common, Device=device or 'Unknown', **{'Primary user': primary_user,
                            'OS': ' '.join(_text(item) for item in (os_name, version) if item is not None),
                            'Issue': device_issue or issue, 'Detail': details, 'Last reported': observed,
@@ -523,6 +547,13 @@ def split_workbook_layout(source_workbook, result, bundle, assessment_path, tech
                 expanded.append(record)
         selected[identifier] = expanded
     devices = {}
+    # Presentation indexes are separate from the frozen decision/snapshot model.
+    compliance = dict(result.get('device_compliance') or {})
+    compliance['_settings_by_id'], compliance['_devices_by_id'] = defaultdict(list), defaultdict(list)
+    for item in compliance.get('settings', []):
+        compliance['_settings_by_id'][str(_value(item['record'], 'id') or '')].append(item)
+    for item in compliance.get('devices', []):
+        compliance['_devices_by_id'][item['device_id']].append(item)
     for dataset in ('managed_devices', 'machines', 'directory_devices'):
         for entry in (bundle.get('assessment_sources') or {}).get(dataset, []):
             for record in entry.get('records') or []:
@@ -696,7 +727,7 @@ def split_workbook_layout(source_workbook, result, bundle, assessment_path, tech
             evidence_links[('Configuration',len(assessment_rows['Configuration'])+1)] = target
             config_source_links[len(assessment_rows['Configuration'])+1] = target
         for record in records:
-            title, projected = _projection(row, record, devices)
+            title, projected = _projection(row, record, devices, compliance)
             if title == 'Configuration' and groups_by_finding[identifier] and record.get('dataset') in {
                     'sharepoint_site_settings','sharepoint_tenant_settings','sharepoint_graph_settings'}:
                 continue

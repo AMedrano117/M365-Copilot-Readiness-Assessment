@@ -36,6 +36,8 @@ def build_intune_device_investigation(client):
     devices = list(raw) if isinstance(raw, (list, tuple)) else []
     status = (_get(client, 'collection_status', {}) or {}).get('managed_devices', {}) or {}
     availability = source_availability(client, 'managed_devices')
+    from .device_compliance import client_compliance, device_fields
+    compliance = client_compliance(client)
     rows = []
     for number, device in enumerate(devices, 1):
         if str(_get(device, 'complianceState', '')).lower() != 'noncompliant':
@@ -64,6 +66,8 @@ def build_intune_device_investigation(client):
             'Collection Completed UTC': status.get('collection_completed_at') or 'Not retained',
             'Collection Window': 'Managed-device snapshot; last sync is reported separately',
         })
+        # Position preserves duplicate local IDs instead of silently merging them.
+        rows[-1].update(device_fields(compliance['devices'][number - 1]))
     compliant = sum(str(_get(item, 'complianceState', '')).lower() == 'compliant' for item in devices)
     other = len(devices) - compliant - len(rows)
     reconciliation = (f'{len(rows)} explicitly noncompliant + {compliant} compliant + {other} other or unknown '
@@ -87,7 +91,8 @@ def build_intune_device_investigation(client):
             'details': [reconciliation,
                 'Selection: complianceState equals noncompliant. Grace-period, error, unknown and compliant states are not counted as noncompliant.',
                 'Scope is the managed-device inventory returned by Intune, not all tenant endpoints or confirmed Copilot devices. Compliance state does not prove successful access or identify the failed compliance rule.',
-                'Open the device in Intune to review individual compliance-policy failures and the assigned user; those per-policy results were not collected.',
+                'Retained per-setting results are shown when a device ID can be joined unambiguously. Missing setting or policy details remain unknown; confirm them in Intune.',
+                compliance['qualification'],
                 'Pagination, truncation and timestamps are copied only when retained. Missing metadata remains unknown. Permissions, licensing and retention were not independently revalidated during offline export.',
                 *([unavailable] if unavailable else [])]}
 
@@ -138,7 +143,8 @@ def qualify_identity_recommendation(record, client):
         elif not complete:
             row.update(Disposition='Coverage', Status='Not Assessed',
                 Recommendation='Collect or review the current risky-user report before deciding whether unresolved account risk remains.')
-    return row
+    from .device_compliance import qualify_device_aggregate
+    return qualify_device_aggregate(row)
 
 
 def select_identity_item(key, row, rec):
@@ -150,8 +156,8 @@ def select_identity_item(key, row, rec):
         if not is_noncompliant_device_finding(rec) or _text(row, 'Compliance State').lower() != 'noncompliant':
             return None
         return _item('Managed device', _first(row, 'Device Name', 'Device ID'), _text(row, 'Device ID'),
-            'Intune explicitly reports this device as noncompliant', _text(row, 'Compliance State'),
-            _details(row, 'Entra Device ID', 'User ID', 'User Principal Name', 'OS', 'OS Version', 'Ownership', 'Management Agent'),
+            _text(row, 'Compliance reason') or 'Intune explicitly reports this device as noncompliant; reason not retained', _text(row, 'Compliance State'),
+            _details(row, 'Compliance reason', 'Device activity', 'Latest activity UTC', 'Compliance qualification', 'Entra Device ID', 'User ID', 'User Principal Name', 'OS', 'OS Version', 'Ownership', 'Management Agent'),
             _text(row, 'Last Sync UTC'), 'Intune admin center > Devices > All devices > Device compliance',
             'Review the failed compliance rules, assigned user and intended pilot scope. Confirm Conditional Access results before concluding that access succeeded.')
     if key == 'guest_access_detail':

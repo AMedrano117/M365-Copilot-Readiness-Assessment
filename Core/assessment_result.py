@@ -662,6 +662,9 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
     """
     bundle = evidence_bundle or {}
     day = evaluation_day(evaluation_date or bundle.get("evaluation_date"))
+    from .device_compliance import build_device_compliance, qualify_device_aggregate
+    compliance = build_device_compliance(bundle, profile=bundle.get('assessment_profile'), evaluation_date=day)
+    recommendations = [qualify_device_aggregate(row) for row in recommendations]
     from .privileged_identity import build_privileged_assessment, privileged_context
     from .privileged_presentation import privileged_findings, qualify_privileged_recommendations
     privileged = build_privileged_assessment(bundle.get('assessment_sources') or {},
@@ -1051,6 +1054,7 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
     from .privileged_validation import validate_privileged_assessment
     result['privileged_diagnostics'] = validate_privileged_assessment(privileged)
     result['device_reconciliation'] = devices
+    result['device_compliance'] = compliance
     from .assessment_catalog import attach_catalog
     from .assessment_identity import attach_identity
     from .finding_reconciliation import attach_reconciliation

@@ -15,6 +15,8 @@ def expanded_findings(bundle, *, profile=None, evaluation_date=None, tenant_id=N
     output = []
     context=_profile_raw(profile or {}).get('assessment_context') or {}
     reporting_days=context.get('endpoint_reporting_days',7) if not context_validation(profile or {}) else 7
+    from .device_compliance import build_device_compliance
+    compliance = build_device_compliance(bundle, profile=profile, evaluation_date=day)
 
     def finding(name, selected, state, feature, explanation, *, domain='endpoints', control='ENDPOINT.POSTURE', disposition='Action', priority='Medium',
                 recommendation='Review the exact retained records, document ownership and treatment, and repeat the applicable operational check.'):
@@ -97,11 +99,30 @@ def expanded_findings(bundle, *, profile=None, evaluation_date=None, tenant_id=N
                     '{count} returned antivirus health record(s) report signatures are not current.',
                     'Update security intelligence on the listed devices and confirm they can reach the configured update source.')
             elif name=='compliance_setting_states':
-                failed=[row for row in records if str(row.get('state','')).lower()=='noncompliant']
-                if failed: finding(f'{name}.noncompliant',failed,state,'Resolve failed device compliance settings',
-                    f'{len(failed)} returned setting record(s) report noncompliance. Settings are not a count of distinct devices.',
-                    recommendation='In Intune (Devices > Compliance > the policy > Per-setting status), fix the failing setting on each '
-                    'listed device, or change the policy if the setting is not required. Re-run the assessment to confirm.')
+                failed=[item for item in compliance['settings'] if item['failed']]
+                current=[item for item in failed if item['triage']=='current_security_failure']
+                review=[item for item in failed if item['triage']!='current_security_failure']
+                for group, items in (('current', current), ('review', review)):
+                    if not items:
+                        continue
+                    reasons=list(dict.fromkeys(item['reason'] for item in items))
+                    dates=sorted(filter(None,(parse_date(item['last_reported']) for item in items)))
+                    count=len({item['device_id'] for item in items if item['device_id']})
+                    unmatched=sum(not item['device_id'] for item in items)
+                    explanation=(f'{len(items)} failed setting record(s), linked to {count} distinct managed device(s); {unmatched} record(s) have unresolved device identity. '
+                                 'Settings are not a count of distinct devices. '+ '; '.join(reasons[:5])+'. ')
+                    explanation+=('Explicit security-setting failures have recent device reports.' if group=='current' else
+                                  'Activity/enrollment failures and older or undated security states require review. Noncompliance is retained; current security risk is not established by inactivity alone.')
+                    finding(f'{name}.noncompliant' if group=='current' else f'{name}.reporting_review',
+                        [item['record'] for item in items],state,
+                        'Resolve failed device compliance settings' if group=='current' else 'Review device compliance activity and unconfirmed failures',
+                        explanation,priority='High' if group=='current' else 'Medium',disposition='Action' if group=='current' else 'Opportunity',
+                        recommendation='Review the linked setting, policy and last check-in in Intune. Remediate explicit security failures; '
+                        'confirm ownership and reporting for inactive devices before retiring or re-enrolling them. Do not treat stale devices as safe or compliant.')
+                    output[-1].update(ObservationDate=dates[0].isoformat() if dates else '',
+                        ObservationDateBasis='Retained setting report date, otherwise managed-device last sync; collection time does not refresh the observation',
+                        EvidenceMaxAgeDays=compliance['reporting_days'],
+                        Qualification=compliance['qualification'],DeviceComplianceTriage=group)
                 errors=[row for row in records if str(row.get('state','')).lower() in {'error','conflict','unknown'}]
                 if errors: finding(f'{name}.errors',errors,state,'Investigate device compliance reporting errors',
                     f'{len(errors)} setting record(s) report error, conflict or unknown. Effective compliance remains unresolved.',disposition='Coverage',
