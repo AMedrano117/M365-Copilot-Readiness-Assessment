@@ -157,7 +157,7 @@ def select_identity_item(key, row, rec):
             return None
         return _item('Managed device', _first(row, 'Device Name', 'Device ID'), _text(row, 'Device ID'),
             _text(row, 'Compliance reason') or 'Intune explicitly reports this device as noncompliant; reason not retained', _text(row, 'Compliance State'),
-            _details(row, 'Compliance reason', 'Device activity', 'Latest activity UTC', 'Compliance qualification', 'Entra Device ID', 'User ID', 'User Principal Name', 'OS', 'OS Version', 'Ownership', 'Management Agent'),
+            _details(row, 'Compliance reason', 'Compliance policy assignment', 'Device activity', 'Latest activity UTC', 'Compliance qualification', 'Entra Device ID', 'User ID', 'User Principal Name', 'OS', 'OS Version', 'Ownership', 'Management Agent'),
             _text(row, 'Last Sync UTC'), 'Intune admin center > Devices > All devices > Device compliance',
             'Review the failed compliance rules, assigned user and intended pilot scope. Confirm Conditional Access results before concluding that access succeeded.')
     if key == 'guest_access_detail':

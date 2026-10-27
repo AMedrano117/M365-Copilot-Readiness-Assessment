@@ -7,6 +7,7 @@ from .collector_registry import source_allowed, supplemental_enabled
 
 
 USER_SIGNIN_ACTIVITY_PATH = '/v1.0/users?$select=id,displayName,userPrincipalName,signInActivity&$top=500'
+DEVICE_COMPLIANCE_SETTINGS_PATH = '/v1.0/deviceManagement?$select=settings'
 
 
 def plain(value):
@@ -68,6 +69,11 @@ async def collect_entra_details(client, fetch, *, permission_profile='standard',
                 'https://learn.microsoft.com/en-us/graph/api/resources/signinactivity?view=graph-rest-1.0',
             ]
             state.setdefault('reason', state.get('error', ''))
+        if name == 'device_compliance_settings':
+            state.update(scope='Tenant-wide Intune compliance settings',
+                permissions='DeviceManagementConfiguration.Read.All (existing setup permission)',
+                documentation_urls=['https://learn.microsoft.com/graph/api/resources/intune-deviceconfig-devicemanagementsettings?view=graph-rest-1.0'],
+                limitations='Tenant configuration only; it does not establish device assignment, effective enforcement or current device activity.')
         client.collection_status[name if parent is None else f'{name}:{parent}'] = state
         client.assessment_datasets.setdefault(name, []).append({'records': rows, 'source': state})
         return rows
@@ -76,6 +82,7 @@ async def collect_entra_details(client, fetch, *, permission_profile='standard',
         read('directory_devices', '/v1.0/devices'),
         read('user_signin_activity', USER_SIGNIN_ACTIVITY_PATH),
         read('authentication_strengths', '/v1.0/identity/conditionalAccess/authenticationStrength/policies'),
+        read('device_compliance_settings', DEVICE_COMPLIANCE_SETTINGS_PATH),
         read('compliance_setting_summaries', '/v1.0/deviceManagement/deviceCompliancePolicySettingStateSummaries'))
     jobs = []
     for policy in getattr(client, 'compliance_policies', []) or []:

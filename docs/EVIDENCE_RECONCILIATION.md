@@ -148,3 +148,29 @@ policy IDs. Findings, workbook details and snapshot replay use the retained mode
 References: [Intune default-policy evaluation](https://learn.microsoft.com/intune/device-security/compliance/monitor-policy#how-intune-evaluates-the-default-compliance-policy),
 [compliance policy settings](https://learn.microsoft.com/intune/device-security/compliance/overview#compliance-policy-settings),
 and [Graph setting-state properties](https://learn.microsoft.com/graph/api/resources/intune-deviceconfig-devicecompliancesettingstate?view=graph-rest-1.0#properties).
+
+A separate device finding lists retained failed **Has a compliance policy assigned**
+checks, including `DefaultDeviceCompliancePolicy.RequireDeviceCompliancePolicyAssigned`.
+It includes devices whose overall Intune state is compliant, preserves the raw
+assignment check, and shows the linked device, user and reporting date. Assignment
+status is reported missing, check passed, conflicting or unknown. Counts describe
+retained managed-device records, with unresolved identities counted separately.
+An empty/partial response, `notAssigned` for an individual setting, or an empty
+policy inventory does not prove that a device has no applicable compliance policy.
+A passing check does not establish policy names or effective enforcement.
+Stale and conflicting assignment checks require current targeting confirmation.
+This is a bounded retained-evidence worklist, not a replacement for Intune's
+[Devices without compliance policy report](https://learn.microsoft.com/en-us/mem/intune/fundamentals/reports#devices-without-compliance-policy-organizational).
+
+Future live Entra collection also reads `GET /v1.0/deviceManagement?$select=settings`
+as a singleton using the existing `DeviceManagementConfiguration.Read.All` setup
+permission. The Configuration sheet reports **Mark devices with no compliance
+policy assigned as** (`secureByDefault`: true means Noncompliant, false means
+Compliant) and **Compliance status validity period (days)**
+(`deviceComplianceCheckinThresholdDays`). The raw object, source metadata and
+reporting date survive saved collection, technical evidence and snapshot replay.
+Omitted, denied, invalid and conflicting values remain qualified; older collections
+cannot supply settings they did not retain. These configuration rows neither prove
+effective enforcement nor change the separate assessment activity/reporting windows.
+See [Graph settings](https://learn.microsoft.com/graph/api/resources/intune-deviceconfig-devicemanagementsettings?view=graph-rest-1.0)
+and [supported read permissions](https://learn.microsoft.com/powershell/module/microsoft.graph.devicemanagement/get-mgdevicemanagement?view=graph-powershell-1.0).

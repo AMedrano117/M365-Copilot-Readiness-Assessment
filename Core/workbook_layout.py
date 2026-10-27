@@ -158,7 +158,7 @@ def _category(row, fields, dataset, kind):
     if dataset == 'compliance_setting_states' or _value(fields, 'settingName', 'Setting Name') is not None:
         return 'Devices'
     if kind == 'configuration' or dataset in {'security_defaults', 'authorization_policy', 'consent_policies',
-                                             'ca_policies', 'sharepoint_tenant_settings', 'sharepoint_graph_settings'}:
+                                             'ca_policies', 'sharepoint_tenant_settings', 'sharepoint_graph_settings', 'device_compliance_settings'}:
         return 'Configuration'
     concern = concern_for(row)
     if concern == 'devices-endpoint' or dataset in {'windows_protection', 'managed_devices', 'machines', 'antivirus_health'}:
@@ -188,6 +188,10 @@ def _projection(row, record, devices, compliance=None):
             Issue=issue, Detail='Identity-level risk details are retained in the linked technical evidence only.',
             **{'Last sign-in or observed':observed})
     if title == 'Configuration':
+        if dataset == 'device_compliance_settings':
+            return title, dict(common, Setting=row.get('ConfigurationLabel') or issue,
+                Current=row.get('ConfigurationValue', 'Unknown'), Recommended=row.get('Recommendation'),
+                Status='Review', Observed=observed, Scope='tenant', **{'Object ID':None, 'Object name':'Intune compliance policy settings', 'Locator':None})
         key = _value(fields, 'setting', 'Setting Key', 'property')
         current = _value(fields, 'value', 'Current Value', 'Current', 'state', 'status')
         recommended = _value(fields, 'recommended', 'Recommended Value') or (row.get('TechnicalGuidance') or {}).get('change') or row.get('Recommendation')
@@ -241,12 +245,15 @@ def _projection(row, record, devices, compliance=None):
                 os_name = _value(inventory, 'operatingSystem')
                 version = _value(inventory, 'osVersion')
                 merged = {**inventory, **fields}
-                device_issue = item['setting']
+                device_issue = 'Compliance policy assignment missing (reported)' if item.get('assignment_missing') else item['setting']
                 details = f"{item['reason']}; activity: {item['activity']}; {item['qualification']} Date basis: {item['date_basis']}."
+                if len(linked) == 1:
+                    details += ' Compliance policy assignment: '+linked[0].get('policy_assignment', 'Unknown')+'.'
                 observed = item['last_reported'] or 'Not retained'
         elif _value(fields, 'Compliance reason'):
             device_issue = _value(fields, 'Compliance reason')
             details = _detail(fields, [('Activity', ('Device activity',)), ('Latest activity', ('Latest activity UTC',)),
+                                      ('Compliance policy assignment', ('Compliance policy assignment',)),
                                       ('Qualification', ('Compliance qualification',))])
             observed = _value(fields, 'Last Sync UTC') or 'Not retained'
         if GUID.fullmatch(str(device or '')):

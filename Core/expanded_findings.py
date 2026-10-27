@@ -75,13 +75,27 @@ def expanded_findings(bundle, *, profile=None, evaluation_date=None, tenant_id=N
                 'complete':all(state.get('complete') is True for state in states)}
 
     for name, datasets in bundle.get('assessment_sources',{}).items():
-        if name in {'windows_protection','antivirus_health','compliance_setting_states'} and datasets:
+        if name in {'windows_protection','antivirus_health','compliance_setting_states','device_compliance_settings'} and datasets:
             datasets=[{'source':merged_state([dataset.get('source',{}) for dataset in datasets]),
                        'records':[row for dataset in datasets for row in dataset.get('records',[])]}]
         for index,dataset in enumerate(datasets):
             state=dataset.get('source',{})
             records=dataset.get('records',[])
-            if name=='windows_protection':
+            if name=='device_compliance_settings':
+                config = compliance['tenant_settings']
+                for key, field in config['fields'].items():
+                    observed = field['state'] == 'observed'
+                    finding(f'{name}.{key}',records,state,field['label'],
+                        field['label']+': '+field['display']+'. '+config['qualification'],
+                        disposition='Reference' if observed else 'Coverage',priority='Low' if observed else 'Medium',
+                        recommendation='Review the retained tenant configuration and intended compliance design. Confirm missing or conflicting values in Intune.')
+                    output[-1].update(Service='Entra',Status='Insight' if observed else 'Not Assessed',
+                        EvidenceKey='device_compliance_settings_detail',EvidenceLevel='configuration',
+                        EvidenceComplete=observed and state.get('complete') is True,
+                        ObservationDate=field['observed_at'],EvidenceScope='Tenant-wide Intune compliance settings',
+                        ConfigurationSetting=key,ConfigurationLabel=field['label'],ConfigurationValue=field['display'],
+                        Qualification=config['qualification'])
+            elif name=='windows_protection':
                 disabled=[row for row in records if reported_boolean(row.get('realTimeProtectionEnabled')) is False]
                 if disabled: health_finding(f'{name}.disabled',disabled,state,'Restore real-time antivirus protection',
                     '{count} Windows device(s) report Microsoft Defender Antivirus real-time protection turned off.',
@@ -100,21 +114,24 @@ def expanded_findings(bundle, *, profile=None, evaluation_date=None, tenant_id=N
                     'Update security intelligence on the listed devices and confirm they can reach the configured update source.')
             elif name=='compliance_setting_states':
                 failed=[item for item in compliance['settings'] if item['failed']]
+                assignment=[item for item in compliance['settings'] if item['assignment_missing']]
                 current=[item for item in failed if item['triage']=='current_security_failure']
-                review=[item for item in failed if item['triage']!='current_security_failure']
-                for group, items in (('current', current), ('review', review)):
+                review=[item for item in failed if item['triage']!='current_security_failure' and not item['assignment_missing']]
+                for group, items in (('current', current), ('review', review), ('assignment', assignment)):
                     if not items:
                         continue
                     reasons=list(dict.fromkeys(item['reason'] for item in items))
                     dates=sorted(filter(None,(parse_date(item['last_reported']) for item in items)))
                     count=len({item['device_id'] for item in items if item['device_id']})
                     unmatched=sum(not item['device_id'] for item in items)
-                    explanation=(f'{len(items)} failed setting record(s), linked to {count} distinct managed device(s); {unmatched} record(s) have unresolved device identity. '
+                    explanation=(f'{len(items)} '+('assignment-check' if group=='assignment' else 'failed setting')+f' record(s), linked to {count} distinct managed device(s); {unmatched} record(s) have unresolved device identity. '
                                  'Settings are not a count of distinct devices. '+ '; '.join(reasons[:5])+'. ')
-                    explanation+=('Explicit security-setting failures have recent device reports.' if group=='current' else
+                    explanation+=('Intune reports no applicable compliance policy for these checks. '+compliance['policy_assignment']['qualification'] if group=='assignment' else
+                                  'Explicit security-setting failures have recent device reports.' if group=='current' else
                                   'Activity/enrollment failures and older or undated security states require review. Noncompliance is retained; current security risk is not established by inactivity alone.')
-                    finding(f'{name}.noncompliant' if group=='current' else f'{name}.reporting_review',
+                    finding(f'{name}.assignment_missing' if group=='assignment' else f'{name}.noncompliant' if group=='current' else f'{name}.reporting_review',
                         [item['record'] for item in items],state,
+                        'Review devices reported without a compliance policy' if group=='assignment' else
                         'Resolve failed device compliance settings' if group=='current' else 'Review device compliance activity and unconfirmed failures',
                         explanation,priority='High' if group=='current' else 'Medium',disposition='Action' if group=='current' else 'Opportunity',
                         recommendation='Review the linked setting, policy and last check-in in Intune. Remediate explicit security failures; '
@@ -123,6 +140,10 @@ def expanded_findings(bundle, *, profile=None, evaluation_date=None, tenant_id=N
                         ObservationDateBasis='Retained setting report date, otherwise managed-device last sync; collection time does not refresh the observation',
                         EvidenceMaxAgeDays=compliance['reporting_days'],
                         Qualification=compliance['qualification'],DeviceComplianceTriage=group)
+                    if group=='assignment':
+                        output[-1].update(Service='Entra', Status='Attention Required', Recommendation='Review the listed devices and confirm an applicable compliance policy is assigned to their users or devices. '
+                            'Check targeting, exclusions and last check-in, document intended exceptions, and verify the assignment result after the device reports. '
+                            'Older or conflicting results require confirmation; absence of returned checks does not establish that all devices have a policy.')
                 errors=[row for row in records if str(row.get('state','')).lower() in {'error','conflict','unknown'}]
                 if errors: finding(f'{name}.errors',errors,state,'Investigate device compliance reporting errors',
                     f'{len(errors)} setting record(s) report error, conflict or unknown. Effective compliance remains unresolved.',disposition='Coverage',

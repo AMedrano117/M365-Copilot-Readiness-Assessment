@@ -17,6 +17,7 @@ KEY_SOURCES = {
  'legacy_signin_detail':['signin_logs'], 'entra_device_detail':['managed_devices','compliance_setting_states','windows_protection'],
  'identity_risk_detail':['risky_users','risk_detections'],
  'compliance_setting_detail':['compliance_setting_states'],
+ 'device_compliance_settings_detail':['device_compliance_settings'],
  'windows_protection_detail':['windows_protection'], 'antivirus_health_detail':['antivirus_health'],
  'defender_device_detail':['machines','antivirus_health','directory_devices'],
  'defender_incident_detail':['incidents','alerts'], 'app_access_detail':['service_principals','oauth_grants','application_permissions','application_owners'],
