@@ -872,6 +872,8 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
     collision_diagnostics = allocate_display_ids([*records, *optional_records],
         lambda row: "REC-" + stable_id([_finding_identity(row), row.get("SourceType"), row.get("EvidenceScope")])[:10].upper())
     actions = [_action(row) for row in records if row.get("Disposition") in {"Action", "Coverage"}]
+    from .evidence_reconciliation import qualify_device_action_titles
+    actions = qualify_device_action_titles(actions)
     actions.sort(key=lambda row: ({"Critical": 0, "High": 1, "Medium": 2, "Low": 3}.get("Critical" if str(row.get("Status", "")).lower() == "critical" else row.get("Priority"), 4),
                                  {"Remediation": 0, "Confirmation": 1, "Evidence": 2}[row["ActionType"]], row["DomainId"], row["Feature"]))
     actions_by_id = {row["RecommendationId"]: row for row in actions}
@@ -1060,4 +1062,7 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
     result['identity_validation'] = validate_assessment_references(result)
     from .identity_finding_taxonomy import project_identity_result
     from .configuration_groups import attach_configuration_groups
-    return attach_configuration_groups(project_identity_result(result, bundle), bundle)
+    result = attach_configuration_groups(project_identity_result(result, bundle), bundle)
+    from .evidence_reconciliation import blocker_control_mapping
+    result['blocker_control_mapping'] = blocker_control_mapping(result)
+    return result

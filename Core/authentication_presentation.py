@@ -4,6 +4,7 @@ from html import escape
 
 
 def authentication_summary_html(result):
+    comparison = (((result.get('authentication_assessment') or {}).get('registration') or {}).get('metric_reconciliation') or {}).get('comparison_explanation','')
     data = result.get('authentication_assessment') or {}
     if not data:
         return ''
@@ -15,7 +16,7 @@ def authentication_summary_html(result):
                          f"{counts.get('Unknown', 0)} unknown, {counts.get('Conflicting', 0)} conflicting and "
                          f"{counts.get('ExcludedWithReason', 0)} excluded with reason. " if denominator else
                          'A known eligible registration denominator is not established. ')
-    registration_text += 'Registration does not establish enforcement or actual use.'
+    registration_text += 'Registration does not establish enforcement or actual use. ' + comparison
     enforcement = data.get('enforcement') or {}
     observed = data.get('observed_authentication') or {}
     legacy = observed.get('legacy') or {}

@@ -95,3 +95,36 @@ Purview, group ownership/membership, application owners, privileged purpose, pil
 goals, policy/governance decisions, network and unmanaged-device evidence remain
 unresolved. Rebuild and compare retained evidence in engineering review before
 approving a customer package; historical output files are not rewritten.
+
+## Follow-up verification
+
+The evidence bundle now retains paid-seat capacity separately from user usage:
+enabled subscription seats, assigned seats and their unassigned remainder are
+capacity signals, not proof of entitlement for the intended pilot. Publishing
+policy active flags do not establish the intended population or broader taxonomy.
+Current investigation qualifications use the reconciled component observation;
+superseded collector wording remains technical history rather than the current gap.
+
+The registration comparison records `isMfaRegistered` separately from recognized
+passwordless `methodsRegistered` inventory and `isPasswordlessCapable`. Each uses
+its own known denominator. The same explanation appears in HTML, the readiness
+summary and workbook guidance, and is persisted for replay.
+
+Colliding device confirmation titles identify the specific protection condition and
+whether retained reports are current or older/undated; an already unique title stays
+stable. Blocker explanations join existing
+recommendation IDs to failed required controls; one action can address multiple
+controls. Missing mapping is qualified rather than inferred. No control outcome,
+privileged-access count or retained assignment is changed by these projections.
+Failed controls with non-blocker actions retain those actions' rollout timing rather
+than being relabeled as pilot blockers. Unavailable response envelopes do not count
+as retained label definitions or audit configuration records.
+
+Coverage reconciles service-prefixed status mirrors with the same native request.
+An unmatched failed or partial request is retained and counted; mirrored metadata
+remains in the technical register without inflating request counts. Parent identities
+stay out of customer coverage. Technical request indexing does not discard zero rows.
+
+Outputs produced by merged main before this correction PR retain their original
+wording and producing revision. Updating the unmerged feature branch does not
+retroactively change existing assessment files or root main.

@@ -94,6 +94,12 @@ def apply_workbook_navigation(workbook, result, bundle, *, role='assessment', co
          'RecommendationId / finding_id joins findings. Detail record IDs join selected lineage; EVD evidence IDs join native Raw sheets. Derived records remain identified as derived. Raw inventories and selected populations are different scopes.', 'Rows': None, 'Type': 'Instructions'},
     ]
     if role == 'assessment':
+        from .evidence_reconciliation import blocker_explanation
+        explanation = blocker_explanation(result)
+        comparison = (((result.get('authentication_assessment') or {}).get('registration') or {}).get('metric_reconciliation') or {}).get('comparison_explanation','')
+        for label, text in (('Failed controls and blocker actions',explanation), ('Authentication metric interpretation',comparison)):
+            if text:
+                entries.append({'Open':label,'Purpose':text,'Rows':None,'Type':'Interpretation'})
         entries.append({'Open': 'Compatibility registers', 'Purpose': 'Hidden registers preserve prior-report, baseline and audit imports. Their links open visible evidence sheets in the technical workbook.', 'Rows': None, 'Type': 'Instructions'})
     source_sheets = {sheet.get('title'): sheet for sheet in (bundle.get('sheets') or {}).values()}
     for sheet in workbook:

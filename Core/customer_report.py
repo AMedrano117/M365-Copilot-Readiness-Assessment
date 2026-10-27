@@ -554,6 +554,7 @@ def _authentication_methods(bundle, result=None):
     if data.get('conflicting_users'):
         review_note += f"{data['conflicting_users']} users have conflicting source rows and remain unknown. "
     reconciliation = data.get('metric_reconciliation') or {}
+    review_note += reconciliation.get('comparison_explanation','') + ' '
     if (reconciliation.get('conflicts') or {}).get('users_with_cross_field_conflicts'):
         review_note += (str(reconciliation['conflicts']['users_with_cross_field_conflicts']) +
             ' users have conflicting registration, capability or method fields. These metrics are not directly comparable; retained values were not normalized. ')
@@ -824,6 +825,9 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None, summ
     actions = result['actions']
     domains = result.get('assessment_domains') or result['domains']
     counts = result['counts']
+    from .evidence_reconciliation import blocker_explanation
+    explanation = blocker_explanation(result)
+    blocker_note = '<p class="qualification">' + prose(explanation) + '</p>' if explanation else ''
     workbook_name = Path(workbook_path).name if workbook_path else ''
     workbook_url = quote(workbook_name) if workbook_name else ''
     technical_name = Path(technical_workbook_path).name if technical_workbook_path else ''
@@ -1119,7 +1123,7 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None, summ
       <nav class="report-nav" aria-label="Report sections"><div class="nav-links"><a href="#executive">Overview</a><a href="#action-plan">Action plan</a><a href="#readiness-domains">Areas</a>{portal_nav}<a href="#rollout">Rollout</a><a href="#getting-started">Getting started</a><a href="#remaining-evidence">Open checks</a><a href="#engineer-appendix">Evidence</a></div><div class="nav-tools">{workbook_button}<button class="button button-secondary" id="print-report" type="button" hidden>Print report</button></div></nav>
       <main><section class="executive" id="executive"><div class="hero-grid"><div class="hero-main"><div class="hero-kicker">YOUR ROLLOUT READINESS</div><div class="decision-label" data-state="{decision_state}">{prose(decision_badge)}</div>
       <h1>{prose(headline)}</h1><p class="hero-copy">{prose(result.get('rationale'))}</p>{adoption_note}</div><aside class="hero-aside" aria-label="Assessment scope and dates"><div class="hero-kicker">ASSESSMENT SCOPE</div><h2>{prose(scope)}</h2><div class="hero-meta"><dl><div><dt>Evaluation date</dt><dd>{prose(result.get('evaluation_date'))}</dd></div><div><dt>Evidence period</dt><dd>{prose(period_text)}</dd></div><div><dt>Open actions</dt><dd>{len(actions)} to resolve or verify</dd></div></dl></div></aside></div>
-      {_progress_timeline(result)}<div class="stats">{cards}</div><div class="executive-brief two-column"><div class="brief-card"><div class="eyebrow">WHERE TO START</div><h2>First actions</h2><ol>{first_actions or '<li>Confirm the pilot scope and maintain the assessed controls.</li>'}</ol></div><div class="brief-card strengths-card"><div class="eyebrow">WHAT IS WORKING</div><h2>Supported observations</h2><ul>{strengths}</ul></div></div></section>{baseline_panel(result)}{pdf_highlights}
+      {_progress_timeline(result)}<div class="stats">{cards}</div>{blocker_note}<div class="executive-brief two-column"><div class="brief-card"><div class="eyebrow">WHERE TO START</div><h2>First actions</h2><ol>{first_actions or '<li>Confirm the pilot scope and maintain the assessed controls.</li>'}</ol></div><div class="brief-card strengths-card"><div class="eyebrow">WHAT IS WORKING</div><h2>Supported observations</h2><ul>{strengths}</ul></div></div></section>{baseline_panel(result)}{pdf_highlights}
       <section id="readiness-domains"><div class="section-heading"><span class="section-index">01</span><div><div class="eyebrow">THE ASSESSMENT AT A GLANCE</div><h2>Readiness by assessment area</h2></div></div><p class="section-description">Open actions by assessment area. Counts reflect the action plan and workbook; they describe the work remaining.</p>{portal_intro}{domain_tiles(result)}</section>
       <section id="action-plan"><div class="section-title"><div class="section-heading"><span class="section-index">02</span><div><div class="eyebrow">PRIORITIES AND ACCOUNTABILITY</div><h2>Prioritized action plan</h2></div></div><span class="badge">{len(actions)} actions</span></div><p class="section-description">Start with the highest-priority conditions. Remediation actions address observed issues. Confirmation actions check whether earlier or limited findings still apply. Evidence checks need a report, validation or owner decision.</p>{''.join(action_html) or '<p>No outstanding actions were identified.</p>'}</section>
 {''.join(domain_html)}{portal_section}

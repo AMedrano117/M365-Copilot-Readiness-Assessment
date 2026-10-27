@@ -105,7 +105,8 @@ def supporting_range(sheet):
 
 def explain_missing_detail(bundle, rec, detail_keys):
     """Return an honest source explanation, never an invented affected object."""
-    observation = str(rec.get('OriginalObservation') or rec.get('Observation') or '').strip()
+    observation = str((rec.get('Observation') if rec.get('ObservedEvidence') else
+                       rec.get('OriginalObservation') or rec.get('Observation')) or '').strip()
     limitations = source_limitations(bundle, rec, detail_keys)
     basis = str(rec.get('EvidenceBasis') or '').casefold()
     if basis == 'workload inventory context':
@@ -121,7 +122,7 @@ def explain_missing_detail(bundle, rec, detail_keys):
     if rec.get('ControlId') == 'ADOPTION.BASELINE' or rec.get('FindingKey') == 'coverage.adoption.baseline':
         return 'Planning input needed', 'This recommendation requires business decisions about use cases, participants and success measures; there is no affected-object population to export.', ''
     if rec.get('ActionType') == 'Evidence' or rec.get('Disposition') == 'Coverage':
-        reason = ' '.join(limitations) or observation
+        reason = observation if rec.get('ObservedEvidence') else ' '.join(limitations) or observation
         return 'Evidence needed', (reason + ' No affected-object list is established by this evidence gap.').strip(), ''
     # A configuration-absence finding can be supported by a complete inventory.
     # Link that inventory explicitly without calling every row an affected item.

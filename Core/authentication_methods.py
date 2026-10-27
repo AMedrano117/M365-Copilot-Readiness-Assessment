@@ -172,11 +172,13 @@ def summarize_registrations(records, state=None, *, users=None):
         methods = _list(row.get('methodsRegistered'))
         groups = {_method(value)[1] for value in methods or []}
         has_resistant = 'resistant' in groups
+        has_passwordless = has_resistant or 'microsoftauthenticatorpasswordless' in (methods or set())
         if row.get('isMfaRegistered') is False:
             field_conflicts['registered_method_with_false_mfa_flag'] += has_resistant
+            field_conflicts['passwordless_method_with_false_mfa_flag'] += has_passwordless
             field_conflicts['passwordless_capability_with_false_mfa_flag'] += row.get('isPasswordlessCapable') is True
             field_conflicts['mfa_capability_with_false_mfa_flag'] += row.get('isMfaCapable') is True
-            field_conflicts['users_with_cross_field_conflicts'] += bool(has_resistant or
+            field_conflicts['users_with_cross_field_conflicts'] += bool(has_passwordless or
                 row.get('isPasswordlessCapable') is True or row.get('isMfaCapable') is True)
         resistant_known = methods is not None and (has_resistant or 'review' not in groups)
         phone_only_known = methods is not None and type(row.get('isMfaRegistered')) is bool and 'review' not in groups
@@ -193,7 +195,7 @@ def summarize_registrations(records, state=None, *, users=None):
         metrics['phone_only_mfa_registered'] += phone_only
         metrics['email_registered'] += 'email' in (methods or set())
         metrics['methods_need_review'] += 'review' in groups
-        metrics['passwordless_registered'] += has_resistant or 'microsoftauthenticatorpasswordless' in (methods or set())
+        metrics['passwordless_registered'] += has_passwordless
         labels = {_method(value)[0] for value in methods or []}
         metrics['authenticator_registered'] += bool(labels & {'Microsoft Authenticator push', 'Authenticator passwordless phone sign-in'})
         metrics['authenticator_passwordless_registered'] += 'Authenticator passwordless phone sign-in' in labels
@@ -269,7 +271,7 @@ def summarize_registrations(records, state=None, *, users=None):
             'system_preferred_unknown':'isSystemPreferredAuthenticationMethodEnabled',
             'current_preference_needs_review':'systemPreferredAuthenticationMethods + userPreferredMethodForSecondaryAuthentication'}
         source_field = fields.get(key, 'methodsRegistered' if key in {
-            'phishing_resistant_registered','phone_registered','email_registered','methods_need_review'} else key)
+            'passwordless_registered','phishing_resistant_registered','phone_registered','email_registered','methods_need_review'} else key)
         summary_rows.append({'Metric ID':key, 'Metric': label, 'Value': value if value is not None else 'Unknown',
             'Known users':known, 'Unknown users':total-known, 'Source field':source_field,
             'Numerator':value, 'Denominator':known or None,
@@ -299,6 +301,8 @@ def summarize_registrations(records, state=None, *, users=None):
             'Numerator':count if known else None,'Denominator':known or None,
             'Interpretation':'Returned registration report population; capability and registration do not prove enforcement.'})
     metric('Passwordless capable users', 'passwordless_capable', 'passwordless_capable_known', 'Graph capability flag; passwordless is not always phishing-resistant.')
+    metric('Recognized passwordless method registered', 'passwordless_registered', 'method_inventory_known',
+           'Recognized methodsRegistered inventory; separate from isMfaRegistered and isPasswordlessCapable. Method presence does not establish use or enforcement.')
     metric('Phishing-resistant method registered', 'phishing_resistant_registered', 'resistant_inventory_known', 'FIDO2/passkeys, Windows Hello, or macOS platform credentials. CBA requires separate MFA configuration verification.')
     metric('Phone method registered', 'phone_registered', 'method_inventory_known', 'SMS/voice availability; may coexist with stronger methods and may be disabled by policy.')
     metric('Phone-only MFA registration', 'phone_only_mfa_registered', 'phone_only_inventory_known', 'MFA-registered users with a phone and no reported reusable non-phone MFA method; unknown methods exclude this classification.')
@@ -349,6 +353,20 @@ def summarize_registrations(records, state=None, *, users=None):
             'Registration and capability do not establish observed use or policy enforcement.'),
         'metrics':[{key:row.get(key) for key in ('Metric ID','Source field','Population','Numerator','Denominator','Reconciliation')}
                    for row in summary_rows]}
+    flag_known, inventory_known = metrics['mfa_registered_known'], metrics['method_inventory_known']
+    comparison = ((f"{metrics['mfa_registered']} of {flag_known} users are explicitly MFA registered (isMfaRegistered). "
+                   if flag_known else 'Explicit MFA registration flags are unknown. ') +
+                  (f"{metrics['passwordless_registered']} of {inventory_known} users have a recognized passwordless method (methodsRegistered). "
+                   if inventory_known else 'Registered method inventories are unknown. ') +
+                  'Each count covers returned eligible users with its respective field known; members and guests can be included. '
+                  'Registration flags, registered method inventory and capability flags have separate semantics. '
+                  + ('Conflicting source fields are retained and the metrics are not directly comparable. ' if field_conflicts else '') +
+                  'No count establishes policy enforcement or observed authentication use.')
+    metric_reconciliation['comparison_explanation'] = comparison
+    summary_rows.append({'Metric ID':'reconciliation.registration_and_passwordless',
+        'Metric':'Registration versus recognized passwordless methods', 'Interpretation':comparison,
+        'Source field':'isMfaRegistered; methodsRegistered', 'Population':'Known flags and known inventories, respectively',
+        'Denominator':{'registration':flag_known or None,'method_inventory':inventory_known or None}})
     if field_conflicts:
         summary_rows.append({'Metric ID':'reconciliation.cross_field_conflicts',
             'Metric':'Users with conflicting registration, capability or method fields',
