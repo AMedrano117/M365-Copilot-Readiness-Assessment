@@ -27,6 +27,11 @@ Preflight (`--check-connections`) prints an **evidence collection plan**: the pa
 
 **Run without any sign-in** with `--interactive-auth skip --delegated off`. Datasets without an application path are reported as not assessed with the step that unlocks them; the tool never opens a browser.
 
+In a full live run, any selected administrator sign-ins finish before evidence
+collection. The same authenticated PowerShell processes are reused, and delegated
+Graph permits silent refresh only during collection. This changes prompt timing;
+it grants no additional permissions. See [the sign-in sequence](RUN.md#application-permissions-first-delegated-sign-in-only-when-needed).
+
 ## Choose and run a profile
 
 | Profile | Setup application and environment | Coverage |
