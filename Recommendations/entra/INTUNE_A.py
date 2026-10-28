@@ -98,13 +98,15 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
             compliance_rate = (compliant_devices / total_devices * 100) if total_devices > 0 else 0
             observations.append(new_recommendation(
                 service="Entra",
-                feature=feature_name,
+                feature="Review Intune device noncompliance reasons",
                 observation=f"{non_compliant_devices} of {total_devices} managed devices are explicitly non-compliant. Their observed access and individual failing settings require separate review",
-                recommendation=f"Block Copilot access from {non_compliant_devices} non-compliant device(s) using Conditional Access. Non-compliant devices fail security requirements: missing encryption, outdated OS, disabled antivirus, jailbroken/rooted, or policy violations. These devices can: 1) Leak Copilot responses through screenshots on unencrypted storage, 2) Be compromised by malware intercepting AI prompts, 3) Violate compliance frameworks (HIPAA, SOC 2) requiring device security. Create CA policy targeting Microsoft 365 requiring 'Require device to be marked as compliant'. Review non-compliance reasons in Intune console and remediate or block access.",
+                recommendation="Review the retained failing settings and last check-in in Intune. Distinguish activity, enrollment and policy-assignment failures from explicit security-setting failures. Confirm current device posture and Conditional Access targeting before changing access.",
                 link_text="Require Compliant Devices",
                 link_url="https://learn.microsoft.com/mem/intune/protect/device-compliance-get-started",
-                priority="High",
-                status=status
+                priority="Medium",
+                status="Attention Required",
+                disposition="Opportunity",
+                finding_key="entra.devices.noncompliant"
             ))
         
         # Good compliance

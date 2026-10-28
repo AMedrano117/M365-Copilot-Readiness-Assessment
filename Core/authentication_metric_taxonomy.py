@@ -17,6 +17,8 @@ METRICS = {
  'passwordless_capable': ('Passwordless authentication capability', 'capability_state'),
  'passwordless_registered': ('Passwordless authentication registration', 'registration_state'),
  'passwordless_classification': ('Passwordless method classification review', 'classification'),
+ 'reconciliation.registration_and_passwordless': ('Registration and passwordless inventory reconciliation', 'classification'),
+ 'reconciliation.cross_field_conflicts': ('Registration and method field conflict review', 'classification'),
  'phishing_resistant_registered': ('Phishing-resistant method registration', 'registration_state'),
  'phishing_resistant_capable': ('Phishing-resistant capability coverage', 'capability_state'),
  'phone_registered': ('Phone-based authentication method registration', 'registration_state'),

@@ -71,7 +71,8 @@ def plain(value):
 
 
 def prose(value):
-    safe = escape(plain(value))
+    from .evidence_reconciliation import customer_text
+    safe = escape(customer_text(plain(value)))
     safe = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', safe, flags=re.S)
     return safe.replace('\n', '<br>') or '<span class="muted">Not established</span>'
 
@@ -109,6 +110,10 @@ def _heading(row):
         'data_exposure.freshness.sam': 'Refresh the older SharePoint permissions evidence',
         'purview.audit.state': 'Audit logging configuration',
     }
+    if row.get('FindingKey') == 'data_exposure.freshness.sam' and (
+            row.get('FreshnessIssue') in {'unknown', 'missing'} or
+            'freshness could not be verified' in str(row.get('Observation') or '')):
+        return 'Confirm the date of SharePoint permissions evidence'
     control_titles = {
         'coverage.content.ownership':'Confirm content owners and review dates',
         'coverage.data.dlp':'Validate DLP protection in operation',
@@ -172,7 +177,13 @@ def _action_text(row):
     # Keep the action brief; report procedures are linked from the action card.
     key = row.get('FindingKey')
     if key == 'sharepoint.dag.not_assessed':
-        return 'Review the permission exports already available, confirm they cover the sites that hold business content, and obtain any missing sharing-activity reports. The report guide below explains where to find them.'
+        if isinstance(row.get('DagGaps'), list):
+            if not row['DagGaps'] and row.get('Disposition') == 'Reference':
+                return ''
+            remaining = ', '.join(gap.get('report', '') for gap in row['DagGaps'] if gap.get('report'))
+            return ('Confirm the remaining report coverage: '+remaining+'. Reuse completed reports already collected or supplied, '
+                    'confirm they cover the business sites, and obtain only evidence that remains missing or unusable.')
+        return 'Review the listed report families and business-site scope. Reuse automatically collected reports and obtain only the results that remain missing or unusable.'
     if key == 'coverage.adoption.baseline':
         return 'Agree the pilot use cases, work tasks and success measures with the business sponsor, and reuse the available usage evidence as the baseline. This is a planning step; it does not change the readiness verdict.'
     if key == 'coverage.license.assignment':
@@ -207,14 +218,14 @@ def _observation(row, bundle):
         return 'User consent is enabled for applications. Review which permissions users can approve without individual administrator review; this setting alone does not establish which content an app can access.'
     permission_reports = [report for report in (bundle.get('data_exposure') or {}).get('sources', {}).get('sam', {}).get('reports', [])
                           if report.get('report_type') in {'permission_snapshot', 'special_group_permissions'} and report.get('records_read', 0)]
-    if row.get('FindingKey') == 'sharepoint.dag.not_assessed' and permission_reports:
+    if row.get('FindingKey') == 'sharepoint.dag.not_assessed' and permission_reports and 'DagGaps' not in row:
         return 'The saved collection recorded incomplete SharePoint report coverage. Permission exports were also supplied and assessed in the content findings. Confirm that the combined evidence covers the business sites and the remaining sharing activity.'
     return text
 
 
 def _completion(row):
     requested = {
-        'sharepoint.dag.not_assessed': 'Completed permission and sharing-activity exports, with their dates, workloads, selected sites and filters recorded; document any unavailable report.',
+        'sharepoint.dag.not_assessed': 'Parsed permission and sharing-activity results from automatic collection or structured exports, with original report dates, selected sites and filters recorded; document any remaining unavailable report.',
         'data_exposure.freshness.sam': 'Current permission evidence for the sites still represented only by older reports, or a dated administrator review explaining their present status.',
         'data_exposure.coverage.sensitive-data_exposure_evidence': 'A completed data-risk assessment or dated owner review of sensitive content and access, with the covered scope, findings and supporting evidence recorded.',
         'data_exposure.snapshot_scope': 'A dated comparison of the site populations and filters, with an explanation for each site omitted from the newer report.',
@@ -529,8 +540,10 @@ def _progress_requirements(result):
       <p class="qualification">These are this assessment’s criteria. Microsoft recommends a phased rollout with a defined strategy, protected data, a small initial group and a review of outcomes before expansion. <a href="https://learn.microsoft.com/en-us/microsoft-365/copilot/microsoft-365-copilot-minimum-requirements-rollout">Microsoft rollout guidance</a></p></section>'''
 
 
-def _authentication_methods(bundle):
-    data = bundle.get('authentication_methods') or {}
+def _authentication_methods(bundle, result=None):
+    model = result if result is not None else bundle.get('assessment_result') or {}
+    retained = (model.get('authentication_assessment') or {}).get('registration') or {}
+    data = retained.get('report') or bundle.get('authentication_methods') or {}
     if not data.get('available'):
         return '<div class="mfa-profile"><h3>MFA method strength and defaults</h3><p>Registered methods and preferred second-factor methods were not available in this evidence. Collect the Entra authentication registration report to assess them.</p></div>'
     metrics = data.get('metrics') or {}
@@ -550,6 +563,11 @@ def _authentication_methods(bundle):
         review_note += f"{metrics['current_preference_needs_review']} users have preferred methods needing classification review. "
     if data.get('conflicting_users'):
         review_note += f"{data['conflicting_users']} users have conflicting source rows and remain unknown. "
+    reconciliation = data.get('metric_reconciliation') or {}
+    review_note += reconciliation.get('comparison_explanation','') + ' '
+    if (reconciliation.get('conflicts') or {}).get('users_with_cross_field_conflicts'):
+        review_note += (str(reconciliation['conflicts']['users_with_cross_field_conflicts']) +
+            ' users have conflicting registration, capability or method fields. These metrics are not directly comparable; retained values were not normalized. ')
     population_columns = [('Population', 'Population'), ('Users', 'Users'),
         ('Phishing-resistant registered', 'Phishing-resistant registered'),
         ('Phone-only MFA', 'Phone-only MFA registration'), ('SMS / voice preferred', 'SMS/voice preferred')]
@@ -807,6 +825,8 @@ def context_has_collection(bundle):
 
 
 def render_customer_report(result, bundle, tenant_name, workbook_path=None, summary_path=None, technical_workbook_path=None):
+    from .evidence_reconciliation import require_supported_confidence
+    require_supported_confidence(result)
     from .identity_finding_taxonomy import ensure_identity_result, licensing_context
     result = ensure_identity_result(result, bundle)
     from .lifecycle_presentation import summary_html,technical_html,finding_html
@@ -815,6 +835,9 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None, summ
     actions = result['actions']
     domains = result.get('assessment_domains') or result['domains']
     counts = result['counts']
+    from .evidence_reconciliation import blocker_explanation
+    explanation = blocker_explanation(result)
+    blocker_note = '<p class="qualification">' + prose(explanation) + '</p>' if explanation else ''
     workbook_name = Path(workbook_path).name if workbook_path else ''
     workbook_url = quote(workbook_name) if workbook_name else ''
     technical_name = Path(technical_workbook_path).name if technical_workbook_path else ''
@@ -926,7 +949,7 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None, summ
                  for r in domain.get('actions', []) if r.get('RecommendationId') in action_numbers]
         extra = ''
         if domain['id'] == 'identity':
-            extra = _authentication_methods(bundle)
+            extra = _authentication_methods(bundle, result)
         if domain['id'] == 'content':
             extra = _settings(bundle) + _lifecycle(bundle)
         if domain['id'] in {'data_protection','classification'}:
@@ -987,18 +1010,21 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None, summ
             evidence_rows.append(f'<tr id="evidence-{slug(key)}"><td>{prose(key)}</td><td>{prose(_heading(row))}</td><td>{prose(_date_text(row))}</td><td>{prose(row.get("Qualification"))}</td><td>{prose(row.get("InvestigationRange") or row.get("EvidenceSheet") or "Supporting location not supplied")}</td><td><span class="muted">Not exported</span></td></tr>')
     source_rows = [r for source in (bundle.get('data_exposure') or {}).get('sources', {}).values() for r in source.get('reports', [])]
     sources = table(source_rows, [('Source file', 'source_file'), ('Report type', 'report_type'), ('Workload', 'workload'), ('Original date', 'report_date'), ('Date basis', 'date_basis'), ('Selection', 'status'), ('Rows', 'records_read'), ('Freshness', 'freshness')])
-    collection_rows = []
-    for name, state in (bundle.get('source_statuses') or {}).items():
-        if name.startswith('connection_') or not isinstance(state, dict):
-            continue
-        status = state.get('availability_status') or state.get('status') or ('available' if state.get('available') else 'unavailable')
-        from .auth_plan import collected_with_label
-        collection_rows.append({'source': name, 'status': status,
-                                'records': state.get('records_collected', state.get('record_count')),
-                                'collected_with': '' if name.startswith('pipeline_') else collected_with_label(state),
-                                'reason': state.get('reason') or state.get('error') or ('Read succeeded.' if status == 'available' else 'No additional detail recorded.'),
-                                'unlock': state.get('unlock', '')})
-    collection_table = table(collection_rows, [('Source', 'source'), ('Read status', 'status'), ('Rows returned', 'records'), ('Collected with', 'collected_with'), ('Reason or qualification', 'reason'), ('How to collect it', 'unlock')]) if collection_rows else ''
+    from .coverage_summary import coverage_projection
+    collection_projection = coverage_projection(result,bundle)
+    collection_rows = collection_projection['summary']
+    collection_columns = ('Dataset','Source','Parent objects queried',
+        'Successful queries','Zero-result queries','Failed queries','Partial queries','Returned records',
+        'Completeness','Truncation','Observation period','Qualification')
+    collection_table = ''
+    if collection_rows:
+        collection_table = '<div class="table-scroll"><table><thead><tr>' + ''.join(
+            '<th>' + escape(key) + '</th>' for key in (*collection_columns,'Technical detail')) + '</tr></thead><tbody>'
+        for row in collection_rows:
+            target = technical_url + "#'Collection Request Detail'!A" + str(row['Technical detail row'])
+            link = '<a href="' + escape(target, quote=True) + '">Detailed request register</a>' if technical_url else 'See Technical Evidence request register'
+            collection_table += '<tr data-collection-state="' + escape(row.get('Availability state','unknown'),quote=True) + '">' + ''.join('<td>' + prose(row.get(key)) + '</td>' for key in collection_columns) + '<td>' + link + '</td></tr>'
+        collection_table += '</tbody></table></div>'
     auth_plan = bundle.get('auth_plan') or {}
     identity_labels = []
     for identity in auth_plan.get('identities') or []:
@@ -1024,9 +1050,7 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None, summ
     ) if migration else ''
     prior = bundle.get('prior_report') or {}
     report_guides = _report_guides(actions) + _remaining_portal_review(bundle)
-    operator_handoff = '''<h3>Rebuild with additional exports</h3><p>From the assessment repository, replace both placeholder paths with the saved collection and the folder containing this tenant’s completed exports. The collection can be the portable package’s collection.json. Existing packaged evidence and settings are restored automatically.</p>
-      <pre class="operator-command"><code>.\\.venv\\Scripts\\python.exe main.py --mode offline --collection-input "&lt;saved collection.json&gt;" --reports-dir "&lt;exports folder&gt;"</code></pre>
-      <p>Check the imported source reports and remaining evidence in the rebuilt report. A successful rebuild does not mean every export format or evidence requirement was satisfied.</p>''' if report_guides else ''
+    operator_handoff = ('<h3>Additional evidence</h3><p>Provide the current completed exports requested below, including their report dates and assessed scope. Detailed import instructions are retained in the technical/operator documentation.</p>' if report_guides else '')
     from .assessment_runs import run_context_rows
     run_note = '<dl>' + ''.join('<dt>' + prose(row['Item']) + '</dt><dd>' + prose(row['Value']) + '</dd>'
                                for row in run_context_rows(result)) + '</dl>'
@@ -1098,7 +1122,7 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None, summ
     summary_name = Path(summary_path).name if summary_path else ''
     if summary_name:
         workbook_button = f'<a class="button button-secondary" href="{quote(summary_name)}">One-page summary</a>' + workbook_button
-    catalog_html = coverage_panels(result, table)
+    catalog_html = coverage_panels(result, table, technical_url, collection_projection)
     from .authentication_presentation import authentication_summary_html
     from .privileged_presentation import privileged_summary_html
     from .repository_provenance import provenance_html
@@ -1109,7 +1133,7 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None, summ
       <nav class="report-nav" aria-label="Report sections"><div class="nav-links"><a href="#executive">Overview</a><a href="#action-plan">Action plan</a><a href="#readiness-domains">Areas</a>{portal_nav}<a href="#rollout">Rollout</a><a href="#getting-started">Getting started</a><a href="#remaining-evidence">Open checks</a><a href="#engineer-appendix">Evidence</a></div><div class="nav-tools">{workbook_button}<button class="button button-secondary" id="print-report" type="button" hidden>Print report</button></div></nav>
       <main><section class="executive" id="executive"><div class="hero-grid"><div class="hero-main"><div class="hero-kicker">YOUR ROLLOUT READINESS</div><div class="decision-label" data-state="{decision_state}">{prose(decision_badge)}</div>
       <h1>{prose(headline)}</h1><p class="hero-copy">{prose(result.get('rationale'))}</p>{adoption_note}</div><aside class="hero-aside" aria-label="Assessment scope and dates"><div class="hero-kicker">ASSESSMENT SCOPE</div><h2>{prose(scope)}</h2><div class="hero-meta"><dl><div><dt>Evaluation date</dt><dd>{prose(result.get('evaluation_date'))}</dd></div><div><dt>Evidence period</dt><dd>{prose(period_text)}</dd></div><div><dt>Open actions</dt><dd>{len(actions)} to resolve or verify</dd></div></dl></div></aside></div>
-      {_progress_timeline(result)}<div class="stats">{cards}</div><div class="executive-brief two-column"><div class="brief-card"><div class="eyebrow">WHERE TO START</div><h2>First actions</h2><ol>{first_actions or '<li>Confirm the pilot scope and maintain the assessed controls.</li>'}</ol></div><div class="brief-card strengths-card"><div class="eyebrow">WHAT IS WORKING</div><h2>Supported observations</h2><ul>{strengths}</ul></div></div></section>{baseline_panel(result)}{pdf_highlights}
+      {_progress_timeline(result)}<div class="stats">{cards}</div>{blocker_note}<div class="executive-brief two-column"><div class="brief-card"><div class="eyebrow">WHERE TO START</div><h2>First actions</h2><ol>{first_actions or '<li>Confirm the pilot scope and maintain the assessed controls.</li>'}</ol></div><div class="brief-card strengths-card"><div class="eyebrow">WHAT IS WORKING</div><h2>Supported observations</h2><ul>{strengths}</ul></div></div></section>{baseline_panel(result)}{pdf_highlights}
       <section id="readiness-domains"><div class="section-heading"><span class="section-index">01</span><div><div class="eyebrow">THE ASSESSMENT AT A GLANCE</div><h2>Readiness by assessment area</h2></div></div><p class="section-description">Open actions by assessment area. Counts reflect the action plan and workbook; they describe the work remaining.</p>{portal_intro}{domain_tiles(result)}</section>
       <section id="action-plan"><div class="section-title"><div class="section-heading"><span class="section-index">02</span><div><div class="eyebrow">PRIORITIES AND ACCOUNTABILITY</div><h2>Prioritized action plan</h2></div></div><span class="badge">{len(actions)} actions</span></div><p class="section-description">Start with the highest-priority conditions. Remediation actions address observed issues. Confirmation actions check whether earlier or limited findings still apply. Evidence checks need a report, validation or owner decision.</p>{''.join(action_html) or '<p>No outstanding actions were identified.</p>'}</section>
 {''.join(domain_html)}{portal_section}

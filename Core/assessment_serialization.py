@@ -27,6 +27,8 @@ def write_assessment_result(path, result):
     """Write a data-only, sanitized snapshot of the current runtime result."""
     from .repository_provenance import require_publication, normalize_revision
     require_publication()
+    from .evidence_reconciliation import require_supported_confidence
+    require_supported_confidence(result)
     from .assessment_references import require_valid_assessment
     from .identity_finding_taxonomy import project_identity_result
     from .repository_provenance import qualify_publication_result
@@ -57,6 +59,8 @@ def read_assessment_result(path):
         result = json.load(handle)
     if not isinstance(result, dict):
         raise ValueError('Assessment snapshot must contain a shared-result object.')
+    from .evidence_reconciliation import require_supported_confidence
+    require_supported_confidence(result)
     from .repository_provenance import normalize_revision
     result['producing_revision'] = normalize_revision(result.get('producing_revision'))
     if 'replay_tool_revision' in result:

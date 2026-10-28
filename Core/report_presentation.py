@@ -56,9 +56,10 @@ def domain_tiles(result):
     return '<div class="domain-tiles">' + ''.join(output) + '</div>'
 
 
-def coverage_panels(result, table):
+def coverage_panels(result, table, technical_url='', dataset_coverage=None):
     panels = []
     rows = result.get('domain_coverage',[])
+    dataset_coverage = dataset_coverage if dataset_coverage is not None else result.get('dataset_coverage') or {}
     for domain in result.get('assessment_domains',[]):
         checks = [row for row in rows if row['Domain']==domain['title']]
         if not checks:
@@ -69,9 +70,18 @@ def coverage_panels(result, table):
         for check in checks:
             # Each catalog entry is retained with all fields, inside its own
             # disclosure instead of an eleven-column wall of repeated prose.
-            detail = [{'Field':key,'Detail':value} for key,value in check.items() if key not in {'Check ID','Check','Domain','State'}]
+            from .coverage_summary import coverage_text
+            required = set(check.get('Required sources') or [])
+            summaries = [row for row in dataset_coverage.get('summary', []) if row['Dataset'] in required]
+            detail = [{'Field':key,'Detail':value} for key,value in check.items()
+                      if key not in {'Check ID','Check','Domain','State','Source metadata','Evidence collected','Evidence dates','Failures and limitations'}]
+            if summaries:
+                detail.append({'Field':'Dataset collection summary', 'Detail':'\n'.join(coverage_text(row) for row in summaries)})
+            elif check.get('Failures and limitations'):
+                detail.append({'Field':'Collection qualification', 'Detail':'Collection limitations remain unresolved; see the technical source register.'})
+            link = ('<p><a href="' + technical_url + '#\'Collection Request Detail\'!A1">Detailed source requests and qualifications</a></p>') if technical_url else ''
             body.append(f'<details class="check-detail"><summary><code>{escape(check["Check ID"])}</code> {escape(check["Check"])} <span class="badge">{escape(check["State"].replace("_"," "))}</span></summary>'
-                        + table(detail,[('Evidence requirement','Field'),('Coverage and limitations','Detail')],mobile_labels=True) + '</details>')
+                        + table(detail,[('Evidence requirement','Field'),('Coverage and limitations','Detail')],mobile_labels=True) + link + '</details>')
         panels.append(f'<details class="coverage-domain" id="coverage-{escape(domain["id"])}"><summary><strong>{escape(domain["title"])}</strong><span>{len(checks)} checks · {escape(summary)}</span></summary>{"".join(body)}</details>')
     return '<section id="collection-coverage"><h2>Collection coverage</h2><p class="section-description">All nine domains and every catalog check. “Collected” describes available evidence; it does not mean the control passed. Expand a domain, then a check for failures, missing evidence and conclusion limits.</p>' + ''.join(panels) + '</section>'
 

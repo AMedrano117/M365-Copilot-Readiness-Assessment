@@ -149,6 +149,8 @@ def process_and_print_all_information(m365_result, entra_info,
     """Process all service information and generate recommendations."""
     from time import perf_counter
     build_started = perf_counter()
+    from datetime import datetime, timezone
+    evaluation_date = (collection_context or {}).get('evaluation_date') or datetime.now(timezone.utc).date().isoformat()
     # Unpack M365 results
     (m365_info, m365_recommendations) = m365_result
     m365_info = dict(m365_info) if isinstance(m365_info, dict) else {}
@@ -164,11 +166,9 @@ def process_and_print_all_information(m365_result, entra_info,
         from .sharepoint_governance import build_sharepoint_recommendations
         m365_recommendations = [row for row in m365_recommendations
                                 if not str(row.get('FindingKey') or '').startswith('sharepoint.')]
-        m365_recommendations.extend(build_sharepoint_recommendations(sharepoint_payload))
+        m365_recommendations.extend(build_sharepoint_recommendations(sharepoint_payload, evaluation_date=evaluation_date))
     m365_result = (m365_info, m365_recommendations)
     evidence_bundle = None
-    from datetime import datetime, timezone
-    evaluation_date = (collection_context or {}).get('evaluation_date') or datetime.now(timezone.utc).date().isoformat()
     from .portal_review import load_portal_review
     portal_review_data = load_portal_review(portal_review, expected_tenant_id, evaluation_date)
     expected_tenant_id = expected_tenant_id or portal_review_data.get('tenant_id')
@@ -258,6 +258,9 @@ def process_and_print_all_information(m365_result, entra_info,
         ))
     
     from .data_exposure_assessment import build_data_exposure_assessment
+    from .sharepoint_report_provenance import downloaded_report_metadata
+    sam_metadata = downloaded_report_metadata(sharepoint_payload, sam_report_paths,
+        (collection_context or {}).get('package_directory'))
     data_exposure_info = build_data_exposure_assessment(
         sam_report_paths=sam_report_paths,
         dspm_report_paths=dspm_report_paths,
@@ -267,6 +270,7 @@ def process_and_print_all_information(m365_result, entra_info,
         dspm_max_age_days=(collection_context or {}).get('assessment_settings', {}).get('dspm_report_max_age_days'),
         lifecycle_max_age_days=(collection_context or {}).get('assessment_settings', {}).get('lifecycle_report_max_age_days'),
         lifecycle_report_dates=(collection_context or {}).get('assessment_settings', {}).get('lifecycle_report_dates'),
+        sam_report_metadata=sam_metadata,
     )
     # Exported Data access governance reports answer the report families the
     # SharePoint collector could not read itself.

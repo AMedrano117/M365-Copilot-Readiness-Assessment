@@ -536,6 +536,8 @@ def build_evidence_bundle(
             if key != "user_details"
         } if m365_client else {},
         "ai_usage": {
+            "license_coverage": {key:value for key,value in (getattr(m365_client, "license_coverage", {}) or {}).items()
+                                 if key not in {'subscription_records','user_records'}} if m365_client else {},
             "copilot_usage": getattr(m365_client, "copilot_usage", {}) if m365_client else {},
             "m365_app_readiness": getattr(m365_client, "m365_app_readiness", {}) if m365_client else {},
             "copilot_dashboard": getattr(m365_client, "copilot_dashboard", {}) if m365_client else {},

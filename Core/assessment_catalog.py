@@ -436,4 +436,6 @@ def attach_catalog(result, bundle):
     result['collection_thresholds'] = {'signin_days':7,'audit_days':7,
         'device_activity_days':context.get('device_activity_days',30),
         'endpoint_reporting_days':context.get('endpoint_reporting_days',7),'review_freshness_days':35}
+    from .coverage_summary import summarize_collection
+    result['dataset_coverage'] = summarize_collection(sources, bundle.get('source_statuses'))
     return result

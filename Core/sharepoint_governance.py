@@ -129,7 +129,7 @@ def merge_sharepoint_payloads(graph_payload, spo_payload):
     return merged
 
 
-def summarize_sharepoint_governance(payload):
+def summarize_sharepoint_governance(payload, evaluation_date=None):
     payload = payload if isinstance(payload, dict) else {}
     tenant = payload.get("tenant") or {}
     sites = payload.get("sites") or {}
@@ -141,7 +141,7 @@ def summarize_sharepoint_governance(payload):
 
     anyone_sites = [row for row in site_items if setting_name("SharingCapability", row.get("SharingCapability")) in ANYONE_VALUES]
     completed_reports = [row for row in report_items if _text(row.get("Status")).lower() in {"completed", "complete", "succeeded"}]
-    now = datetime.now(timezone.utc)
+    now = _date(evaluation_date) or datetime.now(timezone.utc)
     recent_completed = []
     stale_completed = []
     for row in completed_reports:
@@ -149,7 +149,7 @@ def summarize_sharepoint_governance(payload):
             "CompletedDateTime", "ReportEndTime", "EndTime", "CreatedDateTime",
             "TriggeredDateTime", "ReportStartTime", "StartTime",
         ) if _date(row.get(key))), None)
-        if completed and (now - completed).days <= 30:
+        if completed and 0 <= (now.date() - completed.date()).days <= 30:
             recent_completed.append(row)
         else:
             stale_completed.append(row)
@@ -288,8 +288,8 @@ def build_copilot_content_control_recommendations(governance):
     return rows
 
 
-def build_sharepoint_recommendations(governance):
-    governance = summarize_sharepoint_governance(governance)
+def build_sharepoint_recommendations(governance, evaluation_date=None):
+    governance = summarize_sharepoint_governance(governance, evaluation_date=evaluation_date)
     if not governance.get("available"):
         excluded = governance.get('availability_status') == 'not_requested'
         needs_admin_url = governance.get('configuration_required') == 'SHAREPOINT_ADMIN_URL'
@@ -493,13 +493,12 @@ def build_sharepoint_recommendations(governance):
 
 # Exported Data access governance reports (--reports-dir, --sam-report) that
 # answer each report family the SharePoint collector looks for. The permission
-# snapshot carries per-site Anyone-link and guest counts, so it also answers
-# the sharing-link family.
+# snapshot carries per-site permission state. Sharing activity is evaluated
+# separately from that state and requires its own parsed report evidence.
 _EXPORT_COVERAGE = (
     ("SharePoint permission state", lambda r: r.get("report_type") == "permission_snapshot" and _text(r.get("workload")).lower() == "sharepoint"),
     ("OneDrive permission state", lambda r: r.get("report_type") == "permission_snapshot" and _text(r.get("workload")).lower() == "onedrive"),
     ("Everyone and Everyone except external users", lambda r: r.get("report_type") == "special_group_permissions"),
-    ("Anyone and guest sharing links", lambda r: r.get("report_type") in {"permission_snapshot", "sharing_links_activity"}),
 )
 
 
@@ -512,12 +511,27 @@ def _dag_gaps(row):
     return [{"report": name.strip(), "status": status.strip()} for name, status in re.findall(r"([^,(]+)\(([^)]+)\)", text)]
 
 
-def reconcile_dag_coverage(recommendations, sam_reports):
-    """Close report families that supplied, current Microsoft exports already answer."""
-    usable = [report for report in sam_reports or []
-              if report.get("status") in {"selected", "no_activity"} and report.get("freshness") == "fresh"]
+def _parsed_dag_families(usable):
     covered = [label for label, answers in _EXPORT_COVERAGE if any(answers(report) for report in usable)]
-    if not covered:
+    # Link counts in a permission snapshot are state, not sharing activity.
+    entities = {str(report.get('collector_report_entity') or '').lower() for report in usable
+                if report.get('workload') == 'SharePoint'}
+    from .data_exposure_assessment import sharing_link_type
+    manual_links = {sharing_link_type(report.get('source_file', '')) for report in usable
+                    if report.get('report_type') == 'sharing_links_activity' and report.get('workload') == 'SharePoint'}
+    if {'sharinglinks_anyone', 'sharinglinks_guests'} <= entities or {'Anyone links', 'Specific people links shared externally'} <= manual_links:
+        covered.append('Anyone and guest sharing links')
+    if {'everyoneexceptexternalusersatsite', 'everyoneexceptexternalusersforitems'} <= entities:
+        covered.append('Everyone except external users activity')
+    return covered
+
+
+def reconcile_dag_coverage(recommendations, sam_reports):
+    """Separate missing report families from the SAM date-maintenance reminder."""
+    parsed = [report for report in sam_reports or [] if report.get('status') in {'selected', 'no_activity'}]
+    available = _parsed_dag_families(parsed)
+    covered = _parsed_dag_families([report for report in parsed if report.get('freshness') == 'fresh'])
+    if not available:
         return list(recommendations or [])
     reconciled = []
     for row in recommendations or []:
@@ -525,20 +539,28 @@ def reconcile_dag_coverage(recommendations, sam_reports):
             reconciled.append(row)
             continue
         gaps = _dag_gaps(row)
-        remaining = [gap for gap in gaps if gap["report"] not in covered]
-        answered = [gap["report"] for gap in gaps if gap["report"] in covered]
+        remaining = [gap for gap in gaps if gap["report"] not in available]
+        answered = [gap["report"] for gap in gaps if gap["report"] in available]
+        date_review = [name for name in answered if name not in covered]
+        date_note = (' Date confirmation or freshness review remains for: '+', '.join(date_review)+
+                     '; see the separate report-date reminder.') if date_review else ''
         if not answered:
             reconciled.append(row)
             continue
         if not remaining:
-            reconciled.append(dict(row, Disposition="Reference", Status="Insight",
-                                   Observation="The supplied Data access governance exports cover every required report family: "
-                                               + ", ".join(answered) + ".", Recommendation="", DagGaps=[]))
+            reconciled.append(dict(row, Disposition="Reference", Status="Insight", Priority='Low',
+                                   Observation="Parsed Data access governance reports from automatic collection and/or supplied exports answer the previously missing report families: "
+                                               + ", ".join(answered) + ". Conclusions remain limited to their retained dates, objects and scope."+date_note, Recommendation="", DagGaps=[],
+                                   DagCoveredReports=[name for name in answered if name in covered], DagDateReviewReports=date_review))
             continue
         reconciled.append(dict(
             row, DagGaps=remaining,
             Observation=("SharePoint Data Access Governance evidence is incomplete for: "
                          + ", ".join(f"{gap['report']} ({gap['status'].lower()})" for gap in remaining)
-                         + ". The supplied exports cover: " + ", ".join(answered) + "."),
+                         + ". Parsed collected/imported reports answer: " + ", ".join(answered) + ". Conclusions apply to the exported scope."+date_note),
+            DagCoveredReports=[name for name in answered if name in covered], DagDateReviewReports=date_review,
+            Recommendation='Review only the remaining report families: '+', '.join(gap['report'] for gap in remaining)+'. '
+                'Reuse completed results through automatic collection. Check failed downloads, unrecognized formats, report dates and selected scope before requesting new reports. '
+                'Use a structured manual export only where automatic collection remains unavailable.',
         ))
     return reconciled

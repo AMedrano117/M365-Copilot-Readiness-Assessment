@@ -348,12 +348,30 @@ def build_run_manifest(tenant_name, inputs, collectors, source_statuses=None):
 
 def run_integrity_checks(recommendations, evidence_bundle):
     issues = list(evidence_bundle.get("investigation_validation") or [])
+    diagnostics = []
     sheets = evidence_bundle.get("sheets", {})
     for key, sheet in sheets.items():
         for index, row in enumerate(sheet.get("rows", []), start=2):
             for field, value in row.items():
+                normalized_field = re.sub(r'[^a-z]', '', field.lower())
+                display_field = normalized_field in {'displayname','userdisplayname','devicename','computerdnsname',
+                    'principaldisplayname','appdisplayname','groupdisplayname','userprincipalname','mailnickname'}
+                if display_field and value in (None, ''):
+                    diagnostics.append({'kind':'missing_display_name','sheet':sheet.get('title',key),
+                        'row':index,'field':field,'qualification':'Friendly display name is missing; review the retained identifier separately.'})
+                elif display_field and not isinstance(value,str):
+                    issues.append(f"{sheet.get('title',key)} row {index}: malformed display field '{field}'.")
                 if "name" in field.lower() and GUID_RE.match(str(value or "").strip()):
-                    issues.append(f"{sheet.get('title', key)} row {index}: GUID appears in name field '{field}'.")
+                    identifiers = [item for name, item in row.items() if re.sub(r'[^a-z]', '', name.lower()) in
+                                   {'id','objectid','userid','groupid','principalid','appid','deviceid','aaddeviceid','azureaddeviceid','machineid','applicationid','serviceprincipalid'}]
+                    valid_identity = any(GUID_RE.fullmatch(str(item or '').strip()) or
+                                         re.fullmatch(r'[a-fA-F0-9]{40}', str(item or '').strip()) for item in identifiers)
+                    message = f"{sheet.get('title', key)} row {index}: GUID appears in name field '{field}'."
+                    if valid_identity:
+                        diagnostics.append({'kind':'unresolved_display_name', 'sheet':sheet.get('title', key),
+                            'row':index, 'field':field, 'qualification':'Friendly name unresolved; a valid source identifier is retained. This is not evidence corruption.'})
+                    else:
+                        issues.append(message)
     for row in recommendations:
         if row.get("Confidence") == "High" and row.get("Disposition") in {"Action", "Assurance"} and row.get("EvidenceAvailable") != "Yes":
             issues.append(f"{row.get('RecommendationId', 'Unknown')}: high-confidence conclusion lacks linked evidence.")
@@ -362,7 +380,8 @@ def run_integrity_checks(recommendations, evidence_bundle):
     for source, status in (evidence_bundle.get("source_statuses", {}) or {}).items():
         if isinstance(status, dict) and status.get("truncated") and status.get("required", True):
             issues.append(f"Required source '{source}' was truncated.")
-    return {"valid": not issues, "issues": issues, "banner": "" if not issues else "Validation incomplete—do not use for deployment approval"}
+    return {"valid": not issues, "issues": issues, 'diagnostics':diagnostics,
+            "banner": "" if not issues else "Validation incomplete—do not use for deployment approval"}
 
 
 def _load_baseline(path):

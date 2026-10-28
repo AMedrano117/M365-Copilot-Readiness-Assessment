@@ -295,6 +295,8 @@ def prepare_investigation_details(bundle, result):
         return result
     from .privileged_presentation import prepare_privileged_sheets
     prepare_privileged_sheets(bundle, result)
+    from .device_compliance import prepare_device_sheets
+    prepare_device_sheets(bundle, result)
     sheets = bundle.setdefault('sheets', {})
     from .raw_evidence import prepare_raw_details
     prepare_raw_details(bundle, result)

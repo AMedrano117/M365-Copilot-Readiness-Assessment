@@ -152,12 +152,17 @@ SHARING_LINK_REPORT_NAMES = (
 )
 
 
-def sharing_link_type(source_file):
-    """Link type of a sharing-link activity report from Microsoft's export file name.
+def sharing_link_type(source_file, report_entity=None):
+    """Prefer bound collector entity, otherwise Microsoft's standard export name.
 
     The three reports share one header, so the name Microsoft gives the
-    download is the only distinguishing mark. Renamed files stay unattributed.
+    download distinguishes unbound exports. Renamed files without a retained
+    collector binding stay unattributed.
     """
+    entities = {'sharinglinks_anyone':'Anyone links', 'sharinglinks_guests':'Specific people links shared externally',
+                'sharinglinks_peopleinyourorg':'People in your organization links'}
+    if str(report_entity or '').lower() in entities:
+        return entities[str(report_entity).lower()]
     name = _normalized_key(Path(str(source_file)).stem)
     return next((label for prefix, label in SHARING_LINK_REPORT_NAMES if name.startswith(_normalized_key(prefix))), "Sharing links")
 
@@ -288,7 +293,7 @@ def _record_identity(record):
 def _report_date(record):
     return _parse_date(_value(record, "Report Date", "Scan Date", "Assessment Date", "Completed Date",
         "Completion Date", "Data As Of", "Generated Date", "CreatedDateTime",
-        "Report End Time", "ReportEndTime", "TriggeredDateTime"))
+        "Report End Time", "ReportEndTime", "TriggeredDateTime", "_collector_report_date"))
 
 
 def _workload(record):
@@ -447,7 +452,7 @@ def _lifecycle_row(record, report_date=None, date_basis="", source_hash=""):
 
 
 def _scan_reports(paths, source_kind, evaluation_date=None, max_age_days=None, *,
-                  lifecycle_max_age_days=None, lifecycle_report_dates=None):
+                  lifecycle_max_age_days=None, lifecycle_report_dates=None, report_metadata=None):
     evaluated_at = _parse_date(evaluation_date) if evaluation_date else datetime.now(timezone.utc)
     max_age = max_age_days or _positive_int_env(
         "SAM_REPORT_MAX_AGE_DAYS" if source_kind == "sam" else "DSPM_REPORT_MAX_AGE_DAYS",
@@ -473,6 +478,8 @@ def _scan_reports(paths, source_kind, evaluation_date=None, max_age_days=None, *
         try:
             documents = {}
             file_hash = hashlib.sha256(path.read_bytes()).hexdigest()
+            metadata = ((report_metadata or {}).get((str(path.resolve()), file_hash),
+                        (report_metadata or {}).get(file_hash, {}))) if source_kind == 'sam' else {}
             source_row = 0
             for raw in _read_records(path):
                 record = dict(raw or {})
@@ -497,6 +504,11 @@ def _scan_reports(paths, source_kind, evaluation_date=None, max_age_days=None, *
                 record["_report_type"] = report_type
                 date = _report_date(record)
                 date_basis = "Report date field" if date else "Unknown"
+                if not date and metadata:
+                    date = _parse_date(metadata.get('report_date'))
+                    if date:
+                        date_basis = metadata['date_basis']
+                        record['_collector_report_date'] = date.isoformat()
                 if report_type == "content_management_assessment" and not date:
                     # Only this exact file's explicitly confirmed generation date
                     # may fill a missing report date. Filenames and site activity
@@ -507,6 +519,8 @@ def _scan_reports(paths, source_kind, evaluation_date=None, max_age_days=None, *
                 result['retained_records'].append(dict(record, _evidence_date=date.isoformat() if date else '',
                                                      _date_basis=date_basis))
                 workload = _workload(record)
+                if workload == 'Unknown' and metadata.get('workload'):
+                    workload = _workload({'Workload':metadata['workload']})
                 tenant = _text(_value(record, "Tenant ID"))
                 if not tenant:
                     address = _record_identity(record)[0]
@@ -517,6 +531,9 @@ def _scan_reports(paths, source_kind, evaluation_date=None, max_age_days=None, *
                     "source_file": source_file, "source_sheet": sheet, "report_type": report_type,
                     "workload": workload, "tenant_id": tenant, "report_date": date.isoformat() if date else "",
                     "date_basis": date_basis, "source_hash": file_hash,
+                    "acquisition": metadata.get('acquisition', 'Supplied export'),
+                    "collector_report_id": metadata.get('report_id', ''),
+                    "collector_report_entity": metadata.get('entity', ''),
                     "records_read": 0, "status": "selected", "domains": set(), "domains_unknown": set(),
                     "_date": date, "_signature": signature, "_path": str(path),
                     "_risks": {}, "_maxima": {}, "_lifecycle": [], "_baseline_signals": set(), "_detail_sites": {},
@@ -567,7 +584,7 @@ def _scan_reports(paths, source_kind, evaluation_date=None, max_age_days=None, *
                     # Activity context only: links created during the report
                     # period, not the current permission state. Permission
                     # snapshots remain the source for exposure counts.
-                    link_type = sharing_link_type(source_file)
+                    link_type = sharing_link_type(source_file, metadata.get('entity'))
                     count = _number(_value(record, "Links created"))
                     result['observations'].append({
                         'metric_id': 'sam.links_created.' + _normalized_key(link_type).replace(' ', '_'),
@@ -621,9 +638,12 @@ def _scan_reports(paths, source_kind, evaluation_date=None, max_age_days=None, *
                     # neither the report date nor the absence of tenant exposure.
                     blocks.append({
                         "source_file": path.name + ("!" + member if member else ""),
-                        "source_sheet": sheet, "report_type": report_type, "workload": "Unknown",
-                        "tenant_id": "", "report_date": "", "records_read": 0, "status": "empty",
-                        "domains": set(), "domains_unknown": set(), "_date": None, "_signature": (), "_path": str(path),
+                        "source_sheet": sheet, "report_type": report_type, "workload": _workload({'Workload':metadata.get('workload', '')}),
+                        "tenant_id": "", "report_date": metadata.get('report_date', ''), "records_read": 0, "status": "empty",
+                        "date_basis": metadata.get('date_basis', 'Unknown'), "source_hash":file_hash,
+                        "acquisition":metadata.get('acquisition', 'Supplied export'),
+                        "collector_report_id":metadata.get('report_id', ''), "collector_report_entity":metadata.get('entity', ''),
+                        "domains": set(), "domains_unknown": set(), "_date": _parse_date(metadata.get('report_date')), "_signature": (), "_path": str(path),
                         "_risks": {}, "_maxima": {}, "_lifecycle": [], "_baseline_signals": set(), "_detail_sites": {},
                         "_population": set(),
                     })
@@ -719,6 +739,10 @@ def _scan_reports(paths, source_kind, evaluation_date=None, max_age_days=None, *
         block["domains"] = sorted(block["domains"])
         block["domains_unknown"] = sorted(block["domains_unknown"])
         result["reports"].append({k: v for k, v in block.items() if not k.startswith("_")})
+        if block['status'] == 'no_activity':
+            selected_reports.append(block)
+            dates.append(block['_date'])
+            workloads.add(block['workload'])
         if block["status"] != "selected":
             continue
         for row in block["_lifecycle"]:
@@ -853,19 +877,21 @@ def _freshness_finding(feature, source_name, scan, cli_option, env_name, documen
             f"The oldest selected {source_name} evidence is {scan['age_days']} day(s) old, "
             f"which exceeds the {scan['max_age_days']}-day freshness threshold."
         )
+    elif any(report.get('age_days') is not None and report['age_days'] < 0 for report in scan.get('reports', [])):
+        observation = f'The selected {source_name} evidence includes a report date after the evaluation date. Confirm its original reporting period before using it.'
     else:
         observation = (
             f"The supplied {source_name} export did not contain a recognized report or scan date, "
             "so its freshness could not be verified."
         )
-    return new_recommendation(
+    finding = new_recommendation(
         "Data Exposure",
         feature,
         observation,
         f"{run_instructions} Export the completed result and rerun with {cli_option} PATH or {env_name}. The freshness threshold can be changed with {'SAM_REPORT_MAX_AGE_DAYS' if scan['kind'] == 'sam' else 'DSPM_REPORT_MAX_AGE_DAYS'}.",
         "Scan guidance",
         documentation_url,
-        priority="High",
+        priority="Medium" if scan['kind'] == 'sam' else "High",
         status=NOT_ASSESSED_STATUS,
         category=CATEGORY_SCAN_COVERAGE,
         finding_key=f"data_exposure.freshness.{scan['kind']}",
@@ -875,6 +901,12 @@ def _freshness_finding(feature, source_name, scan, cli_option, env_name, documen
         evidence_basis="Stale tenant evidence" if freshness == "stale" else "Freshness not verified",
         confidence="Low",
     )
+    finding['FreshnessIssue'] = freshness
+    if scan['kind'] == 'sam':
+        finding.update(SecurityGate=False, ReadinessStage='Before broad rollout',
+            Recommendation='Confirm the retained report date or reporting-period end and selected scope. Reuse current completed reports already available through automatic collection or supplied exports. '
+                           'Obtain newer evidence only for scopes whose observations need refreshing. An unknown date is not proof that a report is old.')
+    return finding
 
 
 def _risk_finding(feature, observation, recommendation, priority, key, url, confidence="High"):
@@ -1046,7 +1078,7 @@ def _lifecycle_findings(summary):
 
 def build_data_exposure_assessment(sam_report_paths=None, dspm_report_paths=None, enabled=True, evaluation_date=None,
                                    sam_max_age_days=None, dspm_max_age_days=None,
-                                   lifecycle_max_age_days=None, lifecycle_report_dates=None):
+                                   lifecycle_max_age_days=None, lifecycle_report_dates=None, sam_report_metadata=None):
     """Load SAM/DSPM exports and create a dedicated, evidence-backed assessment result."""
     if not enabled and not sam_report_paths and not dspm_report_paths:
         return {"available": False, "recommendations": [], "evidence_rows": [], "lifecycle_evidence_rows": [], "lifecycle_summary": {}, "sources": {}, "operator_messages": []}
@@ -1054,7 +1086,8 @@ def build_data_exposure_assessment(sam_report_paths=None, dspm_report_paths=None
     sam_paths = _expand_paths(_split_env_paths("SAM_DAG_REPORT_PATHS") if sam_report_paths is None else sam_report_paths)
     dspm_paths = _expand_paths(_split_env_paths("DSPM_REPORT_PATHS") if dspm_report_paths is None else dspm_report_paths)
     sam = _scan_reports(sam_paths, "sam", evaluation_date, sam_max_age_days,
-        lifecycle_max_age_days=lifecycle_max_age_days, lifecycle_report_dates=lifecycle_report_dates)
+        lifecycle_max_age_days=lifecycle_max_age_days, lifecycle_report_dates=lifecycle_report_dates,
+        report_metadata=sam_report_metadata)
     dspm = _scan_reports(dspm_paths, "dspm", evaluation_date, dspm_max_age_days)
 
     recommendations = _lifecycle_findings(sam["lifecycle_summary"])

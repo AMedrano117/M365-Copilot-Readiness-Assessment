@@ -265,6 +265,18 @@ async def _fetch_graph_object_via_http(path):
     finally:
         await http_client.aclose()
 
+async def _fetch_graph_detail_via_http(path):
+    """Keep singleton settings and protection objects out of the list reader."""
+    from .expanded_collection import DEVICE_COMPLIANCE_SETTINGS_PATH
+    if path.endswith('/windowsProtectionState') or path == DEVICE_COMPLIANCE_SETTINGS_PATH:
+        result = await _fetch_graph_object_via_http(path)
+        obj = result.pop('object', None)
+        result['value'] = [obj.get('value', obj)] if isinstance(obj, dict) else []
+        result.setdefault('reason', result.get('error', ''))
+        return result
+    return await _fetch_graph_collection_via_http(path)
+
+
 async def get_entra_client(graph_client, tenant_id=None, preview_collectors='auto', permission_profile='standard'):
     """
     Get authenticated client for Microsoft Entra ID (Azure AD) APIs.
@@ -1325,15 +1337,7 @@ async def get_entra_client(graph_client, tenant_id=None, preview_collectors='aut
         # GLOBAL SECURE ACCESS (Entra Internet Access) - NetworkAccess API (Beta)
         # ====================================================================
         from .expanded_collection import collect_entra_details
-        async def detail_fetch(path):
-            if path.endswith('/windowsProtectionState'):
-                result = await _fetch_graph_object_via_http(path)
-                obj = result.pop('object', None)
-                result['value'] = [obj.get('value', obj)] if isinstance(obj, dict) else []
-                result.setdefault('reason', result.get('error', ''))
-                return result
-            return await _fetch_graph_collection_via_http(path)
-        await collect_entra_details(client_obj, detail_fetch, permission_profile=permission_profile,
+        await collect_entra_details(client_obj, _fetch_graph_detail_via_http, permission_profile=permission_profile,
                                    preview_collectors=preview_collectors)
         if preview_collectors not in {'network-access', 'all'}:
             not_selected = {

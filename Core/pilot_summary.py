@@ -112,8 +112,15 @@ def _more(rows, limit=8):
 
 
 def render_pilot_summary(result, bundle, tenant_name, report_path=None, workbook_path=None, technical_workbook_path=None):
+    from .evidence_reconciliation import require_supported_confidence
+    require_supported_confidence(result)
     from .identity_finding_taxonomy import ensure_identity_result
     result = ensure_identity_result(result, bundle)
+    from .evidence_reconciliation import blocker_explanation
+    explanation = blocker_explanation(result)
+    blocker_note = '<p class="intro">' + prose(explanation) + '</p>' if explanation else ''
+    comparison = (((result.get('authentication_assessment') or {}).get('registration') or {}).get('metric_reconciliation') or {}).get('comparison_explanation','')
+    registration_note = '<p class="intro">' + prose(comparison) + '</p>' if comparison else ''
     from .report_presentation import decision_groups
     actions = result.get("actions") or []
     numbers = {row.get("RecommendationId"): index for index, row in enumerate(actions, 1)}
@@ -222,6 +229,6 @@ def render_pilot_summary(result, bundle, tenant_name, report_path=None, workbook
 <header><div class="brand">MICROSOFT 365 COPILOT<span>Executive readiness summary</span></div><div class="meta"><strong>{tenant}</strong>Evaluated {prose(result.get("evaluation_date"))}</div></header>
 <main>{provenance_html(result)}<section class="verdict" data-state="{state}" id="verdict"><div class="kicker">Pilot readiness</div><h1>{escape(headline)}</h1>
 <p>{prose(result.get("rationale"))}</p><p>Scope: {prose(executive.get('Scope') or 'Tenant-wide Microsoft 365 foundation')}. Evidence dates: {prose(period_text)}.</p><div class="scores">{scores}</div></section>
-{pdf_section}{"".join(sections)}{summary_html(result)}{governance_summary(result)}</main>
+{blocker_note}{registration_note}{pdf_section}{"".join(sections)}{summary_html(result)}{governance_summary(result)}</main>
 <footer><p>{links}</p><p>Evidence period: {prose(period_text)}. Methodology {prose(result.get("methodology_version"))}: required checks distinguish configuration, policy enforcement, observed operation and dated owner reviews. Missing operational proof remains unresolved. The full report and workbook hold the evidence or precise collection gap behind every finding.</p></footer>
 {run_note}</div></body></html>'''
