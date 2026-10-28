@@ -194,9 +194,13 @@ class ComplianceOutputTests(unittest.TestCase):
             summary = render_pilot_summary(result, bundle, 'Fictional', workbook_path=path)
             self.assertIn('Is active', html)
             workbook = load_workbook(path)
+            technical = load_workbook(technical_workbook_path(path))
             try:
-                values = list(workbook['Devices'].values)
+                # Every existing reason/date assertion now checks its technical
+                # destination, with an additional customer privacy assertion.
+                values = list(technical['Device Detail'].values)
                 cells = '\n'.join(str(cell or '') for row in values for cell in row)
+                self.assertNotIn('Fictional laptop', '\n'.join(str(cell or '') for row in workbook['Devices'].values for cell in row))
                 self.assertIn('Is active', cells)
                 self.assertIn('Default Device Compliance Policy', cells)
                 self.assertIn('2026-07-01', cells)
@@ -209,6 +213,7 @@ class ComplianceOutputTests(unittest.TestCase):
                 self.assertTrue(finding['TechnicalEvidenceRanges'])
             finally:
                 workbook.close()
+                technical.close()
             self.assertEqual(result, before)
             snapshot = Path(folder) / 'result.json'
             write_assessment_result(snapshot, result)

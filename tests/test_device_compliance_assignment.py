@@ -146,8 +146,12 @@ class PolicyAssignmentOutputTests(unittest.TestCase):
             html = render_customer_report(result, bundle, 'Fictional', path, technical_workbook_path=technical_workbook_path(path))
             self.assertIn('devices reported without a compliance policy', html)
             workbook = load_workbook(path)
+            technical = load_workbook(technical_workbook_path(path))
             try:
-                values = list(workbook['Devices'].values)
+                values = list(technical['Device Detail'].values)
+                customer_cells = '\n'.join(str(cell or '') for values in workbook['Devices'].values for cell in values)
+                self.assertNotIn('Fictional laptop', customer_cells)
+                self.assertNotIn('fictional@example.invalid', customer_cells)
                 records = [dict(zip(values[0], row)) for row in values[1:]]
                 row = next(row for row in records if row.get('Issue') == 'Compliance policy assignment missing (reported)')
                 self.assertEqual(row['Device'], 'Fictional laptop')
@@ -162,6 +166,7 @@ class PolicyAssignmentOutputTests(unittest.TestCase):
                 self.assertEqual(finding['Priority'], 'Medium')
             finally:
                 workbook.close()
+                technical.close()
             self.assertEqual(result, before)
             snapshot = Path(folder) / 'result.json'
             write_assessment_result(snapshot, result)

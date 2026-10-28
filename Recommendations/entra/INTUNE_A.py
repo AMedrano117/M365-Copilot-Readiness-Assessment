@@ -13,7 +13,7 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
     Returns multiple observations:
     1. License check (with upgrade path for lower SKUs)
     2. Device compliance analysis (if entra_insights available):
-       - Non-compliant devices accessing Copilot: High priority
+       - Retained noncompliant device inventory: reconcile setting and activity evidence
        - No managed devices (BYOD): Medium priority
        - Good compliance: Success
     3. CA integration check - Verify compliant device requirement for Copilot
@@ -134,8 +134,9 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
             observations.append(new_recommendation(
                 service="Entra",
                 feature=feature_name,
-                observation=f"{total_devices} devices managed by Intune, but Conditional Access does not require compliant devices for Copilot",
-                recommendation="Create Conditional Access policy to require compliant devices for Microsoft 365 apps (including Copilot). Currently, non-compliant devices can bypass Intune security policies and access Copilot. Configure: Target 'Office 365' application, Grant 'Require device to be marked as compliant', Apply to all users with Copilot licenses. This ensures only encrypted, malware-protected, policy-compliant devices can access AI capabilities, preventing data leakage through compromised endpoints.",
+                observation="The collected Conditional Access evidence does not establish that access to Microsoft 365 is consistently restricted to devices marked compliant by Intune.",
+                recommendation="Review enabled Conditional Access policies, application and user targeting, exclusions, grant controls and report-only results. Validate the intended scope with sign-in evidence. Intune configuration, compliance evaluation, access enforcement and successful sign-in are separate observations.",
+                finding_key="entra.devices.compliant_access",
                 link_text="Device Compliance with CA",
                 link_url="https://learn.microsoft.com/entra/identity/conditional-access/howto-conditional-access-policy-compliant-device",
                 priority="Medium",
@@ -147,8 +148,10 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
             observations.append(new_recommendation(
                 service="Entra",
                 feature=feature_name,
-                observation=f"Conditional Access requires compliant devices for Microsoft 365 apps, enforcing Intune policies for Copilot access",
-                recommendation="",
+                observation="Returned Conditional Access configuration includes a compliant-device grant. Effective Microsoft 365 targeting and observed sign-in outcomes require separate validation.",
+                recommendation="Review effective targeting, exclusions and observed sign-in outcomes for the intended population.",
+                finding_key="entra.devices.compliant_access",
+                disposition="Opportunity",
                 link_text="Device Compliance with CA",
                 link_url="https://learn.microsoft.com/entra/identity/conditional-access/howto-conditional-access-policy-compliant-device",
                 status=status

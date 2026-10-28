@@ -303,6 +303,9 @@ def _projection(row, record, devices, compliance=None):
 
 
 def _affected(row, records, finding):
+    if row.get('DeviceEvidenceCounts'):
+        from .device_evidence import count_text
+        return count_text(row['DeviceEvidenceCounts'])
     if not records:
         return 'Unknown'
     datasets = {record.get('dataset') for record in records}
@@ -396,6 +399,8 @@ def split_workbook_layout(source_workbook, result, bundle, assessment_path, tech
             native_datasets = [model['tables'][key].get('dataset') for key in (finding.get('evidence') or {}).get('tables') or []
                                if not str(model['tables'][key].get('dataset')).startswith(('declared.', 'investigation.'))]
             dataset = next(iter(dict.fromkeys(native_datasets)), None) or origin.get('dataset') or origin.get('api') or origin.get('source_api') or origin.get('name') or origin.get('file') or 'Declared records'
+            if (finding_rows.get(identifier) or {}).get('DeviceEvidenceVersion') and origin.get('dataset'):
+                dataset = origin['dataset']
             if dataset == origin.get('file'):
                 private_dataset_names.add(_text(dataset))
             for number, row in enumerate(_rows(sheet), 2):
@@ -582,12 +587,19 @@ def split_workbook_layout(source_workbook, result, bundle, assessment_path, tech
                     origin = declaration.get('source') or {}
                     dataset = origin.get('dataset') or origin.get('api') or origin.get('source_api') or origin.get('name') or origin.get('file') or 'Retained details'
                 dataset = _text(dataset)
+                device_finding = finding_rows.get(identifier) or {}
+                if device_finding.get('DeviceEvidenceVersion'):
+                    native_dataset = (evidence_records.get(evidence_id) or {}).get('dataset')
+                    if native_dataset:
+                        dataset = _text(native_dataset)
                 marker = (dataset, evidence_id)
                 if marker in seen:
                     continue
                 seen.add(marker)
                 fields = native_fields.get(evidence_id) or record['fields']
                 data = {'RecommendationId': identifier, 'Evidence ID': evidence_id, 'Detail record ID': record['detail_record_id']}
+                if device_finding.get('DeviceEvidenceVersion'):
+                    data['Evidence role'] = 'Selected population' if evidence_id in device_finding.get('DeviceEvidenceIds', []) else 'Supporting context; excluded from affected counts'
                 data.update(('Record.' + key if key in data else key, value) for key, value in fields.items())
                 full.setdefault(dataset, []).append(data)
                 full_members[identifier].append((dataset, len(full[dataset]) + 1))
@@ -712,13 +724,29 @@ def split_workbook_layout(source_workbook, result, bundle, assessment_path, tech
     issues = []
     extra_config_details = []
     config_source_links = {}
+    device_details = []
+    device_counts = []
     for row in result['recommendations']:
         identifier = row['RecommendationId']
         row['AssessmentEvidenceRange'] = ''
         row['AssessmentEvidenceRanges'] = []
         row['TechnicalEvidenceRanges'] = []
         records = selected.get(identifier, [])
-        for group in groups_by_finding[identifier]:
+        device_summary = bool(row.get('DeviceEvidenceVersion'))
+        if device_summary:
+            from .device_evidence import count_text
+            counts = row['DeviceEvidenceCounts']
+            device_counts.append({'Finding ID':identifier, 'Finding type':row['DeviceFindingType'], **counts,
+                                  'Pilot impact':row.get('PilotImpact') or row.get('DevicePilotImpact'),
+                                  'Native evidence IDs':row.get('DeviceEvidenceIds'),
+                                  'Qualification':row.get('DeviceEvidenceQualification')})
+            assessment_rows['Devices'].append({'ID':identifier,
+                'Device':str(counts['resolved_device_count'])+' resolved distinct devices; see ID counts in detail',
+                'Issue':row.get('Feature'), 'Detail':count_text(counts)+' '+str(row.get('DeviceEvidenceQualification') or ''),
+                'Last reported':row.get('ObservationDate') or 'Not established',
+                'Intune compliance':'Per-record state retained in Technical Evidence',
+                'Evidence ID':identifier})
+        for group in ([] if device_summary else groups_by_finding[identifier]):
             target = Path(technical_path).name + '#' + config_targets[group['group_id']]
             ids = sorted(config_evidence_ids[group['group_id']])
             assessment_rows['Configuration'].append({'ID':identifier, 'Setting':group['configuration'], 'Current':group['observed'],
@@ -735,6 +763,13 @@ def split_workbook_layout(source_workbook, result, bundle, assessment_path, tech
             config_source_links[len(assessment_rows['Configuration'])+1] = target
         for record in records:
             title, projected = _projection(row, record, devices, compliance)
+            if device_summary:
+                interpretations = [item for item in row.get('DeviceEvidenceInterpretations', []) if item['evidence_id'] in record['evidence_ids']]
+                device_details.append({**projected, 'Finding type':row['DeviceFindingType'],
+                    'Source dataset':record.get('dataset'), 'Pilot impact':row.get('PilotImpact') or row.get('DevicePilotImpact'),
+                    'Detail record ID':record.get('detail_record_id'),
+                    'Device interpretation':interpretations})
+                continue
             if title == 'Configuration' and groups_by_finding[identifier] and record.get('dataset') in {
                     'sharepoint_site_settings','sharepoint_tenant_settings','sharepoint_graph_settings'}:
                 continue
@@ -785,6 +820,24 @@ def split_workbook_layout(source_workbook, result, bundle, assessment_path, tech
             number = first + offset
             config_source_links[assessment_number] = Path(technical_path).name + '#' + _ref(sheet.title, number, number, sheet.max_column)
             _cell_link(sheet, number, 'Native Evidence ID', '#' + item['Source reference'])
+    device_detail_targets = {}
+    if device_details:
+        sheet = _write(technical, 'Device Detail', device_details)
+        for identifier in {detail['ID'] for detail in device_details}:
+            matches = [index for index,detail in enumerate(device_details,2) if detail['ID']==identifier]
+            device_detail_targets[identifier] = _ref(sheet.title,min(matches),max(matches),sheet.max_column)
+    if device_counts:
+        for item in device_counts:
+            item['Detail link'] = 'Open device / setting rows' if item['Finding ID'] in device_detail_targets else 'No retained detail rows'
+        sheet = _write(technical, 'Device Finding Counts', device_counts)
+        positions = {item['Finding ID']:index for index,item in enumerate(device_counts,2)}
+        for identifier,position in positions.items():
+            if identifier in device_detail_targets:
+                _cell_link(sheet,position,'Detail link','#'+device_detail_targets[identifier])
+        for number,item in enumerate(assessment_rows['Devices'],2):
+            if item['ID'] in positions:
+                position = positions[item['ID']]
+                evidence_links[('Devices',number)] = Path(technical_path).name+'#'+_ref(sheet.title,position,position,sheet.max_column)
     from .workbook_readers import CONFIGURATION_COLUMNS, configuration_rows
     for title in EVIDENCE_COLUMNS:
         if not assessment_rows[title]:
@@ -810,14 +863,33 @@ def split_workbook_layout(source_workbook, result, bundle, assessment_path, tech
         if ranges:
             row['AssessmentEvidenceRange'] = max(ranges, key=lambda location: int(RANGE.fullmatch(location)[5]) - int(RANGE.fullmatch(location)[3]))
         written = sum(int(RANGE.fullmatch(location)[5]) - int(RANGE.fullmatch(location)[3]) + 1 for location in ranges)
-        expected = len(groups_by_finding[identifier]) + sum(
+        expected = (1 if row.get('DeviceEvidenceVersion') else len(groups_by_finding[identifier]) + sum(
             not (groups_by_finding[identifier] and record.get('dataset') in {'sharepoint_site_settings','sharepoint_tenant_settings','sharepoint_graph_settings'} and
-                 _projection(row, record, devices)[0] == 'Configuration') for record in selected.get(identifier, []))
+                 _projection(row, record, devices)[0] == 'Configuration') for record in selected.get(identifier, [])))
         reconciliation.append({'Status': 'Passed' if expected == written else 'Failed', 'Check': 'Finding evidence rows',
                                'Source': identifier, 'Source rows': expected, 'Written rows': written,
                                'Issue': '' if expected == written else 'Affected records do not reconcile.'})
         if written != expected:
             issues.append(f'{identifier}: affected evidence rows do not reconcile.')
+        if row.get('DeviceEvidenceVersion'):
+            expected_native = row['DeviceEvidenceCounts']['source_record_count']
+            actual = len(selected.get(identifier, []))
+            reconciliation.append({'Status':'Passed' if expected_native == actual else 'Failed',
+                'Check':'Device source record count', 'Source':identifier, 'Source rows':expected_native, 'Written rows':actual,
+                'Issue':'' if expected_native == actual else 'Selected device records differ from finding population.'})
+            if expected_native != actual:
+                issues.append(f'{identifier}: selected device records do not reconcile ({expected_native} expected, {actual} selected).')
+
+    device_model = result.get('device_compliance') or {}
+    identities = (device_model.get('identity_model') or {}).get('identities', [])
+    if identities:
+        _write(technical, 'Device Identity', [{key:value for key,value in identity.items() if key!='sources'} |
+            {'Evidence IDs':[entry['evidence_id'] for entry in identity['sources']],
+             'Sources':[entry['source'] for entry in identity['sources']]} for identity in identities])
+    diagnostics = [diagnostic for item in device_model.get('inventory', []) for diagnostic in item['diagnostics']]
+    diagnostics.extend(diagnostic for row in result['recommendations'] for diagnostic in row.get('DeviceEvidenceDiagnostics', []))
+    if diagnostics:
+        _write(technical, 'Device Diagnostics', [json.loads(item) for item in dict.fromkeys(json.dumps(item,sort_keys=True,default=str) for item in diagnostics)])
 
     ordered = sorted(result['recommendations'], key=lambda row: (
         {'Action': 0, 'Coverage': 1, 'Assurance': 2, 'Opportunity': 3, 'Reference': 4}.get(row.get('Disposition'), 5),
