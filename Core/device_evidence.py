@@ -316,8 +316,7 @@ def annotate_finding(row, items, kind, *, confirmed=False):
     row['Observation'] += (f"Active devices: {counts['active_device_count']}; stale devices: {counts['stale_device_count']}; "
         f"pilot-relevant devices: {counts['pilot_relevant_count']}; pilot relevance unknown: {counts['pilot_relevance_unknown_count']} devices "
         f"and {counts['pilot_relevance_unknown_records']} records. Valid/malformed/missing timestamps: "
-        f"{counts['valid_timestamp_count']}/{counts['malformed_timestamp_count']}/{counts['missing_timestamp_count']}. "
-        f'Pilot treatment: {impact}.')
+        f"{counts['valid_timestamp_count']}/{counts['malformed_timestamp_count']}/{counts['missing_timestamp_count']}.")
     return row
 
 

@@ -176,6 +176,16 @@ class DeviceEvidenceInterpretationTests(unittest.TestCase):
         self.assertFalse(pilot_blocker_eligible({'ControlId':'ENDPOINT.POSTURE','Priority':'High'}))
         self.assertTrue(pilot_blocker_eligible({'ControlId':'IDENTITY.AUTH','Priority':'High'}))
 
+    def test_insufficient_source_support_does_not_publish_a_blocker_claim(self):
+        bundle=fixture(setting='BitLocker')
+        bundle['assessment_profile']=roster('intune-1')
+        bundle['assessment_sources']['compliance_setting_states'][0]['source'].update(complete=False,availability_status='partial')
+        assessed=result(bundle)
+        row=next(row for row in assessed['recommendations'] if row.get('DeviceFindingType')=='ExplicitSecuritySettingFailure')
+        self.assertEqual(row['PilotImpact'],'Confirm before pilot')
+        self.assertNotIn('Blocks pilot',row['Observation'])
+        self.assertNotIn(row['RecommendationId'],[blocker['RecommendationId'] for blocker in assessed['blockers']])
+
     def test_rtp_population_units_freshness_and_invalid_values(self):
         bundle=fixture()
         bundle['assessment_sources']['windows_protection']=[dataset([
