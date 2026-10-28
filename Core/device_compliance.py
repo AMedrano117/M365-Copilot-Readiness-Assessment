@@ -7,18 +7,16 @@ to raw compliance states. Setting-summary ParentId is not a device identity.
 import re
 
 from .evidence_contract import parse_date
-from .operational_evidence import reconcile_devices, rows
-
-
-def value(record, *names):
-    keys = {re.sub('[^a-z0-9]', '', str(key).lower()): item for key, item in record.items()}
-    return next((keys[re.sub('[^a-z0-9]', '', name.lower())] for name in names
-                 if keys.get(re.sub('[^a-z0-9]', '', name.lower())) not in (None, '')), None)
+from .operational_evidence import rows
+from .device_evidence import (value, build_device_identities, interpret_records, timestamp)
 
 
 def setting_label(record, summaries=None):
     summary = (summaries or {}).get(str(value(record, 'ParentId') or '').casefold(), {})
     label = value(record, 'settingName', 'setting') or value(summary, 'settingName', 'setting') or 'Setting name not retained'
+    if not isinstance(label, str) or not label.strip() or label.strip().casefold() in {'unknown','not available','n/a'}:
+        label = 'Setting name not retained'
+    label = label.strip()
     key = re.sub('[^a-z0-9]', '', str(label).lower())
     # Graph can retain the built-in setting key rather than its portal label.
     builtin = str(value(record, 'setting') or value(record, 'ParentId') or '')
@@ -31,6 +29,8 @@ def setting_label(record, summaries=None):
         return 'Has a compliance policy assigned', 'assignment'
     if key in {'enrolleduserexists', 'defaultdevicecompliancepolicyrequireuserexistence'}:
         return 'Enrolled user exists', 'identity'
+    if any(term in key for term in ('lastcheckin', 'checkin', 'lastsync', 'synchronization', 'enrollment', 'enrolleduser')):
+        return str(label), 'activity'
     return str(label), 'unknown' if label == 'Setting name not retained' else 'security'
 
 
@@ -47,47 +47,43 @@ def build_device_compliance(bundle, *, profile=None, evaluation_date=None):
     """Return per-device reasons and per-setting triage, retaining row references."""
     day = parse_date(evaluation_date or bundle.get('evaluation_date') or
                      (bundle.get('collection_context') or {}).get('collected_at'))
-    reconciliation = reconcile_devices(bundle, profile, evaluation_date=day) if day else {'records': [], 'reporting_days': 7, 'active_days': 30}
-    activity = {row['Device identity']: row for row in reconciliation['records']}
+    identities = build_device_identities(bundle, profile=profile, evaluation_date=day)
+    reconciliation = identities
     devices = rows(bundle, 'managed_devices')
     summaries = _unambiguous_objects(rows(bundle, 'compliance_setting_summaries'))
-    summary_ids = {str(value(row, 'id') or '').casefold() for row in rows(bundle, 'compliance_setting_summaries')}
     policies = _unambiguous_objects(rows(bundle, 'compliance_policies'))
-    index = {}
+    by_identity = {}
     output = []
+    inventory = interpret_records(identities, 'managed_devices', (bundle.get('assessment_sources') or {}).get('managed_devices', []))
     for position, device in enumerate(devices):
         local = str(value(device, 'id') or '')
-        aad = str(value(device, 'azureADDeviceId') or '').casefold()
-        identity = aad if aad and aad != '00000000-0000-0000-0000-000000000000' else f'unmatched:managed_devices:{local or position}'
-        signals = activity.get(identity, {})
-        item = {'device_id': local, 'device': device, 'activity': signals.get('Activity', 'unknown'),
-                'last_observed': signals.get('Last observed', ''), 'conflict': signals.get('Conflict', False),
+        signals = inventory[position]['identity'] or {}
+        relevance = signals.get('relevance', 'ActivityUnknown')
+        item = {'device_id': local, 'device': device, 'activity': {'CurrentActiveDevice':'active', 'StaleDeviceRecord':'stale'}.get(relevance, 'unknown'),
+                'last_observed': signals.get('last_observed', ''), 'conflict': signals.get('conflict', inventory[position]['unresolved']),
+                'identity': signals, 'relevance': relevance, 'evidence': inventory[position],
                 'last_sync': value(device, 'lastSyncDateTime'), 'settings': [], 'reason': 'Reason not retained'}
         output.append(item)
-        for key in {local.casefold(), aad} - {'', '00000000-0000-0000-0000-000000000000'}:
-            index.setdefault(key, []).append(item)
+        if signals:
+            by_identity.setdefault(signals['identity_key'], []).append(item)
+    interpreted = interpret_records(identities, 'compliance_setting_states', (bundle.get('assessment_sources') or {}).get('compliance_setting_states', []))
+    interpreted = {(item['dataset_index'], item['record_index']): item for item in interpreted}
     settings = []
     for dataset_index, dataset in enumerate((bundle.get('assessment_sources') or {}).get('compliance_setting_states', [])):
-        source = dataset.get('source') or {}
         for record_index, record in enumerate(dataset.get('records') or []):
             label, kind = setting_label(record, summaries)
-            explicit = [str(value(record, key) or '').casefold() for key in ('managedDeviceId', 'deviceId')]
-            identifiers = [key for key in explicit if key]
-            parent = str(value(record, 'ParentId') or '').casefold()
-            # Compatibility for saved per-device reads; summary-derived parents
-            # must never join devices, even when IDs happen to collide.
-            if not identifiers and parent and parent not in summary_ids and 'devicecompliancepolicysettingstatesummaries' not in str(source.get('source_api', '')).lower():
-                identifiers = [parent]
-            matches = [index.get(key, []) for key in identifiers]
-            device = matches[0][0] if matches and all(len(match) == 1 and match[0] is matches[0][0] for match in matches) else None
+            evidence = interpreted[(dataset_index, record_index)]
+            matches = by_identity.get((evidence.get('identity') or {}).get('identity_key'), [])
+            device = matches[0] if len(matches) == 1 and not evidence['unresolved'] else None
             policy = value(record, 'policyName', 'compliancePolicyName')
             if not policy:
                 policy = value(policies.get(str(value(record, 'policyId', 'compliancePolicyId') or '').casefold(), {}), 'displayName')
             if not policy and kind in {'activity', 'assignment', 'identity'}:
                 policy = 'Default Device Compliance Policy'
             observed = value(record, 'lastReportedDateTime') or (device or {}).get('last_sync')
-            date = parse_date(observed)
-            current = bool(day and date and 0 <= (day-date).days <= reconciliation['reporting_days'])
+            observed_date = timestamp(observed, day)
+            date = parse_date(observed_date['date'])
+            current = bool(date and observed_date['age_days'] <= reconciliation['reporting_days'])
             failed = str(value(record, 'state') or '').lower() == 'noncompliant'
             assignment_missing = kind == 'assignment' and failed
             triage = ('reporting_review' if kind in {'activity', 'assignment', 'identity'} else
@@ -104,7 +100,11 @@ def build_device_compliance(bundle, *, profile=None, evaluation_date=None):
                     'failed': failed, 'kind': kind, 'assignment_missing': assignment_missing,
                     'triage': triage, 'reason': reason, 'qualification': qualification,
                     'last_reported': observed or '', 'date_basis': 'lastReportedDateTime' if value(record, 'lastReportedDateTime') else 'managed device last sync' if device else 'not retained',
-                    'activity': (device or {}).get('activity', 'unknown')}
+                    'activity': (device or {}).get('activity', 'unknown'), 'evidence': evidence,
+                    'classification': ('ReportingErrorOrConflict' if re.sub('[^a-z]', '', str(value(record, 'state') or '').lower()) in {'error','conflict','unknown','notevaluated'} else
+                                       'ActivityOrEnrollmentFailure' if failed and kind in {'activity','identity','assignment'} else
+                                       'ExplicitSecuritySettingFailure' if failed and kind == 'security' and current and evidence['evidence_id'] else
+                                       'UnconfirmedSettingState' if failed else 'RetainedSettingState')}
             settings.append(item)
             if device is not None:
                 device['settings'].append(item)
@@ -123,6 +123,8 @@ def build_device_compliance(bundle, *, profile=None, evaluation_date=None):
               for state in ('Reported missing', 'Assignment check passed', 'Conflicting assignment evidence', 'Unknown')}
     from .intune_compliance_settings import tenant_compliance_settings
     return {'devices': output, 'settings': settings, 'evaluation_date': day.isoformat() if day else '',
+            'identity_model': identities,
+            'inventory': inventory,
             'tenant_settings': tenant_compliance_settings(bundle),
             'policy_assignment': {'counts': counts, 'retained_managed_devices': len(output),
                 'unresolved_missing_records': sum(item['assignment_missing'] and not item['device_id'] for item in settings),
@@ -138,7 +140,9 @@ def client_compliance(client):
     from .identity_investigation import _get, _cell
     sources = collect_assessment_sources([client])
     # SDK fixtures and older saves may expose snake_case attributes.
-    fields = ('id', 'deviceName', 'azureADDeviceId', 'complianceState', 'lastSyncDateTime')
+    fields = ('id', 'deviceName', 'azureADDeviceId', 'complianceState', 'lastSyncDateTime',
+              'userId', 'userPrincipalName', 'serialNumber', 'managementState', 'operatingSystem',
+              'deviceEnrollmentType', 'managedDeviceOwnerType', 'deviceActionResults')
     sources['managed_devices'] = [{'records': [{key: _cell(_get(row, key)) for key in fields}
                                              for row in (_get(client, 'managed_devices', []) or [])]}]
     dates = [(_get(client, 'collection_status', {}) or {}).get('managed_devices', {}).get('collection_completed_at'), _get(client, 'collected_at')]

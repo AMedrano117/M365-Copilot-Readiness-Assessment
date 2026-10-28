@@ -14,6 +14,7 @@ param(
     [string]$CertificateThumbprint = "",
     [switch]$IncludeSpecialized,
     [switch]$ConnectionOnly,
+    [switch]$WaitForCollectionStart,
     # Read secrets (certificate password, workload access tokens) as one JSON
     # line from stdin so they never appear in the process command line.
     [switch]$SecretsFromStdin
@@ -180,6 +181,11 @@ try {
             # Fall back to lightweight cmdlet probes below.
         }
 
+        if ($WaitForCollectionStart) {
+            # The new process has no reusable session metadata. Do not read
+            # policy populations while later service sign-ins are still pending.
+            return $state
+        }
         try {
             Get-DlpCompliancePolicy -ErrorAction Stop | Out-Null
             $state.IPPS = $true
@@ -395,6 +401,14 @@ if ($ConnectionOnly) {
         [Console]::Error.WriteLine("CONNECTION_ERROR:Purview:$($_.Exception.Message)")
         Disconnect-PurviewSessions
         exit 2
+    }
+}
+
+if ($WaitForCollectionStart) {
+    [Console]::Error.WriteLine('AUTH_READY:Purview')
+    if ([Console]::In.ReadLine() -cne 'COLLECT') {
+        Disconnect-PurviewSessions
+        exit 1
     }
 }
 

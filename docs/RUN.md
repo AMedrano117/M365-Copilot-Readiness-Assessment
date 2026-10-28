@@ -95,6 +95,19 @@ If exports are already available, include `--reports-dir ".\output\customer\expo
 
 Each dataset uses the best available path, in this order: application permissions through Microsoft Graph, application access to workload PowerShell (an access token from the existing credential for Purview and Exchange, or a certificate), and only then a browser sign-in. Preflight prints the **evidence collection plan** with the path each dataset will use and the step that unlocks more; see [How each dataset is collected](PERMISSIONS.md#how-each-dataset-is-collected).
 
+The full live run completes selected sign-ins during **Prepare and verify access**:
+delegated Graph, SharePoint administration, Purview/Exchange, and optional legacy
+Power Platform. Application paths and cached sign-ins are preferred. PowerShell
+collectors keep the authenticated process alive and wait until sign-in preparation
+finishes before reading evidence. No additional command-line parameters are needed.
+Collection reuses those sessions and allows silent delegated Graph token refresh;
+it does not open a new sign-in or offer a later SharePoint authentication retry.
+If authentication expires or access is rejected, the source remains unavailable
+with a diagnostic. Correct access and rerun. A required delegated sign-in failure
+stops before evidence collection; optional failures remain coverage gaps. Each
+PowerShell sign-in preparation has a 15-minute timeout, and interruption closes the
+prepared collector processes. Offline runs perform no authentication.
+
 To prove a run needs no signed-in administrator, disable both kinds of sign-in:
 
 ```powershell
@@ -116,7 +129,7 @@ The live run saves progress before workload collection and updates it as each se
 
 Graph, Entra, Defender and AI usage read requests retry transient failures up to four times. Retry sleeps total at most 120 seconds per request, excluding HTTP request timeouts. Server `Retry-After` values are honored; a delay beyond the remaining budget stops the read with an explanation. Successfully collected pages are retained as partial evidence, never represented as a complete inventory.
 
-The final `--check-connections` banner distinguishes **COMPLETE**, **COMPLETE WITH WARNINGS** and **COMPLETE WITH ISSUES**. License limitations, partial or unavailable feature coverage, optional delegated access and browser sign-ins planned during collection are warnings. Failed reads and missing permissions, roles, modules, configuration or an unavailable required sign-in remain issues. A short receipt after the evidence plan counts successful checks, warnings, failures and required setup, then names the affected sources. Preflight does not complete planned browser sign-ins or establish full dataset coverage. These display categories do not change connection exit codes or collection policy.
+The final `--check-connections` banner distinguishes **COMPLETE**, **COMPLETE WITH WARNINGS** and **COMPLETE WITH ISSUES**. License limitations, partial or unavailable feature coverage, optional delegated access and browser sign-ins planned before evidence collection are warnings. Failed reads and missing permissions, roles, modules, configuration or an unavailable required sign-in remain issues. A short receipt after the evidence plan counts successful checks, warnings, failures and required setup, then names the affected sources. Preflight does not complete planned browser sign-ins or establish full dataset coverage. These display categories do not change connection exit codes or collection policy.
 
 ### Read the console and copy the next command
 
@@ -157,7 +170,7 @@ Standard setup accepts `-SharePointAdminUrl` and saves it in `.env`. Without the
 
 If no URL is configured, the live workflow can request it when SharePoint collection is selected and interactive authentication is allowed. An explicitly configured URL with invalid syntax must be corrected; the tool does not silently replace it or prompt over it. With `--interactive-auth skip` or unattended execution, a missing URL leaves SharePoint administration unassessed with a configuration reason, and SharePoint administrative PowerShell is not launched. Missing URL configuration is not a missing permission. Other selected sources can still run. Restricted does not use or prompt for this URL. Purview's initial `.onmicrosoft.com` organization-domain discovery is separate and does not establish the SharePoint hostname.
 
-Accepted browser sign-in confirms authentication only. Review the subsequent SharePoint dataset summary for collection gaps. Unreadable collector output is reported separately from authentication failures, with sanitized details in `.cache/collector_diagnostics.log`. An interactive retry accepts the same verified URL. Adding portal exports offline supplements saved evidence; it does not refresh sharing settings or repair a failed live collection.
+Accepted browser sign-in confirms authentication only. Review the subsequent SharePoint dataset summary for collection gaps. Unreadable collector output is reported separately from authentication failures, with sanitized details in `.cache/collector_diagnostics.log`. The full assessment does not request another sign-in or retry URL during collection. Correct the URL or access and rerun if this source is unavailable. Adding portal exports offline supplements saved evidence; it does not refresh sharing settings or repair a failed live collection.
 
 ## 3. Add completed portal exports and rebuild
 

@@ -7,7 +7,8 @@ param(
     [switch]$DataOnly,  # If set, outputs JSON only (for Python subprocess invocation)
     [string]$TenantId,  # Azure AD Tenant ID
     [ValidateSet("Auto", "Fresh")]
-    [string]$AuthMode = "Auto"
+    [string]$AuthMode = "Auto",
+    [switch]$WaitForCollectionStart
 )
 
 # Set buffer width to prevent line wrapping issues when called from Python
@@ -79,10 +80,7 @@ try {
             $probeToken = ConvertFrom-AzAccessToken (
                 (Get-AzAccessToken -TenantId $TenantId -ResourceUrl 'https://api.bap.microsoft.com' -WarningAction SilentlyContinue).Token
             )
-            $testCall = Invoke-RestMethod -Uri "https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments?api-version=2023-06-01" `
-                -Method Get `
-                -Headers @{Authorization = "Bearer $probeToken"} `
-                -ErrorAction Stop
+            if (-not $probeToken) { throw 'No cached Power Platform access token.' }
             $connected = $true
             Write-ConditionalOutput "      > Already connected to Power Platform" -Color Cyan
             [Console]::Error.WriteLine("AUTH_REUSED:Power Platform Admin APIs")
@@ -117,17 +115,22 @@ try {
     exit 1
 }
 
-# Step 2: Collect Power Platform data
-Write-ConditionalOutput ""
-Write-ConditionalOutput "[2/3] Collecting Power Platform deployment data..." -Color Yellow
-
-# Get access tokens for Power Platform APIs
+# Acquire both resource tokens during authentication, before the collection gate.
 $bapToken = ConvertFrom-AzAccessToken (
     (Get-AzAccessToken -TenantId $TenantId -ResourceUrl "https://api.bap.microsoft.com" -WarningAction SilentlyContinue).Token
 )
 $flowToken = ConvertFrom-AzAccessToken (
     (Get-AzAccessToken -TenantId $TenantId -ResourceUrl "https://service.flow.microsoft.com" -WarningAction SilentlyContinue).Token
 )
+
+if ($WaitForCollectionStart) {
+    [Console]::Error.WriteLine('AUTH_READY:Power Platform')
+    if ([Console]::In.ReadLine() -cne 'COLLECT') { exit 1 }
+}
+
+# Step 2: Collect Power Platform data
+Write-ConditionalOutput ""
+Write-ConditionalOutput "[2/3] Collecting Power Platform deployment data..." -Color Yellow
 
 $powerPlatformData = @{}
 $permissionFailures = @()

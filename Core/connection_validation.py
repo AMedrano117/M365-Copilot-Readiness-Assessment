@@ -381,7 +381,7 @@ async def run_connection_checks(
                 )
         else:
             results["sharepoint_governance"] = _result(
-                "sharepoint_governance", SIGN_IN, "Browser sign-in will be requested during collection."
+                "sharepoint_governance", SIGN_IN, "Browser sign-in will be requested before evidence collection."
             )
 
     exchange_roles = compliance_roles = None
@@ -448,7 +448,7 @@ async def run_connection_checks(
             results["purview"] = _result("purview", SIGN_IN, "Browser authentication is disabled for this run and no application path is available. " + unlock)
         else:
             hint = (" To collect without a sign-in: " + purview_token_reason) if purview_token_reason else ""
-            results["purview"] = _result("purview", SIGN_IN, "Browser sign-in will be requested during collection." + hint)
+            results["purview"] = _result("purview", SIGN_IN, "Browser sign-in will be requested before evidence collection." + hint)
 
     if "copilot_admin_settings" in selected:
         if delegated == "off":
@@ -566,12 +566,12 @@ def print_connection_summary(summary):
     for category, items in (('Warning', summary['warnings']), ('Failed', summary['failures']),
                             ('Setup required', summary['setup'])):
         for item in items:
-            detail = ('Sign-in planned during collection.' if _planned_sign_in(item) else
+            detail = ('Sign-in planned before evidence collection.' if _planned_sign_in(item) else
                       item.get('reason') or item.get('status'))
             console.print_paragraph(f"{category} - {item['collector']}: {detail}", indent='  ',
                                     tone='error' if category == 'Failed' else 'warning')
     if any(_planned_sign_in(item) for item in summary['warnings']):
-        console.status('Planned browser sign-ins occur during collection; --check-connections does not complete those sign-ins.')
+        console.status('Planned browser sign-ins occur before evidence collection; --check-connections does not complete those sign-ins.')
     if summary['failures'] or summary['setup']:
         console.status('Next: review failed checks and required setup before collecting the affected sources.', 'warning')
     elif summary['ready'] or summary['warnings']:

@@ -17,13 +17,15 @@ from .orchestrator_setup import (
     prepare_interactive_collection_plan,
     print_interactive_collection_summary
 )
-from .orchestrator_powershell import collect_power_platform_data, collect_sharepoint_governance_via_powershell
+from .orchestrator_powershell import (collect_power_platform_data, collect_sharepoint_governance_via_powershell,
+                                     collect_purview_data_via_powershell)
 from .orchestrator_pipelines import create_pipelines
 from . import console_reporting as console
 from .run_progress import phase
 from .offline_collection import CollectionPackagingError
 from .sharepoint_configuration import SHAREPOINT_ADMIN_URL_REQUIRED, is_valid_sharepoint_admin_url
 from .tenant_identity import TenantMismatchError, confirm_tenant_identity
+from .authentication_preparation import AuthenticationPreparationTimeout
 
 # Service-specific imports are now lazy-loaded based on SERVICES parameter
 
@@ -141,7 +143,8 @@ async def collect_sharepoint_with_retry(admin_url, tenant_id, interactive_auth='
     payload = await collect_sharepoint_governance_via_powershell(
         admin_url, tenant_id, auth_mode=interactive_auth
     )
-    if payload.get('available') or interactive_auth == 'skip' or not sys.stdin.isatty():
+    from .authentication_preparation import active_preparation
+    if active_preparation() or payload.get('available') or interactive_auth == 'skip' or not sys.stdin.isatty():
         return payload
     from . import collection_progress
     with collection_progress.paused():
@@ -202,6 +205,7 @@ async def orchestrate(
         services: List of services to analyze. Valid values: "M365", "Entra", "Defender", 
                   "Purview", "Power Platform", "Copilot Studio". Empty list or None = all services.
     """
+    authentication = None
     try:
         phase('access')
         from .cli_parser import resolve_live_permission_profile
@@ -245,7 +249,7 @@ async def orchestrate(
         auth_plan = {}
 
         def current_delegated_state():
-            return _delegated_state(os.environ.get('TENANT_ID', tenant_id), os.environ.get('CLIENT_ID', ''),
+            return _delegated_state(tenant_id, os.environ.get('CLIENT_ID', ''),
                                     delegated, interactive_auth, permission_profile)
         
         # Extract service flags for easy access
@@ -325,9 +329,6 @@ async def orchestrate(
             print_auth_plan(auth_plan, detailed=True)
             return connection_exit_code(results)
         
-        # Load modules and analyze service plans
-        await load_modules_and_analyze(tenant_id, service_config)
-
         interactive_plan = prepare_interactive_collection_plan(
             service_config,
             interactive_auth,
@@ -336,15 +337,7 @@ async def orchestrate(
         )
         print_interactive_collection_summary(interactive_plan)
         
-        # PRE-FLIGHT: Launch unified Power Platform/Copilot Studio data collector if needed
         use_inventory_source = bool(power_platform_inventory) or preview_collectors in {'power-platform', 'all'}
-        if legacy_power_platform_collector and interactive_plan['power_platform']['will_attempt'] and not use_inventory_source:
-            await collect_power_platform_data(
-                tenant_id,
-                run_power_platform,
-                run_copilot_studio,
-                auth_mode=interactive_auth,
-            )
         
         # Check if we need Graph client messages (only for Graph-based services)
         # PowerShell-based services still need client for licenses, but silently
@@ -353,11 +346,9 @@ async def orchestrate(
         
         # Initialize Graph client and licenses
         if restricted_preflight is None:
-            client, services_and_licenses, has_license_data = await setup_graph_and_licenses(tenant_id, show_graph_messages)
+            client, services_and_licenses, has_license_data = await setup_graph_and_licenses(tenant_id, show_graph_messages, collect_licenses=False)
             await confirm_tenant_identity(client, tenant_id, expected_domain=confirm_tenant,
                                           interactive=interactive_tenant_confirmation)
-        else:
-            has_license_data = await load_license_context(client, services_and_licenses)
         tenant_id = await resolve_assessment_tenant_id(client, tenant_id)
         tenant_name = await resolve_tenant_name(client, tenant_id)
         resolved_sharepoint_admin_url = await resolve_workload_configuration(
@@ -388,6 +379,38 @@ async def orchestrate(
         if any(item.get('access_audit_failed') for item in connection_results):
             console.status('Restricted access verification failed. Review the named grants before collecting tenant evidence.', tone='error')
             return 2
+        # Complete all planned user interaction before any long evidence read.
+        # PowerShell sessions stay in the same processes, stopped at a gate.
+        console.status('Preparing sign-ins. Complete any requested prompts now; evidence collection starts afterward.')
+        delegated_session = None
+        delegated_evidence = {}
+        limited_mode_plan = (auth_plan.get('datasets') or {}).get('copilot_limited_mode') or {}
+        if run_m365 and limited_mode_plan.get('selected_path') == 'graph_delegated':
+            from .delegated_auth import acquire_delegated_session
+            from .copilot_settings import not_collected
+            delegated_session, delegated_reason = await acquire_delegated_session(
+                tenant_id, os.environ.get('CLIENT_ID', ''),
+                mode=delegated, interactive_auth=interactive_auth, permission_profile=permission_profile)
+            if delegated_session is not None:
+                auth_plan.setdefault('identities', []).append({'id':'delegated','type':'user',**delegated_session.identity})
+            else:
+                delegated_evidence['copilot_limited_mode'] = not_collected(delegated_reason)
+                if delegated == 'required':
+                    console.status('Delegated sign-in is required (--delegated required) but did not complete: '+delegated_reason,tone='error')
+                    return 2
+                console.detail('Delegated enrichment skipped: '+delegated_reason)
+        from .authentication_preparation import AuthenticationPreparation
+        authentication = AuthenticationPreparation().activate()
+        sharepoint_task = purview_task = power_platform_task = None
+        if interactive_plan.get('sharepoint', {}).get('will_attempt'):
+            sharepoint_task = await authentication.prepare('SharePoint', collect_sharepoint_with_retry(
+                resolved_sharepoint_admin_url, tenant_id, interactive_auth=interactive_auth))
+        if interactive_plan.get('purview', {}).get('will_attempt') and os.environ.get('PURVIEW_DATA_SOURCE') != 'stdin':
+            purview_task = await authentication.prepare('Purview', collect_purview_data_via_powershell(
+                auth_mode=interactive_auth, tenant_id=tenant_id))
+        if legacy_power_platform_collector and interactive_plan['power_platform']['will_attempt'] and not use_inventory_source:
+            power_platform_task = await authentication.prepare('Power Platform', collect_power_platform_data(
+                tenant_id, run_power_platform, run_copilot_studio, auth_mode=interactive_auth))
         enabled_collectors = [name for name, enabled in (
             ('M365', run_m365), ('Entra', run_entra), ('Defender', run_defender),
             ('Purview', run_purview and permission_profile != 'restricted'), ('Power Platform', run_power_platform),
@@ -465,6 +488,9 @@ async def orchestrate(
         )
         phase('collection')
         checkpoint.save()
+        console.status('Sign-in preparation complete. Collecting tenant evidence...')
+        await load_modules_and_analyze(tenant_id, service_config)
+        has_license_data = await load_license_context(client, services_and_licenses)
         sharepoint_data = {"available": False, "reason": "SharePoint governance collection was not attempted."}
         if permission_profile == 'restricted':
             sharepoint_data.update(
@@ -497,11 +523,10 @@ async def orchestrate(
             if progress_enabled:
                 collection_progress.register(progress_key, progress_label)
         collection_progress.start(enabled=show_progress)
+        authentication.release()
         if sharepoint_plan.get('will_attempt'):
             try:
-                sharepoint_data = await collect_sharepoint_with_retry(
-                    resolved_sharepoint_admin_url, tenant_id, interactive_auth=interactive_auth
-                )
+                sharepoint_data = await sharepoint_task
             except BaseException as exc:
                 try:
                     checkpoint.finish('interrupted' if isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt)) else 'failed')
@@ -530,35 +555,13 @@ async def orchestrate(
                 raise CollectionPackagingError(checkpoint.path, exc) from exc
         checkpoint.record_sharepoint(sharepoint_data)
 
-        # Optional delegated enrichment for data Microsoft exposes only to
-        # signed-in administrators. It runs once, before the parallel
-        # pipelines, so a browser prompt never interleaves with collection.
-        delegated_evidence = {}
-        limited_mode_plan = (auth_plan.get('datasets') or {}).get('copilot_limited_mode') or {}
-        if run_m365 and limited_mode_plan.get('selected_path') == 'graph_delegated':
-            from .delegated_auth import acquire_delegated_session
-            from .copilot_settings import collect_copilot_limited_mode, not_collected
-            session, delegated_reason = await acquire_delegated_session(
-                os.environ.get('TENANT_ID', tenant_id), os.environ.get('CLIENT_ID', ''),
-                mode=delegated, interactive_auth=interactive_auth, permission_profile=permission_profile)
-            if session is not None:
-                auth_plan.setdefault('identities', []).append({'id': 'delegated', 'type': 'user', **session.identity})
-                delegated_evidence['copilot_limited_mode'] = await collect_copilot_limited_mode(session)
-                account = session.identity.get('upn') or 'the signed-in administrator'
-                console.status(('Delegated sign-in: reused the saved sign-in for ' if getattr(session, 'reused', False)
-                                else 'Delegated sign-in: signed in as ') + account
-                               + '; Copilot limited mode ' + ('collected.' if delegated_evidence['copilot_limited_mode'].get('available')
-                                                              else 'unavailable.')
-                               + (' Remove .cache/delegated to sign in as someone else.' if getattr(session, 'reused', False) else ''))
-            else:
-                delegated_evidence['copilot_limited_mode'] = not_collected(delegated_reason)
-                if delegated == 'required':
-                    console.status('Delegated sign-in is required (--delegated required) but did not complete: ' + delegated_reason, tone='error')
-                    checkpoint.finish('failed')
-                    return 2
-                console.detail('Delegated enrichment skipped: ' + delegated_reason)
+        if delegated_session is not None:
+            from .copilot_settings import collect_copilot_limited_mode
+            delegated_evidence['copilot_limited_mode'] = await collect_copilot_limited_mode(delegated_session)
             checkpoint.save()
-        
+        if power_platform_task is not None:
+            await power_platform_task
+
         # Create service pipelines with shared context
         pipelines = create_pipelines(
             client,
@@ -575,6 +578,7 @@ async def orchestrate(
             legacy_power_platform_collector=legacy_power_platform_collector,
             permission_profile=permission_profile,
             delegated_evidence=delegated_evidence,
+            prepared_purview=purview_task,
         )
         
         # Run service pipelines in parallel. Defender can gather its own data while
@@ -646,6 +650,10 @@ async def orchestrate(
             outputs=output, inputs=payload['package'].get('files', []),
         )
         
+    except AuthenticationPreparationTimeout as e:
+        console.section('AUTHENTICATION ERROR', 'error')
+        console.status(str(e), 'error')
+        return 2
     except CredentialUnavailableError as e:
         console.section('AUTHENTICATION ERROR', 'error')
         console.status(f"The configured service-principal credential is unavailable: {str(e)}", 'error')
@@ -685,6 +693,8 @@ async def orchestrate(
         console.detail(f"Error type: {type(e).__name__}")
         return 1
     finally:
+        if authentication is not None:
+            await authentication.close()
         # Restore normal console output on every exit path, including Ctrl+C.
         from . import collection_progress
         collection_progress.stop()

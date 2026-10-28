@@ -162,9 +162,11 @@ def _provenance(row, bundle, expected_tenant_id):
     qualifications = [] if matched else [f'Source association is {association}; confirm the retained dataset for this observation.']
     # Service caches carry their own timestamp; the report build does not refresh it.
     date = row.get("ObservationDate") or row.get("ObservedAt") or row.get("ReportDate") or source.get("collected_at") or source.get("refresh_date")
+    if row.get('DeviceEvidenceVersion'):
+        date = row.get('ObservationDate') or ''
     source_type = row.get("SourceType") or source.get("source_type") or "tenant_collection"
     source_file = row.get("SourceFile") or source.get("source_file") or source.get('source_api') or (context.get("source_file", "") if matched else '')
-    if matched and not date and source_type not in {"purview_cache", "portal_export", "prior_assessment"}:
+    if matched and not date and not row.get('DeviceEvidenceVersion') and source_type not in {"purview_cache", "portal_export", "prior_assessment"}:
         date = context.get("collected_at")
     # A row emitted by an imported portal report must use its report date, not the
     # date of an unrelated directory collection.
@@ -193,7 +195,7 @@ def _qualify_record(original, bundle, day, expected_tenant_id, *, historical=Fal
         # A report-date maintenance request is separate from an independently
         # unverified content control or a measured sharing exposure.
         row.update(Priority='Medium', SecurityGate=False, ReadinessStage='Before broad rollout')
-    if original.get("ActionType") == "Confirmation" and original.get("OriginalFeature"):
+    if original.get("ActionType") == "Confirmation" and original.get("OriginalFeature") and not row.get('DeviceEvidenceVersion'):
         row["Feature"] = original["OriginalFeature"]
         row["Recommendation"] = original.get("OriginalRecommendation", original.get("Recommendation", ""))
     observation = str(row.get("Observation") or "")
@@ -639,6 +641,8 @@ def _action(row):
         elif result['ActionTitle'].startswith('Confirm remediation of Review '):
             result['ActionTitle'] = 'Confirm the review of ' + original[7:]
         result["Feature"] = result["ActionTitle"]
+        if result.get('DeviceEvidenceVersion'):
+            result['Feature'] = result['ActionTitle'] = original
         result["Recommendation"] = "Confirm whether this condition still applies. " + str(result.get("Recommendation") or "Record the outcome and close or update the finding.")
         result["ReadinessStage"] = "Before pilot" if result.get("Status", "").lower() == "critical" else "Before broad rollout"
     else:
@@ -664,11 +668,15 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
     can support a finding or a strength under identical date/completeness rules.
     The function does not mutate inputs or perform I/O.
     """
-    bundle = evidence_bundle or {}
+    bundle = dict(evidence_bundle or {})
+    if expected_tenant_id and not bundle.get('expected_tenant_id'):
+        bundle['expected_tenant_id'] = expected_tenant_id
     day = evaluation_day(evaluation_date or bundle.get("evaluation_date"))
     from .device_compliance import build_device_compliance, qualify_device_aggregate
     compliance = build_device_compliance(bundle, profile=bundle.get('assessment_profile'), evaluation_date=day)
     recommendations = [qualify_device_aggregate(row) for row in recommendations]
+    from .device_findings import qualify_device_findings
+    recommendations = qualify_device_findings(recommendations, bundle, compliance)
     from .privileged_identity import build_privileged_assessment, privileged_context
     from .privileged_presentation import privileged_findings, qualify_privileged_recommendations
     privileged = build_privileged_assessment(bundle.get('assessment_sources') or {},
@@ -854,6 +862,10 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
     for row in records:
         if row.get("Disposition") != "Coverage" or row.get("EvidenceStatus") != "gap":
             continue
+        if row.get('DeviceEvidenceVersion'):
+            # A broad endpoint-control review does not resolve individual report
+            # errors, effective CA targeting, or the missing pilot correlation.
+            continue
         matching_questions = [question[0] for question in questions if _matches_question(row, question)]
         if matching_questions and all(control in reviewed_passes for control in matching_questions):
             # Preserve the original collection diagnostic in the workbook. A
@@ -899,7 +911,10 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
     historical_strengths = [row for row in records if row.get("Disposition") == "Assurance" and row["EvidenceStatus"] != "supported" and has_historical_support(row)]
     opportunities = [row for row in records if row.get("Disposition") == "Opportunity" and row["Historical"] != "Yes"]
     coverage = [row for row in actions if row["ActionType"] == "Evidence"]
-    confirmed_actions = [row for row in actions if row["ActionType"] == "Remediation" and row["SecurityGate"]]
+    from .device_evidence import pilot_blocker_eligible
+    # Endpoint observations retain their tenant priority, but require explicit
+    # pilot-device correlation before contributing to the pilot blocker list.
+    confirmed_actions = [row for row in actions if row["ActionType"] == "Remediation" and row["SecurityGate"] and pilot_blocker_eligible(row)]
     critical = [row for row in confirmed_actions if str(row.get("Status", "")).lower() == "critical"]
     high = [row for row in confirmed_actions if row.get("Priority") == "High"]
     medium = [row for row in confirmed_actions if row.get("Priority") == "Medium"]
@@ -912,7 +927,7 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
     # Conflicting dated reviews (one records a failure) and critical earlier
     # findings must be resolved before a pilot, even though neither is a
     # current measured failure.
-    unresolved_critical = [row for row in actions if row["SecurityGate"] and (
+    unresolved_critical = [row for row in actions if row["SecurityGate"] and pilot_blocker_eligible(row) and (
         row.get("EvidenceStatus") == "conflict"
         or row["ActionType"] == "Confirmation" and str(row.get("Status", "")).lower() == "critical")]
     blockers = critical + [row for row in high if row not in critical] + [
@@ -920,15 +935,25 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
     gates = [row for row in controls if row["security_gate"]]
     answered = [row for row in gates if row["status"] != "Not established"]
     for row in actions:
-        if not row["SecurityGate"]:
+        if row.get('DeviceEvidenceVersion'):
+            impact = row['DevicePilotImpact']
+            if row in blockers:
+                impact = 'Blocks pilot'
+            elif impact == 'Blocks pilot':
+                impact = 'Confirm before pilot'
+            row['PilotImpact'], row['ReadinessStage'] = impact, ('Before pilot' if impact in {'Blocks pilot','Confirm before pilot','Evidence gap'} else 'Before broad rollout')
+        elif not row["SecurityGate"]:
             row["PilotImpact"] = ""
+        elif row.get('ControlId') == 'ENDPOINT.POSTURE':
+            row['PilotImpact'], row['ReadinessStage'] = 'Confirm before pilot', 'Before pilot'
         elif row in blockers:
             row["PilotImpact"], row["ReadinessStage"] = "Blocks pilot", "Before pilot"
         elif row["ActionType"] == "Remediation":
             row["PilotImpact"], row["ReadinessStage"] = "Fix before broad rollout", "Before broad rollout"
         else:
             row["PilotImpact"], row["ReadinessStage"] = "Confirm before pilot", "Before pilot"
-    pilot_conditions = [row for row in actions if row["SecurityGate"] and row not in blockers]
+    pilot_conditions = [row for row in actions if row["SecurityGate"] and row not in blockers and
+                        row.get('DevicePilotImpact') not in {'Tenant hardening','Inventory hygiene'}]
     if critical:
         decision, rationale = "Not ready for pilot", "Confirmed critical conditions require remediation before the pilot proceeds."
     elif blockers:

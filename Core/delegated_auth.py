@@ -161,7 +161,10 @@ async def acquire_delegated_session(tenant_id, client_id, *, mode="auto", intera
         "roles": sorted(claims.get("wids", []) or []),
         "scopes": sorted(str(claims.get("scp", "")).split()),
     }
-    return DelegatedSession(credential, identity, scopes, reused=reused), ""
+    # After the upfront sign-in, permit silent refresh only. Conditional Access
+    # or an expired session must not open another browser during collection.
+    silent_credential = _build_credential(tenant_id, client_id, record=record, allow_prompt=False)
+    return DelegatedSession(silent_credential, identity, scopes, reused=reused), ""
 
 
 def forget_delegated_session(tenant_id, client_id):

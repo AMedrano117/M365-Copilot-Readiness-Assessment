@@ -9,6 +9,11 @@ A normal build continues to produce the HTML assessment and readiness summary pl
 assessment and technical evidence workbooks. Use `--extra-exports evidence-pages` for
 linked HTML evidence pages. Keep companion files together so local links resolve.
 
+Device findings use concise population summaries in the customer workbook;
+per-device and per-setting rows remain in Technical Evidence. See
+[Device evidence interpretation](DEVICE_EVIDENCE.md) for units, dates, pilot
+qualification and the technical reconciliation registers.
+
 ## Shared-result snapshots
 
 Identity finding titles now follow one [versioned condition taxonomy](IDENTITY_FINDING_TAXONOMY.md).
