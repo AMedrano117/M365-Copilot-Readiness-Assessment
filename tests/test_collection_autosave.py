@@ -104,6 +104,22 @@ class CollectionAutosaveTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('COLLECTION INPUT', self.output.getvalue())
 
     async def test_checkpoint_exists_before_sharepoint_and_survives_interruption(self):
+        # Model the authentication/collection boundary: this test interrupts the
+        # data read after the saved checkpoint, not the earlier sign-in.
+        class DeferredCollection:
+            def __init__(self, operation):
+                self.operation = operation
+            def __await__(self):
+                return self.operation.__await__()
+        class PreparedAuthentication:
+            def activate(self):
+                return self
+            async def prepare(self, label, operation):
+                return DeferredCollection(operation)
+            def release(self):
+                pass
+            async def close(self):
+                pass
         async def interrupted_sharepoint(*args, **kwargs):
             path = next(Path('Reports').glob('*/*/collection.json'))
             saved = load_collection(path)
@@ -113,7 +129,8 @@ class CollectionAutosaveTests(unittest.IsolatedAsyncioTestCase):
             raise asyncio.CancelledError()
         with patch('Core.orchestrator.prepare_interactive_collection_plan', return_value={
             'power_platform': {'will_attempt': False}, 'sharepoint': {'selected': True, 'will_attempt': True},
-        }), patch('Core.orchestrator.collect_sharepoint_with_retry', side_effect=interrupted_sharepoint):
+        }), patch('Core.orchestrator.collect_sharepoint_with_retry', side_effect=interrupted_sharepoint), \
+                patch('Core.authentication_preparation.AuthenticationPreparation', PreparedAuthentication):
             with self.assertRaises(asyncio.CancelledError):
                 await self.run_assessment()
         saved = load_collection(next(Path('Reports').glob('*/*/collection.json')))

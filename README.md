@@ -85,6 +85,11 @@ Create `exports` first or omit `--reports-dir` until exports are available. Rest
 
 SharePoint administrative PowerShell cannot use a client secret; without a certificate it announces and requests a SharePoint administrator browser sign-in, while tenant sharing settings still come from Microsoft Graph. Purview uses an application token, then a certificate, then a browser sign-in. Standard SharePoint administrative collection needs the actual admin-center URL. Open the customer's Microsoft 365 admin center, choose **Admin centers > SharePoint**, and copy the HTTPS origin, such as `https://<actual-prefix>-admin.sharepoint.com`, without a page path or query. The tool does not infer this hostname from the tenant's initial `.onmicrosoft.com` domain. See [URL configuration](docs/prereq.md#sharepoint-admin-url).
 
+Live assessments complete all selected administrator sign-ins up front, then reuse
+the authenticated sessions for collection. No extra parameters are needed. An
+expired or rejected session becomes a source gap instead of opening another browser
+during collection. See [the sign-in sequence](docs/RUN.md#application-permissions-first-delegated-sign-in-only-when-needed).
+
 Run the idempotent setup and connection preflight, replacing the URL placeholder with the verified origin:
 
 ```powershell

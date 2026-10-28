@@ -65,7 +65,8 @@ async def setup_graph_and_licenses(tenant_id, show_graph_messages, collect_licen
     Returns:
         Tuple: (graph_client, services_and_licenses, has_license_data)
     """
-    console.status('Microsoft Graph: checking application access and license context...')
+    console.status('Microsoft Graph: checking application access and license context...' if collect_licenses else
+                   'Microsoft Graph: checking application access...')
     # Always create Graph client (needed for license checks in all services)
     # Use silent mode for PowerShell-only runs (Purview, Power Platform)
     client = await get_graph_client(tenant_id, silent=not show_graph_messages)
