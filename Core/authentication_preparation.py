@@ -178,7 +178,7 @@ class AuthenticationPreparation:
                 await self.changed.wait()
         try:
             await asyncio.wait_for(wait_ready(),timeout=self.timeout)
-        except TimeoutError:
+        except asyncio.TimeoutError:
             await self.close()
             raise AuthenticationPreparationTimeout(
                 f'{label} sign-in preparation timed out. Complete the required sign-in and rerun the assessment.') from None
