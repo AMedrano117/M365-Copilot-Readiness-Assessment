@@ -128,8 +128,12 @@ def _select(key, row, rec):
         kind, state, level = _text(row, 'Record Type'), _text(row, 'Risk State').lower(), _text(row, 'Risk Level').lower()
         if kind not in {'Risky User', 'Risk Detection'} or state in {'remediated', 'dismissed', 'confirmedsafe', 'none'}:
             return None
-        if finding_key == 'entra.identity_risk.users' and (kind != 'Risky User' or state not in {'atrisk', 'confirmedcompromised'}):
-            return None
+        cohort = None
+        if finding_key == 'entra.identity_risk.users':
+            from .identity_investigation import risky_user_selection
+            cohort = risky_user_selection({'riskState': state, 'riskLevel': level})
+            if kind != 'Risky User' or cohort is None:
+                return None
         # The legacy Identity Protection recommendations have no FindingKey.
         # Their leading population distinguishes confirmed compromise from a
         # general risk review; subgroup counts elsewhere are not selectors.
@@ -140,8 +144,10 @@ def _select(key, row, rec):
             return None
         if level not in {'high', 'medium'} and state not in {'atrisk', 'confirmedcompromised'}:
             return None
+        reason = ('Risk state is unavailable or unknown; confirm before classifying this record as unresolved'
+                  if cohort == 'state_unknown' else 'Identity risk still requires review')
         return _item(kind, _first(row, 'User Principal Name', 'Display Name'), _text(row, 'Object ID'),
-            'Identity risk still requires review', _text(row, 'Risk State'), _details(row, 'Risk Level', 'Risk Detail'),
+            reason, _text(row, 'Risk State'), _details(row, 'Risk Level', 'Risk Detail'),
             _text(row, 'Last Updated'), 'Entra admin center > Protection > Identity Protection',
             'Review the risk detections and recent sign-ins, then confirm remediation or dismissal.')
     if key == 'admin_role_detail':

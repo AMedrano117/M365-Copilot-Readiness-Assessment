@@ -14,6 +14,16 @@ per-device and per-setting rows remain in Technical Evidence. See
 [Device evidence interpretation](DEVICE_EVIDENCE.md) for units, dates, pilot
 qualification and the technical reconciliation registers.
 
+Identity-risk findings revalidate both positive and zero legacy summaries against
+the saved `riskyUsers` records. Counts and affected-user detail use the same
+selection: `atRisk` and `confirmedCompromised` at every risk level. Resolved and
+dismissed records remain raw evidence, outside the affected list. High/medium-risk
+records with unknown state are separately qualified for confirmation. The finding
+records the risky-user source's completeness; a partial or unavailable read cannot
+establish absence of risk. Use an explicit offline `--run-type Standalone` to
+evaluate saved evidence with these corrections in a separate package. Normal
+snapshot replay preserves the completed assessment's recorded conclusions.
+
 ## Shared-result snapshots
 
 Identity finding titles now follow one [versioned condition taxonomy](IDENTITY_FINDING_TAXONOMY.md).
