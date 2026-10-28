@@ -109,6 +109,14 @@ its linked detail fails workbook validation. Concise customer findings retain
 record and distinct-device counts, evidence period, qualification, pilot treatment,
 recommended action and completion evidence. Rendering uses the frozen result.
 
+Equal payloads at different native response positions or in separate reads remain
+separate source occurrences with their original EVD IDs. Device detail selection
+uses those occurrence IDs instead of deduplicating row content. If an older failed
+export retained fewer detail rows than the frozen device cohort, rendering restores
+that cohort from the original native rows. It does not change the assessment
+conclusions, raw values or snapshot. Valid retained detail remains unchanged, and
+unavailable or repeated occurrence references still fail validation.
+
 Fictional regressions cover identity conflicts, overlapping units, stale and
 malformed values, reporting errors, third-party AV, pilot correlation, raw-row
 preservation and summary/technical separation. Existing detail assertions remain

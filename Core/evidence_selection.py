@@ -67,7 +67,7 @@ class _Registry:
         self.tenant_id = tenant_id
         self.datasets = sources
         self.sources, self.evidence = [], []
-        self.refs, self.fingerprints = {}, {}
+        self.refs, self.fingerprints, self.occurrences = {}, {}, {}
         for name, datasets in sources.items():
             for index, dataset in enumerate(datasets):
                 self.add(name, index, dataset)
@@ -85,6 +85,7 @@ class _Registry:
                                   'source_record_id': _native_id(row), 'raw': row})
             ref = {'dataset': name, 'dataset_index': index, 'record_index': position}
             self.refs[(name, index, position)] = record_id
+            self.occurrences[record_id] = (ref, row)
             self.fingerprints.setdefault(_fingerprint(row), []).append(ref)
 
     def declared(self, name, records, source):
@@ -144,6 +145,31 @@ def _source_names(finding):
                     ['irm_config'] if 'rights management' in text or 'azure-rms' in text else names)
         names = selected
     return list(dict.fromkeys(names))
+
+
+def _device_occurrences(finding, registry):
+    """Select the frozen device cohort by native occurrence, never row content.
+
+    Equal payloads can occur at different response positions or in separate
+    reads. Their EVD IDs are distinct, even when the source-native ID repeats.
+    """
+    identifiers = finding.get('DeviceEvidenceIds')
+    if not isinstance(identifiers, list) or any(not isinstance(item,str) for item in identifiers):
+        raise ValueError('Device evidence requires explicit native source occurrence IDs.')
+    if len(identifiers) != len(set(identifiers)):
+        raise ValueError('Device evidence repeats a native source occurrence ID.')
+    records = []
+    for identifier in identifiers:
+        occurrence = registry.occurrences.get(identifier)
+        if occurrence is None:
+            raise ValueError('A selected device evidence occurrence is unavailable. Rebuild using the original saved collection.')
+        ref, raw = occurrence
+        records.append(_record(raw,[ref]))
+    return {'records':records,'record_type':'selected_records',
+            'selection':'Exact retained device source occurrences selected by the shared result.',
+            'limitations':[],
+            'reconciliation':{'operation':'count','expected':len(identifiers),
+                              'count_unit':'native source occurrences; equal rows remain separate'}}
 
 
 def _from_declared(finding, registry):
@@ -304,6 +330,13 @@ def build_evidence_selection(result, bundle, *, tenant_name=None, generated_at=N
     for original in result.get('recommendations') or []:
         row = _plain(original)
         identifier = row.get('RecommendationId')
+        retained_records = (retained.get('records') or {}).get(identifier)
+        if (row.get('DeviceEvidenceVersion') and isinstance(row.get('DeviceEvidenceIds'),list)
+                and retained_records and len(retained_records) != len(row['DeviceEvidenceIds'])):
+            # A failed older export can retain content-deduplicated detail. The
+            # frozen cohort and original native IDs remain authoritative; repair
+            # only that projection, without re-evaluating the assessment.
+            retained_records = None
         investigation = str(row.get('InvestigationStatus') or '').lower()
         historical = str(row.get('Historical') or '').lower() in {'yes', 'true'} or 'historical' in investigation
         planning = 'planning' in investigation or row.get('FindingKey') == 'planning'
@@ -319,7 +352,12 @@ def build_evidence_selection(result, bundle, *, tenant_name=None, generated_at=N
             # within this selection call, never across runs or source changes.
             finding_key = str(row.get('FindingKey') or '')
             shared_mfa = 'mfa_registration' in finding_key and not finding_key.startswith('entra.privileged.')
-            if shared_mfa and mfa_detail is not None:
+            # Self-contained legacy snapshots have declared detail but no native
+            # source envelopes; keep their existing declared-evidence adapter.
+            if (original_source_ids and row.get('DeviceEvidenceVersion') and 'DeviceEvidenceIds' in row
+                    and not retained_records):
+                detail = _device_occurrences(row, registry)
+            elif shared_mfa and mfa_detail is not None:
                 detail = mfa_detail
             else:
                 detail = expand_finding_records(row, sources, evaluation_date=result.get('evaluation_date'), tenant_id=tenant_id,
@@ -343,7 +381,6 @@ def build_evidence_selection(result, bundle, *, tenant_name=None, generated_at=N
                     if marker not in seen and not (refs and all(_fingerprint(ref) in covered_refs for ref in refs)):
                         records.append(record); seen.add(marker)
                 detail.setdefault('limitations',[]).extend(declarations.get('limitations') or [])
-        retained_records = (retained.get('records') or {}).get(identifier)
         retained_selected = identifier in (retained.get('selected_findings') or [])
         if retained_records:
             records = _plain(retained_records)

@@ -235,7 +235,9 @@ def _projection(row, record, devices, compliance=None):
                                   ('Protection', ('healthStatus',)), ('Policy', ('policyName', 'Policy'))])
         if compliance and dataset == 'compliance_setting_states':
             candidates = compliance['_settings_by_id'].get(str(_value(fields, 'id') or ''), [])
-            matches = [item for item in candidates if all(fields.get(key) == item_value for key, item_value in item['record'].items())]
+            native_matches = [item for item in candidates if (item.get('evidence') or {}).get('evidence_id')
+                              in (record.get('evidence_ids') or [])]
+            matches = native_matches or [item for item in candidates if all(fields.get(key) == item_value for key, item_value in item['record'].items())]
             if len(matches) == 1:
                 item = matches[0]
                 linked = compliance['_devices_by_id'].get(item['device_id'], []) if item['device_id'] else []
