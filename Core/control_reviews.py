@@ -17,6 +17,33 @@ REVIEW_VERSION = "1.0"
 REVIEW_MAX_AGE_DAYS = 35
 
 
+def tenant_review_profile(profile):
+    """Separate optional deployment planning from tenant control attestations."""
+    raw = deepcopy(_profile_raw(profile or {}))
+    supplied = raw.get('readiness_review')
+    if not isinstance(supplied, dict):
+        return profile, {}
+    optional_keys = ('pilot_scope', 'pilot_plan', 'pilot_outcomes', 'pilot_conditions', 'expansion_scope', 'expansion_approval')
+    optional = {key: supplied.pop(key) for key in optional_keys if key in supplied}
+    excluded_ids = {item.get('id') for key in ('pilot_scope', 'expansion_scope')
+                    if isinstance((item := optional.get(key)), dict) and isinstance(item.get('id'), str)}
+    for key in ('control_reviews', 'check_reviews'):
+        if isinstance(supplied.get(key), list):
+            optional[key] = [row for row in supplied[key] if isinstance(row, dict) and
+                             (isinstance(row.get('scope_id'), str) and row['scope_id'] in excluded_ids
+                              or row.get('control_id') == 'ADOPTION.BASELINE')]
+            supplied[key] = [row for row in supplied[key] if row not in optional[key]]
+    wrapped = LoadedAssessmentProfile(raw=raw, filename=(profile or {}).get('filename', ''))
+    return wrapped, optional
+
+
+def build_tenant_review_evidence(profile, **options):
+    wrapped, optional = tenant_review_profile(profile)
+    result = build_review_evidence(wrapped, **options)
+    result['optional_planning_context'] = optional
+    return result
+
+
 class LoadedAssessmentProfile(dict):
     """Internal loader wrapper, distinguishable from arbitrary JSON keys."""
 
@@ -99,7 +126,7 @@ def validate_readiness_review(profile, *, allowed_controls=None):
 
     for key in ("tenant_scope", "pilot_scope", "expansion_scope"):
         scope = supplied.get(key)
-        if scope is None and (key != 'pilot_scope' or supplied.get('tenant_scope')):
+        if scope is None:
             continue
         if fields(scope, "readiness_review." + key, ("id", "description", "reviewer_role", "evidence_reference")):
             if scope.get("population_count") is not None and (isinstance(scope["population_count"], bool)

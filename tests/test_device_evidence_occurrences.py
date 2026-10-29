@@ -157,7 +157,8 @@ class DeviceOccurrenceWorkbookTests(unittest.TestCase):
                 integrity=list(customer['Integrity Checks'].values)
                 checks=[dict(zip(integrity[0],row)) for row in integrity[1:]]
                 self.assertTrue(all(row['Status']=='Passed' for row in checks))
-                self.assertEqual(len(list(customer['Devices'].values))-1,4)
+                self.assertEqual(len(list(customer['Devices'].values))-1,3)
+                self.assertFalse(any(row.get('DeviceFindingType') == 'PilotDevicePostureNotEstablished' for row in result['recommendations']))
                 html=render_customer_report(result,bundle,'Fictional',path,technical_workbook_path=technical_workbook_path(path))
                 self.assertTrue('1 device' in html)
                 self.assertNotIn('172 failed setting records',html)

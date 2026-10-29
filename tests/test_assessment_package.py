@@ -445,8 +445,8 @@ class AssessmentPackageTests(unittest.TestCase):
             # Run from another working directory; outputs stay in the portable
             # source package and will be retained by the copied customer package.
             first = run_cli(collection, root / 'first_build')
-            self.assertEqual(first['decision'], 'Ready for a controlled pilot')
-            self.assertEqual(first['rollout_progress']['current_stage_id'], 'pilot')
+            self.assertEqual(first['decision'], 'Tenant baseline ready')
+            self.assertEqual(first['rollout_progress']['current_stage_id'], 'assessed')
             self.assertEqual(first['counts']['evidence_gaps'], 0)
             self.assertEqual(len(first['domains']), 7)
             usage = [metric for metric in first['adoption_metrics']

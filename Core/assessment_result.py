@@ -22,7 +22,7 @@ DOMAINS = (
     ("applications", "Applications and connectors", "Application and security administrators", "Application grants and connected sources can extend access to organizational information."),
     ("endpoints", "Endpoints and threat protection", "Endpoint and security operations owners", "Managed devices and incident response help protect the accounts and data used with Copilot."),
     ("licensing", "Copilot licensing and prerequisites", "Microsoft 365 administrator", "License assignment and application prerequisites determine who can use the intended Copilot experience."),
-    ("adoption", "Pilot suitability and adoption", "Business sponsor and adoption lead", "Usage and workload activity help choose a pilot and measure its outcomes; they do not prove security readiness."),
+    ("adoption", "Usage context", "Microsoft 365 administrator", "Usage and workload activity are informational context; pilot design and business use cases are outside this assessment."),
 )
 OPTIONAL_DOMAINS = (
     ("agents", "Agents and extensibility", "Agent platform owner", "Agent identities, knowledge sources and actions need an accountable owner and bounded permissions."),
@@ -690,11 +690,12 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
     if expected_tenant_id and prior.get("tenant_id") and str(prior["tenant_id"]).lower() != str(expected_tenant_id).lower():
         raise ValueError("Prior assessment tenant ID does not match the assessed tenant.")
     enabled = _scope_domains(bundle)
-    questions = [*QUESTIONS, *(question for question in OPTIONAL_QUESTIONS if question[1] in enabled)]
-    from .control_reviews import build_review_evidence
-    review = build_review_evidence(bundle.get("assessment_profile") or {}, evaluation_date=day,
+    questions = [*(question for question in QUESTIONS if question[0] != 'ADOPTION.BASELINE'),
+                 *(question for question in OPTIONAL_QUESTIONS if question[1] in enabled)]
+    from .control_reviews import build_tenant_review_evidence
+    review = build_tenant_review_evidence(bundle.get("assessment_profile") or {}, evaluation_date=day,
                                   expected_tenant_id=expected_tenant_id,
-                                  allowed_controls={question[0] for question in questions})
+                                  allowed_controls={question[0] for question in questions} | {'ADOPTION.BASELINE'})
     records, observations = [], []
     for original in recommendations or []:
         if original.get("SourceType") == "assessment_requirement":
@@ -748,21 +749,8 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
     tenant_scope = review.get('tenant_scope') or {}
     review_facts = [dict(row, label=next(question[2] for question in questions if question[0] == row["control_id"]))
                     for row in review["observations"] if row.get("scope_id") == tenant_scope.get("id")]
-    plan = review.get("pilot_plan") or {}
-    if plan.get("current") and pilot_scope.get("current") and parse_date(plan["reviewed_at"]) >= parse_date(pilot_scope["reviewed_at"]):
-        review_facts.append({
-            "tenant_id": review["tenant_id"], "domain_id": "adoption", "control_id": "ADOPTION.BASELINE",
-            "metric_id": "reviewed_pilot_plan", "label": "Reviewed pilot plan", "value": plan["baseline"],
-            "unit": "pilot plan", "availability": "available", "control_result": "pass", "complete": True,
-            "scope": {"id": pilot_scope["id"], "description": pilot_scope["description"]},
-            "observed_at": plan["reviewed_at"], "source_type": "operator_attestation",
-            "source_file": (bundle.get("assessment_profile") or {}).get("filename", ""),
-            "reviewer_role": plan["reviewer_role"], "evidence_reference": plan["evidence_reference"],
-            "qualifications": ["Dated operator review of the pilot plan: " + plan["evidence_reference"]],
-        })
     explicit = reconcile_observations([*(bundle.get("observations") or []), *review_facts], evaluation_date=day, expected_tenant_id=expected_tenant_id)
     observations.extend(explicit)
-    observations.extend(row for row in review["observations"] if row.get("scope_id") != pilot_scope.get("id"))
     for fact in explicit:
         if (fact.get("control_result") != "fail" or fact["selection"] != "selected"
                 or fact["domain_id"] not in enabled):
@@ -813,6 +801,12 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
         if assessment['result']=='conflict': row['EvidenceStatus']='conflict'
         records.append(row)
         observations.append(fact)
+    for row in records:
+        if row.get('ControlId') == 'ADOPTION.BASELINE' or row.get('FindingKey') in {'pilot_plan', 'adoption.pilot_plan'} or (
+                row.get('DomainId') == 'adoption' and not row.get('ControlId')):
+            row.setdefault('OriginalDisposition', row.get('Disposition'))
+            row.update(Disposition='Reference',
+                       AssessmentScopeQualification='Optional planning/usage context; not a tenant readiness requirement.')
     controls = []
     for question in questions:
         control, domain, title, _, _, security_gate = question
@@ -911,23 +905,17 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
     historical_strengths = [row for row in records if row.get("Disposition") == "Assurance" and row["EvidenceStatus"] != "supported" and has_historical_support(row)]
     opportunities = [row for row in records if row.get("Disposition") == "Opportunity" and row["Historical"] != "Yes"]
     coverage = [row for row in actions if row["ActionType"] == "Evidence"]
-    from .device_evidence import pilot_blocker_eligible
-    # Endpoint observations retain their tenant priority, but require explicit
-    # pilot-device correlation before contributing to the pilot blocker list.
-    confirmed_actions = [row for row in actions if row["ActionType"] == "Remediation" and row["SecurityGate"] and pilot_blocker_eligible(row)]
+    from .device_evidence import tenant_blocker_eligible
+    # Native device blockers require current explicit security failures and
+    # stable identity. Pilot membership does not change tenant eligibility.
+    confirmed_actions = [row for row in actions if row["ActionType"] == "Remediation" and row["SecurityGate"] and tenant_blocker_eligible(row)]
     critical = [row for row in confirmed_actions if str(row.get("Status", "")).lower() == "critical"]
     high = [row for row in confirmed_actions if row.get("Priority") == "High"]
     medium = [row for row in confirmed_actions if row.get("Priority") == "Medium"]
     confirmation = [row for row in actions if row["ActionType"] == "Confirmation"]
-    # Methodology 3.0: the pilot decision rests on the tenant-wide baseline. A
-    # control enforced for all users covers any pilot group, so no pilot roster
-    # is needed. Confirmed critical or high-priority conditions block the pilot;
-    # checks the evidence could not answer are conditions to confirm before the
-    # pilot starts, unless too few required checks were answered to decide.
-    # Conflicting dated reviews (one records a failure) and critical earlier
-    # findings must be resolved before a pilot, even though neither is a
-    # current measured failure.
-    unresolved_critical = [row for row in actions if row["SecurityGate"] and pilot_blocker_eligible(row) and (
+    # Keep critical/high findings and unresolved conflicting evidence distinct
+    # from unanswered controls. Deployment planning cannot resolve either.
+    unresolved_critical = [row for row in actions if row["SecurityGate"] and tenant_blocker_eligible(row) and (
         row.get("EvidenceStatus") == "conflict"
         or row["ActionType"] == "Confirmation" and str(row.get("Status", "")).lower() == "critical")]
     blockers = critical + [row for row in high if row not in critical] + [
@@ -935,27 +923,12 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
     gates = [row for row in controls if row["security_gate"]]
     answered = [row for row in gates if row["status"] != "Not established"]
     for row in actions:
-        if row.get('DeviceEvidenceVersion'):
-            impact = row['DevicePilotImpact']
-            if row in blockers:
-                impact = 'Blocks pilot'
-            elif impact == 'Blocks pilot':
-                impact = 'Confirm before pilot'
-            row['PilotImpact'], row['ReadinessStage'] = impact, ('Before pilot' if impact in {'Blocks pilot','Confirm before pilot','Evidence gap'} else 'Before broad rollout')
-        elif not row["SecurityGate"]:
-            row["PilotImpact"] = ""
-        elif row.get('ControlId') == 'ENDPOINT.POSTURE':
-            row['PilotImpact'], row['ReadinessStage'] = 'Confirm before pilot', 'Before pilot'
-        elif row in blockers:
-            row["PilotImpact"], row["ReadinessStage"] = "Blocks pilot", "Before pilot"
-        elif row["ActionType"] == "Remediation":
-            row["PilotImpact"], row["ReadinessStage"] = "Fix before broad rollout", "Before broad rollout"
-        else:
-            row["PilotImpact"], row["ReadinessStage"] = "Confirm before pilot", "Before pilot"
-    pilot_conditions = [row for row in actions if row["SecurityGate"] and row not in blockers and
-                        row.get('DevicePilotImpact') not in {'Tenant hardening','Inventory hygiene'}]
+        row['PilotImpact'] = ('Blocks readiness' if row in blockers else '' if not row['SecurityGate'] else
+                              'Tenant remediation' if row['ActionType'] == 'Remediation' else 'Evidence review')
+        row['ReadinessStage'] = 'Tenant remediation' if row['ActionType'] == 'Remediation' else 'Evidence review'
+    readiness_conditions = [row for row in actions if row['SecurityGate'] and row not in blockers]
     if critical:
-        decision, rationale = "Not ready for pilot", "Confirmed critical conditions require remediation before the pilot proceeds."
+        decision, rationale = 'Tenant remediation required', 'Confirmed critical tenant conditions require remediation. Review the affected population and evidence qualifications.'
     elif blockers:
         fix_count = sum(row["ActionType"] == "Remediation" for row in blockers)
         resolve_count = len(blockers) - fix_count
@@ -964,19 +937,18 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
             parts.append(f"{fix_count} high-priority tenant condition{'s' if fix_count != 1 else ''} must be fixed")
         if resolve_count:
             parts.append(f"{resolve_count} conflicting or critical earlier finding{'s' if resolve_count != 1 else ''} must be resolved")
-        decision, rationale = "Not ready for pilot", (
-            " and ".join(parts) + " before a pilot starts. Every other required check is either met or listed as a condition.")
-    elif gates and len(answered) * 2 < len(gates):
-        decision, rationale = "Readiness unconfirmed", (
-            f"Only {len(answered)} of {len(gates)} required checks could be answered from the collected evidence, too few to decide. "
+        decision, rationale = 'Tenant remediation required', (
+            " and ".join(parts) + '. Review the tenant finding scope and evidence qualifications.')
+    elif not gates or len(answered) * 2 < len(gates):
+        decision, rationale = 'Tenant readiness unconfirmed', (
+            f"Only {len(answered)} of {len(gates)} required tenant checks could be answered from the collected evidence, too few to decide. "
             "Collect the missing sources listed under Open checks, then rebuild the report.")
-    elif pilot_conditions:
-        decision, rationale = "Controlled pilot with conditions", (
-            "No blocking condition was found in the tenant-wide baseline. Confirm the listed checks before the pilot starts "
-            "and schedule the remaining fixes before broad rollout.")
+    elif readiness_conditions or any(row['status'] != 'Observed' for row in gates):
+        decision, rationale = 'Tenant readiness with conditions', (
+            'No blocking tenant condition was established. Resolve or confirm the listed technical conditions; missing evidence is not proof that a control passed.')
     else:
-        decision, rationale = "Ready for a controlled pilot", (
-            "Every required check passed tenant-wide. Choose a bounded pilot group and agree its success measures.")
+        decision, rationale = 'Tenant baseline ready', (
+            'Current evidence supports the required tenant baseline checks within the assessed scope. This is not authorization for a pilot or rollout.')
     counts = {
         "actions": len(actions), "remediation": sum(row["ActionType"] == "Remediation" for row in actions), "confirmation": len(confirmation),
         "evidence_gaps": len(coverage), "strengths": len(strengths), "opportunities": len(opportunities),
@@ -1008,7 +980,7 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
         else:
             summary = 'The collected evidence does not yet answer the required checks in this area.'
         if domain == 'adoption' and metrics:
-            summary = 'Dated usage and workload observations support pilot planning. Agree the pilot use cases and outcome measures with the business sponsor.'
+            summary = 'Dated usage and workload observations are informational context. Business use-case and pilot planning are outside this assessment.'
         domains.append({
             "id": domain, "title": title, "owner_role": owner, "why_it_matters": why,
             "status": status, "summary": summary, "findings": findings, "actions": domain_actions,
@@ -1036,6 +1008,7 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
         })
     dates = sorted({row["observed_at"] for row in observations if row.get("observed_at")})
     result = {
+        "assessment_scope": "tenant_readiness",
         "schema_version": EVIDENCE_SCHEMA_VERSION, "evidence_schema_version": EVIDENCE_SCHEMA_VERSION,
         "reconciliation_version": RECONCILIATION_VERSION,
         "methodology_version": METHODOLOGY_VERSION, "evaluation_date": day.isoformat(),
@@ -1048,34 +1021,22 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
         "strengths": strengths, "historical_strengths": historical_strengths, "opportunities": opportunities,
         "coverage": coverage, "decision_coverage": [row for row in coverage if row["SecurityGate"]],
         "optional_coverage": optional_records, "counts": counts, "critical": critical, "high": high, "medium": medium,
-        "blockers": blockers, "pilot_conditions": pilot_conditions,
+        "blockers": blockers, "pilot_conditions": [], "readiness_conditions": readiness_conditions,
         "answered_controls": len(answered), "required_controls": len(gates),
         "evidence": observations, "adoption_metrics": [row for row in metrics if row["selection"] == "selected"],
         "superseded_findings": superseded, "evidence_period": {"start": dates[0] if dates else None, "end": dates[-1] if dates else None},
         "rollout_conditions": [
-            {"stage": "Prepare", "condition": "Fix the blocking conditions and confirm the checks the evidence could not answer."},
-            {"stage": "Authorize pilot", "condition": "Choose a bounded pilot group, a business owner and the permitted use cases."},
-            {"stage": "Expand", "condition": "Close or approve the remaining remediation, confirm earlier findings and review pilot outcomes."},
+            {'stage': 'Remediate', 'condition': 'Resolve the retained tenant security findings.'},
+            {'stage': 'Verify', 'condition': 'Confirm required control coverage with current, scoped evidence.'},
         ],
     }
     from .repository_provenance import current_revision
     result['producing_revision'] = current_revision()
     result["readiness_review"] = review
+    from .tenant_readiness import prepare_tenant_scope
+    prepare_tenant_scope(result)
     from .readiness_progress import build_rollout_progress
     result["rollout_progress"] = build_rollout_progress(result, review)
-    milestone = result["rollout_progress"]["current_stage_id"]
-    if milestone == "broader":
-        result["decision"] = "Ready for broader adoption"
-        result["rationale"] = "The pilot outcomes, sponsor approval and current control reviews support the explicitly defined larger population."
-    elif milestone == "pilot" and result["decision"] == "Not ready for pilot" and not critical:
-        # Every high-priority condition has a current, documented pilot treatment.
-        result["decision"] = "Controlled pilot with conditions"
-        result["rationale"] = ("Documented pilot treatments cover the high-priority conditions. They remain open and must be "
-                               "fixed before broad rollout.")
-    elif milestone not in {"pilot", "broader"} and result["decision"] in {
-            "Ready for a controlled pilot", "Controlled pilot with conditions", "Pilot only — remediation required"}:
-        result["decision"] = "Readiness unconfirmed"
-        result["rationale"] = "Complete the remaining pilot requirements before authorizing the next rollout stage."
     result['operational_results'] = operation
     from .authentication_findings import assessment_authentication_summary
     result['authentication_assessment'] = assessment_authentication_summary(bundle, operation)

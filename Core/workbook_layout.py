@@ -1035,6 +1035,11 @@ def split_workbook_layout(source_workbook, result, bundle, assessment_path, tech
                     locations = remap(cell.hyperlink.target[1:], external=True)
                     cell.hyperlink = locations[0] if locations else None
     manifest_rows = _rows(assessment['Run Manifest'])
+    if result.get('assessment_scope') == 'tenant_readiness':
+        manifest_rows.extend([
+            {'Item': 'Assessment scope', 'Value': 'Tenant technical readiness'},
+            {'Item': 'Assessment outcome', 'Value': result.get('decision')},
+            {'Item': 'Assessment scope qualification', 'Value': result.get('assessment_scope_qualification')}])
     present = {row.get('Item') for row in manifest_rows}
     manifest_rows.extend({'Item': item, 'Value': value} for item, value in
                          [('Tenant', tenant_name), ('Tenant ID', result.get('tenant_id')),

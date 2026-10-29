@@ -130,6 +130,12 @@ def evaluate_comparability(current, baseline, *, control_mapping=None):
         reasons.append(reason(code,area,detail))
         blocked |= blocking
         qualified |= not blocking
+    scope = (current.get('assessment_scope'), current.get('assessment_scope_version'))
+    prior_scope = (baseline.get('assessment_scope'), baseline.get('assessment_scope_version'))
+    if scope != prior_scope and (any(scope) or any(prior_scope)):
+        add('assessment_scope_changed', 'methodology',
+            'Tenant technical readiness and legacy pilot/rollout assessments use different decision boundaries; their conclusions cannot establish technical improvement or regression.',
+            blocking=True)
     if any(snapshot.get('historical_import') or (snapshot.get('run_context') or {}).get('HistoricalImport')
            for snapshot in (current, baseline)):
         add('historical_report_baseline', 'evidence',

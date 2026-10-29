@@ -124,9 +124,9 @@ class SharedAssessmentTests(unittest.TestCase):
     def test_all_required_questions_have_a_result_or_specific_gap(self):
         result = self.result()
         self.assertEqual(len(result["domains"]), 7)
-        self.assertEqual(len(result["controls"]), len(QUESTIONS))
+        self.assertEqual(len(result["controls"]), len([row for row in QUESTIONS if row[0] != 'ADOPTION.BASELINE']))
         self.assertTrue(all(row["status"] == "Not established" for row in result["controls"]))
-        self.assertEqual(result["decision"], "Readiness unconfirmed")
+        self.assertEqual(result["decision"], "Tenant readiness unconfirmed")
         self.assertIn("CONTENT.SHARING", {row["control_id"] for row in result["controls"]})
         self.assertIn("CONTENT.PERMISSIONS", {row["control_id"] for row in result["controls"]})
 
@@ -257,7 +257,7 @@ class SharedAssessmentTests(unittest.TestCase):
         self.assertEqual(action["Feature"], "Review and remediate risky user accounts")
         self.assertEqual(action["OriginalFeature"], "Microsoft Entra ID P2")
         requirement = next(item for stage in result["rollout_progress"]["stages"] for item in stage["requirements"]
-                           if item["id"] == "pilot.action.ENT-013")
+                           if item["id"] == "tenant.action.ENT-013")
         self.assertEqual(requirement["title"], action["Feature"])
 
     def test_audit_observation_does_not_establish_retention(self):
@@ -278,26 +278,27 @@ class SharedAssessmentTests(unittest.TestCase):
     def test_activity_data_is_not_an_agreed_pilot_plan(self):
         row = rec(Service="M365", Feature="Copilot usage", FindingKey="m365.copilot_usage", EvidenceKey="ai_usage_detail",
                   Observation="There were three active users.", Recommendation="", Disposition="Assurance", Status="Success")
-        control = next(row for row in self.result([row])["controls"] if row["control_id"] == "ADOPTION.BASELINE")
-        self.assertEqual(control["status"], "Not established")
+        result = self.result([row])
+        self.assertNotIn('ADOPTION.BASELINE', {control['control_id'] for control in result['controls']})
+        self.assertNotEqual(result['decision'], 'Tenant baseline ready')
 
     def test_complete_explicit_facts_can_establish_controlled_pilot(self):
         from tests.test_readiness_progress import review_profile
         observations = [fact(domain_id=domain, control_id=control, metric_id=control, value="Reviewed",
-                             scope="pilot population", unit="control result", control_result="pass") for control, domain, *_ in QUESTIONS]
+                             scope="Assessed tenant", unit="control result", control_result="pass") for control, domain, *_ in QUESTIONS]
         result = self.result(evidence=bundle(observations=observations, assessment_profile=review_profile()))
-        self.assertEqual(result["decision"], "Ready for a controlled pilot")
+        self.assertEqual(result["decision"], "Tenant baseline ready")
         self.assertFalse(result["actions"])
         self.assertTrue(all(row["Status"] == "Pass" for row in result["control_results"]))
 
     def test_mode_or_unsupported_supplement_does_not_override_supported_controls(self):
         from tests.test_readiness_progress import review_profile
         observations = [fact(domain_id=domain, control_id=control, metric_id=control, value="Reviewed",
-                             scope="pilot population", unit="control result", control_result="pass") for control, domain, *_ in QUESTIONS]
+                             scope="Assessed tenant", unit="control result", control_result="pass") for control, domain, *_ in QUESTIONS]
         rows = [rec(FindingKey=key, Disposition="Coverage", Status="Not Assessed") for key in
                 ("offline.tenant_coverage", "portal.unrecognized.optional.csv")]
         result = self.result(rows, bundle(observations=observations, assessment_profile=review_profile()))
-        self.assertEqual(result["decision"], "Ready for a controlled pilot")
+        self.assertEqual(result["decision"], "Tenant baseline ready")
         self.assertFalse(result["actions"])
 
     def test_wrongly_labeled_entitlement_still_cannot_become_assurance(self):

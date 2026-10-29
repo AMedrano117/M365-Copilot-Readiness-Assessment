@@ -190,7 +190,8 @@ class ReportLaneTests(unittest.TestCase):
         from Core.assessment_result import build_assessment_result
         result = build_assessment_result(records, {})
         self.assertEqual(body.count('<article class="action"'), result['counts']['actions'])
-        self.assertEqual(len(result['opportunities']), 1)
+        self.assertEqual(len(result['opportunities']), 0)
+        self.assertEqual(next(row for row in result['recommendations'] if row.get('FindingKey') == 'adoption.reviewed_pilot_opportunity')['Disposition'], 'Reference')
         self.assertIn('Supported observations', body)
         self.assertNotIn("Verified controls &amp; available capabilities", body)
         self.assertIn('Remaining evidence and decisions', body)

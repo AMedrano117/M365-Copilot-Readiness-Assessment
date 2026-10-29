@@ -14,6 +14,10 @@ from .customer_report import _heading, _observation, prose, slug
 
 
 VERDICTS = {
+    'Tenant remediation required': ('Tenant remediation required', 'blocked'),
+    'Tenant readiness unconfirmed': ('Not enough tenant evidence to decide yet', 'unknown'),
+    'Tenant readiness with conditions': ('Tenant readiness with conditions', 'conditions'),
+    'Tenant baseline ready': ('Tenant baseline ready', 'ready'),
     "Not ready for pilot": ("Not ready for a pilot yet", "blocked"),
     "Readiness unconfirmed": ("Not enough evidence to decide yet", "unknown"),
     "Controlled pilot with conditions": ("Ready for a pilot, with conditions", "conditions"),
@@ -134,9 +138,9 @@ def render_pilot_summary(result, bundle, tenant_name, report_path=None, workbook
     failing = [row for row in gates if row.get("status") == "Action required"]
     unanswered = [row for row in gates if row.get("status") == "Not established"]
 
-    blockers = [row for row in actions if row.get("PilotImpact") == "Blocks pilot"]
-    confirm = [row for row in actions if row.get("PilotImpact") == "Confirm before pilot"]
-    later = [row for row in actions if row.get("PilotImpact") == "Fix before broad rollout"]
+    blockers = [row for row in actions if row.get("PilotImpact") in {"Blocks pilot", 'Blocks readiness'}]
+    confirm = [row for row in actions if row.get("PilotImpact") in {"Confirm before pilot", 'Evidence review'}]
+    later = [row for row in actions if row.get("PilotImpact") in {"Fix before broad rollout", 'Tenant remediation'}]
 
     scores = "".join(f'<div class="score" data-kind="{kind}"><b>{value}</b><span>{label}</span></div>' for kind, value, label in (
         ("pass", len(passed), f"of {len(gates)} required checks passed"),
@@ -201,12 +205,23 @@ def render_pilot_summary(result, bundle, tenant_name, report_path=None, workbook
     decisions = executive.get('Decisions required') or []
     if decisions:
         sections.append('<section id="decisions-required"><h2>Decisions required</h2>' + decision_groups(result) + '</section>')
-    guidance = "".join(f"<li>{prose(item)}</li>" for item in PILOT_GROUP_GUIDANCE)
-    sections.append(
-        f'<section id="pilot-group"><h2>{len(sections) + 1}. Choosing the pilot group</h2>'
-        '<p class="intro">The readiness baseline covers the whole tenant. Pilot users, devices and content can be recorded as additional context. '
-        'You do not need to name the pilot users for the assessment.</p>'
-        f'<ul>{guidance}</ul></section>')
+    if result.get('assessment_scope') == 'tenant_readiness':
+        from .tenant_readiness import QUALIFICATION
+        sections.append('<section id="pilot-group"><h2>Assessment scope</h2><p>' + QUALIFICATION + '</p></section>')
+        sections = [section.replace('Fix before the pilot', 'Tenant remediation')
+                    .replace('before pilot approval', 'for tenant readiness')
+                    .replace('Confirm before the pilot', 'Evidence to confirm')
+                    .replace('Fix before broad rollout', 'Additional tenant remediation')
+                    .replace('These do not block a pilot. Schedule them before Copilot reaches more users.',
+                             'Resolve these findings according to their priority and retained evidence.')
+                    for section in sections]
+    else:
+        guidance = "".join(f"<li>{prose(item)}</li>" for item in PILOT_GROUP_GUIDANCE)
+        sections.append(
+            f'<section id="pilot-group"><h2>{len(sections) + 1}. Choosing the pilot group</h2>'
+            '<p class="intro">The readiness baseline covers the whole tenant. Pilot users, devices and content can be recorded as additional context. '
+            'You do not need to name the pilot users for the assessment.</p>'
+            f'<ul>{guidance}</ul></section>')
 
     period = result.get("evidence_period") or {}
     start, end = (period.get("start"), period.get("end")) if isinstance(period, dict) else (None, None)
@@ -224,8 +239,9 @@ def render_pilot_summary(result, bundle, tenant_name, report_path=None, workbook
     run_note = ('<p>Run type: ' + prose(run.get('RunType')) + '. Baseline comparability: '
                 + prose((run.get('Comparability') or {}).get('Outcome'))
                 + '. See the full report technical appendix for qualifications.</p>') if run else ''
+    page_title = 'Tenant readiness summary' if result.get('assessment_scope') == 'tenant_readiness' else 'Copilot pilot readiness summary'
     return f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{tenant} — Copilot pilot readiness summary</title><style>{SUMMARY_CSS}</style></head><body><div class="page">
+<title>{tenant} — {page_title}</title><style>{SUMMARY_CSS}</style></head><body><div class="page">
 <header><div class="brand">MICROSOFT 365 COPILOT<span>Executive readiness summary</span></div><div class="meta"><strong>{tenant}</strong>Evaluated {prose(result.get("evaluation_date"))}</div></header>
 <main>{provenance_html(result)}<section class="verdict" data-state="{state}" id="verdict"><div class="kicker">Pilot readiness</div><h1>{escape(headline)}</h1>
 <p>{prose(result.get("rationale"))}</p><p>Scope: {prose(executive.get('Scope') or 'Tenant-wide Microsoft 365 foundation')}. Evidence dates: {prose(period_text)}.</p><div class="scores">{scores}</div></section>

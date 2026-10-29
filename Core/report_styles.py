@@ -46,7 +46,7 @@ a:focus-visible, button:focus-visible, summary:focus-visible, [tabindex]:focus-v
 .header-meta { color: var(--muted); font-size: 13px; text-align: right; line-height: 1.55; overflow-wrap: anywhere; }
 .header-meta strong { display: block; color: var(--navy); font-size: 15px; }
 .report-nav, nav { position: sticky; top: 0; z-index: 10; display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 12px 30px; background: #fffffff5; border-block: 1px solid var(--line); box-shadow: 0 3px 12px #102b4005; }
-.nav-links { display: flex; align-items: center; gap: 24px; min-width: 0; }
+.nav-links { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 24px; min-width: 0; }
 .report-nav a, nav a { text-decoration: none; font-size: 13px; font-weight: 650; }
 .nav-links a { color: var(--muted); padding-block: 8px; white-space: nowrap; }
 .nav-links a:hover { color: var(--teal-dark); }
@@ -197,7 +197,7 @@ li + li { margin-top: 9px; }
 .guide-body li { margin-bottom: 12px; }
 .operator-command { white-space: pre-wrap; overflow-wrap: anywhere; padding: 14px; background: #f8fafb; color: var(--ink); border-radius: 7px; }
 .rollout-track { padding: 24px 32px 16px; border-bottom: 1px solid var(--line); }
-.rollout-track ol { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); list-style: none; padding: 0; gap: 14px; }
+.rollout-track ol { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px,1fr)); list-style: none; padding: 0; gap: 14px; }
 .rollout-track li { margin: 0; padding: 13px 12px; border-top: 3px solid var(--line); color: var(--muted); }
 .rollout-track li[data-state="complete"] { border-color: var(--teal); }
 .rollout-track li[data-state="current"] { border-color: var(--teal); background: var(--pale); border-radius: 0 0 8px 8px; color: var(--navy); }
@@ -286,7 +286,7 @@ tr:target { background: #fff3cf !important; outline: 2px solid #c49942; outline-
   .header-meta { text-align: left; font-size: 12px; }
   .header-meta strong { font-size: 14px; }
   .report-nav, nav { display: block; padding: 8px 18px; }
-  .nav-links { gap: 20px; margin-right: -4px; padding: 3px 4px 6px 0; overflow-x: auto; scrollbar-width: thin; }
+  .nav-links { flex-wrap: nowrap; gap: 20px; margin-right: -4px; padding: 3px 4px 6px 0; overflow-x: auto; scrollbar-width: thin; }
   .nav-links a { flex: 0 0 auto; font-size: 12px; min-height: 36px; }
   .nav-tools { justify-content: flex-end; gap: 9px; margin-top: 4px; padding-bottom: 3px; }
   .button { padding: 8px 12px; min-height: 38px; font-size: 12px; }

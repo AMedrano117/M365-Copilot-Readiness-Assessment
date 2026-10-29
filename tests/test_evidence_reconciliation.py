@@ -108,7 +108,7 @@ class ComponentEvidenceTests(unittest.TestCase):
         result,_=self.licensing()
         for control in ('DATA.EXPOSURE','LICENSE.APPS','CONTENT.PERMISSIONS'):
             self.assertEqual(gap(result,control)['Disposition'],'Coverage')
-        self.assertEqual(result['decision'],'Readiness unconfirmed')
+        self.assertEqual(result['decision'],'Tenant readiness unconfirmed')
 
 
 class MetricReconciliationTests(unittest.TestCase):

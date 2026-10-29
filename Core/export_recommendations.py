@@ -907,7 +907,7 @@ def export_to_excel(recommendations, filename=None, tenant_name=None, evidence_b
         ('Executive Summary', [{'Item':key,'Value':value} for key,value in result.get('executive_summary',{}).items()]),
         ('Source Windows', result.get('source_windows',[])),
         ('Documentation Verification',result.get('documentation_verification',[])),
-        ('Assessment Summary', [{'Item': 'Deployment decision', 'Value': result['decision']},
+        ('Assessment Summary', [{'Item': 'Tenant readiness outcome' if result.get('assessment_scope') == 'tenant_readiness' else 'Deployment decision', 'Value': result['decision']},
             *provenance_rows(result),
             {'Item': 'Rationale', 'Value': result['rationale']},
             {'Item': 'Evaluation date', 'Value': result.get('evaluation_date')},
@@ -1170,14 +1170,14 @@ def print_recommendations_summary(
     high_priority = [r for r in findings if r.get("Priority") == "High"]
     medium_priority = [r for r in findings if r.get("Priority") == "Medium"]
     low_priority = [r for r in findings if r.get("Priority") == "Low"]
-    tone = 'success' if readiness['decision'] == 'Ready for a controlled pilot' else 'error' if readiness['decision'] == 'Not ready for pilot' else 'warning'
+    tone = 'success' if readiness['decision'] in {'Tenant baseline ready', 'Ready for a controlled pilot'} else 'error' if readiness['decision'] in {'Tenant remediation required', 'Not ready for pilot'} else 'warning'
     progress = readiness.get('rollout_progress') or {}
     if progress:
-        status(f"Rollout stage: {progress['current_stage']}", tone)
+        status(('Assessment stage: ' if readiness.get('assessment_scope') == 'tenant_readiness' else 'Rollout stage: ') + progress['current_stage'], tone)
         checks = progress.get('counts') or {}
         status(f"Required controls: {checks.get('established_controls', 0)} established | "
                f"{checks.get('observed_issues', 0)} with issues | {checks.get('unconfirmed_controls', 0)} unconfirmed")
-    status(f"Deployment decision: {readiness['decision']}", tone)
+    status(('Tenant readiness: ' if readiness.get('assessment_scope') == 'tenant_readiness' else 'Deployment decision: ') + readiness['decision'], tone)
     detail(readiness['rationale'])
     counts = readiness['counts']
     print(f"Actions: {len(findings)} — {counts['remediation']} remediation, {counts['confirmation']} confirmation, {counts['evidence_gaps']} evidence checks")

@@ -316,7 +316,8 @@ def collect_assessment_sources(clients, *, collected_at='', data_exposure=None, 
 
 
 def current_check_reviews(profile, day, tenant_id):
-    from .control_reviews import _profile_raw, validate_readiness_review
+    from .control_reviews import _profile_raw, validate_readiness_review, tenant_review_profile
+    profile, _ = tenant_review_profile(profile)
     if validate_readiness_review(profile or {}):
         return {}
     review = _profile_raw(profile).get('readiness_review') or {}

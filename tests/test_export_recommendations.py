@@ -292,10 +292,10 @@ class ExportRecommendationsTests(unittest.TestCase):
         )
 
         html = Path(html_path).read_text(encoding="utf-8")
-        self.assertIn("Adoption opportunities guide the value of a pilot", html)
-        self.assertIn("They do not establish that security controls are effective", html)
-        self.assertIn("Teams activity suggests a focused pilot population", html)
-        self.assertIn("How to decide whether to expand", html)
+        self.assertIn('handled outside this assessment', html)
+        self.assertNotIn("Adoption opportunities guide the value of a pilot", html)
+        self.assertNotIn("Teams activity suggests a focused pilot population", html)
+        self.assertNotIn("How to decide whether to expand", html)
         self.assertNotIn("Three readiness conclusions", html)
         self.assertNotIn("Provider and tier approval", html)
         self.assertNotIn("complete once per product and subscription tier", html)
@@ -469,7 +469,8 @@ class ExportRecommendationsTests(unittest.TestCase):
 
         self.assertIn('id="domain-external_ai"', html)
         self.assertIn("Contoso AI", html)
-        self.assertIn("Proposal review", html)
+        self.assertNotIn("Proposal review", html)
+        self.assertIn('Provider security context', html)
 
     def test_html_translates_sharepoint_settings_into_customer_language(self):
         evidence_bundle = self._sample_evidence_bundle()
