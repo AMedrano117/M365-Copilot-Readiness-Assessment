@@ -115,7 +115,8 @@ class ComplianceReasonTests(unittest.TestCase):
         data.append(dict(data[0], id='activity', settingName='Is active'))
         rows = expanded_findings(bundle, evaluation_date=DAY)
         self.assertEqual(len(rows), 2)
-        self.assertEqual(sorted(row['Priority'] for row in rows), ['High', 'Medium'])
+        self.assertEqual(sorted(row['Priority'] for row in rows), ['Medium', 'Medium'])
+        self.assertFalse(any(row['DeviceFindingType'] == 'ExplicitSecuritySettingFailure' for row in rows))
         self.assertTrue(all('1 distinct managed device' in row['Observation'] for row in rows))
         selected = [record for row in rows for record in row['InvestigationEvidence']['records']]
         self.assertCountEqual(selected, data)

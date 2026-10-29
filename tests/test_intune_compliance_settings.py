@@ -146,7 +146,7 @@ class ComplianceSettingsOutputTests(unittest.TestCase):
             before = deepcopy(result)
             html = render_customer_report(result, bundle, 'Fictional', path, technical_workbook_path=technical_workbook_path(path))
             self.assertIn('Compliance status validity period', html)
-            self.assertIn('Mark devices with no compliance policy assigned as', html)
+            self.assertIn('Devices without an assigned compliance policy are marked compliant', html)
             workbook = load_workbook(path)
             try:
                 values = list(workbook['Configuration'].values)

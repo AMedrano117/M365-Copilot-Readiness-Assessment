@@ -60,7 +60,7 @@ class DeviceEvidenceInterpretationTests(unittest.TestCase):
             ('TPM','conflict'),('Encryption','unknown'),('Secure boot','notEvaluated')]))
         findings = expanded_findings(bundle,evaluation_date=DAY)
         self.assertEqual({row['DeviceFindingType'] for row in findings},
-            {'ExplicitSecuritySettingFailure','ActivityOrEnrollmentFailure','ReportingErrorOrConflict'})
+            {'UnconfirmedSettingState','ActivityOrEnrollmentFailure','ReportingErrorOrConflict'})
         self.assertEqual(sorted(row['DeviceEvidenceCounts']['source_record_count'] for row in findings),[1,2,4])
         self.assertCountEqual([item for row in findings for item in row['InvestigationEvidence']['records']],records)
         self.assertTrue(all(row['Disposition']!='Action' for row in findings if row['DeviceFindingType']!='ExplicitSecuritySettingFailure'))
@@ -331,8 +331,9 @@ class DeviceEvidenceOutputTests(unittest.TestCase):
                 summary=list(customer['Devices'].values)
                 self.assertLessEqual(len(summary)-1,4)
                 html=render_customer_report(assessment,bundle,'Fictional',path,technical_workbook_path=technical_workbook_path(path))
-                self.assertNotIn('739915',html)
-                self.assertNotIn('fictional@example.invalid',html)
+                from tools.audit_report_signal import public_report_source
+                self.assertNotIn('739915',public_report_source(html))
+                self.assertNotIn('fictional@example.invalid',public_report_source(html))
             finally:
                 customer.close();technical.close()
             snapshot=Path(folder)/'result.json'

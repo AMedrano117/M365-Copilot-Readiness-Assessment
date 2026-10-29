@@ -160,8 +160,9 @@ class PortalReportEvidenceTests(unittest.TestCase):
         self.assertEqual(evidence["Report Date"], "2026-09-11")
         self.assertEqual(evidence["Freshness"], "fresh")
         html = self.html(self.bundle(exposure=self.exposure()))
-        self.assertIn("Imported source reports and dates", html)
-        self.assertIn("older-sites.csv", html)
+        self.assertIn("Imported report dates", html)
+        self.assertNotIn("older-sites.csv", html)
+        self.assertIn("2026-09-12", html)
         self.assertIn("superseded", html)
 
     def test_offline_provenance_follows_decision_and_preserves_original_collection(self):

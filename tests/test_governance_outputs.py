@@ -118,7 +118,8 @@ class RendererTests(unittest.TestCase):
             for name in ('html_path','summary_html_path'):
                 text=Path(outputs[name]).read_text(encoding='utf-8');self.assertIn('Governance',text)
                 self.assertIn('Risk acceptance is not remediation',text)
-            self.assertIn('Governance audit history',Path(outputs['html_path']).read_text(encoding='utf-8'))
+            self.assertNotIn('Governance audit history',Path(outputs['html_path']).read_text(encoding='utf-8'))
+            self.assertIn('Complete run, source, lifecycle and governance registers are retained in the workbooks',Path(outputs['html_path']).read_text(encoding='utf-8'))
 
     def test_html_escaping_and_full_long_workbook_fields(self):
         from Core.governance_presentation import technical_html,detail_rows

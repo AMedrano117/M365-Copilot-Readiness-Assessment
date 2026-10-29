@@ -25,6 +25,16 @@ do not prove completed decommissioning. The existing assessment defaults are a
 `assessment_context.device_activity_days` and `endpoint_reporting_days`.
 These are not the tenant's Intune compliance validity period.
 
+Customer summaries separately classify compliance reporting using the collected
+tenant validity period and the Default Device Compliance Policy's `Is active`
+result. This measures compliance reporting, not user sign-ins. A missing or
+conflicting tenant period remains unknown; no 30-day tenant default is assumed.
+Inactive, overdue and retired devices are excluded from confirmed active-device
+security counts, with their raw failures retained for investigation. Reporting
+errors remain separate. Policy and reason counts use distinct stable device IDs
+and may overlap. The HTML appendix shows up to three named examples per finding;
+the technical workbook retains complete populations and source records.
+
 ## Findings and counts
 
 Current, named security-setting failures remain separate from default-policy

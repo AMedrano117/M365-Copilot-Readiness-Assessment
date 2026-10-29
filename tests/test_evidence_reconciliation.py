@@ -338,10 +338,12 @@ class EvidenceProjectionTests(unittest.TestCase):
             before=deepcopy(result)
             html=render_customer_report(result,bundle,'Fictional',workbook_path=path,technical_workbook_path=technical_workbook_path(path))
             self.assertEqual(result,before)
-            self.assertNotIn('--reports-dir',html); self.assertNotIn('restricted-0@example.invalid',html)
+            from tools.audit_report_signal import public_report_source
+            self.assertNotIn('--reports-dir',html); self.assertNotIn('restricted-0@example.invalid',public_report_source(html))
             self.assertNotIn(PARENT,html)
-            self.assertIn('Detailed request register',html)
-            self.assertIn('1 successful',html.lower().replace('successful queries=1','1 successful'))
+            self.assertIn('Technical appendix and evidence workbook',html)
+            self.assertNotIn('Detailed request register',html)
+            self.assertIn('Complete run, source, lifecycle and governance registers are retained in the workbooks',html)
             customer=load_workbook(path); technical=load_workbook(technical_workbook_path(path))
             try:
                 customer_texts='\n'.join(str(c.value or '') for s in customer for row in s for c in row)

@@ -122,7 +122,7 @@ def build_device_compliance(bundle, *, profile=None, evaluation_date=None):
     counts = {state: sum(device['policy_assignment'] == state for device in output)
               for state in ('Reported missing', 'Assignment check passed', 'Conflicting assignment evidence', 'Unknown')}
     from .intune_compliance_settings import tenant_compliance_settings
-    return {'devices': output, 'settings': settings, 'evaluation_date': day.isoformat() if day else '',
+    model = {'devices': output, 'settings': settings, 'evaluation_date': day.isoformat() if day else '',
             'identity_model': identities,
             'inventory': inventory,
             'tenant_settings': tenant_compliance_settings(bundle),
@@ -132,6 +132,16 @@ def build_device_compliance(bundle, *, profile=None, evaluation_date=None):
                                  'A passing assignment check does not establish policy names or effective enforcement. Reporting dates and conflicts require review.'},
             'reporting_days': reconciliation['reporting_days'], 'activity_days': reconciliation['active_days'],
             'qualification': 'Assessment reporting/activity windows are not the tenant Intune compliance validity period; that setting is not inferred.'}
+    from .device_summary import compliance_activity, compliance_overview
+    for device in output:
+        device['compliance_activity'] = compliance_activity(device, model)
+        if device['compliance_activity'] in {'inactive', 'overdue', 'retired'}:
+            for item in device['settings']:
+                if item['classification'] == 'ExplicitSecuritySettingFailure':
+                    item.update(triage='historical_or_unknown_review', classification='UnconfirmedSettingState',
+                        qualification='Intune compliance reporting is inactive, overdue or retired; confirm the setting before treating it as a current active-device failure.')
+    model['summary'] = compliance_overview(model)
+    return model
 
 
 def client_compliance(client):

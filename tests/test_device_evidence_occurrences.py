@@ -159,8 +159,8 @@ class DeviceOccurrenceWorkbookTests(unittest.TestCase):
                 self.assertTrue(all(row['Status']=='Passed' for row in checks))
                 self.assertEqual(len(list(customer['Devices'].values))-1,4)
                 html=render_customer_report(result,bundle,'Fictional',path,technical_workbook_path=technical_workbook_path(path))
-                self.assertIn('172',html)
-                self.assertIn('298',html)
+                self.assertTrue('1 device' in html)
+                self.assertNotIn('172 failed setting records',html)
             finally:
                 customer.close();technical.close()
         self.assertEqual(bundle['assessment_sources'],original)

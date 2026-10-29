@@ -306,8 +306,12 @@ def _projection(row, record, devices, compliance=None):
 
 def _affected(row, records, finding):
     if row.get('DeviceEvidenceCounts'):
-        from .device_evidence import count_text
-        return count_text(row['DeviceEvidenceCounts'])
+        if row.get('DeviceFindingType') == 'CompliantDeviceAccessEnforcementNotEstablished':
+            return str(row['DeviceEvidenceCounts']['source_record_count']) + ' policies'
+        if row['DeviceEvidenceCounts'].get('unresolved_identity_count') and row.get('DeviceSummary'):
+            return row['DeviceSummary']['display_count']
+        count = row['DeviceEvidenceCounts']['resolved_device_count']
+        return str(count) + (' distinct device' if count == 1 else ' distinct devices') + '; full counts in technical evidence'
     if not records:
         return 'Unknown'
     datasets = {record.get('dataset') for record in records}
@@ -743,8 +747,8 @@ def split_workbook_layout(source_workbook, result, bundle, assessment_path, tech
                                   'Native evidence IDs':row.get('DeviceEvidenceIds'),
                                   'Qualification':row.get('DeviceEvidenceQualification')})
             assessment_rows['Devices'].append({'ID':identifier,
-                'Device':str(counts['resolved_device_count'])+' resolved distinct devices; see ID counts in detail',
-                'Issue':row.get('Feature'), 'Detail':count_text(counts)+' '+str(row.get('DeviceEvidenceQualification') or ''),
+                'Device':(row.get('DeviceSummary') or {}).get('display_count') or str(counts['resolved_device_count'])+' distinct device(s)',
+                'Issue':row.get('Feature'), 'Detail':(row.get('DeviceSummary') or {}).get('text') or count_text(counts)+' '+str(row.get('DeviceEvidenceQualification') or ''),
                 'Last reported':row.get('ObservationDate') or 'Not established',
                 'Intune compliance':'Per-record state retained in Technical Evidence',
                 'Evidence ID':identifier})
@@ -903,8 +907,8 @@ def split_workbook_layout(source_workbook, result, bundle, assessment_path, tech
         row['AssessmentAffected'] = affected
         row['AssessmentEvidenceCount'] = len(selected.get(row['RecommendationId'], []))
         findings.append(dict(zip(FINDING_COLUMNS, (row['RecommendationId'], row.get('Priority'), row.get('PilotImpact'),
-                        row.get('Domain') or row.get('ImpactArea'), _heading(row), row.get('Observation'),
-                        row.get('Recommendation'), affected, affected + ' ›' if row['AssessmentEvidenceRange'] else
+                        row.get('Domain') or row.get('ImpactArea'), _heading(row), (row.get('DeviceSummary') or {}).get('text') or row.get('Observation'),
+                        (row.get('DeviceSummary') or {}).get('action') or row.get('Recommendation'), affected, affected + ' ›' if row['AssessmentEvidenceRange'] else
                         row.get('InvestigationStatus') or 'Evidence unavailable', row.get('ObservationDate'),
                         row.get('OwnerRole'), 'Open', None))))
         findings[-1].update(treatment_fields(result,row))

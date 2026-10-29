@@ -215,8 +215,10 @@ class InvestigationContractExportTests(unittest.TestCase):
         self.assertEqual(bundle['investigation_validation'], [])
         html_path = export_to_html([rec], filename='generic-investigation.html', evidence_bundle=bundle, excel_path=path)
         html = Path(html_path).read_text(encoding='utf-8')
+        from tools.audit_report_signal import public_report_source
+        self.assertIn('Private widget one', html)
         for value in ('private-widget-1', 'private-widget-2', 'Private widget one', 'fixture-region'):
-            self.assertNotIn(value, html)
+            self.assertNotIn(value, public_report_source(html))
 
     def test_long_original_attributes_survive_and_exact_range_includes_continuation_columns(self):
         original = 'X' * 70000

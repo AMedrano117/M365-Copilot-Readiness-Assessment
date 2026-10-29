@@ -324,7 +324,8 @@ class ClosurePersistenceTests(unittest.TestCase):
                         self.assertEqual(book['Decision Register'].cell(2, headers.index('ClosureOverride') + 1).value, override)
                     finally:
                         book.close()
-                self.assertIn('Governance audit history', Path(paths['html_path']).read_text(encoding='utf-8'))
+                self.assertNotIn('Governance audit history', Path(paths['html_path']).read_text(encoding='utf-8'))
+                self.assertIn('Complete run, source, lifecycle and governance registers are retained in the workbooks', Path(paths['html_path']).read_text(encoding='utf-8'))
                 self.assertIn('Governance', Path(paths['summary_html_path']).read_text(encoding='utf-8'))
 
     def test_invalid_retained_overrides_cannot_serialize_or_render(self):

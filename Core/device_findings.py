@@ -141,4 +141,9 @@ def qualify_device_findings(recommendations, bundle, compliance):
                 count_text(population(selected))+' Intended pilot-device posture is not established by overall compliance or tenant-wide inventory alone.',
                 'Correlate approved pilot members with stable device IDs, current per-setting results, protection-provider health and applicable Conditional Access. Record dated closure evidence for the intended pilot population.',
                 selected, 'PilotDevicePostureNotEstablished', disposition='Coverage'))
+    from .device_summary import finding_summary
+    for row in output:
+        summary = finding_summary(row, compliance)
+        if summary:
+            row['DeviceSummary'] = summary
     return output
