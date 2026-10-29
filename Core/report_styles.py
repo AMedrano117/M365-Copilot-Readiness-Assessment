@@ -472,6 +472,14 @@ REPORT_CSS += r'''
 .technical-example { margin:14px 0; padding:14px 18px; border:1px solid var(--line); border-radius:8px; background:#fff; }
 .technical-example > summary { color:var(--navy); font-weight:650; cursor:pointer; }
 .technical-example table { margin-top:12px; }
+@media screen and (max-width:640px) {
+  .technical-example .table-scroll { overflow:visible; }
+  .technical-example table, .technical-example tbody, .technical-example tr { display:block; width:100%; }
+  .technical-example thead { display:none; }
+  .technical-example tr { margin:12px 0; padding:10px; border:1px solid var(--line); border-radius:6px; }
+  .technical-example td { display:block; width:auto; padding:6px 0; border:0; }
+  .technical-example td::before { content:attr(data-label); display:block; font-weight:700; color:var(--navy); }
+}
 .settings-change { margin-top:14px; }
 .callout-label { margin:0 0 6px !important; color:var(--red); font-size:12px !important; font-weight:750; letter-spacing:.35px; text-transform:uppercase; }
 .settings-change .qualification { margin-top:8px; }

@@ -78,7 +78,7 @@ def expanded_findings(bundle, *, profile=None, evaluation_date=None, tenant_id=N
             kind = 'DefenderRealTimeProtectionObservation' if '.disabled' in name else 'DefenderSignatureObservation'
             output[-1]['Observation'] = count_text(population(selected_items))+' '+output[-1]['Observation']
             if kind == 'DefenderRealTimeProtectionObservation':
-                output[-1].update(Disposition='Opportunity', Status='Attention Required', Priority='Medium', Confidence='Low')
+                output[-1].update(Disposition='Opportunity', Status='Attention Required', Priority='Low', Confidence='Low')
                 output[-1]['Observation'] += (' Real-time protection off is an observation, not proof of an active unprotected device. '
                     'Current protection effectiveness is not established without current AV mode, onboarding, approved third-party AV, platform and complete source correlation. '
                     'Returned Defender machine records do not establish fleet coverage.')
@@ -179,7 +179,7 @@ def expanded_findings(bundle, *, profile=None, evaluation_date=None, tenant_id=N
                             'Check targeting, exclusions and last check-in, document intended exceptions, and verify the assignment result after the device reports. '
                             'Older or conflicting results require confirmation; absence of returned checks does not establish that all devices have a policy.')
                 errors=[row for row in records if re.sub('[^a-z]','',str(row.get('state','')).lower()) in {'error','conflict','unknown','notevaluated'}]
-                if errors: finding(f'{name}.errors',errors,state,'Investigate device compliance reporting errors',
+                if errors: finding(f'{name}.errors',errors,state,'Review unresolved device compliance results',
                     f'{len(errors)} setting record(s) report error, conflict or unknown. Effective compliance remains unresolved.',disposition='Coverage',
                     recommendation='Review the per-setting status in Intune for the listed records, resolve conflicting policy assignments '
                     'and devices that fail to report, then re-run the assessment.')

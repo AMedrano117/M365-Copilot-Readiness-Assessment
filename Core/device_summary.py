@@ -146,6 +146,13 @@ def finding_summary(row, model):
     lines = []
     if kind == 'InventoryComplianceState':
         lines = list((model.get('summary') or compliance_overview(model))['lines'])
+        lines.append('Overall noncompliance is an inventory total, not an additional setting failure. Devices may also appear in the setting and reporting findings; do not add their counts.')
+        reported = [device for device in model.get('devices', [])
+                    if str(value(device['device'], 'complianceState') or '').casefold() == 'noncompliant']
+        missing = {str(device['device_id']).casefold() for device in reported if device.get('device_id')
+                   and not any(item['failed'] or item['assignment_missing'] for item in device.get('settings', []))}
+        if missing:
+            lines.append(f'{len(missing)} noncompliant devices have no retained failing setting that explains the inventory status. Confirm the reason in Intune.')
     elif kind == 'ExplicitSecuritySettingFailure':
         active = sum(devices.get(identifier, {}).get('activity') == 'active' for identifier in ids)
         lines = [f'{active} active devices have current compliance-policy failures.']
@@ -177,7 +184,25 @@ def finding_summary(row, model):
     elif kind == 'PolicyAssignmentNotEstablished':
         lines = [f'{count} devices are reported without an applicable compliance policy. Confirm assignment and check-in.']
     elif kind == 'ReportingErrorOrConflict':
-        lines = [f'{count} devices have compliance reporting errors or conflicting results. Confirm their status before remediation.']
+        from collections import Counter
+        from .device_examples import status_name, setting_name, error_detail
+        states = Counter(status_name(value(item['record'], 'state')) for item in settings)
+        lines = [f'{count} devices have unresolved compliance-setting results. These are reporting gaps, not confirmed security failures.']
+        if states:
+            lines.append('Setting records: ' + '; '.join(f'{state}: {total}' for state, total in sorted(states.items())) + '.')
+        examples = []
+        for item in settings:
+            policy = item['policy'] if item['policy'] != 'not retained' else 'Policy name not retained'
+            description = f"{policy}: {setting_name(item['setting'])} — {status_name(value(item['record'], 'state'))}"
+            if description not in examples:
+                examples.append(description)
+            if len(examples) == 3:
+                break
+        lines.extend(description + '.' for description in examples)
+        if settings and not any(error_detail(item['record']) for item in settings):
+            lines.append('No error code or diagnostic message was retained. The source status alone does not explain the cause; review the device setting in Intune.')
+        elif settings:
+            lines.append('Retained diagnostic codes and messages are shown in the technical examples and evidence workbook.')
     elif kind == 'UnconfirmedSettingState':
         lines = [f'{count} devices have older or unconfirmed compliance-setting failures.']
         inactive = sum(devices.get(identifier, {}).get('activity') in {'inactive', 'overdue', 'retired'} for identifier in ids)
@@ -188,7 +213,7 @@ def finding_summary(row, model):
             lines.append('Reported failures: ' + '; '.join(reasons[:3]) + '.')
     elif kind == 'DefenderRealTimeProtectionObservation':
         lines = [f'{count} devices report Defender real-time protection off.',
-                 'Confirm the active antivirus provider, Defender mode and report date. This observation alone does not establish that the devices are unprotected.']
+                 'Another antivirus may be the primary provider while Defender is passive or disabled. Confirm the active provider, Defender mode and report date before changing protection. This observation alone does not establish that the devices are unprotected.']
     elif kind == 'DefenderSignatureObservation':
         lines = [f'{count} devices have reported antivirus signature-update issues.',
                  'Check the endpoint report date and current device activity before treating the issue as current.']

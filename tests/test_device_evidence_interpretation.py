@@ -196,7 +196,7 @@ class DeviceEvidenceInterpretationTests(unittest.TestCase):
         findings=[row for row in expanded_findings(bundle,evaluation_date=DAY) if row.get('DeviceFindingType')=='DefenderRealTimeProtectionObservation']
         self.assertEqual([row['DeviceEvidenceCounts']['source_record_count'] for row in findings],[186,66])
         self.assertTrue(all(row['DeviceEvidenceCounts']['distinct_intune_devices']==1 for row in findings))
-        self.assertTrue(all(row['Priority']=='Medium' and row['Disposition']=='Opportunity' for row in findings))
+        self.assertTrue(all(row['Priority']=='Low' and row['Disposition']=='Opportunity' for row in findings))
         self.assertTrue(all(not row['DevicePilotBlockerEligible'] for row in findings))
         self.assertTrue(all('effectiveness is not established' in row['Observation'] for row in findings))
         self.assertTrue(all(len(row['DeviceEvidenceDiagnostics'])==2*row['DeviceEvidenceCounts']['source_record_count'] for row in findings))

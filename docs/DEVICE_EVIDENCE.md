@@ -35,6 +35,23 @@ errors remain separate. Policy and reason counts use distinct stable device IDs
 and may overlap. The HTML appendix shows up to three named examples per finding;
 the technical workbook retains complete populations and source records.
 
+Device examples separate the compliance policy, setting/reason and returned
+status. Policy names come from the selected native setting occurrence or its
+explicit policy ID; a setting name is not a policy name. Inventory examples use
+only settings linked to the resolved device ID. Missing causes and diagnostic
+messages are stated explicitly rather than inferred from overall noncompliance.
+Reporting summaries distinguish Error, Conflict, Unknown and Not evaluated;
+technical examples show retained diagnostic codes/messages when present. Inventory and setting
+findings may describe the same devices and are not additive failure counts.
+
+Defender real-time protection Off is a low-priority observation, not a confirmed
+unprotected-device finding or readiness blocker. Another antivirus can be the
+primary provider while Defender is passive or disabled. Examples show the
+reported provider and mode when retained; missing provider evidence remains
+unverified. Confirm current provider health and intended operating mode before
+changing protection. This does not suppress explicit Intune security-policy
+failures or antivirus signature findings. See [Microsoft's compatibility guidance](https://learn.microsoft.com/en-us/defender-endpoint/microsoft-defender-antivirus-compatibility).
+
 ## Findings and counts
 
 Current, named security-setting failures remain separate from default-policy
