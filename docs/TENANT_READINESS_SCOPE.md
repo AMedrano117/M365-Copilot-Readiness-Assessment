@@ -24,6 +24,10 @@ tenant reviews, and business approval cannot close a failed technical control.
 Provider security reviews remain visible; business use cases are outside scope.
 Aggregate usage can provide context, but does not establish control effectiveness.
 
+The active tenant checklist excludes `SCOPE.PILOT` and `EXTERNAL_AI.OUTCOMES`;
+their exclusion is recorded explicitly. Technical service ownership, applicable
+security/legal obligations, real risk observations and remediation remain in scope.
+
 The shared result records `assessment_scope: tenant_readiness` and
 `assessment_scope_version: 1.0`. HTML, the readiness summary, workbooks and
 machine-readable output use this scope. Legacy field/tab names can remain for

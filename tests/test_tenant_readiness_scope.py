@@ -38,6 +38,9 @@ class TenantReadinessScopeTests(unittest.TestCase):
         self.assertEqual(result['rollout_progress']['current_stage_id'], 'assessed')
         self.assertFalse(result['rollout_progress']['next_requirements'])
         self.assertNotIn('ADOPTION.BASELINE', {row['control_id'] for row in result['controls']})
+        self.assertNotIn('SCOPE.PILOT', {row['Check ID'] for row in result['domain_coverage']})
+        self.assertNotIn('EXTERNAL_AI.OUTCOMES', {row['Check ID'] for row in result['domain_coverage']})
+        self.assertIn('IDENTITY.AUTH', {row['control_id'] for row in result['controls']})
 
     def test_optional_incomplete_planning_does_not_discard_valid_tenant_reviews(self):
         profile = review_profile()
@@ -163,7 +166,8 @@ class TenantScopeOutputsTests(unittest.TestCase):
             self.assertIn('Tenant baseline ready', source)
             self.assertIn('handled outside this assessment', source)
             for text in ('Choose and run the pilot', 'Record the pilot group that ran', 'Confirm pilot-device posture',
-                         'Review the pilot use cases, baseline and success measures', 'For broader adoption, record the pilot outcomes'):
+                         'Review the pilot use cases, baseline and success measures', 'For broader adoption, record the pilot outcomes',
+                         'Pilot users, devices, content locations, applications and connectors'):
                 self.assertNotIn(text, source)
             for path in (workbook, technical_workbook_path(workbook)):
                 book = load_workbook(path)

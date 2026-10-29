@@ -194,8 +194,9 @@ class PolicyAndOperationTests(unittest.TestCase):
     def test_all_nine_domains_and_every_catalog_check_are_reported_without_sources(self):
         result=build_assessment_result([],{},evaluation_date=DAY,expected_tenant_id=TENANT)
         self.assertEqual(len(result['assessment_domains']),9)
-        self.assertEqual(len(result['domain_coverage']),len(CHECKS))
-        self.assertEqual(len({row['Check ID'] for row in result['domain_coverage']}),len(CHECKS))
+        self.assertEqual({row['Check ID'] for row in result['domain_coverage']},
+                         {check['id'] for check in CHECKS} - {'SCOPE.PILOT', 'EXTERNAL_AI.OUTCOMES'})
+        self.assertEqual(len({row['Check ID'] for row in result['domain_coverage']}),len(result['domain_coverage']))
         self.assertEqual(result['methodology_version'],'4.0.0')
         self.assertEqual(result['evidence_schema_version'],'1.1.0')
 

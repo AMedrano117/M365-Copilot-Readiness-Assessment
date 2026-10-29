@@ -288,7 +288,7 @@ tr:target { background: #fff3cf !important; outline: 2px solid #c49942; outline-
   .report-nav, nav { display: block; padding: 8px 18px; }
   .nav-links { flex-wrap: nowrap; gap: 20px; margin-right: -4px; padding: 3px 4px 6px 0; overflow-x: auto; scrollbar-width: thin; }
   .nav-links a { flex: 0 0 auto; font-size: 12px; min-height: 36px; }
-  .nav-tools { justify-content: flex-end; gap: 9px; margin-top: 4px; padding-bottom: 3px; }
+  .nav-tools { flex-wrap: wrap; justify-content: flex-start; gap: 9px; margin-top: 4px; padding-bottom: 3px; }
   .button { padding: 8px 12px; min-height: 38px; font-size: 12px; }
   main { padding: 18px 12px 8px; }
   section { padding: 25px 21px; margin-bottom: 18px; }

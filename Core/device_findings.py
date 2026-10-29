@@ -64,7 +64,7 @@ def qualify_device_findings(recommendations, bundle, compliance):
             row.update(UnverifiedSourceObservation=row.get('Observation'),
                 Feature='Confirm earlier endpoint observations', Disposition='Opportunity', Priority='Medium',
                 Observation='No native endpoint records are retained for validation. The earlier endpoint conclusion remains unverified.',
-                Recommendation='Obtain dated device and setting records, reconcile stable identities and confirm the current protection provider and intended pilot population.',
+                Recommendation='Obtain dated device and setting records, reconcile stable identities and confirm the current protection provider and assessed tenant population.',
                 ObservationDate='', EvidenceComplete=False,
                 InvestigationEvidence={'kind':'records','records':[],'source':{},'reconciliation':{'operation':'count','expected':0}})
             annotate_finding(row, [], 'UnverifiedLegacyDeviceObservation')
@@ -92,7 +92,7 @@ def qualify_device_findings(recommendations, bundle, compliance):
             row.update(FindingKey='entra.devices.compliant_access',
                 Feature='Confirm compliant-device Conditional Access enforcement',
                 Observation=CA_QUALIFICATION+' '+count_text(population(items))+' Policy records are configuration evidence; they are not device failures or observed sign-in outcomes.',
-                Recommendation='Review enabled policy grants, Microsoft 365 targeting, inclusions and exclusions. Validate the intended pilot population using report-only or sign-in results before enforcing changes.',
+                Recommendation='Review enabled policy grants, Microsoft 365 targeting, inclusions and exclusions. Validate the assessed users using report-only or sign-in results before enforcing changes.',
                 OriginalRecommendation='', Priority='Medium', Disposition='Coverage', Status='Not Assessed',
                 ControlId='ENDPOINT.POSTURE', DomainId='endpoints', EvidenceKey='conditional_access_detail',
                 EvidenceLevel='configuration',

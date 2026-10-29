@@ -27,11 +27,13 @@ def tenant_review_profile(profile):
     optional = {key: supplied.pop(key) for key in optional_keys if key in supplied}
     excluded_ids = {item.get('id') for key in ('pilot_scope', 'expansion_scope')
                     if isinstance((item := optional.get(key)), dict) and isinstance(item.get('id'), str)}
+    from .tenant_readiness import OUT_OF_SCOPE_CHECKS
     for key in ('control_reviews', 'check_reviews'):
         if isinstance(supplied.get(key), list):
             optional[key] = [row for row in supplied[key] if isinstance(row, dict) and
                              (isinstance(row.get('scope_id'), str) and row['scope_id'] in excluded_ids
-                              or row.get('control_id') == 'ADOPTION.BASELINE')]
+                              or row.get('control_id') == 'ADOPTION.BASELINE'
+                              or isinstance(row.get('check_id'), str) and row['check_id'] in OUT_OF_SCOPE_CHECKS)]
             supplied[key] = [row for row in supplied[key] if row not in optional[key]]
     wrapped = LoadedAssessmentProfile(raw=raw, filename=(profile or {}).get('filename', ''))
     return wrapped, optional

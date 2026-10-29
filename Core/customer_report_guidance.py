@@ -65,7 +65,7 @@ GUIDES = {
         'steps': [
             'Open Microsoft Purview > Solutions > DSPM > Discover > Data risk assessments > '
             'Microsoft 365. Check existing completed default and custom assessments before '
-            'starting another scan. Confirm that the date and selected sites cover the pilot.',
+            'starting another scan. Confirm that the date and selected sites cover the assessed business content.',
             'Open the applicable completed assessment and select Export. Prefer the original '
             'CSV with its headers intact; Microsoft also offers Excel, JSON and TSV. Retain '
             'the assessment date, scope and completion status alongside the export.',

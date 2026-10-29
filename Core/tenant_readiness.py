@@ -1,6 +1,7 @@
 """Tenant technical readiness; deployment planning does not establish control results."""
 
 SCOPE = 'tenant_readiness'
+OUT_OF_SCOPE_CHECKS = frozenset({'SCOPE.PILOT', 'EXTERNAL_AI.OUTCOMES'})
 QUALIFICATION = ('This assessment evaluates the tenant technical baseline. Pilot membership, business use cases, '
                  'success measures and rollout authorization are handled outside this assessment.')
 

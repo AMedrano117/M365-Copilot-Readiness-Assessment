@@ -82,7 +82,7 @@ def expanded_findings(bundle, *, profile=None, evaluation_date=None, tenant_id=N
                 output[-1]['Observation'] += (' Real-time protection off is an observation, not proof of an active unprotected device. '
                     'Current protection effectiveness is not established without current AV mode, onboarding, approved third-party AV, platform and complete source correlation. '
                     'Returned Defender machine records do not establish fleet coverage.')
-                output[-1]['CompletionEvidence'] = 'Dated protection-provider and AV-mode validation, onboarding status, approved antivirus exceptions, current health and pilot-device correlation.'
+                output[-1]['CompletionEvidence'] = 'Dated protection-provider and AV-mode validation, onboarding status, approved antivirus exceptions and current device health.'
             annotate_finding(output[-1], selected_items, kind)
 
     def merged_state(states):
@@ -125,7 +125,7 @@ def expanded_findings(bundle, *, profile=None, evaluation_date=None, tenant_id=N
                     '{count} Windows protection record(s) report Microsoft Defender Antivirus real-time protection turned off.',
                     'Validate the current antivirus provider, approved third-party antivirus, Defender mode, onboarding, platform, '
                     'tamper protection and signatures against the retained report dates. Restore the intended protection only after '
-                    'confirming current device ownership, activity and intended pilot scope.',priority='Medium')
+                    'confirming current device ownership, activity and assessed tenant scope.',priority='Medium')
                 overdue=[row for row in records if reported_boolean(row.get('signatureUpdateOverdue')) is True]
                 if overdue: health_finding(f'{name}.overdue',overdue,state,'Update overdue endpoint protection signatures',
                     '{count} Windows device(s) report overdue security intelligence (signature) updates.',
