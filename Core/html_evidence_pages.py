@@ -1,6 +1,7 @@
 """Linked technical evidence pages that sit beside the customer HTML report.
 
-The main report and one-page summary stay aggregate-only. These companion pages hold the
+The main report offers at most three named technical examples per finding; its
+one-page summary stays aggregate-only. These companion pages hold the complete
 named records for technical reviewers, paginated so every record remains reachable.
 Every value is HTML-escaped; the pages use no scripts or external resources.
 """

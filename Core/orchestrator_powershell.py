@@ -175,10 +175,16 @@ def _launch_powershell(script_path, script_args, prefer_windows=False, secrets=N
     the command line, where other local processes can read them. When supplied,
     the collector receives ``-SecretsFromStdin`` and one JSON line on stdin.
     """
+    from .authentication_preparation import active_preparation
+    preparation = active_preparation()
+    if preparation:
+        preparation.verify_launch()
     secrets = {key: value for key, value in (secrets or {}).items() if value}
     for value in secrets.values():
         remember_runtime_secret(value)
     script_args = list(script_args)
+    if preparation:
+        script_args.append('-WaitForCollectionStart')
     if secrets and "-SecretsFromStdin" not in script_args:
         script_args.append("-SecretsFromStdin")
     candidates = []
@@ -203,7 +209,7 @@ def _launch_powershell(script_path, script_args, prefer_windows=False, secrets=N
                 [executable, "-NoProfile", "-File", script_path, *script_args],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                stdin=subprocess.PIPE if secrets else None,
+                stdin=subprocess.PIPE if secrets or preparation else None,
                 env=powershell_environment(executable),
                 text=True,
                 encoding='utf-8',
@@ -223,13 +229,14 @@ def _launch_powershell(script_path, script_args, prefer_windows=False, secrets=N
                 # The collector exited before reading; its own error is reported.
                 pass
             finally:
-                try:
-                    process.stdin.close()
-                except OSError:
-                    pass
-                # communicate() must not try to reuse the closed pipe.
-                process.stdin = None
-        return process
+                if not preparation:
+                    try:
+                        process.stdin.close()
+                    except OSError:
+                        pass
+                    # communicate() must not try to reuse the closed pipe.
+                    process.stdin = None
+        return preparation.attach(process) if preparation else process
 
     raise last_error
 
@@ -240,13 +247,16 @@ def _communicate_with_progress(process, progress_key):
     Only a real process is streamed; substitutes that provide communicate()
     (for example in tests) use it unchanged.
     """
-    if not isinstance(process, subprocess.Popen):
+    from .authentication_preparation import PreparedProcess
+    if not isinstance(process, (subprocess.Popen, PreparedProcess)):
         return process.communicate()
     stderr_lines = []
 
     def read_stderr():
         try:
             for line in iter(process.stderr.readline, ''):
+                if line.strip().startswith('AUTH_READY:'):
+                    continue
                 if collection_progress.handle_collector_line(progress_key, line.strip()):
                     continue
                 if line.startswith('AUTH_PROMPT'):
@@ -419,7 +429,9 @@ async def collect_power_platform_data(
     
     # Launch unified collector (PS1 files are in parent directory, not in Core)
     ps_script_path = os.path.join(os.path.dirname(__file__), "..", "collect_power_platform_and_copilot_studio_data.ps1")
-    console.status('Power Platform / Copilot Studio: collecting deployment evidence; browser sign-in may be required.')
+    from .authentication_preparation import active_preparation
+    console.status('Power Platform / Copilot Studio: preparing sign-in...' if active_preparation() else
+                   'Power Platform / Copilot Studio: collecting deployment evidence; browser sign-in may be required.')
     process = _launch_powershell(
         ps_script_path,
         [
@@ -484,6 +496,9 @@ async def collect_power_platform_data(
                     break
                 line = line.strip()
                 if not line:
+                    continue
+                if line.startswith('AUTH_READY:'):
+                    stop_spinner()
                     continue
                 stderr_lines.append(line)
                 if (
@@ -556,7 +571,7 @@ async def collect_power_platform_data(
     stdout_thread.start()
     
     # Wait for completion
-    process.wait()
+    await __import__('asyncio').to_thread(process.wait)
     stop_spinner()
     stderr_thread.join(timeout=1.0)
     stdout_thread.join(timeout=1.0)
@@ -728,6 +743,9 @@ async def collect_purview_data_via_powershell(auth_mode='auto', tenant_id=None, 
                 line = line.strip()
                 if not line:
                     continue
+                if line.startswith('AUTH_READY:'):
+                    stop_spinner()
+                    continue
                 if collection_progress.handle_collector_line('purview', line):
                     continue
                 stderr_lines.append(line)
@@ -774,8 +792,8 @@ async def collect_purview_data_via_powershell(auth_mode='auto', tenant_id=None, 
     stderr_thread.start()
     
     # Wait for process to complete and get stdout (don't use communicate())
-    stdout = process.stdout.read()
-    process.wait()
+    stdout = await __import__('asyncio').to_thread(process.stdout.read)
+    await __import__('asyncio').to_thread(process.wait)
     result_returncode = process.returncode
     
     # Stop any remaining spinner
@@ -927,7 +945,9 @@ async def collect_sharepoint_governance_via_powershell(admin_url, tenant_id, aut
         return {"available": False, "availability_status": "unavailable",
                 "configuration_required": "SHAREPOINT_ADMIN_URL", "reason": SHAREPOINT_ADMIN_URL_REQUIRED}
 
-    console.status('SharePoint: collecting sharing settings and completed governance reports...')
+    from .authentication_preparation import active_preparation
+    console.status('SharePoint: preparing sign-in...' if active_preparation() else
+                   'SharePoint: collecting sharing settings and completed governance reports...')
 
     client_id = os.environ.get("CLIENT_ID", "")
     certificate_path, certificate_thumbprint, _ = certificate_settings("SHAREPOINT")

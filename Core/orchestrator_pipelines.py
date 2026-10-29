@@ -62,6 +62,7 @@ def create_pipelines(
     legacy_power_platform_collector=False,
     permission_profile='standard',
     delegated_evidence=None,
+    prepared_purview=None,
 ):
     """Create all service pipeline functions with shared context.
     
@@ -288,7 +289,12 @@ def create_pipelines(
             attempted_collection = False
             
             # If data not available via stdin, invoke PowerShell to collect it
-            if purview_data_source != 'stdin' and allow_purview_collection:
+            if prepared_purview is not None:
+                attempted_collection = True
+                collection_success = await prepared_purview
+                purview_data_source = os.environ.get('PURVIEW_DATA_SOURCE')
+                use_deployment_enrichment = collection_success and purview_data_source in ('subprocess','cache')
+            elif purview_data_source != 'stdin' and allow_purview_collection:
                 # Gathering phase - invoke PowerShell
                 attempted_collection = True
                 collection_success = await collect_purview_data_via_powershell(auth_mode=interactive_auth, tenant_id=tenant_id)

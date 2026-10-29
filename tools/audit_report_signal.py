@@ -36,6 +36,21 @@ def _attribute(attrs, name):
     return html.unescape(match.group(1)).strip() if match else ""
 
 
+def public_report_source(source):
+    """Named examples are explicitly permitted only inside the bounded appendix."""
+    return re.sub(r'<section id="technical-review-examples" data-example-limit="3">.*?</section>', '', source,
+                  flags=re.I | re.S)
+
+
+def technical_example_issues(source):
+    issues = []
+    for sample in re.finditer(r'<details class="technical-example"[^>]*>(.*?)</details>', source, re.I | re.S):
+        body = re.search(r'<tbody>(.*?)</tbody>', sample.group(1), re.I | re.S)
+        if body and len(re.findall(r'<tr\b', body.group(1), re.I)) > 3:
+            issues.append('A technical finding example exceeds the three-record limit.')
+    return issues
+
+
 def parse_report(path):
     source = Path(path).read_text(encoding="utf-8")
     if 'id="action-plan"' in source:
@@ -46,6 +61,10 @@ def parse_report(path):
                 r'<tr id="(evidence-[^"]+)">\s*<td>(.*?)</td>', source, re.I | re.S,
             )
         }
+        for match in re.finditer(r'<(?:span|details)\b(?P<attrs>[^>]*\bid="(?P<id>evidence-[^"]+)"[^>]*)>', source, re.I):
+            identifier = _attribute(match.group('attrs'), 'finding-id')
+            if identifier:
+                identifiers[match.group('id')] = identifier
         records = []
         for match in re.finditer(r'<article class="action"(?P<attrs>.*?)>(?P<body>.*?)</article>', source, re.I | re.S):
             attrs, body = match.group('attrs'), match.group('body')
@@ -54,6 +73,8 @@ def parse_report(path):
             kind = re.search(r'<span class="action-kind">(.*?)</span>', body, re.I | re.S)
             def paragraph(label):
                 found = re.search(r'<p><strong>' + re.escape(label) + r'</strong>(.*?)</p>', body, re.I | re.S)
+                if not found and label == 'What we found.':
+                    found = re.search(r'<div class="callout callout-found"[^>]*>(.*?)</div>', body, re.I | re.S)
                 return _text(found.group(1)) if found else ''
             action_type = _text(kind.group(1)) if kind else ''
             records.append({
@@ -112,7 +133,8 @@ def summarize(records, html_source="", workbook=None):
     issues = []
     modern = 'id="action-plan"' in html_source
     action_dispositions = {'Action', 'Coverage'} if modern else {'Action'}
-    if re.search(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", html_source, re.I):
+    issues.extend(technical_example_issues(html_source))
+    if re.search(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", public_report_source(html_source), re.I):
         issues.append("HTML contains a possible user identity (email address).")
     if "Validation incomplete—do not use for deployment approval" in html_source:
         issues.append("The report integrity gate is incomplete.")

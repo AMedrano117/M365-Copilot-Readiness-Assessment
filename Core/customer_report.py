@@ -174,6 +174,8 @@ def _heading(row):
 
 
 def _action_text(row):
+    if row.get('DeviceSummary'):
+        return row['DeviceSummary']['action']
     # Keep the action brief; report procedures are linked from the action card.
     key = row.get('FindingKey')
     if key == 'sharepoint.dag.not_assessed':
@@ -211,6 +213,8 @@ def _action_text(row):
 
 def _observation(row, bundle):
     """Clarify what the observed configuration establishes; retain raw evidence in the workbook."""
+    if row.get('DeviceSummary'):
+        return row['DeviceSummary']['text']
     text = row.get('Observation') or row.get('Evidence') or row.get('Strength') or ''
     if row.get('FindingKey') == 'purview.audit.state' and 'Copilot activities are logged' in text:
         return text.replace(' - Copilot activities are logged', '. Copilot event coverage still needs verification.')
@@ -829,8 +833,8 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None, summ
     require_supported_confidence(result)
     from .identity_finding_taxonomy import ensure_identity_result, licensing_context
     result = ensure_identity_result(result, bundle)
-    from .lifecycle_presentation import summary_html,technical_html,finding_html
-    from .governance_presentation import summary_html as governance_summary,technical_html as governance_technical,finding_html as governance_finding
+    from .lifecycle_presentation import summary_html,finding_html
+    from .governance_presentation import summary_html as governance_summary,finding_html as governance_finding
     from .report_presentation import baseline_panel, coverage_panels, decision_groups, domain_tiles, short_text
     actions = result['actions']
     domains = result.get('assessment_domains') or result['domains']
@@ -846,6 +850,8 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None, summ
         key = row.get('RecommendationId') or row.get('FindingKey') or row.get('Feature')
         return f'<a href="#evidence-{slug(key)}">Evidence and qualifications</a>'
     def investigation_link(row):
+        if row.get('DeviceSummary') and technical_url:
+            return '<p class="evidence-link"><a href="' + escape(technical_url + '#%27Device%20Detail%27!A1', quote=True) + '">Review specific devices in the technical evidence workbook</a></p>'
         qualification = row.get('InvestigationPublicQualification', row.get('InvestigationQualification'))
         note = f'<p class="qualification">{prose(qualification)}</p>' if qualification else ''
         if not workbook_url:
@@ -880,6 +886,8 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None, summ
             text += f" · {evidence['context_record_count']} supporting context records"
         return text + f" · {evidence['kind'].replace('_', ' ')} · {evidence['availability'].replace('_', ' ')}"
     def technical_evidence(row):
+        if row.get('DeviceSummary'):
+            return ''
         # Aggregate counts only; named records stay in the workbooks and optional evidence pages.
         item = model_findings.get(row.get('RecommendationId'))
         if not item:
@@ -904,17 +912,30 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None, summ
                 '</details>')
     def record(row, with_action=False):
         description = _observation(row, bundle)
-        support = row.get('Evidence') if row.get('Evidence') != description else ''
+        support = row.get('Evidence') if not row.get('DeviceSummary') and row.get('Evidence') != description else ''
+        description_html = ('<ul class="device-summary">' + ''.join('<li>' + prose(line) + '</li>' for line in row['DeviceSummary']['lines'][:-1]) + '</ul>'
+                            if row.get('DeviceSummary') else '<p>' + prose(description) + '</p>')
         qualification = row.get('Qualification') or row.get('qualification') or ''
         status = row.get('ActionType') or row.get('EvidenceStatus') or row.get('Disposition')
         status = {'supported': 'Observed', 'limited': 'Limited coverage', 'gap': 'Evidence needed', 'stale': 'Older evidence'}.get(status, status)
         return f'''<article class="finding"><div class="eyebrow">{prose(status)} · {prose(_date_text(row))}</div>
-          <h4>{prose(_heading(row))}</h4><p>{prose(description)}</p>{('<p>' + prose(support) + '</p>') if support else ''}
+          <h4>{prose(_heading(row))}</h4>{description_html}{('<p>' + prose(support) + '</p>') if support else ''}
           {('<p class="qualification">' + prose(licensing_context(row)) + '</p>') if row.get('FindingTaxonomyVersion') else ''}
           {('<p><strong>What to do.</strong> ' + prose(_action_text(row)) + '</p>') if with_action else ''}
           {investigation_link(row) if row.get('Recommendation') else ''}{technical_evidence(row)}
           {('<p class="qualification">' + prose(qualification) + '</p>') if qualification else ''}
           <p class="evidence-link">{evidence_link(row)}</p>{finding_html(result,row)}{governance_finding(result,row)}</article>'''
+
+    def device_found(row):
+        summary = row.get('DeviceSummary')
+        if summary:
+            groups = summary.get('policy_groups') or []
+            lines = [line for line in summary['lines'][:-1] if not any(group['policy'] in line and line.startswith(str(group['devices']) + ' device') for group in groups)]
+            policies = [{'policy': group['policy'], 'count': group['devices'],
+                         'reasons': '\n'.join('• ' + item['reason'] for item in group['reasons'][:3])} for group in groups[:3]]
+            return ('<strong>What we found.</strong><ul class="device-summary">' + ''.join('<li>' + prose(line) + '</li>' for line in lines) + '</ul>'
+                    + (table(policies, [('Compliance policy', 'policy'), ('Devices', 'count'), ('Failed requirements', 'reasons')], mobile_labels=True) if policies else ''))
+        return '<p><strong>What we found.</strong> ' + prose(_observation(row, bundle)) + '</p>'
 
     action_html = []
     sharing_changes = _sharing_changes(bundle)
@@ -927,7 +948,7 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None, summ
           <div class="action-tags"><span class="priority-badge" data-priority="{slug(row.get('Priority'))}">{prose(row.get('Priority') or 'Review')} priority</span>{('<span class="action-kind">' + prose(row.get('PilotImpact')) + '</span>') if row.get('PilotImpact') else ''}<span class="action-kind">{prose(row.get('ActionType'))}</span><span class="action-domain">{prose(row.get('Domain'))}</span></div>
           <h3>{prose(_heading(row))}</h3><p class="action-preview"><span class="preview-label" data-kind="issue">Issue</span>{prose(short_text(_observation(row,bundle)))}</p>
           <p class="action-preview"><span class="preview-label" data-kind="fix">{step_label}</span>{prose(short_text(_action_text(row)))}</p><span class="detail-prompt">Details, next step and supporting logs</span></summary><div class="action-body">
-          <div class="callout callout-found" data-priority="{slug(row.get('Priority'))}"><p><strong>What we found.</strong> {prose(_observation(row, bundle))}</p>{settings_html}</div>
+          <div class="callout callout-found" data-priority="{slug(row.get('Priority'))}">{device_found(row)}{settings_html}</div>
           <div class="callout callout-fix"><p><strong>What to do.</strong> {prose(_action_text(row))}</p></div>{investigation_link(row)}{technical_evidence(row)}
           {('<p class="qualification">' + prose(licensing_context(row)) + '</p>') if row.get('FindingTaxonomyVersion') else ''}
           <div class="action-meta"><p><strong>Responsible role</strong><br>{prose(row.get('OwnerRole'))}</p>
@@ -950,6 +971,9 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None, summ
         extra = ''
         if domain['id'] == 'identity':
             extra = _authentication_methods(bundle, result)
+        if domain['id'] in {'endpoints', 'devices'} and (result.get('device_compliance') or {}).get('summary'):
+            summary = result['device_compliance']['summary']
+            extra = '<h3>Device compliance at a glance</h3><ul class="device-summary">' + ''.join('<li>' + prose(line) + '</li>' for line in summary['lines']) + '</ul>'
         if domain['id'] == 'content':
             extra = _settings(bundle) + _lifecycle(bundle)
         if domain['id'] in {'data_protection','classification'}:
@@ -968,7 +992,8 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None, summ
             # Keep the separate paid-user prompt aggregates visible there too.
             extra += _collected_admin_context(bundle, 'adoption')
         relevant = ''.join(f'<li><a href="#action-{action_numbers[r.get("RecommendationId")]}">{prose(_heading(r))}</a> <span class="muted">{prose(r.get("ActionType"))}</span></li>' for r in domain.get('actions',[]) if r.get('RecommendationId') in action_numbers)
-        extra = '<details class="domain-context"><summary>Collected settings, metrics and report context</summary>'+extra+'</details>' if extra else ''
+        extra = ('<details class="domain-context"' + (' open' if domain['id'] in {'endpoints', 'devices'} else '')
+                 + '><summary>Collected settings, metrics and report context</summary>'+extra+'</details>') if extra else ''
         domain_html.append(f'''<details class="domain domain-panel" data-state="{slug(domain.get('status'))}" id="domain-{escape(domain['id'])}"><summary><span class="domain-index">{domain_index:02d}</span><h2>{prose(domain['title'])}</h2><span class="badge" data-state="{slug(domain.get('status'))}">{prose(domain.get('status'))}</span></summary>
           {('<ul class="domain-action-links">'+relevant+'</ul>') if relevant else '<p>No action-plan items in this area. Collection and owner reviews still determine coverage.</p>'}{findings_html}{extra}<p><a href="#coverage-{escape(domain['id'])}">Collection coverage and outstanding catalog reviews</a></p></details>''')
 
@@ -983,93 +1008,12 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None, summ
         ('confirmation', 'Findings to confirm', 'Check current status and scope'),
         ('evidence_gaps', 'Evidence checks', 'Close unanswered questions'),
         ('strengths', 'Supported observations', 'Configuration or observed results')))
-    all_records = result.get('recommendations') or []
-    evidence_rows = []
-    for row in all_records:
-        key = row.get('RecommendationId') or row.get('FindingKey') or row.get('Feature')
-        location = row.get('AssessmentEvidenceRange', row.get('InvestigationRange') or row.get('EvidenceSheet'))
-        tabs = prose(location or row.get('InvestigationStatus') or 'Supporting location not supplied')
-        if workbook_url and location and re.fullmatch(r"'((?:[^']|'')+)'![A-Z]+[1-9][0-9]*:[A-Z]+[1-9][0-9]*", str(location)):
-            tabs = '<a href="' + escape(workbook_url + '#' + quote(str(location), safe='!:$')) + '">' + tabs + '</a>'
-        evidence_note = ('Inventory or licensing context; full qualifications are retained in the Findings Register.'
-                         if row.get('Disposition')=='Reference' else row.get('EvidenceBasis'))
-        detail_note = '' if row.get('Disposition')=='Reference' else row.get('Qualification')
-        technical_cell = '<span class="muted">Not exported</span>'
-        if row.get('RecommendationId') in model_findings:
-            from .html_evidence_pages import page_name
-            summary = prose(evidence_summary(row))
-            technical_cell = (f'<a href="{escape(quote(evidence_folder + "/" + page_name(row["RecommendationId"]), safe="/"))}">{summary}</a>'
-                              if evidence_folder else summary)
-        evidence_rows.append(f'<tr id="evidence-{slug(key)}"><td>{prose(key)}</td><td>{prose(_heading(row))}</td><td>{prose(_date_text(row))}</td><td>{prose(evidence_note)}{("<br>" + prose(detail_note)) if detail_note else ""}</td><td>{tabs}</td><td>{technical_cell}</td></tr>')
-    # Some curated strengths arrive independently of the recommendation register.
-    seen_ids = {r.get('RecommendationId') or r.get('FindingKey') or r.get('Feature') for r in all_records}
-    for row in strength_rows + (result.get('historical_strengths') or []):
-        key = row.get('RecommendationId') or row.get('FindingKey') or row.get('Feature')
-        if key not in seen_ids:
-            seen_ids.add(key)
-            evidence_rows.append(f'<tr id="evidence-{slug(key)}"><td>{prose(key)}</td><td>{prose(_heading(row))}</td><td>{prose(_date_text(row))}</td><td>{prose(row.get("Qualification"))}</td><td>{prose(row.get("InvestigationRange") or row.get("EvidenceSheet") or "Supporting location not supplied")}</td><td><span class="muted">Not exported</span></td></tr>')
-    source_rows = [r for source in (bundle.get('data_exposure') or {}).get('sources', {}).values() for r in source.get('reports', [])]
-    sources = table(source_rows, [('Source file', 'source_file'), ('Report type', 'report_type'), ('Workload', 'workload'), ('Original date', 'report_date'), ('Date basis', 'date_basis'), ('Selection', 'status'), ('Rows', 'records_read'), ('Freshness', 'freshness')])
-    from .coverage_summary import coverage_projection
-    collection_projection = coverage_projection(result,bundle)
-    collection_rows = collection_projection['summary']
-    collection_columns = ('Dataset','Source','Parent objects queried',
-        'Successful queries','Zero-result queries','Failed queries','Partial queries','Returned records',
-        'Completeness','Truncation','Observation period','Qualification')
-    collection_table = ''
-    if collection_rows:
-        collection_table = '<div class="table-scroll"><table><thead><tr>' + ''.join(
-            '<th>' + escape(key) + '</th>' for key in (*collection_columns,'Technical detail')) + '</tr></thead><tbody>'
-        for row in collection_rows:
-            target = technical_url + "#'Collection Request Detail'!A" + str(row['Technical detail row'])
-            link = '<a href="' + escape(target, quote=True) + '">Detailed request register</a>' if technical_url else 'See Technical Evidence request register'
-            collection_table += '<tr data-collection-state="' + escape(row.get('Availability state','unknown'),quote=True) + '">' + ''.join('<td>' + prose(row.get(key)) + '</td>' for key in collection_columns) + '<td>' + link + '</td></tr>'
-        collection_table += '</tbody></table></div>'
-    auth_plan = bundle.get('auth_plan') or {}
-    identity_labels = []
-    for identity in auth_plan.get('identities') or []:
-        if identity.get('type') == 'service_principal':
-            identity_labels.append('assessment application (' + ('certificate' if identity.get('credential_type') == 'certificate' else 'client secret')
-                                   + ', application permissions only)')
-        elif identity.get('type') == 'user':
-            identity_labels.append('signed-in administrator (delegated, enrichment only)')
-    if identity_labels:
-        identity_note = ('<p>Access used for this assessment: ' + prose('; '.join(identity_labels))
-                         + '. Each source below records which identity read it.</p>')
-    elif context_has_collection(bundle):
-        identity_note = '<p>Access used for this assessment was not recorded by this collection.</p>'
-    else:
-        identity_note = ''
-    context = bundle.get('collection_context') or {}
-    migration = context.get('methodology_migration') or {}
-    migration_note = (
-        '<p>Saved collection methodology: ' + prose(migration.get('from'))
-        + '. Reassessed using methodology ' + prose(migration.get('to'))
-        + '. ' + prose(migration.get('reason'))
-        + ' Original collection evidence and dates are preserved.</p>'
-    ) if migration else ''
-    prior = bundle.get('prior_report') or {}
     report_guides = _report_guides(actions) + _remaining_portal_review(bundle)
-    operator_handoff = ('<h3>Additional evidence</h3><p>Provide the current completed exports requested below, including their report dates and assessed scope. Detailed import instructions are retained in the technical/operator documentation.</p>' if report_guides else '')
-    from .assessment_runs import run_context_rows
-    run_note = '<dl>' + ''.join('<dt>' + prose(row['Item']) + '</dt><dd>' + prose(row['Value']) + '</dd>'
-                               for row in run_context_rows(result)) + '</dl>'
-    technical = technical_html(result) + governance_technical(result) + f'''<details class="appendix-panel" id="engineer-appendix"><summary>Technical appendix and evidence workbook</summary>
-      <p>{('<a href="' + workbook_url + '">Download ' + escape(workbook_name) + '</a>') if workbook_url else 'The workbook contains the complete evidence register.'}
-      {('<a href="' + technical_url + '">Download ' + escape(technical_name) + '</a>') if technical_url else ''}</p>
-      <p>Evaluation date: {prose(result.get('evaluation_date'))}. Methodology: {prose(result.get('methodology_version'))}. Evidence schema: {prose(result.get('evidence_schema_version'))}.</p>
-      {run_note}
-      <p>Original tenant collection: {prose(context.get('collected_at'))}. Report execution: {prose(context.get('mode') or 'Evidence supplied directly')}.</p>
-      <p>Collection permission profile: {prose(context.get('permission_profile') or 'unrecorded')}.</p>
-      {identity_note}
-      {migration_note}
-      {operator_handoff}
-      {table(context.get('historical_sources') or [], [('Source file', 'source_file'), ('Source type', 'source_type'), ('Original date', 'reported_at')]) if context.get('historical_sources') else ''}
-      {('<p>Historical workbook: ' + prose(prior.get('source_file')) + '. Original report date: <strong>' + prose(prior.get('generated_at')) + '</strong>. The complete original register and source mapping are preserved in the Prior workbook tabs.</p>') if prior else ''}
-      {('<h3>Source collection results</h3><p>These are the source states retained with the tenant collection. An unsuccessful read cannot establish a zero tenant count.</p>' + collection_table) if collection_rows else ''}
-      <h3>Imported source reports and dates</h3>{sources}<h3>Evidence references</h3>
-      {('<p>Named supporting records are on the <a href="' + escape(quote(evidence_folder + '/index.html', safe='/')) + '">linked technical evidence pages</a>. Keep that folder with this report and the workbook; share it only with authorized technical reviewers.</p>') if evidence_folder and model_findings else ''}
-      <div class="table-scroll"><table><thead><tr><th>Reference</th><th>Finding</th><th>Original date</th><th>Evidence and qualifications</th><th>Workbook tab</th><th>Technical evidence</th></tr></thead><tbody>{''.join(evidence_rows)}</tbody></table></div></details>'''
+    from .coverage_summary import coverage_projection
+    collection_projection = coverage_projection(result, bundle)
+    collection_rows = collection_projection['summary']
+    from .technical_appendix import render_technical_appendix
+    technical = render_technical_appendix(result, bundle, workbook_url, technical_url, model_findings, collection_rows)
 
     gaps = result.get('coverage') or []
     gap_items = []

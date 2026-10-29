@@ -217,7 +217,8 @@ class CrossOutputTests(unittest.TestCase):
             for output in (html,summary):
                 self.assertIn('4 of 586',output); self.assertIn('6 of 586',output)
                 self.assertNotIn('--reports-dir',output); self.assertNotIn('24 hours',output)
-                self.assertNotIn('restricted-0@example.invalid',output)
+                from tools.audit_report_signal import public_report_source
+                self.assertNotIn('restricted-0@example.invalid',public_report_source(output))
                 if result['blocker_control_mapping']['explanation']:
                     self.assertIn(result['blocker_control_mapping']['explanation'],output)
             self.assertEqual(result,before)

@@ -325,7 +325,10 @@ class DeviceAndSourceTests(unittest.TestCase):
         self.assertEqual(operational_results(bundle,{},evaluation_date=DAY,tenant_id=TENANT)[0]['ENDPOINT.POSTURE']['result'],'pass')
         bundle['assessment_sources']['windows_protection'][0]['records'][0]['realTimeProtectionEnabled']=False
         findings=expanded_findings(bundle,evaluation_date=DAY)
-        self.assertEqual(findings[0]['Disposition'],'Action')
+        self.assertEqual(findings[0]['Disposition'],'Opportunity')
+        self.assertEqual(findings[0]['DeviceFindingType'],'DefenderRealTimeProtectionObservation')
+        self.assertFalse(findings[0]['DevicePilotBlockerEligible'])
+        self.assertIn('effectiveness is not established',findings[0]['Observation'])
         self.assertEqual(findings[0]['InvestigationEvidence']['records'][0]['ParentId'],'intune')
 
     def test_per_device_protection_reads_produce_one_action_per_condition_and_freshness(self):
@@ -339,15 +342,19 @@ class DeviceAndSourceTests(unittest.TestCase):
         current,older=findings
         self.assertEqual(len(current['InvestigationEvidence']['records']),3)
         self.assertEqual(current['ObservationDate'],'2026-09-10')
-        self.assertTrue(current['Observation'].startswith('3 Windows device'))
+        self.assertEqual(current['DeviceEvidenceCounts']['source_record_count'],3)
+        self.assertEqual(current['DeviceEvidenceCounts']['distinct_intune_devices'],3)
+        self.assertIn('3 Windows protection record',current['Observation'])
         self.assertIn('between 2026-09-10 and 2026-09-14',current['Observation'])
-        self.assertIn('Endpoint security > Antivirus',current['Recommendation'])
+        self.assertIn('current antivirus provider',current['Recommendation'])
+        self.assertIn('approved third-party antivirus',current['Recommendation'])
         self.assertEqual(older['ObservationDate'],'2026-07-06')
         self.assertIn('{id}',current['InvestigationEvidence']['source']['source_api'])
         result=build_assessment_result([dict(row,TenantId=TENANT) for row in findings],{'assessment_sources':{'windows_protection':reads}},
                                        evaluation_date=DAY,expected_tenant_id=TENANT)
         titles=[row['Feature'] for row in result['actions'] if 'windows_protection' in str(row.get('FindingKey'))]
-        self.assertEqual(sorted(titles),['Confirm the device protection baseline','Restore real-time antivirus protection'])
+        self.assertEqual(titles,[])
+        self.assertTrue(all(row['Disposition']=='Opportunity' for row in result['recommendations'] if 'windows_protection' in str(row.get('FindingKey'))))
 
     def test_device_thresholds_exceptions_and_validation(self):
         profile={'assessment_context':{'device_activity_days':12,'endpoint_reporting_days':3,'exceptions':[

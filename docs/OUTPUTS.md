@@ -9,6 +9,36 @@ A normal build continues to produce the HTML assessment and readiness summary pl
 assessment and technical evidence workbooks. Use `--extra-exports evidence-pages` for
 linked HTML evidence pages. Keep companion files together so local links resolve.
 
+Device findings use concise population summaries in the customer workbook;
+per-device and per-setting rows remain in Technical Evidence. See
+[Device evidence interpretation](DEVICE_EVIDENCE.md) for units, dates, pilot
+qualification and the technical reconciliation registers.
+
+The HTML technical appendix shows at most three named examples per finding,
+with links to complete workbook evidence. Full source inventories, report-date
+registers and run metadata remain in the workbooks. Names are limited to this
+technical sample section; the readiness summary stays aggregate-only.
+
+Device summaries count distinct retained Intune device IDs. They separate active
+noncompliance, reported `Is active` failures, overdue check-ins and unknown activity.
+The collected compliance status validity period governs the overdue comparison;
+Entra sign-in activity does not replace compliance reporting. Missing/conflicting
+tenant settings stay unknown. Inactive/overdue security-setting reports require
+confirmation rather than being classified as current active-device failures.
+Policy names and readable failed requirements are shown when retained; missing
+policy names are explicit. These populations and policy groups can overlap and
+do not establish tenant-wide completeness.
+
+Identity-risk findings revalidate both positive and zero legacy summaries against
+the saved `riskyUsers` records. Counts and affected-user detail use the same
+selection: `atRisk` and `confirmedCompromised` at every risk level. Resolved and
+dismissed records remain raw evidence, outside the affected list. High/medium-risk
+records with unknown state are separately qualified for confirmation. The finding
+records the risky-user source's completeness; a partial or unavailable read cannot
+establish absence of risk. Use an explicit offline `--run-type Standalone` to
+evaluate saved evidence with these corrections in a separate package. Normal
+snapshot replay preserves the completed assessment's recorded conclusions.
+
 ## Shared-result snapshots
 
 Identity finding titles now follow one [versioned condition taxonomy](IDENTITY_FINDING_TAXONOMY.md).

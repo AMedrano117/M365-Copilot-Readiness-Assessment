@@ -69,8 +69,9 @@ class PriorReportRenderTests(unittest.TestCase):
         self.assertNotIn('Previous tenant assessment', html)
         self.assertNotIn('Full historical recommendation register', html)
         self.assertIn(self.prior['generated_at'], html)
-        self.assertIn(self.prior['source_file'], html)
-        self.assertIn('Historical verified control', html)
+        self.assertIn('original register and source mapping remain in the Prior workbook tabs', html)
+        self.assertIn('Historical verified control', str(result['recommendations']))
+        self.assertNotIn('Historical verified control', html)
         identity = next(domain for domain in result['domains'] if domain['id'] == 'identity')
         historical = [row for row in identity['actions'] if row.get('Historical') == 'Yes']
         self.assertEqual(len(historical), 1)

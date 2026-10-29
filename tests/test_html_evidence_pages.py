@@ -102,9 +102,11 @@ class MainReportLinkTests(unittest.TestCase):
         identifier = result['recommendations'][0]['RecommendationId']
         self.assertIn('report_evidence/' + page_name(identifier), html)
         self.assertIn('sign-in events', html)
-        self.assertNotIn('user1@example.invalid', html)
+        from tools.audit_report_signal import public_report_source
+        self.assertIn('user1@example.invalid', html)
+        self.assertNotIn('user1@example.invalid', public_report_source(html))
         self.assertNotIn('192.0.2.10', html)
-        self.assertIsNone(re.search(r'[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}', html, re.I))
+        self.assertIsNone(re.search(r'[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}', public_report_source(html), re.I))
         action_plan = html.split('id="action-plan"', 1)[1].split('</section>', 1)[0]
         self.assertNotIn(identifier, action_plan)
         self.assertIn('Technical steps', action_plan)

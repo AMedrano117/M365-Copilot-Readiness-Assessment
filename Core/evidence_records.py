@@ -271,13 +271,13 @@ def _admin(sources, evaluation_timestamp=None, privileged_assessment=None):
 
 
 def _risks(sources):
+    from .identity_investigation import risky_user_selection
     output = []
     detections = list(_rows(sources, 'risk_detections'))
     users = list(_rows(sources, 'users'))
     for row, ref in _rows(sources, 'risky_users'):
-        state = _norm(row.get('riskState'))
-        level = _norm(row.get('riskLevel'))
-        if state not in {'atrisk', 'confirmedcompromised'} and not (not state and level in {'high', 'medium'}):
+        cohort = risky_user_selection(row)
+        if cohort is None:
             continue
         identifier = row.get('id') or row.get('userId')
         refs = [ref]
@@ -305,9 +305,12 @@ def _risks(sources):
         if event_ref:
             derived.update({'lastRiskyActivity': 'Latest retained risk detection joined by stable user ID; risk-status update time is not activity time.',
                             'location': 'Location of the latest retained risk detection joined by stable user ID.'})
+        qualifications = ['Risk status is dated source evidence and should be checked before remediation.']
+        if cohort == 'state_unknown':
+            qualifications.append('Risk state is unavailable or unknown; this high/medium-risk record requires confirmation and is not an established unresolved case.')
         output.append(_record(fields, refs, native_id=identifier, derived=derived,
-                              qualifications=['Risk status is dated source evidence and should be checked before remediation.']))
-    return _finish(output, 'risky_user', 'Users in atRisk or confirmedCompromised state; medium/high risk with an unavailable state remains qualified. Resolved/dismissed users are excluded.',
+                              qualifications=qualifications))
+    return _finish(output, 'risky_user', 'Users in atRisk or confirmedCompromised state; medium/high risk with an unavailable or unknown state remains qualified. Resolved/dismissed users are excluded.',
                    sources, ['risky_users', 'risk_detections', 'users'],
                    reconciliation={'selected_user_records': len(output)})
 

@@ -21,6 +21,27 @@ def _cell(value):
     return value.isoformat() if hasattr(value, 'isoformat') else ('' if value is None else value)
 
 
+def risky_user_selection(record):
+    """Separate unresolved status from risk level, using retained fields only."""
+    state = str(_get(record, 'riskState', '') or '').strip().casefold()
+    level = str(_get(record, 'riskLevel', '') or '').strip().casefold()
+    if state in {'atrisk', 'confirmedcompromised'}:
+        return 'unresolved'
+    if state in {'', 'unknown', 'unknownfuturevalue'} and level in {'high', 'medium'}:
+        return 'state_unknown'
+    return None
+
+
+def _risky_user_finding(row):
+    if row.get('FindingKey') == 'entra.identity_risk.users':
+        return True
+    # Positive legacy findings often have no FindingKey. Detection events are a
+    # different population and must not be reclassified as risky-user records.
+    return (row.get('EvidenceSource') != 'risk_detections'
+            and bool(re.match(r'^(?:no|\d+)\s+(?:risky|at[- ]risk)\s+users?\b',
+                              str(row.get('Observation') or '').strip(), re.I)))
+
+
 def is_noncompliant_device_finding(record):
     if record.get('FindingKey') == 'entra.devices.noncompliant':
         return True
@@ -118,13 +139,15 @@ def qualify_identity_recommendation(record, client):
         elif report:
             row.update(Observation=report['unavailability_reason'] or report['reconciliation_note'],
                 EvidenceSource='managed_devices', EvidenceComplete=False, Disposition='Coverage', Status='Not Assessed')
-    elif observation.lower().startswith('no risky users detected'):
+    elif _risky_user_finding(row):
         users = list(_get(client, 'risky_users', []) or [])
         complete = source_is_complete(client, 'risky_users')
-        high_medium = sum(str(_get(user, 'riskLevel', '')).lower() in {'high', 'medium'} for user in users)
-        low_at_risk = sum(str(_get(user, 'riskLevel', '')).lower() == 'low'
-                          and str(_get(user, 'riskState', '')).lower() == 'atrisk' for user in users)
-        unresolved = sum(str(_get(user, 'riskState', '')).lower() in {'atrisk', 'confirmedcompromised'} for user in users)
+        high_medium = sum(str(_get(user, 'riskLevel', '') or '').strip().casefold() in {'high', 'medium'} for user in users)
+        low_at_risk = sum(str(_get(user, 'riskLevel', '') or '').strip().casefold() == 'low'
+                          and str(_get(user, 'riskState', '') or '').strip().casefold() == 'atrisk' for user in users)
+        unresolved = sum(risky_user_selection(user) == 'unresolved' for user in users)
+        unknown = sum(risky_user_selection(user) == 'state_unknown' for user in users)
+        availability = source_availability(client, 'risky_users')
         row.setdefault('OriginalObservation', observation)
         row.update(Observation=f'The retained risky-user records contain {high_medium} high/medium-risk user(s) and '
                    f'{low_at_risk} low-risk user(s) with state atRisk, among {len(users)} returned records. '
@@ -132,7 +155,9 @@ def qualify_identity_recommendation(record, client):
                    + ('' if complete else ' The source is incomplete or its completeness is unknown.'),
                    FindingKey='entra.identity_risk.users', EvidenceKey='identity_risk_detail',
                    EvidenceSource='risky_users', EvidenceComplete=complete,
-                   EvidenceScope='All retained riskyUsers records; counts separated by risk level and state',
+                   SourceAvailability=availability,
+                   ReportedRiskyUserCount=unresolved, RiskReviewRecordCount=unresolved + unknown,
+                   EvidenceScope='Retained riskyUsers snapshot; unresolved states at every risk level, with unknown-state high/medium records separately qualified; resolved/dismissed cases excluded from the affected list',
                    Disposition='Reference', Status='Insight', Recommendation='')
         if unresolved:
             row.update(Disposition='Action', Status='Attention Required',
@@ -140,9 +165,17 @@ def qualify_identity_recommendation(record, client):
                 Observation=f'{unresolved} unresolved risky user record(s) have state atRisk or confirmedCompromised. ' + row['Observation'],
                 Recommendation='Review the linked unresolved risky-user records, including lower-risk atRisk accounts, '
                                'and confirm investigation or remediation in Entra ID Protection.')
-        elif not complete:
+        if unknown:
+            row['Observation'] += f' {unknown} additional high/medium-risk record(s) have an unavailable or unknown risk state; they require confirmation and are not counted as unresolved.'
+            row['Recommendation'] += (' ' if row['Recommendation'] else '') + 'Confirm the risk state of the separately qualified records before deciding whether remediation is required.'
+            if not unresolved:
+                row.update(Disposition='Coverage', Status='Not Assessed')
+        if not unresolved and not unknown and not complete:
             row.update(Disposition='Coverage', Status='Not Assessed',
                 Recommendation='Collect or review the current risky-user report before deciding whether unresolved account risk remains.')
+            if not users:
+                row['Observation'] = ('The risky-user source is unavailable, incomplete or unrecorded. No retained user population '
+                    'supports the saved aggregate; absence of unresolved risk cannot be established.')
     from .device_compliance import qualify_device_aggregate
     return qualify_device_aggregate(row)
 

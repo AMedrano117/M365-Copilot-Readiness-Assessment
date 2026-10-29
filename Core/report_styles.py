@@ -466,6 +466,12 @@ REPORT_CSS += r'''
 .callout-fix { border-left-color:var(--teal); background:var(--pale); }
 .callout-fix p { font-size:15px; }
 .callout strong { color:var(--navy); }
+.device-summary { margin:10px 0; padding-left:22px; }
+.device-summary li { margin:8px 0; line-height:1.55; }
+.callout-found td:last-child { white-space:pre-line; }
+.technical-example { margin:14px 0; padding:14px 18px; border:1px solid var(--line); border-radius:8px; background:#fff; }
+.technical-example > summary { color:var(--navy); font-weight:650; cursor:pointer; }
+.technical-example table { margin-top:12px; }
 .settings-change { margin-top:14px; }
 .callout-label { margin:0 0 6px !important; color:var(--red); font-size:12px !important; font-weight:750; letter-spacing:.35px; text-transform:uppercase; }
 .settings-change .qualification { margin-top:8px; }

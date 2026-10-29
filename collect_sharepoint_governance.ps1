@@ -8,6 +8,7 @@ param(
     [string]$CertificateThumbprint,
     [string]$DownloadPath,
     [switch]$ConnectionOnly,
+    [switch]$WaitForCollectionStart,
     # Read secrets as one JSON line from stdin so they never appear in the
     # process command line. The Python orchestrator always uses this path.
     [switch]$SecretsFromStdin
@@ -215,6 +216,14 @@ if ($ConnectionOnly) {
         [Console]::Error.WriteLine("CONNECTION_ERROR:SharePoint:$($_.Exception.Message)")
         Disconnect-SPOService -ErrorAction SilentlyContinue | Out-Null
         exit 2
+    }
+}
+
+if ($WaitForCollectionStart) {
+    [Console]::Error.WriteLine('AUTH_READY:SharePoint')
+    if ([Console]::In.ReadLine() -cne 'COLLECT') {
+        Disconnect-SPOService -ErrorAction SilentlyContinue | Out-Null
+        exit 1
     }
 }
 

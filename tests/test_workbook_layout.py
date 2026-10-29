@@ -29,7 +29,7 @@ def fixture():
                                        'DefaultSharingLinkType': 3, 'RequireAnonymousLinksExpireInDays': -1,
                                        'FileAnonymousLinkType': 2, 'FolderAnonymousLinkType': 2}],
         'windows_protection': [{'id': 'protection-001', 'ParentId': 'device-001', 'realTimeProtectionEnabled': False,
-                                'isTamperProtected': False, 'signatureUpdateOverdue': False,
+                                'isTamperProtected': False, 'signatureUpdateOverdue': True,
                                 'lastReportedDateTime': '2026-10-05T12:00:00Z'}],
         'managed_devices': [{'id': 'device-001', 'deviceName': 'LAPTOP-0142', 'userPrincipalName': 'j.smith@example.invalid',
                              'operatingSystem': 'Windows 11', 'osVersion': '23H2', 'complianceState': 'compliant'}],
@@ -121,18 +121,30 @@ class WorkbookLayoutTests(unittest.TestCase):
 
     def test_device_names_and_setting_units_are_kept_separate(self):
         findings = {row['ID']: row for row in records(self.assessment['Findings'])}
-        self.assertEqual(findings['WIN-1']['Affected'], '1 devices')
-        self.assertEqual(findings['SETTING-1']['Affected'], '2 settings')
-        devices = records(self.assessment['Devices'])
-        protection = next(row for row in devices if row['ID'] == 'WIN-1')
+        model = self.bundle['assessment_result']['recommendations']
+        protection_finding = next(row for row in model if row.get('DeviceFindingType')=='DefenderRealTimeProtectionObservation')
+        setting_finding = next(row for row in model if row.get('DeviceFindingType')=='UnconfirmedSettingState')
+        signatures = next(row for row in model if row.get('DeviceFindingType')=='DefenderSignatureObservation')
+        self.assertEqual(protection_finding['DeviceEvidenceCounts']['source_record_count'],1)
+        self.assertEqual(protection_finding['DeviceEvidenceCounts']['distinct_intune_devices'],1)
+        self.assertIn('1 distinct device;',findings[protection_finding['RecommendationId']]['Affected'])
+        self.assertEqual(setting_finding['DeviceEvidenceCounts']['source_record_count'],2)
+        self.assertEqual(setting_finding['DeviceEvidenceCounts']['distinct_intune_devices'],1)
+        self.assertIn('1 distinct device;',findings[setting_finding['RecommendationId']]['Affected'])
+        devices = records(self.technical['Device Detail'])
+        protection = next(row for row in devices if row['ID'] == protection_finding['RecommendationId'])
         self.assertEqual(protection['Device'], 'LAPTOP-0142')
         self.assertEqual(protection['Primary user'], 'j.smith@example.invalid')
         self.assertEqual(protection['OS'], 'Windows 11 23H2')
         self.assertEqual(protection['Intune compliance'], 'Compliant')
         self.assertEqual(protection['Issue'], 'Real-time protection off')
-        settings = [row for row in devices if row['ID'] == 'SETTING-1']
+        settings = [row for row in devices if row['ID'] == setting_finding['RecommendationId']]
         self.assertEqual({row['Issue'] for row in settings}, {'Minimum OS version', 'Require encryption'})
-        self.assertEqual(sum(row['ID'] == 'WIN-2' for row in devices), 1, 'One source record appears under both findings.')
+        self.assertEqual(sum(row['ID'] == signatures['RecommendationId'] for row in devices), 1, 'One source record supports both RTP and signature findings.')
+        self.assertEqual(protection_finding['DeviceEvidenceIds'],signatures['DeviceEvidenceIds'])
+        customer = '\n'.join(str(cell or '') for row in self.assessment['Devices'].values for cell in row)
+        self.assertNotIn('LAPTOP-0142',customer)
+        self.assertNotIn('j.smith@example.invalid',customer)
 
     def test_sharing_values_and_recommendations_are_readable(self):
         values = {row['Setting']: row for row in records(self.assessment['Configuration']) if row['ID'] == 'M365-116'}
@@ -227,7 +239,10 @@ class WorkbookLayoutTests(unittest.TestCase):
         self.assertEqual(len(logs), 1)
         self.assertFalse(any(sheet.title.startswith('Records Windows Protection') for sheet in self.technical))
         data = records(logs[0])
-        self.assertEqual({row['RecommendationId'] for row in data}, {'WIN-1', 'WIN-2'})
+        expected = {row['RecommendationId'] for row in self.bundle['assessment_result']['recommendations']
+                    if row.get('DeviceFindingType') in {'DefenderRealTimeProtectionObservation','DefenderSignatureObservation'}}
+        self.assertEqual({row['RecommendationId'] for row in data}, expected)
+        self.assertEqual(len(expected),2)
         self.assertEqual(len(data), 2)
         self.assertTrue(all(row['ParentId'] == 'device-001' for row in data))
         self.assertTrue(all(row['realTimeProtectionEnabled'] is False for row in data))

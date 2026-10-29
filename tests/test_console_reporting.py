@@ -24,13 +24,13 @@ class ConsoleReportingTests(unittest.TestCase):
                 {'collector': 'Microsoft Graph', 'status': 'Ready', 'reason': ''},
                 {'collector': 'Usage reports', 'status': 'Connection failed', 'reason': 'Report download failed.'},
                 {'collector': 'SharePoint', 'status': 'Sign-in required',
-                 'reason': 'Browser sign-in will be requested during collection.'},
+                 'reason': 'Browser sign-in will be requested before evidence collection.'},
             ])
         text = ' '.join(output.getvalue().split())
         self.assertIn('1 successful, 1 warning, 1 failed', text)
         self.assertIn('--check-connections does not complete those sign-ins', text)
         self.assertIn('Connection failed - Report download failed.', text)
-        self.assertIn('Warning - SharePoint: Sign-in planned during collection.', text)
+        self.assertIn('Warning - SharePoint: Sign-in planned before evidence collection.', text)
         self.assertIn('Failed - Usage reports: Report download failed.', text)
 
     def test_old_pdf_package_notices_are_explained_without_rewriting_receipts(self):

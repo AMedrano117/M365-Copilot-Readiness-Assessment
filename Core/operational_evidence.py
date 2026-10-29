@@ -47,34 +47,27 @@ def reconcile_devices(bundle, profile=None, *, evaluation_date=None):
     exceptions = {str(row.get('device_id','')).lower():row for row in context.get('exceptions', [])
                   if row.get('device_id') and parse_date(row.get('approved_at')) and parse_date(row.get('expires_at'))
                   and parse_date(row['approved_at']) <= day <= parse_date(row['expires_at'])}
-    groups = defaultdict(list)
-    for source, id_field, activity in (('directory_devices','deviceId','approximateLastSignInDateTime'),
-                                       ('managed_devices','azureADDeviceId','lastSyncDateTime'), ('machines','aadDeviceId','lastSeen')):
-        for position, record in enumerate(rows(bundle, source)):
-            identity = str(record.get(id_field) or '').lower()
-            if identity == '00000000-0000-0000-0000-000000000000': identity = ''
-            # Unmatched source-local IDs cannot be joined by hostname.
-            identity = identity or f"unmatched:{source}:{record.get('id', position)}"
-            groups[identity].append((source, record, parse_date(record.get(activity))))
+    from .device_evidence import build_device_identities, timestamp
+    model = build_device_identities(bundle, profile=profile, evaluation_date=day)
     output = []
-    for identity, records in sorted(groups.items()):
-        dates = [observed for _,_,observed in records if observed and observed <= day]
-        future = any(observed and observed > day for _,_,observed in records)
-        activity = 'unknown' if future else 'active' if dates and (day-max(dates)).days <= active_days else 'unknown' if not dates or any(observed is None for _,_,observed in records) else 'stale'
-        machines = [record for source,record,_ in records if source=='machines']
-        states = {str(record.get('onboardingStatus',record.get('onboardingstatus','unknown'))).lower() for record in machines}
-        conflict = len(states)>1
-        for source, field in (('managed_devices','complianceState'),('directory_devices','accountEnabled')):
-            values = {str(record.get(field)) for record_source,record,_ in records if record_source==source and field in record}
-            conflict = conflict or len(values)>1
-        onboarded = bool(machines) and states=={'onboarded'}
-        reporting = onboarded and any(str(record.get('healthStatus','')).lower()=='active' and (observed:=parse_date(record.get('lastSeen'))) and 0 <= (day-observed).days <= reporting_days for record in machines)
-        output.append({'Device identity':identity, 'Activity':activity, 'Excluded':identity in exceptions,
-            'Exception':exceptions.get(identity), 'Managed':any(source=='managed_devices' for source,_,_ in records),
-            'Onboarded':onboarded, 'Actively reporting':reporting, 'Conflict':conflict,
-            'Compliant':any(source=='managed_devices' and str(record.get('complianceState','')).lower()=='compliant' for source,record,_ in records),
-            'Unmatched':identity.startswith('unmatched:'), 'Duplicates':len(records)-len({source for source,_,_ in records}),
-            'Last observed':max(dates).isoformat() if dates else '', 'Sources':[{'source':source,'record':record} for source,record,_ in records]})
+    for identity in model['identities']:
+        records = identity['sources']
+        machines = [entry['record'] for entry in records if entry['source'] == 'machines']
+        onboarded = bool(machines) and all(str(record.get('onboardingStatus', record.get('onboardingstatus', 'unknown'))).lower() == 'onboarded' for record in machines)
+        reporting = onboarded and any(str(record.get('healthStatus', '')).lower() == 'active' and
+            (date := timestamp(record.get('lastSeen'), day))['state'] == 'valid' and date['age_days'] <= reporting_days for record in machines)
+        key = identity['entra_id'] or 'unmatched:' + identity['identity_key']
+        output.append({'Device identity': key,
+            'Activity': {'CurrentActiveDevice': 'active', 'StaleDeviceRecord': 'stale'}.get(identity['relevance'], 'unknown'),
+            'Relevance': identity['relevance'], 'Pilot relevance': identity['pilot_relevance'],
+            'Excluded': key in exceptions, 'Exception': exceptions.get(key),
+            'Managed': bool(identity['intune_id']), 'Onboarded': onboarded, 'Actively reporting': reporting,
+            'Conflict': identity['conflict'], 'Compliant': any(entry['source'] == 'managed_devices' and
+                str(entry['record'].get('complianceState', '')).lower() == 'compliant' for entry in records),
+            'Unmatched': not identity['entra_id'] or identity['unresolved'],
+            'Duplicates': len(records) - len({entry['source'] for entry in records}),
+            'Last observed': identity['last_observed'],
+            'Sources': [{'source': entry['source'], 'record': entry['record']} for entry in records]})
     active = [row for row in output if row['Activity']=='active' and not row['Excluded']]
     justified = bool(active) and all(source_current(bundle,name,day) for name in ('directory_devices','managed_devices','machines')) and not any(row['Unmatched'] or row['Conflict'] or row['Activity']=='unknown' for row in output)
     denominator = len(active) if justified else None
@@ -120,8 +113,9 @@ def operational_results(bundle, profile, *, evaluation_date=None, tenant_id=None
         for row in rows(bundle,'antivirus_health'): antivirus[str(row.get('machineId'))].append(row)
         healthy = source_current(bundle,'windows_protection',day) and source_current(bundle,'antivirus_health',day)
         def recent(value):
-            observed=parse_date(value)
-            return bool(observed and 0 <= (day-observed).days <= devices['reporting_days'])
+            from .device_evidence import timestamp
+            observed = timestamp(value, day)
+            return observed['state'] == 'valid' and observed['age_days'] <= devices['reporting_days']
         for row in active:
             managed = [entry['record'] for entry in row['Sources'] if entry['source']=='managed_devices']
             machines = [entry['record'] for entry in row['Sources'] if entry['source']=='machines']

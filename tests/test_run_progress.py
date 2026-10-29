@@ -112,7 +112,7 @@ class RunProgressTests(unittest.TestCase):
         results += [
             {'collector': 'Entra risk', 'status': 'License unavailable', 'reason': 'Risk evidence requires Entra ID P2.'},
             {'collector': 'SharePoint governance', 'status': 'Sign-in required',
-             'reason': 'Browser sign-in will be requested during collection.'},
+             'reason': 'Browser sign-in will be requested before evidence collection.'},
             {'collector': 'Optional disabled source', 'status': 'Optional source not selected', 'reason': ''},
         ]
         output = io.StringIO()
@@ -128,7 +128,7 @@ class RunProgressTests(unittest.TestCase):
         self.assertIn('CONNECTION CHECKS COMPLETE WITH WARNINGS', text)
         self.assertIn('Connection summary: 14 successful, 2 warnings, 0 failed.', text)
         self.assertIn('Warning - Entra risk: Risk evidence requires Entra ID P2.', text)
-        self.assertIn('Warning - SharePoint governance: Sign-in planned during collection.', text)
+        self.assertIn('Warning - SharePoint governance: Sign-in planned before evidence collection.', text)
         self.assertIn('Prepare and verify access: 28s (done with warnings)', text)
         self.assertIn('Next: continue with the full assessment', text)
         self.assertEqual(1, text.count('Connection summary:'))

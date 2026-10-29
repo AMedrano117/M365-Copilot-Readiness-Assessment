@@ -255,7 +255,7 @@ class ExportRecommendationsTests(unittest.TestCase):
         self.assertIn('<details class="appendix-panel" id="engineer-appendix">', html)
         self.assertIn('href="tenant_report.xlsx"', html)
         appendix = html.split('id="engineer-appendix"', 1)[1]
-        self.assertIn("Detail mapping missing", appendix)
+        self.assertIn("Use the technical workbook for all devices, users, policies and source records", appendix)
         self.assertIn("DEF-001", appendix)
         self.assertIn("Review the flagged apps and security signals before rollout.", html)
         for anchor in re.findall(r'href="#(evidence-[^"]+)"', html):
@@ -349,7 +349,8 @@ class ExportRecommendationsTests(unittest.TestCase):
         self.assertIn("Microsoft Entra ID P1", html)
         self.assertIn("Full Identity Protection risk data", html)
         self.assertIn("Confirm tenant sharing defaults", html)
-        self.assertIn("dspm-assessment.csv", html)
+        self.assertNotIn("dspm-assessment.csv", html)
+        self.assertIn("Imported report dates", html)
         self.assertIn("2026-09-14", html)
         self.assertIn("selected", html)
         self.assertNotIn("Current report assessed", html)
@@ -568,8 +569,10 @@ class ExportRecommendationsTests(unittest.TestCase):
                                   excel_path=workbook_path)).read_text(encoding='utf-8')
         self.assertIn('Review optional pilot resources with their accountable owner.', html)
         self.assertIn('1 supporting record in workbook</a>', html)
+        from tools.audit_report_signal import public_report_source
+        self.assertIn('Private resource', html)
         for private_value in ('private-resource-id', 'Private resource', 'private-source-file.json', 'private-filter-identity'):
-            self.assertNotIn(private_value, html)
+            self.assertNotIn(private_value, public_report_source(html))
 
     def test_investigation_item_source_link_opens_the_application_grant_records(self):
         recommendations = self._sample_recommendations()

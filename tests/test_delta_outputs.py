@@ -157,4 +157,5 @@ class DeltaRendererTests(unittest.TestCase):
                 self.assertIn('Missing current evidence does not indicate improvement',html)
                 self.assertIn(initial.identity['RunId'],html)
             html=Path(outputs['html_path']).read_text(encoding='utf-8')
-            self.assertIn('Lifecycle records',html)
+            self.assertIn('Complete run, source, lifecycle and governance registers are retained in the workbooks',html)
+            self.assertNotIn('Lifecycle records</',html)

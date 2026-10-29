@@ -452,7 +452,8 @@ class OfflineReportTests(unittest.TestCase):
             report = self.csv(Path(directory) / 'readiness.csv', [row])
             html = self.run_cli(['--offline', '--copilot-readiness-export', str(report)], directory)
             text = html.read_text(encoding='utf-8')
-            self.assertIn('Copilot readiness portal export', text)
+            self.assertIn('Copilot prerequisites in the exported population', text)
+            self.assertIn('do not measure actual Copilot usage', text)
             self.assertNotIn('private-user@example.invalid', text)
 
     def test_prior_workbook_and_portal_export_build_together_offline(self):
@@ -495,7 +496,7 @@ class OfflineReportTests(unittest.TestCase):
             self.assertTrue('2026-09-09T18:30:00+00:00' in body, 'Prior generation date must be retained.')
             self.assertTrue('Content ownership and lifecycle' in body)
             self.assertNotEstablished(body, 'Prior findings and exports alone must not establish readiness.')
-            self.assertTrue('purview-cache.json' in body, 'The Purview source must be identified.')
+            self.assertTrue('Purview configuration cache' in body, 'The Purview source type must be identified.')
             combined = load_workbook(html.with_suffix('.xlsx'), read_only=True)
             try:
                 history = [s for s in combined.technical if s.title.startswith('Prior')]
