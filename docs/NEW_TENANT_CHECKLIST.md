@@ -22,8 +22,8 @@ alone do not prove a failed control.
       and supported certificate or client secret. Arrange the workload access in [prereq.md](prereq.md).
 - [ ] Selected environment file exists; review the startup tenant, application, profile and authentication summary before collection. Resolve any setup expiry or credential-recovery message.
 - [ ] For Standard delegated collection: administrators available for SharePoint and Purview/Exchange sign-in. Restricted uses customer exports or saved evidence instead.
-- [ ] Business sponsor, proposed pilot users, approved content/sites and devices.
-- [ ] Intended use cases, current deployment status, baseline, success measures and stop/expansion criteria.
+- [ ] Assessed tenant services, content/sites, devices and accountable technical owners.
+- [ ] Available dated evidence and current technical findings; pilot groups, business use cases and success measures are outside this assessment.
 - [ ] Agents and external AI explicitly included or excluded from the assessment scope.
 
 Use a separate environment file, for example `.env.newcustomer`, starting from `.env.example`.
@@ -57,9 +57,9 @@ Restricted setup and preflight stop on excess requested or granted application p
 | Copilot Readiness CSV | Original user-table export with refresh date and report period. | Supported technical eligibility and application-readiness evidence. This does not measure actual Copilot usage. |
 | SharePoint and OneDrive access reports | Review the live report inventory and downloaded results first. Reuse completed permission/sharing reports; let running reports finish and generate only missing or stale reports. Manually supply specific results if download fails or collection is excluded. | Content access and oversharing evidence. Completion alone does not establish scope or successful import; retain dates, filters and workloads. |
 | Content Management Assessment | Original CSV covering site ownership and inactivity, with its confirmed report date. | Ownership and lifecycle review. The tool's default lifecycle age limit is 90 days. |
-| Sensitive-content access evidence | Existing completed Purview data risk assessment, or a dated scoped owner review of sensitive content and effective access. Check the default top-100 SharePoint scope against the pilot; confirm entitlement before any additional assessment/classification. | Answers the sensitive-data access question. Existing results are separate from optional PAYG scans/protections. A label inventory or tenant sharing default alone is insufficient. |
+| Sensitive-content access evidence | Existing completed Purview data risk assessment, or a dated scoped owner review of sensitive content and effective access. Check the default top-100 SharePoint scope against the assessed business content; confirm entitlement before any additional assessment/classification. | Answers the sensitive-data access question. Existing results are separate from optional PAYG scans/protections. A label inventory or tenant sharing default alone is insufficient. |
 | Compliance Manager AI Baseline (optional) | Open the AI Baseline assessment and Export actions to Excel; preserve assessment metadata, dates and tenant GUID when supplied. | Microsoft implementation/test statuses appear as dated reference actions in HTML and both workbooks. They do not change technical readiness and are separate from DSPM recommended policies. |
-| Pilot plan and control reviews | Dated sponsor-approved scope/plan and specific owner reviews for remaining control questions. | Needed to establish the readiness milestones. Record actual reviews using the assessment-profile workflow. |
+| Tenant control reviews | Dated tenant-scope reviews for technical control questions the retained evidence cannot answer. | Needed only for unresolved technical questions. A pilot roster, business plan or sponsor outcome review is not required. |
 | Agent or external-service inventory | Supported inventory and boundary reviews when those products are in scope. | Supplemental evidence for the agreed scope. |
 
 Request long-running reports early. First inspect completed results before asking an administrator
