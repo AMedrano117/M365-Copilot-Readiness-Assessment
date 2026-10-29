@@ -311,14 +311,16 @@ def assess_provider_and_use_cases(profile, provider_evidence, foundation_decisio
             applicable_controls = list(dict.fromkeys(applicable_controls))
             foundation_ok = foundation_decision in {"Ready for a controlled pilot", "Controlled pilot with conditions", "Ready for broader adoption"}
             ready = bool(complete and foundation_ok and provider_result and provider_result["Approval Status"] == "Approved")
-            use_cases.append({"Use Case": item.get("name", "Unnamed use case"), "Business Owner": item.get("business_owner", ""), "Provider": provider, "Product / Tier": f"{product} / {tier}".strip(" /"), "Applicable Controls": "; ".join(applicable_controls), "Readiness": "Ready for controlled pilot" if ready else "Not ready", "Reason": "Foundation, provider review, and required profile fields are satisfied." if ready else "Foundation, provider approval, or required use-case evidence is incomplete."})
+            use_cases.append({"Use Case": item.get("name", "Unnamed use case"), "Business Owner": item.get("business_owner", ""), "Provider": provider, "Product / Tier": f"{product} / {tier}".strip(" /"), "Applicable Controls": "; ".join(applicable_controls),
+                "Readiness": "Outside assessment scope" if str(foundation_decision).startswith('Tenant ') else "Ready for controlled pilot" if ready else "Not ready",
+                "Reason": "Business use-case design and approval are handled outside the tenant technical assessment." if str(foundation_decision).startswith('Tenant ') else "Foundation, provider review, and required profile fields are satisfied." if ready else "Foundation, provider approval, or required use-case evidence is incomplete."})
 
     return {
         "foundation": {"Conclusion": foundation_decision, "Scope": "Microsoft 365 foundation"},
         "providers": products,
         "use_cases": use_cases,
         "provider_conclusion": "Not assessed" if not profile.get("available") else ("Approved" if products and all(row["Approval Status"] == "Approved" for row in products) else "Not approved"),
-        "use_case_conclusion": "Not assessed" if not profile.get("available") else ("Ready" if use_cases and all(row["Readiness"].startswith("Ready") for row in use_cases) else "Not ready"),
+        "use_case_conclusion": "Outside assessment scope" if str(foundation_decision).startswith('Tenant ') else "Not assessed" if not profile.get("available") else ("Ready" if use_cases and all(row["Readiness"].startswith("Ready") for row in use_cases) else "Not ready"),
     }
 
 

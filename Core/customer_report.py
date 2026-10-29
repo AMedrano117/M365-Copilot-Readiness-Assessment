@@ -471,26 +471,33 @@ def _license_context(bundle):
     return '<h3>Identity licensing context</h3><p>Detected tenant tier: ' + prose(tier) + '</p>' + table(context.get('capabilities') or context.get('rows') or [], [('Capability', 'Capability'), ('Availability', 'Tenant')])
 
 
-def _scoped_products(bundle):
+def _scoped_products(bundle, result=None):
     conclusion = bundle.get('conclusions') or {}
     profile = bundle.get('assessment_profile') or {}
-    products = profile.get('products') or []
+    products = conclusion.get('providers') or profile.get('products') or []
     cases = conclusion.get('use_cases') or []
+    if (result or {}).get('assessment_scope') == 'tenant_readiness':
+        cases = []
     if not products and not cases:
         return ''
     products = [p if isinstance(p, dict) else {'product': p} for p in products]
-    return '<h3>Scoped products and use cases</h3>' + table(products, [(key.replace('_', ' ').title(), key) for key in dict.fromkeys(k for r in products for k in r)]) + table(cases, [(key, key) for key in dict.fromkeys(k for r in cases for k in r)])
+    title = 'Provider security context' if (result or {}).get('assessment_scope') == 'tenant_readiness' else 'Scoped products and use cases'
+    return '<h3>' + title + '</h3>' + table(products, [(key.replace('_', ' ').title(), key) for key in dict.fromkeys(k for r in products for k in r)]) + table(cases, [(key, key) for key in dict.fromkeys(k for r in cases for k in r)])
 
 
 def _adoption_report(result):
     metrics = result.get('adoption_metrics') or []
     if not metrics:
-        return '<h3>Usage baseline</h3><p>No measured Copilot usage was supplied. Agree whether the pilot is a first deployment or an expansion, and record the baseline needed to judge its outcomes.</p>'
+        return ('<p>No aggregate usage observations were supplied. Usage is optional context and does not establish tenant control effectiveness.</p>'
+                if result.get('assessment_scope') == 'tenant_readiness' else
+                '<h3>Usage baseline</h3><p>No measured Copilot usage was supplied. Agree whether the pilot is a first deployment or an expansion, and record the baseline needed to judge its outcomes.</p>')
     periods = {str(m.get('window') or '') for m in metrics if m.get('metric_kind') == 'summary'}
     primary = next((p for p in ('D28', 'D30', 'D7', 'D90', 'D180') if p in periods), next(iter(sorted(periods)), ''))
     summary = [m for m in metrics if m.get('metric_kind') == 'summary' and m.get('window') == primary]
     if not summary:
-        return '<h3>Available aggregate observations</h3><p>The supplied evidence includes the observations below. A measured Copilot activity report is still needed if activity is part of the pilot baseline.</p>' + table(metrics, [('Measure', 'label'), ('Value', 'value'), ('Unit', 'unit'), ('Population', 'population'), ('Reporting window', 'window_label'), ('Observed', 'observed_at')])
+        note = ('The supplied aggregate observations are informational; they do not establish tenant control effectiveness.' if result.get('assessment_scope') == 'tenant_readiness' else
+                'The supplied evidence includes the observations below. A measured Copilot activity report is still needed if activity is part of the pilot baseline.')
+        return '<h3>Available aggregate observations</h3><p>' + note + '</p>' + table(metrics, [('Measure', 'label'), ('Value', 'value'), ('Unit', 'unit'), ('Population', 'population'), ('Reporting window', 'window_label'), ('Observed', 'observed_at')])
     dates = sorted({m['observed_at'] for m in summary if m.get('observed_at')})
     heading = (summary[0].get('window_label') or primary) if summary else 'Available period'
     qualification = 'Historical aggregate usage' if any(m.get('source_type') == 'prior_assessment' for m in summary) else 'Measured usage'
@@ -523,6 +530,8 @@ def _progress_requirements(result):
     numbers = {row.get('RecommendationId'): n for n, row in enumerate(result.get('actions', []), 1)}
     stages = []
     labels = {'met': 'Met', 'open': 'Evidence needed', 'issue': 'Blocks pilot', 'condition': 'Pilot condition'}
+    if result.get('assessment_scope') == 'tenant_readiness':
+        labels.update(issue='Remediation required', condition='Tenant condition')
     for stage in progress.get('stages', []):
         items = []
         for requirement in stage.get('requirements', []):
@@ -537,6 +546,11 @@ def _progress_requirements(result):
     totals = (f'<p class="control-totals"><strong>{counts["required_controls"]} required controls:</strong> '
               f'{counts.get("established_controls", 0)} established · {counts.get("observed_issues", 0)} with observed issues · '
               f'{counts.get("unconfirmed_controls", 0)} unconfirmed.</p><p class="qualification">Several actions can relate to one control check.</p>') if 'required_controls' in counts else ''
+    if result.get('assessment_scope') == 'tenant_readiness':
+        return ('<section id="readiness-requirements"><h2>Tenant control requirements</h2><p>'
+                + prose(progress.get('qualification')) + '</p>' + totals + ''.join(stages)
+                + '<p>For a tenant control review, record its assessed population, date, responsible role, result and supporting evidence. '
+                  'An owner review cannot silently close an observed technical failure.</p></section>')
     return f'''<section id="readiness-requirements"><div class="section-heading"><span class="section-index">→</span><div><div class="eyebrow">HOW TO MOVE FORWARD</div><h2>What each readiness stage requires</h2></div></div>
       <p>Current stage: <strong>{prose(progress.get('current_stage'))}</strong>. These stages describe readiness supported by the assessment. Existing Copilot use is shown separately in the adoption section.</p>
       <p class="section-description">{prose(progress.get('qualification'))}</p>{totals}{''.join(stages)}
@@ -784,7 +798,10 @@ def _remaining_portal_review(bundle):
 
 
 def _getting_started(result, action_numbers):
-    """Findings-driven 30/60/90-day roadmap; guidance only, never a control result."""
+    """Technical handoff for new assessments; retain historical rollout guidance."""
+    if result.get('assessment_scope') == 'tenant_readiness':
+        from .tenant_readiness import getting_started_html
+        return getting_started_html()
     from .adoption_guidance import build_adoption_guidance
     guidance = build_adoption_guidance(result, action_numbers, title_for=_heading)
     phase_html = []
@@ -979,10 +996,10 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None, summ
         if domain['id'] in {'data_protection','classification'}:
             extra = _purview_policy_table(bundle, technical_url or workbook_url)
         if domain['id'] in {'licensing','scope'}:
-            extra = _readiness_export(bundle) + _license_context(bundle) + _adoption_report(result)
+            extra = _readiness_export(bundle) + _license_context(bundle) + ('<h3>Usage context</h3>' if result.get('assessment_scope') == 'tenant_readiness' else '') + _adoption_report(result)
         if domain['id'] in {'agents', 'external_ai'}:
-            extra = _scoped_products(bundle)
-        if domain['id'] in {'adoption','scope'}:
+            extra = _scoped_products(bundle, result)
+        if domain['id'] in {'adoption','scope'} and result.get('assessment_scope') != 'tenant_readiness':
             if domain['id'] == 'adoption': extra = _adoption_report(result)
             extra += '<h3>What the pilot should prove</h3><p>Select a small group with a defined work task, accountable content owners, and approved access. The readiness checks are tenant-wide, so the group can be chosen after this assessment. Agree how the group will judge output quality and time saved.</p><h3>How to decide whether to expand</h3><p>Review actual Copilot activity, task quality, and user feedback before expanding. Familiarity with Teams, email, or Office can guide pilot selection; it does not measure Copilot use.</p>'
         context_id = {'classification':'data_protection','scope':'licensing'}.get(domain['id'],domain['id'])
@@ -1039,7 +1056,8 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None, summ
     progress = result.get('rollout_progress') or {}
     from .pilot_summary import VERDICTS
     headline = VERDICTS.get(decision, (progress.get('current_stage') or decision, ''))[0]
-    decision_badge = ('Rollout stage: ' + progress['current_stage']) if progress.get('current_stage') else 'Assessment outcome'
+    decision_badge = (('Assessment stage: ' if result.get('assessment_scope') == 'tenant_readiness' else 'Rollout stage: ')
+                      + progress['current_stage']) if progress.get('current_stage') else 'Assessment outcome'
     observed_use = any(row.get('metric_id') == 'copilot.active_users' and isinstance(row.get('value'), (int, float))
                        and row['value'] > 0 for row in result.get('adoption_metrics', []))
     adoption_note = ('<p class="qualification">The supplied reports show existing Copilot use. This stage identifies what is verified for the next rollout decision.</p>' if progress and observed_use else '')
@@ -1059,7 +1077,13 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None, summ
                       + _portal_captures(bundle) + '</section>') if portal_count else ''
     portal_nav = '<a href="#pdf-report-highlights">PDF highlights</a><a href="#admin-pages">Admin pages</a>' if portal_count else ''
     pdf_highlights = _pdf_report_highlights(bundle)
-    decision_state = 'ready' if decision in {'Ready for a controlled pilot', 'Ready for broader adoption'} else 'blocked' if decision == 'Not ready for pilot' else 'unknown'
+    from .tenant_readiness import scope_handoff_html
+    scope_handoff = scope_handoff_html(result) if result.get('assessment_scope') == 'tenant_readiness' else '<section id="rollout"><div class="section-heading"><span class="section-index">03</span><div><div class="eyebrow">FROM ASSESSMENT TO PILOT</div><h2>Conditions for the next rollout stage</h2></div></div><div class="phase-grid"><div class="phase"><span class="phase-number">1</span><h3>Clear the blockers</h3><p>Fix the conditions marked “Blocks pilot” and confirm unresolved scope, configuration and operational checks. Record their supporting population and exclusions before pilot approval.</p></div><div class="phase"><span class="phase-number">2</span><h3>Choose and run the pilot</h3><p>Pick a bounded group with clear work tasks, agree success measures with the business sponsor, assign licenses through a group, and record the security owner\'s decision against the action plan.</p></div><div class="phase"><span class="phase-number">3</span><h3>Before expanding</h3><p>Close the high-priority conditions, verify access to the intended content, and demonstrate that the agreed controls cover the larger group. Review actual Copilot usage and task outcomes with the business sponsor.</p></div></div><p class="qualification">Adoption opportunities guide the value of a pilot. They do not establish that security controls are effective.</p></section>'
+    decision_state = 'ready' if decision in {'Tenant baseline ready', 'Ready for a controlled pilot', 'Ready for broader adoption'} else 'blocked' if decision in {'Tenant remediation required', 'Not ready for pilot'} else 'unknown'
+    tenant_scope_report = result.get('assessment_scope') == 'tenant_readiness'
+    hero_caption = 'TENANT READINESS' if tenant_scope_report else 'YOUR ROLLOUT READINESS'
+    handoff_label = 'Assessment scope' if tenant_scope_report else 'Rollout'
+    default_first_actions = '<li>Maintain the assessed tenant controls and retain current evidence.</li>' if tenant_scope_report else '<li>Confirm the pilot scope and maintain the assessed controls.</li>'
     workbook_button = f'<a class="button button-primary" href="{workbook_url}">Assessment workbook <span aria-hidden="true">↗</span></a>' if workbook_url else ''
     if technical_url:
         workbook_button += f'<a class="button" href="{technical_url}">Technical evidence workbook <span aria-hidden="true">↗</span></a>'
@@ -1074,14 +1098,14 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None, summ
     return f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{escape(str(tenant_name or 'Tenant'))} — AI Readiness and M365 Hardening</title><style>{REPORT_CSS}</style></head><body>
       <a class="skip-link" href="#executive">Skip to assessment</a>
       <header class="report-header"><div class="brand"><span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span><span></span></span><div>AI READINESS<span class="brand-subtitle">Microsoft 365 hardening</span></div></div><div class="header-meta"><strong>{escape(str(tenant_name or 'Tenant assessment'))}</strong><span>Executive briefing · {prose(result.get('evaluation_date'))}</span></div></header>
-      <nav class="report-nav" aria-label="Report sections"><div class="nav-links"><a href="#executive">Overview</a><a href="#action-plan">Action plan</a><a href="#readiness-domains">Areas</a>{portal_nav}<a href="#rollout">Rollout</a><a href="#getting-started">Getting started</a><a href="#remaining-evidence">Open checks</a><a href="#engineer-appendix">Evidence</a></div><div class="nav-tools">{workbook_button}<button class="button button-secondary" id="print-report" type="button" hidden>Print report</button></div></nav>
-      <main><section class="executive" id="executive"><div class="hero-grid"><div class="hero-main"><div class="hero-kicker">YOUR ROLLOUT READINESS</div><div class="decision-label" data-state="{decision_state}">{prose(decision_badge)}</div>
+      <nav class="report-nav" aria-label="Report sections"><div class="nav-links"><a href="#executive">Overview</a><a href="#action-plan">Action plan</a><a href="#readiness-domains">Areas</a>{portal_nav}<a href="#rollout">{handoff_label}</a><a href="#getting-started">Getting started</a><a href="#remaining-evidence">Open checks</a><a href="#engineer-appendix">Evidence</a></div><div class="nav-tools">{workbook_button}<button class="button button-secondary" id="print-report" type="button" hidden>Print report</button></div></nav>
+      <main><section class="executive" id="executive"><div class="hero-grid"><div class="hero-main"><div class="hero-kicker">{hero_caption}</div><div class="decision-label" data-state="{decision_state}">{prose(decision_badge)}</div>
       <h1>{prose(headline)}</h1><p class="hero-copy">{prose(result.get('rationale'))}</p>{adoption_note}</div><aside class="hero-aside" aria-label="Assessment scope and dates"><div class="hero-kicker">ASSESSMENT SCOPE</div><h2>{prose(scope)}</h2><div class="hero-meta"><dl><div><dt>Evaluation date</dt><dd>{prose(result.get('evaluation_date'))}</dd></div><div><dt>Evidence period</dt><dd>{prose(period_text)}</dd></div><div><dt>Open actions</dt><dd>{len(actions)} to resolve or verify</dd></div></dl></div></aside></div>
-      {_progress_timeline(result)}<div class="stats">{cards}</div>{blocker_note}<div class="executive-brief two-column"><div class="brief-card"><div class="eyebrow">WHERE TO START</div><h2>First actions</h2><ol>{first_actions or '<li>Confirm the pilot scope and maintain the assessed controls.</li>'}</ol></div><div class="brief-card strengths-card"><div class="eyebrow">WHAT IS WORKING</div><h2>Supported observations</h2><ul>{strengths}</ul></div></div></section>{baseline_panel(result)}{pdf_highlights}
+      {_progress_timeline(result)}<div class="stats">{cards}</div>{blocker_note}<div class="executive-brief two-column"><div class="brief-card"><div class="eyebrow">WHERE TO START</div><h2>First actions</h2><ol>{first_actions or default_first_actions}</ol></div><div class="brief-card strengths-card"><div class="eyebrow">WHAT IS WORKING</div><h2>Supported observations</h2><ul>{strengths}</ul></div></div></section>{baseline_panel(result)}{pdf_highlights}
       <section id="readiness-domains"><div class="section-heading"><span class="section-index">01</span><div><div class="eyebrow">THE ASSESSMENT AT A GLANCE</div><h2>Readiness by assessment area</h2></div></div><p class="section-description">Open actions by assessment area. Counts reflect the action plan and workbook; they describe the work remaining.</p>{portal_intro}{domain_tiles(result)}</section>
       <section id="action-plan"><div class="section-title"><div class="section-heading"><span class="section-index">02</span><div><div class="eyebrow">PRIORITIES AND ACCOUNTABILITY</div><h2>Prioritized action plan</h2></div></div><span class="badge">{len(actions)} actions</span></div><p class="section-description">Start with the highest-priority conditions. Remediation actions address observed issues. Confirmation actions check whether earlier or limited findings still apply. Evidence checks need a report, validation or owner decision.</p>{''.join(action_html) or '<p>No outstanding actions were identified.</p>'}</section>
 {''.join(domain_html)}{portal_section}
-      <section id="rollout"><div class="section-heading"><span class="section-index">03</span><div><div class="eyebrow">FROM ASSESSMENT TO PILOT</div><h2>Conditions for the next rollout stage</h2></div></div><div class="phase-grid"><div class="phase"><span class="phase-number">1</span><h3>Clear the blockers</h3><p>Fix the conditions marked “Blocks pilot” and confirm unresolved scope, configuration and operational checks. Record their supporting population and exclusions before pilot approval.</p></div><div class="phase"><span class="phase-number">2</span><h3>Choose and run the pilot</h3><p>Pick a bounded group with clear work tasks, agree success measures with the business sponsor, assign licenses through a group, and record the security owner's decision against the action plan.</p></div><div class="phase"><span class="phase-number">3</span><h3>Before expanding</h3><p>Close the high-priority conditions, verify access to the intended content, and demonstrate that the agreed controls cover the larger group. Review actual Copilot usage and task outcomes with the business sponsor.</p></div></div><p class="qualification">Adoption opportunities guide the value of a pilot. They do not establish that security controls are effective.</p></section>
-      {executive_html}<details class="appendix-panel"><summary>Rollout requirements and the first 90 days</summary>{_progress_requirements(result)}{_getting_started(result, action_numbers)}</details>
+      {scope_handoff}
+      {executive_html}<details class="appendix-panel"><summary>{'Tenant readiness requirements and next steps' if result.get('assessment_scope') == 'tenant_readiness' else 'Rollout requirements and the first 90 days'}</summary>{_progress_requirements(result)}{_getting_started(result, action_numbers)}</details>
       <details class="appendix-panel" id="remaining-evidence"><summary>Outstanding evidence: what owners should return</summary><div class="section-heading"><span class="section-index">05</span><div><div class="eyebrow">COMPLETE THE PICTURE</div><h2>Remaining evidence and decisions</h2></div></div><p class="section-description">{prose(gap_intro)}</p><ul class="gap-list">{gap_html or '<li>No required evidence gaps remain for the assessed scope.</li>'}</ul>{report_guides}</details>{catalog_html}{technical}</main>
       <footer class="report-footer"><strong>AI Readiness and M365 Hardening</strong><span>{escape(str(tenant_name or 'Tenant'))} · Evaluation {prose(result.get('evaluation_date'))}</span></footer><script>{REPORT_SCRIPT}</script></body></html>'''

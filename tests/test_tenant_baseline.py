@@ -172,20 +172,20 @@ class VerdictAndSummaryTests(unittest.TestCase):
 
     def test_high_baseline_failure_blocks_the_pilot_and_summary_leads_with_it(self):
         result, bundle = self.build(self.baseline_rows())
-        self.assertEqual(result["decision"], "Not ready for pilot")
+        self.assertEqual(result["decision"], "Tenant remediation required")
         blocker = next(row for row in result["actions"] if row.get("ControlId") == "IDENTITY.AUTH")
-        self.assertEqual((blocker["PilotImpact"], blocker["ReadinessStage"]), ("Blocks pilot", "Before pilot"))
+        self.assertEqual((blocker["PilotImpact"], blocker["ReadinessStage"]), ("Blocks readiness", "Tenant remediation"))
         retention = next(row for row in result["actions"] if row.get("ControlId") == "DATA.RETENTION")
-        self.assertEqual(retention["PilotImpact"], "Fix before broad rollout")
+        self.assertEqual(retention["PilotImpact"], "Tenant remediation")
         statuses = {row["control_id"]: row["status"] for row in result["controls"]}
         self.assertEqual(statuses["DATA.DLP"], "Not established")
         self.assertEqual(statuses["DATA.PUBLISHING"], "Observed")
         html = render_pilot_summary(result, bundle, "Contoso", "report.html", "workbook.xlsx")
-        self.assertIn("<h1>Not ready for a pilot yet</h1>", html)
-        self.assertLess(html.index("Fix before the pilot"), html.index("Choosing the pilot group"))
+        self.assertIn("<h1>Tenant remediation required</h1>", html)
+        self.assertLess(html.index("Tenant remediation"), html.index("Assessment scope"))
         self.assertIn("Require MFA and block legacy sign-in for all users", html)
         self.assertIn('href="report.html#action-', html)
-        self.assertIn("You do not need to name the pilot users", html)
+        self.assertIn("handled outside this assessment", html)
         self.assertNotIn("pilot population", html)
 
     def test_other_supported_evidence_answers_a_baseline_confirm_row(self):

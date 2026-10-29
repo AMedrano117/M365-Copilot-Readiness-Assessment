@@ -75,6 +75,12 @@ noncompliance or a policy grant.
 
 ## Pilot correlation
 
+Current [tenant-readiness assessments](TENANT_READINESS_SCOPE.md) do not require
+pilot correlation. Current explicit device-security failures can block tenant
+readiness without a roster; missing membership does not create a posture gap.
+The fields below remain optional legacy context and do not determine the current
+tenant verdict.
+
 Without an explicit dated pilot membership record, device findings have
 `PilotRelevanceUnknown`. The existing assessment-profile
 `readiness_review.pilot_scope` can optionally include:
@@ -100,8 +106,9 @@ unmatched reconciled device `OutsideKnownPilotScope`; an incomplete roster canno
 prove exclusion. This does not make a roster mandatory for collecting or
 assessing the tenant baseline. Tenant-wide device counts are never a pilot roster.
 
-Only confirmed pilot-relevant, active, current security failures may block the
-pilot. Unknown relevance or posture requires confirmation. Verified active
+For historical pilot-scoped conclusions, only confirmed pilot-relevant, active,
+current security failures may block the pilot. Unknown relevance or posture
+requires confirmation in that historical scope. Verified active
 failures outside a known pilot remain tenant hardening. Stale, duplicate and
 retired populations are inventory hygiene; insufficient identity correlation is
 an evidence gap. Tenant severity remains visible independently of pilot impact.

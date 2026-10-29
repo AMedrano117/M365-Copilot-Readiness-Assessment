@@ -178,7 +178,7 @@ class PortalReportEvidenceTests(unittest.TestCase):
         self.assertIn("Original tenant collection: 2026-06-01T12:00:00Z", html)
         self.assertIn("Report execution: offline", html)
         self.assertLess(html.index('id="executive"'), html.index('id="engineer-appendix"'))
-        self.assertEqual(bundle["assessment_result"]["decision"], "Readiness unconfirmed")
+        self.assertEqual(bundle["assessment_result"]["decision"], "Tenant readiness unconfirmed")
         self.assertTrue(bundle["assessment_result"]["decision_coverage"])
         self.assertNotIn("Current report assessed", html)
         path = export_to_excel(bundle["recommendations"], filename="offline.xlsx", evidence_bundle=bundle)
@@ -193,7 +193,7 @@ class PortalReportEvidenceTests(unittest.TestCase):
         bundle["collection_context"] = {"mode": "offline", "scope": "Portal exports only"}
         html = self.html(bundle)
         result = bundle["assessment_result"]
-        self.assertEqual(result["decision"], "Readiness unconfirmed")
+        self.assertEqual(result["decision"], "Tenant readiness unconfirmed")
         missing = {row["control_id"] for row in result["controls"] if row["status"] == "Not established"}
         self.assertIn("IDENTITY.AUTH", missing)
         self.assertIn("DATA.DLP", missing)

@@ -230,7 +230,7 @@ class OfflineReportTests(unittest.TestCase):
     def assertNotEstablished(self, text, message):
         # The headline states the verdict; replayed or partial evidence must not reach a pilot verdict.
         headline = re.search(r'<h1>(.*?)</h1>', text).group(1)
-        self.assertIn(headline, {'Not enough evidence to decide yet', 'Not ready for a pilot yet'}, message)
+        self.assertIn(headline, {'Not enough tenant evidence to decide yet', 'Tenant remediation required'}, message)
 
     def test_cli_replay_builds_reports_without_auth_network_or_powershell(self):
         with tempfile.TemporaryDirectory() as directory:

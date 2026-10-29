@@ -1,5 +1,9 @@
 # Supported outputs
 
+New assessments use [tenant readiness scope](TENANT_READINESS_SCOPE.md). Pilot
+groups, business use cases and rollout approvals are outside the assessment;
+the reports, workbooks and shared result record technical readiness only.
+
 The supported assessment deliverables cover executive and domain assessment reports,
 the readiness roadmap, customer action plan, executive presentation, technical evidence
 workbook, HTML Evidence Portal, and the shared machine-readable assessment result.

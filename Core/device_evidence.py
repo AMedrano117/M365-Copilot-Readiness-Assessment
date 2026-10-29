@@ -50,7 +50,9 @@ def _pilot_scope(profile, day):
     from .control_reviews import _profile_raw
     # Optional correlation extends the existing dated pilot scope. A description
     # or tenant-wide device population is never a device roster.
-    scope = (_profile_raw(profile or {}).get('readiness_review') or {}).get('pilot_scope') or {}
+    review = _profile_raw(profile or {}).get('readiness_review')
+    scope = review.get('pilot_scope') if isinstance(review, dict) else None
+    scope = scope if isinstance(scope, dict) else {}
     reviewed = timestamp(scope.get('reviewed_at'), day)
     valid = (reviewed['state'] == 'valid' and reviewed['age_days'] <= 35
              and all(scope.get(key) for key in ('id', 'description', 'reviewer_role', 'evidence_reference')))
@@ -307,10 +309,10 @@ def annotate_finding(row, items, kind, *, confirmed=False):
             'record_relevance':item['relevance'], 'pilot_relevance':item['pilot_relevance'],
             'identity_unresolved':item['unresolved'], 'timestamp':item['timestamp'], 'date_basis':item['date_basis'],
             **({'defender':defender_context(item)} if item['source'] in {'windows_protection','antivirus_health'} else {})} for item in items],
-        DeviceEvidenceQualification=('Current protection and intended pilot relevance require separate evidence. '
+        DeviceEvidenceQualification=('Current tenant protection requires dated setting and provider evidence. '
                                      'Inventory compliance is not proof that every setting passed or that access occurred.'),
         RecordUnit='source records', CompletionEvidence=row.get('CompletionEvidence') or
-        'Dated per-device/per-setting results, reconciled stable IDs and approved pilot membership; validate protection and effective access separately.')
+        'Dated per-device/per-setting results and reconciled stable IDs; validate tenant protection and effective access separately.')
     row['Observation'] = str(original_observation or '') + ' Evidence period: ' + (
         counts['evidence_period']['start']+' to '+counts['evidence_period']['end'] if counts['evidence_period']['start'] else 'not established') + '. '
     row['Observation'] += (f"Active devices: {counts['active_device_count']}; stale devices: {counts['stale_device_count']}; "
@@ -324,3 +326,13 @@ def pilot_blocker_eligible(row):
     if row.get('DeviceEvidenceVersion'):
         return row.get('DevicePilotBlockerEligible') is True
     return row.get('ControlId') != 'ENDPOINT.POSTURE'
+
+
+def tenant_blocker_eligible(row):
+    """Current explicit device failures do not depend on a pilot membership record."""
+    if not row.get('DeviceEvidenceVersion'):
+        return True
+    return row.get('DeviceFindingType') == 'ExplicitSecuritySettingFailure' and any(
+        not item.get('identity_unresolved') and item.get('record_relevance') == 'CurrentActiveDevice'
+        and (item.get('timestamp') or {}).get('state') == 'valid'
+        for item in row.get('DeviceEvidenceInterpretations', []))

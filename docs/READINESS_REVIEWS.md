@@ -2,6 +2,33 @@
 
 [Documentation index](README.md) | [Project overview](../README.md)
 
+Current assessments use [tenant technical readiness](TENANT_READINESS_SCOPE.md).
+Pilot groups, business use cases, success measures and rollout approvals are not
+required inputs or completion criteria. Usage does not establish control effectiveness.
+
+## Current tenant control reviews
+
+Use a dated review only for a technical question the retained evidence cannot
+answer. The existing assessment profile supports `readiness_review.version: 1.0`,
+`tenant_id`, `tenant_scope` and `control_reviews`; no pilot scope or plan is needed.
+The tenant scope records its ID, description, review date, responsible role and
+evidence reference. Each control review references that tenant scope and records
+its control ID, review date, responsible role, result, rationale and evidence.
+Operational controls also need observed-operation evidence, tested behavior and
+tested scope. Record only reviews actually performed; an attestation cannot
+silently close an observed technical failure.
+
+Current progress covers evidence collection, tenant readiness review and the
+assessed tenant baseline. Pilot/expansion inputs, when supplied, remain optional
+traceability context. They cannot advance this baseline or clear a tenant finding.
+
+<details>
+<summary>Legacy rollout-review format and historical examples</summary>
+
+The following describes earlier pilot/rollout assessments and retained input
+formats. Its pilot and broader-adoption requirements do not apply to current
+tenant-readiness assessments.
+
 The report distinguishes observed Copilot adoption from verified rollout readiness. Assigned
 licenses or active users can show that adoption has begun while the next readiness milestone
 still needs evidence. No percentage or usage threshold advances readiness automatically.
@@ -192,3 +219,5 @@ See [the methodology](METHODOLOGY.md#deployment-decision) for how these mileston
 deployment recommendation and [RUN.md](RUN.md) for collection and rebuild commands.
 
 See [Assessment evidence and outputs](ASSESSMENT_EVIDENCE.md) for catalog check reviews, evidence levels, structured assessment context and approved exceptions.
+
+</details>

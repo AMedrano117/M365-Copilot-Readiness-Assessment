@@ -1,6 +1,6 @@
 # AI Readiness and Microsoft 365 Hardening
 
-This read-only assessment reviews AI readiness and Microsoft 365 tenant hardening, helping business leaders and IT owners decide what must be addressed or confirmed before a Microsoft 365 Copilot pilot expands. It combines tenant evidence, saved collections and Microsoft portal exports into a customer HTML report, an assessment workbook and a technical evidence workbook. Agents and external AI products are included when explicitly scoped.
+This read-only assessment reviews the Microsoft 365 tenant technical baseline and hardening needs. It combines tenant evidence, saved collections and Microsoft portal exports into a customer HTML report, an assessment workbook and a technical evidence workbook. Agents and external AI products are included when explicitly scoped. Pilot design, business use cases and deployment authorization are handled outside this assessment.
 
 **Start here:** [Operator runbook](docs/RUN.md) | [Customer checklist](docs/NEW_TENANT_CHECKLIST.md) | [All documentation](docs/README.md)
 
@@ -8,13 +8,12 @@ Use [explicit assessment governance](docs/ASSESSMENT_GOVERNANCE.md) to record hu
 closure, risk acceptance, exceptions and applicability decisions after a run.
 These decisions require configured authority and never change technical conclusions.
 
-The report produces three distinct conclusions:
+The report separates:
 
-- Microsoft 365 foundation readiness.
-- Approval status for each proposed AI provider and subscription tier.
-- Readiness of each named AI use case.
+- Tenant technical readiness and its supporting evidence.
+- Optional provider-security review for explicitly scoped products and subscription tiers.
 
-Provider and use-case conclusions require an assessment profile and provider evidence. Without those inputs, the tool concludes only on the Microsoft 365 foundation; it does not automatically approve ChatGPT, Claude, Cursor, or another external service.
+Provider-security reviews require the corresponding profile and provider evidence. The tool does not automatically approve ChatGPT, Claude, Cursor, or another external service. Business use-case readiness is outside scope. See [tenant readiness scope](docs/TENANT_READINESS_SCOPE.md).
 
 ## What the default assessment reads
 
@@ -103,9 +102,9 @@ Keep one environment file per customer. Setup writes `EXPECTED_TENANT_DOMAIN`, a
 
 The Standard permission profile defaults to Global Reader in both Standard and Unattended modes; setup requests delegated `RoleManagement.ReadWrite.Directory` to assign it. Restricted defaults to no workload role and rejects role assignments. `-WorkloadRbac None` skips assignment but does not remove existing roles or guarantee a Purview browser fallback after an application connection succeeds.
 
-Each build writes a one-page **pilot readiness summary** (`Readiness Summary - <company>.html`) next to the full report: a plain verdict (not ready yet, ready with conditions, or ready), what to fix before the pilot, what to confirm, what is already in place and how to choose the pilot group. Required checks retain the tenant-wide baseline and distinguish configuration from operational confirmation (methodology 4.0), so the verdict never depends on naming the pilot users.
+Each build writes a one-page **tenant readiness summary** (`Readiness Summary - <company>.html`) next to the full report: the technical outcome, tenant findings to remediate, evidence to confirm and supported controls. Required checks distinguish configuration from operational confirmation. Pilot membership, business plans and rollout approval do not determine the tenant verdict.
 
-The report also includes a **Getting started** section: a 30/60/90-day roadmap that links the security gates in the action plan with adoption steps (acceptable use, training, champions, success measures) and an owner checklist for external AI services. It is guidance only and never changes the readiness decision.
+The report's **Getting started** section links technical remediation and evidence validation to the assessment action plan. A short handoff note identifies pilot and adoption work as a separate engagement. Historical snapshots retain their recorded rollout scope when rendered.
 
 An explicitly selected `--env-file` must exist and be readable. Before authentication, the console shows the effective tenant, application, profile, authentication method and configured SharePoint URL without credential values. Setup verifies reused secrets, records their key ID/expiry, and saves new credentials before consent or workload configuration. See [setup recovery and rotation](docs/prereq.md).
 

@@ -74,7 +74,7 @@ class DeviceEvidenceInterpretationTests(unittest.TestCase):
         self.assertEqual(failed['DeviceEvidenceCounts']['source_record_count'],1)
         self.assertIn('1 compliant',inventory['Observation'])
         self.assertEqual(failed['Priority'],'High')
-        self.assertNotIn(failed['RecommendationId'],[row['RecommendationId'] for row in assessment['blockers']])
+        self.assertIn(failed['RecommendationId'],[row['RecommendationId'] for row in assessment['blockers']])
 
     def test_stale_missing_and_malformed_values_do_not_establish_current_risk(self):
         for raw, expected in [('2026-01-01','StaleDeviceRecord'),(None,'ActivityUnknown'),
@@ -161,8 +161,9 @@ class DeviceEvidenceInterpretationTests(unittest.TestCase):
             assessment=result(bundle)
             finding=next(row for row in assessment['recommendations'] if row.get('DeviceFindingType')=='ExplicitSecuritySettingFailure')
             self.assertEqual(finding['Priority'],'High')
-            self.assertEqual(finding['PilotImpact'],impact)
-            self.assertEqual(finding['RecommendationId'] in [row['RecommendationId'] for row in assessment['blockers']],impact=='Blocks pilot')
+            self.assertEqual(finding['DevicePilotImpact'],impact)
+            self.assertEqual(finding['PilotImpact'],'Blocks readiness')
+            self.assertIn(finding['RecommendationId'], [row['RecommendationId'] for row in assessment['blockers']])
 
     def test_old_roster_or_missing_scope_evidence_never_establishes_pilot(self):
         for field,value in [('reviewed_at','2025-01-01'),('evidence_reference',''),('intune_device_ids','intune-1')]:
@@ -182,7 +183,7 @@ class DeviceEvidenceInterpretationTests(unittest.TestCase):
         bundle['assessment_sources']['compliance_setting_states'][0]['source'].update(complete=False,availability_status='partial')
         assessed=result(bundle)
         row=next(row for row in assessed['recommendations'] if row.get('DeviceFindingType')=='ExplicitSecuritySettingFailure')
-        self.assertEqual(row['PilotImpact'],'Confirm before pilot')
+        self.assertEqual(row['PilotImpact'],'Evidence review')
         self.assertNotIn('Blocks pilot',row['Observation'])
         self.assertNotIn(row['RecommendationId'],[blocker['RecommendationId'] for blocker in assessed['blockers']])
 

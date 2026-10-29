@@ -203,13 +203,13 @@ def blocker_control_mapping(result):
     """Count existing decisions and join recorded IDs; never evaluate controls."""
     failed = [c for c in result.get('controls') or [] if c.get('security_gate') and c.get('status') == 'Action required']
     actions = result.get('actions') or []
-    blockers = [r for r in actions if r.get('PilotImpact') == 'Blocks pilot']
+    blockers = [r for r in actions if r.get('PilotImpact') in {'Blocks pilot', 'Blocks readiness'}]
     rows, other_rows = [], []
     for action in actions:
         ids = {action.get('RecommendationId'),*(action.get('CompatibilityRecommendationIds') or [])} - {None,''}
         row = {'recommendation_id':action.get('RecommendationId'), 'pilot_impact':action.get('PilotImpact'),
                'control_ids':[c['control_id'] for c in failed if ids.intersection(c.get('recommendation_ids') or [])]}
-        if action.get('PilotImpact') == 'Blocks pilot': rows.append(row)
+        if action.get('PilotImpact') in {'Blocks pilot', 'Blocks readiness'}: rows.append(row)
         elif row['control_ids']: other_rows.append(row)
     linked = {identifier for row in rows for identifier in row['control_ids']}
     all_linked = linked | {identifier for row in other_rows for identifier in row['control_ids']}
@@ -222,6 +222,8 @@ def blocker_control_mapping(result):
         explanation += f' {len(linked)} failed controls link to pilot blockers; the remaining {len(failed)-len(linked)} link to other recorded actions with their stated rollout timing.'
     elif explanation and not complete:
         explanation += ' The retained control-to-action mapping is incomplete; no missing relationship is inferred.'
+    if result.get('assessment_scope') == 'tenant_readiness':
+        explanation = explanation.replace('pilot-blocker', 'readiness-blocker').replace('pilot blockers', 'readiness blockers')
     return {'failed_control_count':len(failed),'blocker_action_count':len(blockers),
         'mapping_complete':complete,'actions':rows,'other_actions':other_rows,'explanation':explanation}
 

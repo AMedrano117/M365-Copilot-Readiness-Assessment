@@ -247,7 +247,7 @@ class SharePointMaintenanceOutputTests(unittest.TestCase):
                 self.assertEqual(row['Priority'],'Medium')
                 self.assertFalse(row['SecurityGate'])
                 self.assertEqual(row['PilotImpact'],'')
-                self.assertEqual(row['ReadinessStage'],'Before broad rollout')
+                self.assertEqual(row['ReadinessStage'],'Evidence review')
                 bundle['assessment_result'] = result
                 output = Path(export_to_excel(data['recommendations'],filename='Fictional.xlsx',evidence_bundle=bundle,output_dir=folder))
                 result = bundle['assessment_result']

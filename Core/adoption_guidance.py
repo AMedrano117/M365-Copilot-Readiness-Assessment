@@ -46,12 +46,18 @@ def _phase_for_action(action):
 
 
 def build_adoption_guidance(result, action_numbers=None, title_for=None):
-    """Return the roadmap, baseline table and owner checklists for one result.
-
-    ``title_for`` formats an action title (the HTML report passes its own
-    customer-facing heading so both sections name actions identically).
-    """
+    """Project technical next steps, or historical rollout guidance for legacy data."""
     result = result or {}
+    if result.get('assessment_scope') == 'tenant_readiness':
+        from .tenant_readiness import QUALIFICATION
+        numbers = action_numbers or {}
+        return {'content_version': 'tenant-readiness-1.0', 'qualification': QUALIFICATION,
+                'phases': [{'id': 'tenant_review', 'title': 'Tenant remediation and validation',
+                    'steps': ['Review confirmed tenant findings with the accountable technical owners.',
+                              'Obtain missing dated control evidence and verify remediation.'],
+                    'actions': [_action_entry(row, numbers.get(row.get('RecommendationId')), title_for)
+                                for row in result.get('actions', [])], 'checklist': []}],
+                'baseline': [], 'external_ai_checks': []}
     action_numbers = action_numbers or {}
     phases = {phase["id"]: {
         "id": phase["id"], "title": phase["title"], "goal": phase["goal"],

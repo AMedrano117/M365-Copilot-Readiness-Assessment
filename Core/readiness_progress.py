@@ -3,11 +3,9 @@
 Milestones describe verified readiness, not whether people already use Copilot.
 No usage percentage, source count or unsupported approval advances a milestone.
 
-Methodology 3.0 judges the pilot on the tenant-wide baseline: a control that
-covers all users covers any pilot group, so reaching "Ready for pilot" needs no
-pilot roster. Blocking conditions must be fixed (or carry a documented pilot
-treatment); checks the evidence could not answer are conditions to confirm.
-Recording the pilot group and plan is required before broader adoption.
+Current assessments project tenant technical requirements without pilot planning
+or deployment approval. The historical rollout projection is retained for legacy
+data that has no explicit tenant-readiness scope; frozen replay is not rescored.
 """
 
 from __future__ import annotations
@@ -38,6 +36,9 @@ def _all_met(requirements, *, allow_conditions=False):
 
 
 def build_rollout_progress(result, review=None):
+    if result.get('assessment_scope') == 'tenant_readiness':
+        from .tenant_readiness import build_tenant_progress
+        return build_tenant_progress(result)
     review = review or {}
     controls = [row for row in result.get("controls", []) if row.get("security_gate")]
     actions = [row for row in result.get("actions", []) if row.get("SecurityGate")]

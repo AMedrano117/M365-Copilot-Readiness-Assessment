@@ -6,7 +6,7 @@ For existing workbook/HTML reports without collection JSON, use the [historical 
 
 This is the canonical workflow for Microsoft 365 Copilot readiness: **prepare → collect and save → add exports → rebuild and review**. Use one tenant per assessment folder. Collection reads supported configuration and existing reports; it does not start Microsoft scans or change tenant policies. Application setup is a separate operation.
 
-For another customer, start with the [new-tenant assessment checklist](NEW_TENANT_CHECKLIST.md), including access, portal captures, structured exports and pilot-owner reviews.
+For another customer, start with the [new-tenant assessment checklist](NEW_TENANT_CHECKLIST.md), including access, portal captures, structured exports and tenant control reviews. Pilot planning and business use cases are [outside tenant readiness scope](TENANT_READINESS_SCOPE.md).
 
 ## 1. Prepare
 
@@ -385,7 +385,7 @@ Under **Scope and licensing**, expand **Collected Copilot prompt activity** for 
 
 **Use the assessment workbook** from **Start Here**, then **Action Plan**, **Findings** and **Coverage**. Five readable evidence layouts organize settings, devices, identity, applications and sharing; empty sheets are omitted. A finding's **Evidence** link opens its exact block, and each row's **Evidence ID** opens the complete technical record. Action statuses retain their recorded values; unassigned due dates remain blank. **`Technical Evidence - <company>.xlsx`** retains full raw exports, **Findings Lineage**, dataset-based selected records, source windows, reconciliation and historical sheets. Its **Evidence** lineage rows share the HTML evidence IDs. Original range fields remain unchanged; new fields link to the two workbook layouts. See [workbook layout and compatibility registers](ASSESSMENT_EVIDENCE.md#deliverables-and-replay).
 
-**Action Plan** orders pilot blockers, required validation, then planning and improvements, using the existing priority within each group. **Source record** opens the original action and full recommendation in the technical workbook's filterable **Action Detail** table. Pilot impact joins only an unambiguous exact finding ID; missing relationships remain unresolved. Blank due dates need agreement with the responsible role.
+**Action Plan** orders tenant remediation and required evidence review using the existing priority within each group. **Source record** opens the original action and full recommendation in the technical workbook's filterable **Action Detail** table. Readiness impact joins only an unambiguous exact finding ID; missing relationships remain unresolved. Blank due dates need agreement with the responsible role. Pilot planning is not an assessment completion requirement.
 
 **Coverage** has two filterable sections: assessment topics describe collection; readiness controls retain recorded configuration, operation and overall conclusions. Available evidence does not mean a passing control. Missing evidence does not automatically mean failure. Unsupported owners remain blank. Apparent conflicts between coverage gaps and retained license, audit or label evidence show **Evidence reconciliation required** with both references; they do not silently change readiness.
 

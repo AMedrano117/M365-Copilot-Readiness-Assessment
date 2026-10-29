@@ -165,31 +165,29 @@ class ReadinessProgressTests(unittest.TestCase):
 
     def test_all_pilot_requirements_and_reviewed_plan_establish_pilot(self):
         result = self.build(review_profile())
-        self.assertEqual(result["rollout_progress"]["current_stage"], "Ready for pilot")
-        self.assertEqual(result["decision"], "Ready for a controlled pilot")
-        self.assertEqual(result["rollout_progress"]["counts"]["pilot_blockers"], 0)
+        self.assertEqual(result["rollout_progress"]["current_stage"], "Tenant baseline assessed")
+        self.assertEqual(result["decision"], "Tenant baseline ready")
+        self.assertEqual(result["rollout_progress"]["counts"]["readiness_blockers"], 0)
         self.assertFalse(result["actions"])
 
     def test_documented_example_is_valid_but_preserves_unfinished_reviews(self):
         profile = load_assessment_profile(Path(__file__).resolve().parents[1] / "examples" / "readiness-review.example.json")
         self.assertTrue(profile["available"], profile["reason"])
         result = self.build(profile)
-        self.assertEqual(result["rollout_progress"]["current_stage"], "Preparing for pilot")
-        self.assertGreater(result["rollout_progress"]["counts"]["pilot_blockers"], 0)
+        self.assertEqual(result["rollout_progress"]["current_stage"], "Tenant readiness review")
+        self.assertTrue(result["rollout_progress"]["next_requirements"])
         controls = {row["control_id"]: row for row in result["controls"]}
         self.assertEqual(controls["LICENSE.APPS"]["status"], "Action required")
         self.assertEqual(controls["DATA.RETENTION"]["status"], "Observed")
 
-    def test_technical_passes_without_pilot_plan_reach_pilot_but_not_broader(self):
-        # Methodology 3.0: the pilot decision rests on the tenant-wide baseline;
-        # the pilot plan is recorded before broader adoption, not before a pilot.
+    def test_technical_passes_without_pilot_plan_establish_tenant_baseline(self):
         profile = review_profile()
-        del profile["readiness_review"]["pilot_plan"]
+        del profile['readiness_review']['pilot_plan']
         result = self.build(profile)
-        self.assertEqual(result["rollout_progress"]["current_stage"], "Ready for pilot")
-        self.assertEqual(result["decision"], "Ready for a controlled pilot")
-        requirements = {row["id"]: row for row in result["rollout_progress"]["next_requirements"]}
-        self.assertEqual(requirements["broader.pilot_plan"]["status"], "open")
+        self.assertEqual(result['decision'], 'Tenant baseline ready')
+        self.assertEqual(result['rollout_progress']['current_stage_id'], 'assessed')
+        self.assertFalse(result['rollout_progress']['next_requirements'])
+
 
     def test_no_pilot_roster_is_needed_for_a_pilot_verdict(self):
         # Tenant-wide baseline rows answer every required control without a readiness review.
@@ -203,39 +201,39 @@ class ReadinessProgressTests(unittest.TestCase):
                          "EvidenceAvailable": "Yes", "EvidenceKey": keys[0] if keys else "", "EvidenceScope": "Assessed tenant",
                          "ObservationDate": "2026-09-10", "EvidenceComplete": True, "BaselineCheck": True})
         configuration_only = self.build(records=rows)
-        self.assertEqual(configuration_only['decision'],'Controlled pilot with conditions')
+        self.assertEqual(configuration_only['decision'],'Tenant readiness with conditions')
         from tests.test_methodology_v4 import operational_profile
         result = self.build(profile=operational_profile(), records=rows)
-        self.assertEqual(result['decision'],'Ready for a controlled pilot')
+        self.assertEqual(result['decision'],'Tenant baseline ready')
         self.assertFalse(result['readiness_review'].get('pilot_scope'))
         self.assertFalse(any('pilot population' in str(row.get('Observation')) for row in result['actions']))
 
     def test_unreadable_checks_are_conditions_but_too_few_answers_cannot_decide(self):
         few = self.build(records=[source_record(Disposition="Assurance", Status="Success", Priority="Low",
                                                 Observation="MFA registration is complete.", Recommendation="")])
-        self.assertEqual(few["decision"], "Readiness unconfirmed")
-        self.assertIn("too few to decide", few["rationale"])
-        self.assertTrue(all(row["PilotImpact"] == "Confirm before pilot" for row in few["actions"] if row["SecurityGate"]))
+        self.assertEqual(few["decision"], "Tenant readiness unconfirmed")
+        self.assertIn("required tenant checks", few["rationale"])
+        self.assertTrue(all(row["PilotImpact"] == "Evidence review" for row in few["actions"] if row["SecurityGate"]))
 
-    def test_missing_control_reason_does_not_invent_an_earlier_finding(self):
+    def test_missing_control_reason_does_not_invent_planning_or_earlier_findings(self):
         result = self.build()
-        requirements = {row["id"]: row for stage in result["rollout_progress"]["stages"] for row in stage["requirements"]}
-        self.assertNotIn("earlier", requirements["pilot.DATA.DLP"]["reason"])
-        self.assertNotIn("historical", requirements["pilot.DATA.DLP"]["reason"])
-        self.assertNotIn("profile", requirements["broader.pilot_scope"]["reason"])
-        self.assertNotIn("profile", requirements["broader.pilot_plan"]["reason"])
-        self.assertTrue(any(row["id"] == "pilot.evidence" for row in result["rollout_progress"]["next_requirements"]))
+        requirements = {row['id']: row for row in result['rollout_progress']['next_requirements']}
+        self.assertNotIn('earlier', requirements['tenant.DATA.DLP']['reason'])
+        self.assertNotIn('historical', requirements['tenant.DATA.DLP']['reason'])
+        self.assertFalse(any('pilot' in key or 'broader' in key for key in requirements))
+        self.assertEqual(result['decision'], 'Tenant readiness unconfirmed')
+
 
     def test_first_completed_milestone_has_a_met_requirement_when_scope_missing(self):
         result = self.build(records=[source_record()])
         progress = result["rollout_progress"]
-        self.assertEqual(progress["current_stage_id"], "preparing")
+        self.assertEqual(progress["current_stage_id"], "reviewing")
         first = progress["stages"][0]
         self.assertEqual(first["status"], "complete")
         self.assertTrue(all(row["status"] == "met" for row in first["requirements"]))
 
     def test_no_evidence_is_just_started_and_usage_never_proves_rollout(self):
-        self.assertEqual(self.build()["rollout_progress"]["current_stage"], "Just started")
+        self.assertEqual(self.build()["rollout_progress"]["current_stage"], "Evidence collection")
         result = self.build(extra={"ai_usage": {"copilot_usage": {"available": True, "refresh_date": DAY,
                                                                   "periods": {"D28": {"active_users": 100}}}}})
         self.assertNotIn(result["rollout_progress"]["current_stage_id"], {"pilot", "broader"})
@@ -255,13 +253,13 @@ class ReadinessProgressTests(unittest.TestCase):
                             Disposition="Coverage", Status="Not Assessed", EvidenceKey="")
         result = self.build(review_profile(), [gap])
         self.assertFalse(result["actions"])
-        self.assertEqual(result["rollout_progress"]["current_stage_id"], "pilot")
+        self.assertEqual(result["rollout_progress"]["current_stage_id"], "assessed")
 
     def test_manual_pass_does_not_overwrite_observed_or_historical_risk(self):
         # A current high-priority finding blocks the pilot; an earlier finding
         # stays open as a condition to confirm before the pilot starts.
-        for changes, stage, impact in (({}, "preparing", "Blocks pilot"),
-                                       ({"SourceType": "prior_assessment", "SourceFile": "earlier.json"}, "pilot", "Confirm before pilot")):
+        for changes, stage, impact in (({}, "reviewing", "Blocks readiness"),
+                                       ({"SourceType": "prior_assessment", "SourceFile": "earlier.json"}, "reviewing", "Evidence review")):
             with self.subTest(changes=changes):
                 result = self.build(review_profile(), [source_record(**changes)])
                 action = next(row for row in result["actions"] if row.get("FindingKey") == "identity.mfa")
@@ -277,32 +275,32 @@ class ReadinessProgressTests(unittest.TestCase):
         }, **changes)]
         return profile
 
-    def test_dated_specific_pilot_condition_does_not_close_broader_issue(self):
+    def test_pilot_treatment_does_not_close_tenant_issue(self):
         result = self.build(self.condition_profile(), [source_record()])
-        self.assertEqual(result["rollout_progress"]["current_stage_id"], "pilot")
-        self.assertEqual(result["counts"]["remediation"], 1)
-        self.assertTrue(result["rollout_progress"]["pilot_conditions"])
-        broader = next(row for row in result["rollout_progress"]["stages"] if row["id"] == "broader")
-        self.assertEqual(next(row for row in broader["requirements"] if row["id"] == "broader.actions")["status"], "issue")
+        self.assertEqual(result['decision'], 'Tenant remediation required')
+        self.assertEqual(result['counts']['remediation'], 1)
+        self.assertFalse(result['rollout_progress']['pilot_conditions'])
+        self.assertTrue(result['blockers'])
+
 
     def test_condition_cannot_bypass_critical_historical_or_newer_scope(self):
         for changes in ({"Status": "Critical"}, {"SourceType": "prior_assessment", "Status": "Critical"}):
-            self.assertEqual(self.build(self.condition_profile(), [source_record(**changes)])["rollout_progress"]["current_stage_id"], "preparing")
+            self.assertEqual(self.build(self.condition_profile(), [source_record(**changes)])["rollout_progress"]["current_stage_id"], "reviewing")
         # A non-critical earlier finding is a condition to confirm, not a treated issue.
         historical = self.build(self.condition_profile(), [source_record(SourceType="prior_assessment")])
-        self.assertEqual(historical["decision"], "Controlled pilot with conditions")
+        self.assertEqual(historical["decision"], "Tenant readiness with conditions")
         self.assertFalse(historical["rollout_progress"]["pilot_conditions"])
         profile = self.condition_profile(reviewed_at="2026-09-10")
         profile["readiness_review"]["pilot_scope"]["reviewed_at"] = "2026-09-11"
         profile["readiness_review"]["pilot_plan"]["reviewed_at"] = "2026-09-11"
-        self.assertEqual(self.build(profile, [source_record()])["rollout_progress"]["current_stage_id"], "preparing")
+        self.assertEqual(self.build(profile, [source_record()])["rollout_progress"]["current_stage_id"], "reviewing")
 
     def test_same_date_opposite_review_results_conflict_even_with_same_rationale(self):
         profile = review_profile()
         opposed = dict(profile["readiness_review"]["control_reviews"][0], result="fail")
         profile["readiness_review"]["control_reviews"].append(opposed)
         result = self.build(profile)
-        self.assertEqual(result["rollout_progress"]["current_stage_id"], "preparing")
+        self.assertEqual(result["rollout_progress"]["current_stage_id"], "reviewing")
         self.assertTrue(any(row.get("selection") == "conflict" for row in result["evidence"]))
 
     def expansion_profile(self):
@@ -322,28 +320,28 @@ class ReadinessProgressTests(unittest.TestCase):
         review["control_reviews"].extend(dict(row, scope_id="expansion") for row in list(review["control_reviews"]))
         return profile
 
-    def test_broader_adoption_requires_outcomes_approval_and_larger_scope_reviews(self):
+    def test_rollout_approval_is_outside_tenant_assessment(self):
         profile = self.expansion_profile()
         complete = self.build(profile)
-        self.assertEqual(complete["rollout_progress"]["current_stage_id"], "broader")
-        self.assertEqual(complete["decision"], "Ready for broader adoption")
-        for missing in ("pilot_outcomes", "expansion_approval", "expansion_reviews"):
+        for missing in ('pilot_outcomes', 'expansion_approval', 'expansion_reviews'):
             partial = copy.deepcopy(profile)
-            if missing == "expansion_reviews":
-                partial["readiness_review"]["control_reviews"] = [row for row in partial["readiness_review"]["control_reviews"] if row["scope_id"] == "tenant"]
+            if missing == 'expansion_reviews':
+                partial['readiness_review']['control_reviews'] = [row for row in partial['readiness_review']['control_reviews'] if row['scope_id'] == 'tenant']
             else:
-                del partial["readiness_review"][missing]
+                del partial['readiness_review'][missing]
             result = self.build(partial)
-            self.assertEqual(result["rollout_progress"]["current_stage_id"], "pilot")
-            self.assertNotEqual(result["decision"], "Ready for broader adoption")
+            self.assertEqual(result['decision'], 'Tenant baseline ready')
+            self.assertEqual(result['decision'], complete['decision'])
+            self.assertEqual(result['rollout_progress']['current_stage_id'], 'assessed')
+
 
     def test_older_expansion_approval_or_unexpanded_population_does_not_advance(self):
         profile = self.expansion_profile()
         profile["readiness_review"]["expansion_approval"]["reviewed_at"] = "2026-09-13"
-        self.assertEqual(self.build(profile)["rollout_progress"]["current_stage_id"], "pilot")
+        self.assertEqual(self.build(profile)["rollout_progress"]["current_stage_id"], "assessed")
         profile = self.expansion_profile()
         profile["readiness_review"]["expansion_scope"]["population_count"] = 10
-        self.assertEqual(self.build(profile)["rollout_progress"]["current_stage_id"], "pilot")
+        self.assertEqual(self.build(profile)["rollout_progress"]["current_stage_id"], "assessed")
 
     def test_precise_controls_do_not_borrow_consent_or_license_assignment(self):
         result = self.build(records=[source_record(ControlId="APPS-001", Service="Entra", Feature="Application consent",

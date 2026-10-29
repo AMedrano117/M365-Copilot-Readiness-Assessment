@@ -316,7 +316,8 @@ def collect_assessment_sources(clients, *, collected_at='', data_exposure=None, 
 
 
 def current_check_reviews(profile, day, tenant_id):
-    from .control_reviews import _profile_raw, validate_readiness_review
+    from .control_reviews import _profile_raw, validate_readiness_review, tenant_review_profile
+    profile, _ = tenant_review_profile(profile)
     if validate_readiness_review(profile or {}):
         return {}
     review = _profile_raw(profile).get('readiness_review') or {}
@@ -353,7 +354,15 @@ def attach_catalog(result, bundle):
     if context_validation(bundle.get('assessment_profile') or {}):
         context = {}
     coverage = []
+    from .tenant_readiness import OUT_OF_SCOPE_CHECKS
+    tenant_scope = result.get('assessment_scope') == 'tenant_readiness'
     for check in CHECKS:
+        if tenant_scope and check['id'] in OUT_OF_SCOPE_CHECKS:
+            continue
+        if tenant_scope and check['id'] == 'SCOPE.OWNERS':
+            check = dict(check, description='Technical owners for identity, devices, data protection and security operations')
+        if tenant_scope and check['id'] == 'SCOPE.REQUIREMENTS':
+            check = dict(check, description='Applicable security, legal, privacy and regulatory requirements')
         datasets = [(name, dataset) for name in check['sources'] for dataset in sources.get(name, [])]
         collected, limitations, dates = [], [], set()
         for name, dataset in datasets:
@@ -414,6 +423,10 @@ def attach_catalog(result, bundle):
             'why_it_matters':'Configuration, observed operation and owner decisions establish different aspects of this assessment.'})
     result['assessment_domains'] = domains + [row for row in result.get('domains',[]) if row['id']=='agents']
     result['domain_coverage'] = coverage
+    if tenant_scope:
+        result['out_of_scope_checks'] = [{'Check ID': key,
+            'Reason': 'Pilot planning and business outcome reviews are handled outside the tenant technical assessment.'}
+            for key in sorted(OUT_OF_SCOPE_CHECKS)]
     from .guidance_verification import verification_rows
     from .technical_guidance import verification_rows as technical_guidance_rows
     result['documentation_verification'] = verification_rows() + technical_guidance_rows()

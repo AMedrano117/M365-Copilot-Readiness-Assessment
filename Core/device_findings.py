@@ -53,6 +53,8 @@ def qualify_device_findings(recommendations, bundle, compliance):
         recommendations += [row for row in fresh if row.get('FindingKey') not in present]
     output, has_inventory = [], False
     for original in recommendations:
+        if original.get('DeviceFindingType') == 'PilotDevicePostureNotEstablished' or original.get('FindingKey') == 'device.pilot.posture_not_established':
+            continue
         row = dict(original)
         text = ' '.join(str(row.get(key) or '') for key in ('Observation', 'Recommendation', 'OriginalRecommendation'))
         key = str(row.get('FindingKey') or '')
@@ -62,7 +64,7 @@ def qualify_device_findings(recommendations, bundle, compliance):
             row.update(UnverifiedSourceObservation=row.get('Observation'),
                 Feature='Confirm earlier endpoint observations', Disposition='Opportunity', Priority='Medium',
                 Observation='No native endpoint records are retained for validation. The earlier endpoint conclusion remains unverified.',
-                Recommendation='Obtain dated device and setting records, reconcile stable identities and confirm the current protection provider and intended pilot population.',
+                Recommendation='Obtain dated device and setting records, reconcile stable identities and confirm the current protection provider and assessed tenant population.',
                 ObservationDate='', EvidenceComplete=False,
                 InvestigationEvidence={'kind':'records','records':[],'source':{},'reconciliation':{'operation':'count','expected':0}})
             annotate_finding(row, [], 'UnverifiedLegacyDeviceObservation')
@@ -90,7 +92,7 @@ def qualify_device_findings(recommendations, bundle, compliance):
             row.update(FindingKey='entra.devices.compliant_access',
                 Feature='Confirm compliant-device Conditional Access enforcement',
                 Observation=CA_QUALIFICATION+' '+count_text(population(items))+' Policy records are configuration evidence; they are not device failures or observed sign-in outcomes.',
-                Recommendation='Review enabled policy grants, Microsoft 365 targeting, inclusions and exclusions. Validate the intended pilot population using report-only or sign-in results before enforcing changes.',
+                Recommendation='Review enabled policy grants, Microsoft 365 targeting, inclusions and exclusions. Validate the assessed users using report-only or sign-in results before enforcing changes.',
                 OriginalRecommendation='', Priority='Medium', Disposition='Coverage', Status='Not Assessed',
                 ControlId='ENDPOINT.POSTURE', DomainId='endpoints', EvidenceKey='conditional_access_detail',
                 EvidenceLevel='configuration',
@@ -129,18 +131,6 @@ def qualify_device_findings(recommendations, bundle, compliance):
             'Overall compliance is independent of each retained setting result and does not prove access or Copilot use.',
             'Reconcile current devices, stale or retired records, duplicate identities and setting-level failures. Validate policy assignment and device ownership; retain an explained inventory of every other state.',
             inventory, 'InventoryComplianceState'))
-    if inventory:
-        pilot = [item for item in inventory if item['pilot_relevance']=='PilotRelevant']
-        unresolved = [item for item in inventory if item['pilot_relevance']=='PilotRelevanceUnknown']
-        # Even a roster is insufficient to establish protection effectiveness.
-        # An explicit operational pilot-device validation can close this check;
-        # a tenant-wide review or a compliant aggregate cannot silently do so.
-        selected = pilot or unresolved
-        if selected:
-            output.append(_finding('device.pilot.posture_not_established', 'Confirm pilot-device posture',
-                count_text(population(selected))+' Intended pilot-device posture is not established by overall compliance or tenant-wide inventory alone.',
-                'Correlate approved pilot members with stable device IDs, current per-setting results, protection-provider health and applicable Conditional Access. Record dated closure evidence for the intended pilot population.',
-                selected, 'PilotDevicePostureNotEstablished', disposition='Coverage'))
     from .device_summary import finding_summary
     for row in output:
         summary = finding_summary(row, compliance)
