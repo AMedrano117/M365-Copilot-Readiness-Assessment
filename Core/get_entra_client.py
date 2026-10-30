@@ -271,6 +271,27 @@ async def _fetch_graph_detail_via_http(path):
     if path.endswith('/windowsProtectionState') or path == DEVICE_COMPLIANCE_SETTINGS_PATH:
         result = await _fetch_graph_object_via_http(path)
         obj = result.pop('object', None)
+        if path == DEVICE_COMPLIANCE_SETTINGS_PATH and result.get('available') is True:
+            from .intune_compliance_settings import missing_settings
+            missing = missing_settings(obj) if isinstance(obj, dict) else ['secureByDefault', 'deviceComplianceCheckinThresholdDays']
+            if missing:
+                # Retry the same v1.0 singleton without projection. This is bounded
+                # and adds no permissions; keep both responses for provenance.
+                attempts = [{'source_api': result.get('source_api') or 'https://graph.microsoft.com'+path,
+                             'response': obj, 'missing_fields': missing}]
+                retry = await _fetch_graph_object_via_http('/v1.0/deviceManagement')
+                fallback = retry.pop('object', None)
+                fallback_missing = missing_settings(fallback) if isinstance(fallback, dict) else missing
+                attempts.append({'source_api': retry.get('source_api') or 'https://graph.microsoft.com/v1.0/deviceManagement',
+                                 'response': fallback, 'missing_fields': fallback_missing,
+                                 'available': retry.get('available'), 'error': retry.get('error')})
+                if retry.get('available') is True and len(fallback_missing) < len(missing):
+                    result, obj, missing = retry, fallback, fallback_missing
+                    result.setdefault('source_api', 'https://graph.microsoft.com/v1.0/deviceManagement')
+                result['request_attempts'] = attempts
+            if missing:
+                result.update(availability_status='partial', complete=False,
+                    reason='The tenant compliance settings response omitted usable values for: '+', '.join(missing)+'. No defaults are assumed.')
         result['value'] = [obj.get('value', obj)] if isinstance(obj, dict) else []
         result.setdefault('reason', result.get('error', ''))
         return result

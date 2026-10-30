@@ -102,17 +102,29 @@ def expanded_findings(bundle, *, profile=None, evaluation_date=None, tenant_id=N
             records=dataset.get('records',[])
             if name=='device_compliance_settings':
                 config = compliance['tenant_settings']
-                for key, field in config['fields'].items():
+                known = [[(key, field)] for key, field in config['fields'].items() if field['state'] == 'observed']
+                missing = [(key, field) for key, field in config['fields'].items() if field['state'] != 'observed']
+                for group in known + ([missing] if missing else []):
+                    key, field = group[0]
                     observed = field['state'] == 'observed'
-                    finding(f'{name}.{key}',records,state,field['label'],
-                        field['label']+': '+field['display']+'. '+config['qualification'],
+                    key = key if observed else 'confirmation'
+                    label = field['label'] if observed else 'Confirm tenant compliance settings'
+                    displays = {item['display'] for _, item in group}
+                    display = next(iter(displays)) if len(displays) == 1 else 'Needs confirmation'
+                    explanation = (field['label']+': '+field['display']+'. ' if observed else
+                                   (config.get('collection_issue') or 'The saved response did not establish all tenant compliance settings.')+' ')
+                    finding(f'{name}.{key}',records,state,label,
+                        explanation+(config['qualification'] if observed else
+                            'No default period or no-policy behavior is assumed. This is a collection limitation, not evidence of tenant misconfiguration.'),
                         disposition='Reference' if observed else 'Coverage',priority='Low' if observed else 'Medium',
                         recommendation='Review the retained tenant configuration and intended compliance design. Confirm missing or conflicting values in Intune.')
                     output[-1].update(Service='Entra',Status='Insight' if observed else 'Not Assessed',
                         EvidenceKey='device_compliance_settings_detail',EvidenceLevel='configuration',
                         EvidenceComplete=observed and state.get('complete') is True,
                         ObservationDate=field['observed_at'],EvidenceScope='Tenant-wide Intune compliance settings',
-                        ConfigurationSetting=key,ConfigurationLabel=field['label'],ConfigurationValue=field['display'],
+                        ConfigurationSetting=key,ConfigurationLabel=label,ConfigurationValue=display,
+                        ConfigurationSettings=[dict(item, key=setting) for setting, item in group],
+                        ConfigurationCollectionIssue=config.get('collection_issue', ''),
                         Qualification=config['qualification'])
             elif name=='windows_protection':
                 disabled=[row for row in records if reported_boolean(row.get('realTimeProtectionEnabled')) is False]
@@ -174,7 +186,7 @@ def expanded_findings(bundle, *, profile=None, evaluation_date=None, tenant_id=N
                             'Check targeting, exclusions and last check-in, document intended exceptions, and verify the assignment result after the device reports. '
                             'Older or conflicting results require confirmation; absence of returned checks does not establish that all devices have a policy.')
                 errors=[item['record'] for item in compliance['settings'] if item['classification']=='ReportingErrorOrConflict']
-                if errors: finding(f'{name}.errors',errors,state,'Review unresolved device compliance results',
+                if errors: finding(f'{name}.errors',errors,state,'Confirm incomplete device compliance checks',
                     f'{len(errors)} setting record(s) report error, conflict or unknown. Effective compliance remains unresolved.',disposition='Coverage',
                     recommendation='Review the per-setting status in Intune for the listed records, resolve conflicting policy assignments '
                     'and devices that fail to report, then re-run the assessment.')

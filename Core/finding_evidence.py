@@ -315,6 +315,8 @@ def build_finding_evidence(payload):
             availability = 'complete' if all(_source_complete(originals[item['dataset_id']]) for item in native) else 'partial'
         else:
             availability = 'unknown'
+        if row.get('ConfigurationSettings') and any(field.get('state') != 'observed' for field in row['ConfigurationSettings']):
+            availability = 'partial'  # Returned rows do not establish missing configuration values.
         hint = next((DATASET_KINDS[name] for name in names if name in DATASET_KINDS), None)
         kinds = Counter()
         primary = {}

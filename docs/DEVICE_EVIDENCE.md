@@ -1,5 +1,19 @@
 # Device evidence interpretation
 
+Tenant compliance configuration is validated by returned values, not HTTP success
+alone. A null or incomplete settings object is partial evidence. Collection makes
+at most one additional read of the same v1.0 singleton without `$select`, retains
+both attempts and their original responses, and never assumes a validity period
+or no-policy default. Saved missing settings are one explained confirmation card.
+An offline rebuild cannot recover values that were never returned.
+
+The device overview contains the overall inventory population once. Inventory
+context and its native rows remain in workbooks/evidence pages but are not another
+customer finding or named-example panel. Incomplete setting checks remain distinct
+from explicit noncompliance: they may overlap inventory totals and are not added.
+The customer card groups checks by requirement and counts device/setting pairs;
+original status codes and diagnostics remain in technical evidence.
+
 Endpoint findings use retained evidence only. Intune device inventory, individual
 setting results, Windows protection reads and Defender machine inventory have
 different units. Counts must not be added across overlapping findings.

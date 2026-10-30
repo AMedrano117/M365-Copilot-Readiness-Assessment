@@ -37,10 +37,10 @@ class DeviceExampleDetailTests(unittest.TestCase):
         raw[0].update(state='notEvaluated')
         result, html = render(bundle)
         row = next(row for row in result['recommendations'] if row.get('DeviceFindingType') == 'ReportingErrorOrConflict')
-        self.assertIn('Not evaluated: 1', row['DeviceSummary']['text'])
-        self.assertIn('No error code or diagnostic message was retained', row['DeviceSummary']['text'])
+        self.assertEqual(row['DeviceSummary']['diagnostic_groups'][0]['checks'], 1)
+        self.assertIn('no diagnostic explanation', row['DeviceSummary']['text'])
         self.assertIn('Not evaluated', html)
-        self.assertIn('No error code or diagnostic message retained', html)
+        self.assertIn('No diagnostic detail returned', html)
         self.assertNotIn('Firewall protection does not meet policy', row['DeviceSummary']['text'])
 
     def test_retained_error_details_survive_and_html_escapes_them(self):
@@ -52,24 +52,22 @@ class DeviceExampleDetailTests(unittest.TestCase):
         row = next(row for row in result['recommendations'] if row.get('DeviceFindingType') == 'ReportingErrorOrConflict')
         self.assertIn('Code: 65001', html)
         self.assertIn('Device &lt;report&gt; unavailable', html)
-        self.assertIn('Error: 1', row['DeviceSummary']['text'])
+        self.assertEqual(row['DeviceSummary']['diagnostic_groups'][0]['checks'], 1)
         self.assertEqual(bundle['assessment_sources'], before)
 
     def test_inventory_examples_link_real_reasons_and_explain_overlap(self):
         result, html = render(scenario())
         row = next(row for row in result['recommendations'] if row.get('DeviceFindingType') == 'InventoryComplianceState')
         self.assertIn('not an additional setting failure', row['DeviceSummary']['text'])
-        fragment = html.split('Overall noncompliance is an inventory total')[1].split('</details>')[0]
-        self.assertIn('Windows baseline', fragment)
-        self.assertIn('BitLocker encryption requirement failed', fragment)
-        self.assertIn('do not add these counts', fragment)
+        self.assertNotIn('<summary>Reconcile device compliance inventory</summary>', html)
+        self.assertIn('Windows baseline', html)
+        self.assertTrue(row['InvestigationEvidence']['records'])
 
     def test_missing_cause_is_explicit_and_names_do_not_establish_identity(self):
         bundle = scenario()
         bundle['assessment_sources'].pop('compliance_setting_states')
         _, html = render(bundle)
-        self.assertIn('Specific noncompliance reason not retained', html)
-        self.assertIn('Not compliant', html)
+        self.assertNotIn('<summary>Reconcile device compliance inventory</summary>', html)
         record = {'deviceName': 'Same name', 'complianceState': 'noncompliant'}
         example = device_example(record, {}, [], 'InventoryComplianceState')
         self.assertEqual(example['policy'], 'Not retained')
@@ -79,9 +77,9 @@ class DeviceExampleDetailTests(unittest.TestCase):
         bundle = scenario()
         bundle['assessment_sources']['compliance_setting_states'][0]['records'][0].update(state='unknown')
         _, html = render(bundle)
-        fragment = html.split('Review unresolved device compliance results')[1].split('</details>')[0]
-        self.assertIn('BitLocker Enabled', fragment)
-        self.assertNotIn('Active Firewall Required', fragment)
+        fragment = html.split('Confirm incomplete device compliance checks')[1].split('</details>')[0]
+        self.assertIn('BitLocker encryption requirement', fragment)
+        self.assertNotIn('Firewall protection requirement', fragment)
         self.assertIn('Unknown', fragment)
 
     def test_off_observation_with_third_party_av_is_low_priority_and_not_a_blocker(self):

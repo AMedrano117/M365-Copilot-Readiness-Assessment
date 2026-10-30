@@ -24,6 +24,14 @@ def requirement_name(label):
     key = setting_key(label)
     if key in builtin:
         return builtin[key]
+    for marker, name in [('bitlocker', 'BitLocker encryption requirement'),
+                         ('secureboot', 'Secure Boot requirement'),
+                         ('firewall', 'Firewall protection requirement'),
+                         ('antivirussignature', 'Antivirus signature currency requirement'),
+                         ('antivirus', 'Antivirus protection requirement'),
+                         ('antispyware', 'Antispyware protection requirement')]:
+        if marker in key:
+            return name
     short = str(label or 'Setting name not retained').rsplit('.', 1)[-1]
     return re.sub(r'([a-z0-9])([A-Z])', r'\1 \2', short).replace('_', ' ').replace('Bit Locker', 'BitLocker')
 

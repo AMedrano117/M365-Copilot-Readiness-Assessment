@@ -112,7 +112,7 @@ def qualify_device_findings(recommendations, bundle, compliance):
         elif is_noncompliant_device_finding(row):
             has_inventory = True
             selected = [item for item in inventory if str(value(item['record'], 'complianceState') or '').casefold() == 'noncompliant']
-            row.update(Feature='Review Intune device noncompliance reasons', Disposition='Opportunity', Priority='Medium',
+            row.update(Feature='Intune device inventory context', ActionTitle='Intune device inventory context', Disposition='Opportunity', Priority='Medium',
                 Observation=count_text(population(selected))+' Overall Intune noncompliance requires reconciliation with setting, activity and enrollment evidence. It does not establish a security-setting cause, Copilot use or successful access.',
                 InvestigationEvidence={'kind':'records','records':[item['record'] for item in selected],
                     'reason':'Retained overall noncompliant Intune inventory',
@@ -133,7 +133,7 @@ def qualify_device_findings(recommendations, bundle, compliance):
         for item in inventory:
             state = str(value(item['record'], 'complianceState') or 'unknown').casefold()
             states[state] = states.get(state, 0)+1
-        output.append(_finding('device.inventory.reconciliation', 'Reconcile device compliance inventory',
+        output.append(_finding('device.inventory.reconciliation', 'Intune device inventory context',
             count_text(counts)+f" Overall states: {states.get('noncompliant',0)} noncompliant; {states.get('compliant',0)} compliant; "
             f"{len(inventory)-states.get('noncompliant',0)-states.get('compliant',0)} other or unknown. "
             'Overall compliance is independent of each retained setting result and does not prove access or Copilot use.',

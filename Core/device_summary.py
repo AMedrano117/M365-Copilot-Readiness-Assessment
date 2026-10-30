@@ -98,7 +98,9 @@ def compliance_overview(model):
     if counts['retired']:
         lines.append(f"{counts['retired']} noncompliant devices are recorded as retired; review inventory cleanup.")
     lines.append(f'Compliance status validity period: {days} days. Devices must successfully report compliance within this period.'
-                 if days is not None else 'Compliance status validity period was not collected or has conflicting values; no default day count is assumed.')
+                 if days is not None else 'Compliance status validity period could not be verified; no default day count is assumed.')
+    if model['tenant_settings'].get('collection_issue'):
+        lines.append(model['tenant_settings']['collection_issue'])
     if marking['state'] == 'observed':
         lines.append('Devices without an assigned compliance policy are marked ' + marking['display'].lower() + '.')
         if marking['value'] is False:
@@ -174,25 +176,23 @@ def finding_summary(row, model):
     elif kind == 'PolicyAssignmentNotEstablished':
         lines = [f'{count} devices are reported without an applicable compliance policy. Confirm assignment and check-in.']
     elif kind == 'ReportingErrorOrConflict':
-        from collections import Counter
-        from .device_examples import status_name, error_detail
+        from .device_examples import error_detail
+        from .device_compliance_text import requirement_name
         check_groups = group_settings(settings)
-        states = Counter(status_name(group_state(group)) for group in check_groups)
-        lines = [f'{count} devices have unresolved compliance-setting results. These are reporting gaps, not confirmed security failures.']
-        if states:
-            lines.append('Distinct device/setting checks: ' + '; '.join(f'{state}: {total}' for state, total in sorted(states.items())) + '.')
-        examples = []
+        checks_unit = 'device/setting check' if len(check_groups) == 1 else 'device/setting checks'
+        device_unit = 'identified device' if count == 1 else 'identified devices'
+        lines = [f'Intune did not establish results for {len(check_groups)} {checks_unit} across {count} {device_unit}.',
+                 'These checks need verification. They are separate from explicit noncompliant results and may involve the same devices.']
+        diagnostic_groups = {}
         for group in check_groups:
             item = group[0]
-            policy = item['policy'] if item['policy'] != 'not retained' else 'Policy name not retained'
-            description = f"{policy}: {requirement_result(item['setting'], group_state(group))} — {status_name(group_state(group))}"
-            if description not in examples:
-                examples.append(description)
-            if len(examples) == 3:
-                break
-        lines.extend(description + '.' for description in examples)
+            label = requirement_name(item['setting'])
+            entry = diagnostic_groups.setdefault(label, {'requirement': label, 'checks': 0, 'devices': set()})
+            entry['checks'] += 1
+            if item.get('device_id'):
+                entry['devices'].add(str(item['device_id']).casefold())
         if settings and not any(error_detail(item['record']) for item in settings):
-            lines.append('No error code or diagnostic message was retained. The source status alone does not explain the cause; review the device setting in Intune.')
+            lines.append('The saved results contain no diagnostic explanation. Confirm the current result in Intune; the original status codes remain in technical evidence.')
         elif settings:
             lines.append('Retained diagnostic codes and messages are shown in the technical examples and evidence workbook.')
     elif kind == 'UnconfirmedSettingState':
@@ -236,7 +236,7 @@ def finding_summary(row, model):
               if kind == 'ActivityOrEnrollmentFailure' else
               'Confirm current activity and setting results before remediation. Review inactive devices for inventory cleanup.'
               if kind == 'UnconfirmedSettingState' else
-              'Review reporting errors and conflicting assignments in Intune, then verify fresh setting results.'
+              'Review the incomplete checks in Intune, confirm assignments and check-in, and obtain a new setting result.'
               if kind == 'ReportingErrorOrConflict' else
               'Validate the active antivirus provider, operating mode and current report date before changing protection.'
               if kind == 'DefenderRealTimeProtectionObservation' else
@@ -249,4 +249,6 @@ def finding_summary(row, model):
     if kind != 'CompliantDeviceAccessEnforcementNotEstablished' and counts.get('unresolved_identity_count'):
         display = ((str(count) + ' identified device(s); ' if count else 'Device count unverified; ')
                    + str(counts['unresolved_identity_count']) + ' unresolved source record(s)')
-    return {'lines': lines, 'text': ' '.join(lines), 'policy_groups': groups, 'action': action, 'display_count': display}
+    return {'lines': lines, 'text': ' '.join(lines), 'policy_groups': groups, 'action': action, 'display_count': display,
+            **({'diagnostic_groups': [dict(entry, devices=len(entry['devices'])) for entry in diagnostic_groups.values()]}
+               if kind == 'ReportingErrorOrConflict' else {})}

@@ -50,6 +50,8 @@ def render_technical_appendix(result, bundle, workbook_url, technical_url, model
         used.add(identifier)
         row = rows_by_id.get(identifier, action)
         kind = row.get('DeviceFindingType')
+        if kind == 'InventoryComplianceState' and (result.get('device_compliance') or {}).get('summary'):
+            continue  # Aggregate context already appears once in the device overview.
         subsets = row.get('EndpointObservationSubsets') or {}
         interpretations = {item['evidence_id']: item for item in row.get('DeviceEvidenceInterpretations', [])}
         selected_settings_by_device = {}
@@ -132,7 +134,7 @@ def render_technical_appendix(result, bundle, workbook_url, technical_url, model
         qualification = ('<p>Overall noncompliance is an inventory total, not an additional failure count. '
                          'Devices can also appear in the setting and reporting findings below; do not add these counts.</p>'
                          if kind == 'InventoryComplianceState' else
-                         '<p>Error, conflict, unknown and not-evaluated results need verification; they are not confirmed security failures.</p>'
+                         '<p>Intune did not establish results for these checks. These are incomplete observations, separate from confirmed noncompliance; devices may appear in both populations.</p>'
                          if kind == 'ReportingErrorOrConflict' else
                          '<p>Defender may be inactive when another antivirus is the primary provider. '
                          'An Off result alone does not establish missing protection; verify the provider and operating mode.</p>'

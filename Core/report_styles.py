@@ -470,6 +470,8 @@ REPORT_CSS += r'''
 .device-summary li { margin:8px 0; line-height:1.55; }
 .finding-facts, .finding-steps { margin:10px 0; padding-left:22px; }
 .finding-facts li, .finding-steps li { margin:7px 0; line-height:1.55; }
+.supporting-detail { margin:14px 0; padding:12px 16px; border:1px solid var(--line); border-radius:8px; }
+.supporting-detail > summary { color:var(--navy); font-weight:650; cursor:pointer; }
 .callout > .finding-facts, .callout > .finding-steps { font-size:14px; }
 .callout-found td:last-child { white-space:pre-line; }
 .technical-example { margin:14px 0; padding:14px 18px; border:1px solid var(--line); border-radius:8px; background:#fff; }

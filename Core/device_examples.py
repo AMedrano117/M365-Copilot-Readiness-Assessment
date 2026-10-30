@@ -65,7 +65,7 @@ def device_example(record, device, selected_settings, kind):
         if len(labels) > 2:
             detail += ('; ' if detail else '') + 'Additional settings in workbook'
         if not detail:
-            detail = ('No error code or diagnostic message retained' if kind == 'ReportingErrorOrConflict' else
+            detail = ('No diagnostic detail returned' if kind == 'ReportingErrorOrConflict' else
                       'Overall inventory state; setting causes shown separately' if kind == 'InventoryComplianceState' else
                       'Retained setting result')
         if any(group_state(group) == 'conflictingResults' for group in groups):

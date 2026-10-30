@@ -31,6 +31,48 @@ def config_bundle(settings=None, **metadata):
 
 
 class ComplianceSettingsCollectionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_null_projection_retries_same_singleton_without_select_and_preserves_attempts(self):
+        calls = []
+        def respond(request):
+            if request.url.path == '/v1.0/deviceManagement':
+                calls.append(str(request.url))
+                settings = None if request.url.params.get('$select') else {'secureByDefault': False, 'deviceComplianceCheckinThresholdDays': 45}
+                return httpx.Response(200, json={'settings': settings})
+            return httpx.Response(200, json={'value': []})
+        async def factory():
+            return httpx.AsyncClient(base_url='https://graph.microsoft.com', transport=httpx.MockTransport(respond))
+        client = empty_client()
+        with patch('Core.get_entra_client._get_graph_http_client', side_effect=factory):
+            await collect_entra_details(client, _fetch_graph_detail_via_http, preview_collectors='none')
+        self.assertEqual(len(calls), 2)
+        saved = client.assessment_datasets['device_compliance_settings'][0]
+        self.assertIsNone(saved['source']['request_attempts'][0]['response']['settings'])
+        self.assertTrue(saved['source']['complete'])
+        self.assertEqual(saved['source']['source_api'], 'https://graph.microsoft.com/v1.0/deviceManagement')
+        model = tenant_compliance_settings({'assessment_sources': collect_assessment_sources([client])})
+        self.assertIs(model['fields']['secureByDefault']['value'], False)
+        self.assertEqual(model['fields']['deviceComplianceCheckinThresholdDays']['value'], 45)
+
+    async def test_null_success_is_partial_not_complete_and_does_not_invent_defaults(self):
+        calls = []
+        def respond(request):
+            if request.url.path == '/v1.0/deviceManagement':
+                calls.append(request)
+                return httpx.Response(200, json={'settings': None})
+            return httpx.Response(200, json={'value': []})
+        async def factory():
+            return httpx.AsyncClient(base_url='https://graph.microsoft.com', transport=httpx.MockTransport(respond))
+        client = empty_client()
+        with patch('Core.get_entra_client._get_graph_http_client', side_effect=factory):
+            await collect_entra_details(client, _fetch_graph_detail_via_http, preview_collectors='none')
+        saved = client.assessment_datasets['device_compliance_settings'][0]
+        self.assertEqual(len(calls), 2)
+        self.assertFalse(saved['source']['complete'])
+        self.assertEqual(saved['source']['availability_status'], 'partial')
+        self.assertIsNone(saved['records'][0]['settings'])
+        model = tenant_compliance_settings({'assessment_sources': collect_assessment_sources([client])})
+        self.assertTrue(all(field['value'] is None for field in model['fields'].values()))
+
     async def test_singleton_get_selects_settings_and_preserves_false_value_and_source(self):
         calls = []
         def respond(request):
