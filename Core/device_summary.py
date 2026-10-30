@@ -97,7 +97,8 @@ def compliance_overview(model):
         lines.append(f"Activity could not be verified for {counts['unknown']} noncompliant devices.")
     if counts['retired']:
         lines.append(f"{counts['retired']} noncompliant devices are recorded as retired; review inventory cleanup.")
-    lines.append(f'Compliance status validity period: {days} days. Devices must successfully report compliance within this period.'
+    period_basis = ' (assumed default; API returned 0)' if fields['deviceComplianceCheckinThresholdDays'].get('assumed_default') else ''
+    lines.append(f'Compliance status validity period: {days} days{period_basis}. Devices must successfully report compliance within this period.'
                  if days is not None else 'Compliance status validity period could not be verified; no default day count is assumed.')
     if model['tenant_settings'].get('collection_issue'):
         lines.append(model['tenant_settings']['collection_issue'])

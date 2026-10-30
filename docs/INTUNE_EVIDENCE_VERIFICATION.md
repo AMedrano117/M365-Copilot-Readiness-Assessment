@@ -47,13 +47,14 @@ partial evidence; the original response is retained. An offline
 rebuild cannot recover values that were never saved; future collection must use
 the updated collector.
 
-If the API returns `deviceComplianceCheckinThresholdDays: 0`, preserve that raw
-value and confirm the effective period in the portal. The assessment displays
-**API returned 0; effective period unverified**, and uses neither zero nor an
-assumed default for device inactivity calculations. Microsoft documents a default
-of 30 days and a configurable range of 1-120 days; a zero API response has also
-been reported on previously unchanged tenants. That does not independently verify
-the effective value in the tenant being assessed. Do not change the tenant setting
+If the API returns numeric `deviceComplianceCheckinThresholdDays: 0`, the assessment
+uses **30 days** for compliance check-in calculations and displays **30 (assumed
+default; API returned 0)**. The raw response remains 0. Microsoft documents a
+default of 30 days and a configurable range of 1-120 days; a zero API response has
+also been reported on previously unchanged tenants. Missing, null, Boolean,
+malformed and out-of-range values remain unknown. A nonzero configured period
+remains authoritative; conflicting retained periods remain unresolved. The probe
+prints the raw API value, so it will still print 0. Do not change tenant settings
 just to make the diagnostic return a different value.
 
 ## Compare an incomplete check on one device
