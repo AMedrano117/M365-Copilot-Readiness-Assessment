@@ -9,6 +9,7 @@ import re
 from .evidence_contract import parse_date
 from .operational_evidence import rows
 from .device_evidence import (value, build_device_identities, interpret_records, timestamp)
+from .device_compliance_text import requirement_result, setting_key, status_key, group_settings, group_state
 
 
 def setting_label(record, summaries=None):
@@ -22,12 +23,12 @@ def setting_label(record, summaries=None):
     builtin = str(value(record, 'setting') or value(record, 'ParentId') or '')
     if label == 'Setting name not retained' and builtin.lower().startswith('defaultdevicecompliancepolicy.'):
         key = re.sub('[^a-z0-9]', '', builtin.lower())
-    if key in {'isactive', 'defaultdevicecompliancepolicyrequireremaincontact'}:
+    if key in {'isactive', 'requireremaincontact', 'defaultdevicecompliancepolicyrequireremaincontact'}:
         return 'Is active', 'activity'
     if key in {'hasacompliancepolicyassigned', 'defaultdevicecompliancepolicyrequirecompliancepolicyassigned',
-               'defaultdevicecompliancepolicyrequiredevicecompliancepolicyassigned', 'requiredevicecompliancepolicyassigned'}:
+               'defaultdevicecompliancepolicyrequiredevicecompliancepolicyassigned', 'requiredevicecompliancepolicyassigned', 'requirecompliancepolicyassigned'}:
         return 'Has a compliance policy assigned', 'assignment'
-    if key in {'enrolleduserexists', 'defaultdevicecompliancepolicyrequireuserexistence'}:
+    if key in {'enrolleduserexists', 'requireuserexistence', 'defaultdevicecompliancepolicyrequireuserexistence'}:
         return 'Enrolled user exists', 'identity'
     if any(term in key for term in ('lastcheckin', 'checkin', 'lastsync', 'synchronization', 'enrollment', 'enrolleduser')):
         return str(label), 'activity'
@@ -78,19 +79,23 @@ def build_device_compliance(bundle, *, profile=None, evaluation_date=None):
             policy = value(record, 'policyName', 'compliancePolicyName')
             if not policy:
                 policy = value(policies.get(str(value(record, 'policyId', 'compliancePolicyId') or '').casefold(), {}), 'displayName')
-            if not policy and kind in {'activity', 'assignment', 'identity'}:
+            if not policy and setting_key(label) in {'requireremaincontact', 'requireuserexistence', 'requiredevicecompliancepolicyassigned'}:
                 policy = 'Default Device Compliance Policy'
             observed = value(record, 'lastReportedDateTime') or (device or {}).get('last_sync')
             observed_date = timestamp(observed, day)
             date = parse_date(observed_date['date'])
             current = bool(date and observed_date['age_days'] <= reconciliation['reporting_days'])
-            failed = str(value(record, 'state') or '').lower() == 'noncompliant'
+            state = status_key(value(record, 'state'))
+            failed = state == 'noncompliant'
+            diagnostic = state in {'error', 'conflict', 'unknown', 'notevaluated'}
             assignment_missing = kind == 'assignment' and failed
-            triage = ('reporting_review' if kind in {'activity', 'assignment', 'identity'} else
-                      'current_security_failure' if kind == 'security' and current and device and device['activity'] == 'active' and not device['conflict'] else
+            triage = ('reporting_review' if diagnostic or kind in {'activity', 'assignment', 'identity'} else
+                      'current_security_failure' if failed and kind == 'security' and current and device and device['activity'] == 'active' and not device['conflict'] else
                       'historical_or_unknown_review')
-            reason = f'{label}: {value(record, "state") or "Unknown"}; policy: {policy or "not retained"}'
-            qualification = ('Activity/reporting failure; it does not establish an encryption or other security-setting failure.' if kind == 'activity' else
+            result_text = requirement_result(label, state)
+            description = f'{result_text}: {value(record, "state") or "Unknown"}; policy: {policy or "not retained"}'
+            qualification = ('Unresolved diagnostic result; it does not establish an unmet requirement or a noncompliance cause.' if diagnostic else
+                             'Activity/reporting failure; it does not establish an encryption or other security-setting failure.' if kind == 'activity' else
                              'Assignment check reports no applicable compliance policy. Confirm current user/device targeting and check-in; this does not establish a security-setting failure.' if assignment_missing else
                              'Assignment or enrolled-user check; review enrollment and policy targeting.' if kind in {'assignment', 'identity'} else
                              'Explicit setting failure with a recent device report; confirm remediation.' if triage == 'current_security_failure' else
@@ -98,10 +103,11 @@ def build_device_compliance(bundle, *, profile=None, evaluation_date=None):
             item = {'record': record, 'dataset_index': dataset_index, 'record_index': record_index,
                     'device_id': (device or {}).get('device_id'), 'setting': label, 'policy': policy or 'not retained',
                     'failed': failed, 'kind': kind, 'assignment_missing': assignment_missing,
-                    'triage': triage, 'reason': reason, 'qualification': qualification,
+                    'triage': triage, 'reason': description if failed else '',
+                    'result': result_text, 'diagnostic': description if diagnostic else '', 'qualification': qualification,
                     'last_reported': observed or '', 'date_basis': 'lastReportedDateTime' if value(record, 'lastReportedDateTime') else 'managed device last sync' if device else 'not retained',
                     'activity': (device or {}).get('activity', 'unknown'), 'evidence': evidence,
-                    'classification': ('ReportingErrorOrConflict' if re.sub('[^a-z]', '', str(value(record, 'state') or '').lower()) in {'error','conflict','unknown','notevaluated'} else
+                    'classification': ('ReportingErrorOrConflict' if diagnostic else
                                        'ActivityOrEnrollmentFailure' if failed and kind in {'activity','identity','assignment'} else
                                        'ExplicitSecuritySettingFailure' if failed and kind == 'security' and current and evidence['evidence_id'] else
                                        'UnconfirmedSettingState' if failed else 'RetainedSettingState')}
@@ -109,13 +115,26 @@ def build_device_compliance(bundle, *, profile=None, evaluation_date=None):
             if device is not None:
                 device['settings'].append(item)
     for device in output:
-        failed = [item for item in device['settings'] if item['failed'] or item['assignment_missing']]
+        groups = group_settings(device['settings'])
+        for group in groups:
+            if group_state(group) == 'conflictingResults':
+                for item in group:
+                    if item['failed']:
+                        item.update(triage='historical_or_unknown_review', classification='UnconfirmedSettingState',
+                            qualification='Different results were retained for the same device/setting; confirm the current result before treating it as an unmet requirement.')
+        failed = [group for group in groups if group_state(group) == 'noncompliant']
         if failed:
-            device['reason'] = '; '.join(dict.fromkeys(item['reason'] for item in failed))
+            device['reason'] = '; '.join(dict.fromkeys(item['reason'] for group in failed for item in group))
+        unresolved = [group for group in groups if status_key(group_state(group)) in {'error','conflict','unknown','notevaluated','conflictingresults'}]
+        device['diagnostics'] = '; '.join(dict.fromkeys(
+            requirement_result(group[0]['setting'], group_state(group)) + ': ' + group_state(group)
+            for group in unresolved))
         checks = [item for item in device['settings'] if item['kind'] == 'assignment']
-        missing = any(item['assignment_missing'] for item in checks)
-        passed = any(str(value(item['record'], 'state') or '').lower() in {'compliant', 'remediated'} for item in checks)
-        device['policy_assignment'] = ('Conflicting assignment evidence' if missing and passed else
+        assignment_groups = group_settings(checks)
+        missing = any(group_state(group) == 'noncompliant' for group in assignment_groups)
+        passed = any(group_state(group) in {'compliant', 'remediated'} for group in assignment_groups)
+        conflicting = any(group_state(group) == 'conflictingResults' for group in assignment_groups)
+        device['policy_assignment'] = ('Conflicting assignment evidence' if conflicting or (missing and passed) else
                                        'Reported missing' if missing else 'Assignment check passed' if passed else 'Unknown')
         device['qualification'] = ('Activity is based on retained Intune, Entra and Defender timestamps; stale reporting does not establish retirement or safety. '
                                    'Missing setting details do not establish a cause. The raw Intune compliance state is unchanged.')
@@ -160,7 +179,7 @@ def client_compliance(client):
 
 
 def device_fields(device):
-    return {'Compliance reason': device['reason'], 'Device activity': device['activity'],
+    return {'Compliance reason': device['reason'], 'Compliance diagnostics': device.get('diagnostics', ''), 'Device activity': device['activity'],
             'Compliance policy assignment': device.get('policy_assignment', 'Unknown'),
             'Latest activity UTC': device['last_observed'], 'Compliance qualification': device['qualification']}
 

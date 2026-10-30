@@ -26,6 +26,11 @@ def render_technical_appendix(result, bundle, workbook_url, technical_url, model
         row = rows_by_id.get(identifier, action)
         kind = row.get('DeviceFindingType')
         interpretations = {item['evidence_id']: item for item in row.get('DeviceEvidenceInterpretations', [])}
+        selected_settings_by_device = {}
+        for key in row.get('DeviceEvidenceIds', []):
+            item = settings_by_id.get(key)
+            if item and item.get('device_id'):
+                selected_settings_by_device.setdefault(str(item['device_id']).casefold(), []).append(item)
         examples, seen = [], set()
         for table_id in finding['evidence'].get('tables', []):
             for record in tables.get(table_id, {}).get('rows', []):
@@ -44,6 +49,8 @@ def render_technical_appendix(result, bundle, workbook_url, technical_url, model
                     device_id = interpreted[0].get('intune_id') or device_id
                 unresolved = any(item.get('identity_unresolved') for item in interpreted) or (settings and not settings[0].get('device_id'))
                 device_model = {} if unresolved else devices.get(str(device_id or '').casefold(), {})
+                if settings and not unresolved:
+                    settings = selected_settings_by_device.get(str(device_id or '').casefold(), settings)
                 device = device_model.get('device') or {}
                 name = next((record.get(key) for key in ('deviceName', 'upn', 'userPrincipalName', 'userDisplayName',
                     'displayName', 'policyName', 'compliancePolicyName', 'name', 'title') if record.get(key)), None)
@@ -83,7 +90,7 @@ def render_technical_appendix(result, bundle, workbook_url, technical_url, model
         population = row.get('DeviceSummary', {}).get('display_count', population)
         columns = ([('Example', 'name'), ('Observation', 'setting'), ('Status', 'status'), ('Context', 'detail')]
                    if kind in {'DefenderRealTimeProtectionObservation', 'DefenderSignatureObservation'} else
-                   [('Example', 'name'), ('Compliance policy', 'policy'), ('Setting / reason', 'setting'),
+                   [('Example', 'name'), ('Compliance policy', 'policy'), ('Check / diagnostic' if kind == 'ReportingErrorOrConflict' else 'Requirement / result', 'setting'),
                     ('Status', 'status'), ('Details', 'detail')] if examples and 'policy' in examples[0] else
                    [('Example', 'name'), ('Reason', 'detail'), ('Status', 'status'), ('Diagnostic details', 'diagnostic')])
         qualification = ('<p>Overall noncompliance is an inventory total, not an additional failure count. '
@@ -95,7 +102,7 @@ def render_technical_appendix(result, bundle, workbook_url, technical_url, model
                          'An Off result alone does not establish missing protection; verify the provider and operating mode.</p>'
                          if kind == 'DefenderRealTimeProtectionObservation' else '')
         rendered.append('<details class="technical-example" id="evidence-' + slug(identifier) + '" data-finding-id="' + escape(str(identifier), quote=True) + '"><summary>'
-            + prose(_heading(row)) + '</summary><p>' + str(len(examples)) + ' named examples from '
+            + prose(_heading(row)) + '</summary><p>' + str(len(examples)) + (' named example from ' if len(examples) == 1 else ' named examples from ')
             + prose(population) + '. Examples are a sample, not the complete population.</p>'
             + qualification + table(examples, columns, mobile_labels=True) + link + '</details>')
     # Keep existing report/summary anchors valid without embedding the entire

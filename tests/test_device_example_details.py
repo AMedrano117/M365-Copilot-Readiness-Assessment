@@ -26,7 +26,7 @@ class DeviceExampleDetailTests(unittest.TestCase):
         self.assertIn('<th scope="col">Compliance policy</th>', html)
         self.assertIn('<th scope="col">Status</th>', html)
         self.assertIn('Windows baseline', html)
-        self.assertIn('BitLocker Enabled', html)
+        self.assertIn('BitLocker encryption requirement failed', html)
         self.assertIn('Not compliant', html)
         self.assertNotIn('Windows10CompliancePolicy', html)
         self.assertNotIn('Reason or status', html)
@@ -61,7 +61,7 @@ class DeviceExampleDetailTests(unittest.TestCase):
         self.assertIn('not an additional setting failure', row['DeviceSummary']['text'])
         fragment = html.split('Overall noncompliance is an inventory total')[1].split('</details>')[0]
         self.assertIn('Windows baseline', fragment)
-        self.assertIn('BitLocker Enabled', fragment)
+        self.assertIn('BitLocker encryption requirement failed', fragment)
         self.assertIn('do not add these counts', fragment)
 
     def test_missing_cause_is_explicit_and_names_do_not_establish_identity(self):

@@ -150,6 +150,48 @@ def _detail(fields, names):
                      if (value := _value(fields, *keys)) is not None)
 
 
+def _deduplicate_device_details(rows):
+    """One device/setting per finding in the review sheet, with all lineage.
+
+    The native selected tables and raw source sheets retain every occurrence.
+    Different result/policy variants are combined visibly, never discarded.
+    """
+    output, groups = [], {}
+    for row in rows:
+        device, setting = row.get('Managed device ID'), row.get('Setting key')
+        if row.get('Source dataset') != 'compliance_setting_states' or not device or not setting or setting == 'settingnamenotretained':
+            output.append(row)
+            continue
+        key = (row.get('ID'), str(device).casefold(), setting)
+        # Native IDs already have their own lineage columns. Do not repeat the
+        # same interpretation hundreds of times inside one Excel cell.
+        row = dict(row)
+        interpretations = row.get('Device interpretation') or []
+        row['Device interpretation'] = []
+        for interpretation in interpretations:
+            variant = {name: item for name, item in interpretation.items() if name != 'evidence_id'}
+            if variant not in row['Device interpretation']:
+                row['Device interpretation'].append(variant)
+        if key not in groups:
+            groups[key] = dict(row)
+            groups[key]['Source occurrences'] = 1
+            output.append(groups[key])
+            continue
+        grouped = groups[key]
+        grouped['Source occurrences'] += 1
+        for field, item in row.items():
+            previous = grouped.get(field)
+            if item in (None, '') or previous == item:
+                continue
+            if previous in (None, ''):
+                grouped[field] = item
+            elif isinstance(previous, list) and isinstance(item, list):
+                grouped[field] = previous + [entry for entry in item if entry not in previous]
+            else:
+                grouped[field] = '\n'.join(dict.fromkeys([*str(previous).split('\n'), str(item)]))
+    return output
+
+
 def _category(row, fields, dataset, kind):
     from .customer_report import SHARING_SETTING_LABELS
     from .finding_evidence import concern_for
@@ -213,6 +255,9 @@ def _projection(row, record, devices, compliance=None):
                               'Object name': _value(fields, 'Object name', 'Title', 'displayName'),
                               'Locator': _value(fields, 'Locator', 'siteUrl', 'Url')})
     if title == 'Devices':
+        from .device_compliance_text import requirement_result, setting_key
+        from .device_examples import status_name, error_detail
+        compliance_columns = {}
         parent = _value(fields, 'managedDeviceId', 'deviceId', 'ParentId', 'id')
         inventory = devices.get(_text(parent).casefold(), {})
         if dataset == 'compliance_setting_states':
@@ -226,6 +271,13 @@ def _projection(row, record, devices, compliance=None):
         os_name = _value(merged, 'operatingSystem', 'osPlatform', 'OS')
         version = _value(merged, 'osVersion', 'OS Version')
         device_issue = _value(fields, 'settingName', 'Setting Name')
+        if dataset == 'compliance_setting_states':
+            label = device_issue or _value(fields, 'setting') or 'Setting name not retained'
+            state = _value(fields, 'state')
+            device_issue = requirement_result(label, state)
+            compliance_columns = {'Compliance policy': _value(fields, 'policyName', 'compliancePolicyName') or 'Not retained',
+                'Setting key': setting_key(label), 'Setting status': status_name(state),
+                'Compliance diagnostics': error_detail(fields) or 'No diagnostic message retained'}
         if _value(fields, 'realTimeProtectionEnabled') is False:
             device_issue = 'Real-time protection off'
         details = _detail(fields, [('Tamper protection', ('isTamperProtected', 'tamperProtectionEnabled')),
@@ -247,8 +299,17 @@ def _projection(row, record, devices, compliance=None):
                 os_name = _value(inventory, 'operatingSystem')
                 version = _value(inventory, 'osVersion')
                 merged = {**inventory, **fields}
-                device_issue = 'Compliance policy assignment missing (reported)' if item.get('assignment_missing') else item['setting']
-                details = f"{item['reason']}; activity: {item['activity']}; {item['qualification']} Date basis: {item['date_basis']}."
+                device_issue = requirement_result(item['setting'], _value(fields, 'state'))
+                unresolved = item['classification'] in {'ReportingErrorOrConflict', 'UnconfirmedSettingState'}
+                if item['classification'] == 'UnconfirmedSettingState':
+                    device_issue = 'Reported: ' + device_issue + '; current result unconfirmed'
+                details = f"{item.get('reason') or item.get('diagnostic') or device_issue}; activity: {item['activity']}; {item['qualification']} Date basis: {item['date_basis']}."
+                compliance_columns.update({'Managed device ID': item['device_id'], 'Setting key': setting_key(item['setting']),
+                    'Compliance policy': item['policy'] if item['policy'] != 'not retained' else 'Not retained',
+                    'Result type': 'Unresolved diagnostic' if unresolved else 'Reported unmet requirement' if item['failed'] else 'Retained requirement result',
+                    'Compliance reason': '' if unresolved else item.get('reason', ''),
+                    'Compliance diagnostics': (item.get('diagnostic') or item['qualification']) if unresolved else '',
+                    'Diagnostic detail': error_detail(fields) or 'No error code or diagnostic message retained'})
                 if len(linked) == 1:
                     details += ' Compliance policy assignment: '+linked[0].get('policy_assignment', 'Unknown')+'.'
                 observed = item['last_reported'] or 'Not retained'
@@ -263,7 +324,7 @@ def _projection(row, record, devices, compliance=None):
         return title, dict(common, Device=device or 'Unknown', **{'Primary user': primary_user,
                            'OS': ' '.join(_text(item) for item in (os_name, version) if item is not None),
                            'Issue': device_issue or issue, 'Detail': details, 'Last reported': observed,
-                           'Intune compliance': _label(_value(merged, 'complianceState', 'Compliance State'))})
+                           'Intune compliance': _label(_value(merged, 'complianceState', 'Compliance State')), **compliance_columns})
     if title == 'Users & Identity':
         return title, dict(common, User=_value(fields, 'userDisplayName', 'displayName', 'User', 'Principal', 'Entity'),
                            UPN=_value(fields, 'userPrincipalName', 'upn', 'User Principal Name'),
@@ -828,6 +889,7 @@ def split_workbook_layout(source_workbook, result, bundle, assessment_path, tech
             _cell_link(sheet, number, 'Native Evidence ID', '#' + item['Source reference'])
     device_detail_targets = {}
     if device_details:
+        device_details = _deduplicate_device_details(device_details)
         sheet = _write(technical, 'Device Detail', device_details)
         for identifier in {detail['ID'] for detail in device_details}:
             matches = [index for index,detail in enumerate(device_details,2) if detail['ID']==identifier]

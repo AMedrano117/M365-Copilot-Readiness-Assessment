@@ -40,7 +40,7 @@ class ComplianceReasonTests(unittest.TestCase):
         self.assertEqual(bundle, before)
         device = model['devices'][0]
         self.assertEqual(device['activity'], 'stale')
-        self.assertEqual(device['reason'], 'Is active: noncompliant; policy: Default Device Compliance Policy')
+        self.assertEqual(device['reason'], 'Device may be inactive/not recently checked in: noncompliant; policy: Default Device Compliance Policy')
         self.assertEqual(sum(item['failed'] for item in model['settings']), 1)
         self.assertEqual(device['device']['complianceState'], 'noncompliant')
         rows = expanded_findings(bundle, evaluation_date=DAY)
@@ -48,7 +48,7 @@ class ComplianceReasonTests(unittest.TestCase):
         self.assertEqual(rows[0]['Priority'], 'Medium')
         self.assertEqual(rows[0]['Disposition'], 'Opportunity')
         self.assertNotIn('BitLocker', rows[0]['Observation'])
-        self.assertIn('Is active', rows[0]['Observation'])
+        self.assertIn('Device may be inactive/not recently checked in', rows[0]['Observation'])
 
     def test_recent_default_policy_failure_is_still_reporting_review(self):
         model = self.model(fixture())
@@ -61,7 +61,7 @@ class ComplianceReasonTests(unittest.TestCase):
         row = expanded_findings(bundle, evaluation_date=DAY)[0]
         self.assertEqual(row['Priority'], 'High')
         self.assertEqual(row['Disposition'], 'Action')
-        self.assertIn('Require BitLocker', row['Observation'])
+        self.assertIn('BitLocker encryption requirement failed', row['Observation'])
         self.assertIn('Windows encryption baseline', row['Observation'])
         self.assertEqual(row['ObservationDate'], DAY)
 
@@ -71,7 +71,7 @@ class ComplianceReasonTests(unittest.TestCase):
         self.assertEqual(row['ObservationDate'], '2026-07-01')
         self.assertEqual(row['Priority'], 'Medium')
         self.assertEqual(row['InvestigationEvidence']['records'][0]['state'], 'noncompliant')
-        self.assertIn('Require BitLocker', row['Observation'])
+        self.assertIn('BitLocker encryption requirement failed', row['Observation'])
         self.assertIn('current security risk is not established', row['Observation'])
 
     def test_fresh_defender_signal_does_not_make_old_intune_state_current(self):
@@ -193,7 +193,7 @@ class ComplianceOutputTests(unittest.TestCase):
             before = deepcopy(result)
             html = render_customer_report(result, bundle, 'Fictional', path, technical_workbook_path=technical_workbook_path(path))
             summary = render_pilot_summary(result, bundle, 'Fictional', workbook_path=path)
-            self.assertIn('Is active', html)
+            self.assertIn('may be inactive/not recently checked in', html)
             workbook = load_workbook(path)
             technical = load_workbook(technical_workbook_path(path))
             try:
@@ -202,7 +202,7 @@ class ComplianceOutputTests(unittest.TestCase):
                 values = list(technical['Device Detail'].values)
                 cells = '\n'.join(str(cell or '') for row in values for cell in row)
                 self.assertNotIn('Fictional laptop', '\n'.join(str(cell or '') for row in workbook['Devices'].values for cell in row))
-                self.assertIn('Is active', cells)
+                self.assertIn('may be inactive/not recently checked in', cells)
                 self.assertIn('Default Device Compliance Policy', cells)
                 self.assertIn('2026-07-01', cells)
                 self.assertIn('activity: stale', cells)

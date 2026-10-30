@@ -40,6 +40,20 @@ status. Policy names come from the selected native setting occurrence or its
 explicit policy ID; a setting name is not a policy name. Inventory examples use
 only settings linked to the resolved device ID. Missing causes and diagnostic
 messages are stated explicitly rather than inferred from overall noncompliance.
+Translations consider the returned result. Failed `RequireRemainContact` checks
+read "Device may be inactive/not recently checked in"; failed
+`RequireUserExistence` checks read "Enrolled user could not be confirmed."
+Positive portal check labels remain only in native source records. Error,
+unknown, conflict and not-evaluated checks are unresolved diagnostics, never
+confirmed noncompliance causes. Assignment Error does not establish a missing
+policy. Missing policy details and diagnostic messages remain unknown.
+
+Review summaries and the technical workbook's Device Detail group repeated
+records by stable device ID and setting within each finding. Different statuses
+and policy details remain visible; conflicting results do not establish a
+confirmed cause. Unknown identities/settings are not collapsed. Device Detail
+retains occurrence counts and all evidence IDs; native evidence tables and raw
+worksheets retain every original row and value for reconciliation.
 Reporting summaries distinguish Error, Conflict, Unknown and Not evaluated;
 technical examples show retained diagnostic codes/messages when present. Inventory and setting
 findings may describe the same devices and are not additive failure counts.

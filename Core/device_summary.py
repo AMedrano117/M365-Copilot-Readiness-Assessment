@@ -4,6 +4,7 @@ from collections import defaultdict
 
 from .device_evidence import timestamp, value
 from .evidence_contract import parse_date
+from .device_compliance_text import requirement_result, group_settings, group_state
 
 
 def _readable(lines):
@@ -15,20 +16,7 @@ def _readable(lines):
 
 
 def setting_reason(label):
-    key = re.sub('[^a-z0-9]', '', str(label).casefold())
-    for marker, text in (
-        ('bitlocker', 'BitLocker encryption requirement failed'),
-        ('secureboot', 'Secure Boot requirement failed'),
-        ('firewall', 'Firewall protection does not meet policy'),
-        ('antivirussignature', 'Antivirus signatures are out of date'),
-        ('antivirus', 'Antivirus protection does not meet policy'),
-        ('realtimeprotection', 'Real-time protection does not meet policy'),
-    ):
-        if marker in key:
-            return text
-    short = str(label).rsplit('.', 1)[-1]
-    short = re.sub(r'([a-z0-9])([A-Z])', r'\1 \2', short).replace('_', ' ')
-    return short + ' requirement failed'
+    return requirement_result(label, 'noncompliant')
 
 
 def compliance_activity(device, model):
@@ -38,6 +26,8 @@ def compliance_activity(device, model):
     if device.get('relevance') == 'RetiredOrDecommissioned':
         return 'retired'
     checks = [item for item in device.get('settings', []) if item['setting'] == 'Is active']
+    if any(group_state(group) == 'conflictingResults' for group in group_settings(checks)):
+        return 'unknown'
     if any(item['failed'] for item in checks):
         return 'inactive'
     day = parse_date(model.get('evaluation_date'))
@@ -100,7 +90,7 @@ def compliance_overview(model):
     elif not reported and not any(not device.get('device_id') for device in model['devices']):
         lines = [f'No retained managed devices are reported noncompliant ({len(devices)} distinct device IDs assessed).']
     if counts['inactive']:
-        lines.append(f"{counts['inactive']} noncompliant devices failed Intune's Is active check.")
+        lines.append(f"{counts['inactive']} noncompliant devices may be inactive/not recently checked in (failed contact requirement).")
     if counts['overdue']:
         lines.append(f"{counts['overdue']} other noncompliant devices last checked in more than {days} days ago; confirm their compliance-reporting status.")
     if counts['unknown']:
@@ -173,27 +163,29 @@ def finding_summary(row, model):
         lines = [f'{count} devices are reported without an applicable compliance policy. Confirm assignment and check-in.']
     elif kind == 'ActivityOrEnrollmentFailure':
         inactive = {item['device_id'] for item in settings if item['setting'] == 'Is active' and item['failed'] and item['device_id']}
-        lines = [f'{len(inactive)} devices failed the Is active compliance check.' if inactive else
+        lines = [f'{len(inactive)} devices may be inactive/not recently checked in (failed contact requirement).' if inactive else
                  f'{count} devices have activity or enrollment checks that need review.']
         days = (model.get('summary') or {}).get('validity_days')
         lines.append(f'Compliance status validity period: {days} days; this checks compliance reporting, not user sign-ins.'
                      if days is not None else 'The configured compliance validity period is unknown; confirm it in Intune.')
-        reasons = list(dict.fromkeys(item['setting'] for item in settings if item['setting'] != 'Is active'))
+        reasons = list(dict.fromkeys(requirement_result(item['setting'], item['record'].get('state')) for item in settings if item['setting'] != 'Is active'))
         if reasons:
             lines.append('Other checks: ' + '; '.join(reasons[:3]) + '.')
     elif kind == 'PolicyAssignmentNotEstablished':
         lines = [f'{count} devices are reported without an applicable compliance policy. Confirm assignment and check-in.']
     elif kind == 'ReportingErrorOrConflict':
         from collections import Counter
-        from .device_examples import status_name, setting_name, error_detail
-        states = Counter(status_name(value(item['record'], 'state')) for item in settings)
+        from .device_examples import status_name, error_detail
+        check_groups = group_settings(settings)
+        states = Counter(status_name(group_state(group)) for group in check_groups)
         lines = [f'{count} devices have unresolved compliance-setting results. These are reporting gaps, not confirmed security failures.']
         if states:
-            lines.append('Setting records: ' + '; '.join(f'{state}: {total}' for state, total in sorted(states.items())) + '.')
+            lines.append('Distinct device/setting checks: ' + '; '.join(f'{state}: {total}' for state, total in sorted(states.items())) + '.')
         examples = []
-        for item in settings:
+        for group in check_groups:
+            item = group[0]
             policy = item['policy'] if item['policy'] != 'not retained' else 'Policy name not retained'
-            description = f"{policy}: {setting_name(item['setting'])} — {status_name(value(item['record'], 'state'))}"
+            description = f"{policy}: {requirement_result(item['setting'], group_state(group))} — {status_name(group_state(group))}"
             if description not in examples:
                 examples.append(description)
             if len(examples) == 3:

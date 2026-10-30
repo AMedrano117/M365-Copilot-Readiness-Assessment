@@ -178,7 +178,7 @@ def expanded_findings(bundle, *, profile=None, evaluation_date=None, tenant_id=N
                         output[-1].update(Service='Entra', Status='Attention Required', Recommendation='Review the listed devices and confirm an applicable compliance policy is assigned to their users or devices. '
                             'Check targeting, exclusions and last check-in, document intended exceptions, and verify the assignment result after the device reports. '
                             'Older or conflicting results require confirmation; absence of returned checks does not establish that all devices have a policy.')
-                errors=[row for row in records if re.sub('[^a-z]','',str(row.get('state','')).lower()) in {'error','conflict','unknown','notevaluated'}]
+                errors=[item['record'] for item in compliance['settings'] if item['classification']=='ReportingErrorOrConflict']
                 if errors: finding(f'{name}.errors',errors,state,'Review unresolved device compliance results',
                     f'{len(errors)} setting record(s) report error, conflict or unknown. Effective compliance remains unresolved.',disposition='Coverage',
                     recommendation='Review the per-setting status in Intune for the listed records, resolve conflicting policy assignments '

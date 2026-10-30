@@ -3,18 +3,18 @@ import re
 
 from .device_evidence import value
 from .operational_evidence import reported_boolean
+from .device_compliance_text import requirement_name, requirement_result, group_settings, group_state
 
 
 def setting_name(label):
-    short = str(label or 'Setting name not retained').rsplit('.', 1)[-1]
-    return re.sub(r'([a-z0-9])([A-Z])', r'\1 \2', short).replace('_', ' ').replace('Bit Locker', 'BitLocker')
+    return requirement_name(label)
 
 
 def status_name(state):
     text = str(state or 'Not retained')
     return {'noncompliant': 'Not compliant', 'compliant': 'Compliant',
             'notevaluated': 'Not evaluated', 'error': 'Error', 'conflict': 'Conflict',
-            'unknown': 'Unknown', 'remediated': 'Remediated'}.get(
+            'unknown': 'Unknown', 'remediated': 'Remediated', 'conflictingresults': 'Conflicting results'}.get(
                 re.sub('[^a-z]', '', text.casefold()), text)
 
 
@@ -48,14 +48,18 @@ def device_example(record, device, selected_settings, kind):
 
     items = selected_settings
     if kind == 'InventoryComplianceState':
-        items = [item for item in device.get('settings', []) if item['failed'] or item['assignment_missing']]
+        items = [item for group in group_settings(device.get('settings', [])) if group_state(group) == 'noncompliant'
+                 for item in group]
     if items:
         # A device can have multiple settings. Keep the example bounded and make
         # any omitted details explicit; the complete rows stay in the workbook.
         policies = list(dict.fromkeys(item['policy'] if item['policy'] != 'not retained'
                                      else 'Not retained' for item in items))
-        labels = list(dict.fromkeys(setting_name(item['setting']) for item in items))
-        states = list(dict.fromkeys(status_name(value(item['record'], 'state')) for item in items))
+        groups = group_settings(items)
+        labels = list(dict.fromkeys(requirement_result(group[0]['setting'], group_state(group)) for group in groups))
+        if kind == 'UnconfirmedSettingState':
+            labels = ['Reported: ' + label + '; current result unconfirmed' for label in labels]
+        states = list(dict.fromkeys(status_name(group_state(group)) for group in groups))
         diagnostics = list(dict.fromkeys(error_detail(item['record']) for item in items if error_detail(item['record'])))
         detail = '; '.join(diagnostics[:2])
         if len(labels) > 2:
@@ -64,13 +68,16 @@ def device_example(record, device, selected_settings, kind):
             detail = ('No error code or diagnostic message retained' if kind == 'ReportingErrorOrConflict' else
                       'Overall inventory state; setting causes shown separately' if kind == 'InventoryComplianceState' else
                       'Retained setting result')
+        if any(group_state(group) == 'conflictingResults' for group in groups):
+            returned = list(dict.fromkeys(status_name(value(item['record'], 'state')) for item in items))
+            detail += '; returned statuses: ' + '; '.join(returned)
         if kind == 'InventoryComplianceState':
             overall = status_name(value(record, 'complianceState'))
             states = [overall] if states == [overall] else ['Overall: ' + overall + '; setting: ' + '; '.join(states)]
         return {'policy': '; '.join(policies[:2]), 'setting': '; '.join(labels[:2]),
                 'status': '; '.join(states), 'detail': detail}
     return {'policy': value(record, 'policyName', 'compliancePolicyName') or 'Not retained',
-            'setting': setting_name(value(record, 'settingName', 'setting')) if kind != 'InventoryComplianceState'
+            'setting': requirement_result(value(record, 'settingName', 'setting'), value(record, 'state')) if kind != 'InventoryComplianceState'
                        else 'Specific noncompliance reason not retained',
             'status': status_name(value(record, 'complianceState', 'state', 'status')),
             'detail': error_detail(record) or ('Overall inventory state; not an additional setting failure'
