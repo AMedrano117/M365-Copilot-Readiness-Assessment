@@ -138,8 +138,11 @@ class ObservationSubsetTests(unittest.TestCase):
         self.assertIn('Fictional-intune-3', fragment)
         self.assertIn('Stale observations', fragment)
         self.assertIn('Current observations', fragment)
-        self.assertIn('Report date / recency', fragment)
-        self.assertIn('current activity observed', fragment)
+        self.assertIn('Device activity', fragment)
+        self.assertIn('Evidence recency', fragment)
+        self.assertIn('Reported time', fragment)
+        self.assertIn('data-label="Device activity">Current', fragment)
+        self.assertIn('data-label="Evidence recency">Stale', fragment)
         self.assertEqual(fragment.count('data-label="Example"'), 3)
 
     def test_subsets_and_example_order_survive_sorted_snapshot_serialization(self):

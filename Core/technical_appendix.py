@@ -3,7 +3,7 @@ from html import escape
 from urllib.parse import quote
 
 from .device_summary import setting_reason
-from .device_examples import device_example, error_detail, status_name
+from .device_examples import device_example, error_detail, status_name, example_timing
 
 
 def _example_tables(finding, tables, subsets):
@@ -101,15 +101,12 @@ def render_technical_appendix(result, bundle, workbook_url, technical_url, model
                     'CompliantDeviceAccessEnforcementNotEstablished', 'UnverifiedLegacyDeviceObservation'} else
                     {'detail': note or 'No descriptive reason retained', 'status': status_name(status),
                      'diagnostic': error_detail(record) or 'Not retained'})
-                if subsets:
-                    ids = set(str(record.get('evidence_record_ids') or '').split('; '))
-                    labels = [subset['label'] for subset in subsets.values() if ids.intersection(subset['evidence_ids'])]
-                    reported = record.get('lastReportedDateTime') or record.get('dataRefreshTimestamp') or 'Date not retained'
-                    example['reporting'] = '; '.join(labels) + '; reported: ' + str(reported)
-                    activity = (interpreted[0].get('record_relevance') if interpreted else None) or 'ActivityUnknown'
-                    example['detail'] += '; device activity: ' + {'CurrentActiveDevice': 'current activity observed',
-                        'StaleDeviceRecord': 'stale activity record', 'RetiredOrDecommissioned': 'retired/decommissioned',
-                        'ActivityUnknown': 'unknown'}.get(activity, str(activity))
+                if kind and 'setting' in example:
+                    timing = example_timing(record, device_model, interpreted, settings,
+                        row.get('EndpointReportingDays') or (result.get('device_compliance') or {}).get('reporting_days', 7))
+                    example.update({key: timing[key] for key in ('activity', 'recency', 'reported')})
+                    if timing['date_basis']:
+                        example['detail'] += '; '+timing['date_basis']
                 examples.append({'name': name[:120], **{key: str(value)[:240] for key, value in example.items()}})
                 if len(examples) == 3:
                     break
@@ -126,10 +123,10 @@ def render_technical_appendix(result, bundle, workbook_url, technical_url, model
                       str(evidence['record_count']) + ' ' + str(evidence['record_unit']))
         population = row.get('DeviceSummary', {}).get('display_count', population)
         columns = ([('Example', 'name'), ('Observation', 'setting'), ('Status', 'status'),
-                    *([('Report date / recency', 'reporting')] if subsets else []), ('Context', 'detail')]
+                    ('Device activity', 'activity'), ('Evidence recency', 'recency'), ('Reported time', 'reported'), ('Context', 'detail')]
                    if kind in {'DefenderRealTimeProtectionObservation', 'DefenderSignatureObservation'} else
                    [('Example', 'name'), ('Compliance policy', 'policy'), ('Check / diagnostic' if kind == 'ReportingErrorOrConflict' else 'Requirement / result', 'setting'),
-                    ('Status', 'status'), ('Details', 'detail')] if examples and 'policy' in examples[0] else
+                    ('Status', 'status'), ('Device activity', 'activity'), ('Evidence recency', 'recency'), ('Reported time', 'reported'), ('Details', 'detail')] if examples and 'policy' in examples[0] else
                    [('Example', 'name'), ('Reason', 'detail'), ('Status', 'status'), ('Diagnostic details', 'diagnostic')])
         qualification = ('<p>Overall noncompliance is an inventory total, not an additional failure count. '
                          'Devices can also appear in the setting and reporting findings below; do not add these counts.</p>'

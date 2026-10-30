@@ -1,9 +1,51 @@
 """Presentation of selected device evidence; no inference of missing causes."""
 import re
+from datetime import datetime, timezone
 
 from .device_evidence import value
 from .operational_evidence import reported_boolean
 from .device_compliance_text import requirement_name, requirement_result, group_settings, group_state
+
+
+def reported_time(raw, observed):
+    if raw in (None, ''):
+        return 'Not returned'
+    if observed.get('state') != 'valid':
+        return 'Invalid date; see workbook'
+    try:
+        parsed = datetime.fromisoformat(str(raw).replace('Z', '+00:00'))
+        if len(str(raw).strip()) == 10:
+            return parsed.date().isoformat()+' (date only)'
+        if parsed.tzinfo is not None:
+            return parsed.astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
+        return parsed.strftime('%Y-%m-%d %H:%M:%S')+' (timezone not retained)'
+    except (TypeError, ValueError):
+        return 'Invalid date; see workbook'
+
+
+def example_timing(record, device, interpretations, settings, days):
+    """Keep device activity, observation age and source report time independent."""
+    from .endpoint_observations import reporting_subset
+    entries = [(item['record'], item['evidence']['timestamp'], item['evidence'].get('date_basis', '')) for item in settings]
+    if not entries:
+        entries = [(record, item.get('timestamp') or {}, item.get('date_basis', '')) for item in interpretations]
+    if not entries:
+        entries = [(record, {'state': 'missing'}, '')]
+    ages = list(dict.fromkeys({'current':'Current', 'stale':'Stale', 'undated':'Undated', 'invalid':'Invalid date'}[
+        reporting_subset(observed, days)] for _, observed, _ in entries))
+    times = list(dict.fromkeys(reported_time(value(raw, 'lastReportedDateTime', 'dataRefreshTimestamp'), observed)
+                               for raw, observed, _ in entries))
+    relevance = {item.get('record_relevance') for item in interpretations}
+    activity = {'CurrentActiveDevice':'Current', 'StaleDeviceRecord':'Stale', 'RetiredOrDecommissioned':'Retired',
+                'DuplicateOrSupersededRecord':'Duplicate/superseded'}.get(next(iter(relevance)), 'Unknown') if len(relevance) == 1 else 'Unknown'
+    if any(item.get('identity_unresolved') for item in interpretations):
+        activity = 'Unknown'
+    elif device.get('compliance_activity') in {'inactive', 'overdue', 'retired'}:
+        activity = {'inactive':'Inactive (Intune contact check)', 'overdue':'Stale (Intune check-in)', 'retired':'Retired'}[device['compliance_activity']]
+    return {'activity': activity, 'recency': ages[0] if len(ages) == 1 else 'Mixed: '+' / '.join(ages),
+            'reported': '\n'.join(times[:2])+ ('\nAdditional times in workbook' if len(times)>2 else ''),
+            'date_basis': 'Recency uses device check-in; setting report time was not returned.'
+                          if any('managed device' in basis for _, _, basis in entries) else ''}
 
 
 def setting_name(label):
