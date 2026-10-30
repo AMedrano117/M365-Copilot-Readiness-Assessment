@@ -33,6 +33,8 @@ def privilege_summary(model):
 
 
 def privileged_summary_html(result):
+    from .finding_presentation import render_details
+    from .customer_report import table
     model = result.get('privileged_assessment') or {}
     if not model or not model.get('assignments'):
         return ''
@@ -51,7 +53,7 @@ def privileged_summary_html(result):
               'Inactivity candidates require an explicit policy and qualified successful activity. Special-purpose candidates require validation.')
     metrics = '<ul>' + ''.join('<li>' + escape(f"{r['Metric']}: {r['Value']} {r['Unit']}. {r['Source']}.") + '</li>'
                               for r in model.get('metric_reconciliation', [])) + '</ul>'
-    return '<section id="privileged-identity-observations"><h2>Privileged identity review</h2><p>' + escape(text) + '</p><p>' + escape(detail) + '</p>' + metrics + '</section>'
+    return '<section id="privileged-identity-observations"><h2>Privileged identity review</h2>' + render_details(text, escape, table) + render_details(detail, escape, table) + metrics + '</section>'
 
 
 def assignment_sheet(model):

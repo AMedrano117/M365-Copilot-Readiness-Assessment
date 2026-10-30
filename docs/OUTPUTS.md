@@ -1,5 +1,13 @@
 # Supported outputs
 
+Detailed HTML findings use the same reading layout across assessment areas:
+"What we found" uses bullets and tables for distinct facts, "What to do" uses
+separate steps when needed, and completion evidence and qualifications remain
+explicit. Supporting observations follow the same pattern. Clear labeled facts
+and parallel counts are separated without splitting numbers, URLs, quoted values
+or ordinary prose commas. This is presentation only; stored findings, counts,
+priorities, decisions and complete workbook/source evidence are unchanged.
+
 New assessments use [tenant readiness scope](TENANT_READINESS_SCOPE.md). Pilot
 groups, business use cases and rollout approvals are outside the assessment;
 the reports, workbooks and shared result record technical readiness only.

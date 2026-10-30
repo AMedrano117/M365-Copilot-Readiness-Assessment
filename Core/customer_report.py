@@ -916,7 +916,7 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None, summ
         line = (f'<p class="evidence-link"><a href="{escape(quote(evidence_folder + "/" + page_name(item["finding_id"]), safe="/"))}">'
                 f'{prose(summary)}</a></p>' if evidence_folder else f'<p class="evidence-link">{prose(summary)}</p>')
         if item['evidence']['count_relation']:
-            line += f'<p class="qualification">{prose(item["evidence"]["count_relation"])}</p>'
+            line += '<div class="qualification">' + render_details(item['evidence']['count_relation'], prose, table) + '</div>'
         detail = item.get('recommendation_detail') or {}
         if detail.get('guidance_status') != 'verified':
             return line
@@ -926,26 +926,28 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None, summ
         links = ' · '.join(f'<a href="{escape(link["url"], quote=True)}">{prose(link.get("title"))}</a>'
                            for link in detail.get('links') or [] if link.get('url'))
         return (line + '<details class="technical-steps"><summary>Technical steps</summary>' +
-                ''.join(f'<p><strong>{escape(label)}.</strong> {prose(value)}</p>' for label, value in facts if value) +
+                ''.join('<strong>' + escape(label) + '.</strong>' + render_details(value, prose, table,
+                        steps=label == 'How to verify') for label, value in facts if value) +
                 (f'<p class="qualification">Microsoft documentation (verified {prose(detail.get("verified_on"))}): {links}</p>' if links else '') +
                 '</details>')
     def record(row, with_action=False):
         description = _observation(row, bundle)
         support = row.get('Evidence') if not row.get('DeviceSummary') and row.get('Evidence') != description else ''
-        description_html = ('<ul class="device-summary">' + ''.join('<li>' + prose(line) + '</li>' for line in row['DeviceSummary']['lines'][:-1]) + '</ul>'
-                            if row.get('DeviceSummary') else '<p>' + prose(description) + '</p>')
+        description_html = '<div class="callout callout-found" data-priority="' + slug(row.get('Priority')) + '">' + finding_found(row) + '</div>'
         qualification = row.get('Qualification') or row.get('qualification') or ''
         status = row.get('ActionType') or row.get('EvidenceStatus') or row.get('Disposition')
         status = {'supported': 'Observed', 'limited': 'Limited coverage', 'gap': 'Evidence needed', 'stale': 'Older evidence'}.get(status, status)
         return f'''<article class="finding"><div class="eyebrow">{prose(status)} · {prose(_date_text(row))}</div>
-          <h4>{prose(_heading(row))}</h4>{description_html}{('<p>' + prose(support) + '</p>') if support else ''}
+          <h4>{prose(_heading(row))}</h4>{description_html}{('<strong>Supporting evidence.</strong>' + render_details(support, prose, table)) if support else ''}
           {('<p class="qualification">' + prose(licensing_context(row)) + '</p>') if row.get('FindingTaxonomyVersion') else ''}
-          {('<p><strong>What to do.</strong> ' + prose(_action_text(row)) + '</p>') if with_action else ''}
+          {('<div class="callout callout-fix"><strong>What to do.</strong>' + render_details(_action_text(row), prose, table, steps=True) + '</div>') if with_action else ''}
           {investigation_link(row) if row.get('Recommendation') else ''}{technical_evidence(row)}
-          {('<p class="qualification">' + prose(qualification) + '</p>') if qualification else ''}
+          {('<div class="qualification"><strong>Evidence qualifications.</strong>' + render_details(qualification, prose, table) + '</div>') if qualification else ''}
           <p class="evidence-link">{evidence_link(row)}</p>{finding_html(result,row)}{governance_finding(result,row)}</article>'''
 
-    def device_found(row):
+    from .finding_presentation import render_details
+
+    def finding_found(row):
         summary = row.get('DeviceSummary')
         if summary:
             groups = summary.get('policy_groups') or []
@@ -954,7 +956,7 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None, summ
                          'reasons': '\n'.join('• ' + item['reason'] for item in group['reasons'][:3])} for group in groups[:3]]
             return ('<strong>What we found.</strong><ul class="device-summary">' + ''.join('<li>' + prose(line) + '</li>' for line in lines) + '</ul>'
                     + (table(policies, [('Compliance policy', 'policy'), ('Devices', 'count'), ('Failed requirements', 'reasons')], mobile_labels=True) if policies else ''))
-        return '<p><strong>What we found.</strong> ' + prose(_observation(row, bundle)) + '</p>'
+        return '<strong>What we found.</strong>' + render_details(_observation(row, bundle), prose, table)
 
     action_html = []
     sharing_changes = _sharing_changes(bundle)
@@ -967,13 +969,13 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None, summ
           <div class="action-tags"><span class="priority-badge" data-priority="{slug(row.get('Priority'))}">{prose(row.get('Priority') or 'Review')} priority</span>{('<span class="action-kind">' + prose(row.get('PilotImpact')) + '</span>') if row.get('PilotImpact') else ''}<span class="action-kind">{prose(row.get('ActionType'))}</span><span class="action-domain">{prose(row.get('Domain'))}</span></div>
           <h3>{prose(_heading(row))}</h3><p class="action-preview"><span class="preview-label" data-kind="issue">Issue</span>{prose(short_text(_observation(row,bundle)))}</p>
           <p class="action-preview"><span class="preview-label" data-kind="fix">{step_label}</span>{prose(short_text(_action_text(row)))}</p><span class="detail-prompt">Details, next step and supporting logs</span></summary><div class="action-body">
-          <div class="callout callout-found" data-priority="{slug(row.get('Priority'))}">{device_found(row)}{settings_html}</div>
-          <div class="callout callout-fix"><p><strong>What to do.</strong> {prose(_action_text(row))}</p></div>{investigation_link(row)}{technical_evidence(row)}
+          <div class="callout callout-found" data-priority="{slug(row.get('Priority'))}">{finding_found(row)}{settings_html}</div>
+          <div class="callout callout-fix"><strong>What to do.</strong>{render_details(_action_text(row), prose, table, steps=True)}</div>{investigation_link(row)}{technical_evidence(row)}
           {('<p class="qualification">' + prose(licensing_context(row)) + '</p>') if row.get('FindingTaxonomyVersion') else ''}
           <div class="action-meta"><p><strong>Responsible role</strong><br>{prose(row.get('OwnerRole'))}</p>
           <p><strong>Rollout stage</strong><br>{prose(row.get('ReadinessStage'))}</p></div>
-          <p><strong>Evidence of completion.</strong> {prose(_completion(row))}</p>{guidance_link}
-          <p class="qualification">{prose(_date_text(row))}{(' · ' + prose(row.get('Qualification'))) if row.get('Qualification') else ''}</p>
+          <strong>Evidence of completion.</strong>{render_details(_completion(row), prose, table)}{guidance_link}
+          <div class="qualification"><p>{prose(_date_text(row))}</p>{('<strong>Evidence qualifications.</strong>' + render_details(row.get('Qualification'), prose, table)) if row.get('Qualification') else ''}</div>
           {evidence_link(row)}{finding_html(result,row)}{governance_finding(result,row)}</div></details></article>''')
 
     domain_html = []
