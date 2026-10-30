@@ -275,23 +275,8 @@ async def _fetch_graph_detail_via_http(path):
             from .intune_compliance_settings import missing_settings
             missing = missing_settings(obj) if isinstance(obj, dict) else ['secureByDefault', 'deviceComplianceCheckinThresholdDays']
             if missing:
-                # Retry the same v1.0 singleton without projection. This is bounded
-                # and adds no permissions; keep both responses for provenance.
-                attempts = [{'source_api': result.get('source_api') or 'https://graph.microsoft.com'+path,
-                             'response': obj, 'missing_fields': missing}]
-                retry = await _fetch_graph_object_via_http('/v1.0/deviceManagement')
-                fallback = retry.pop('object', None)
-                fallback_missing = missing_settings(fallback) if isinstance(fallback, dict) else missing
-                attempts.append({'source_api': retry.get('source_api') or 'https://graph.microsoft.com/v1.0/deviceManagement',
-                                 'response': fallback, 'missing_fields': fallback_missing,
-                                 'available': retry.get('available'), 'error': retry.get('error')})
-                if retry.get('available') is True and len(fallback_missing) < len(missing):
-                    result, obj, missing = retry, fallback, fallback_missing
-                    result.setdefault('source_api', 'https://graph.microsoft.com/v1.0/deviceManagement')
-                result['request_attempts'] = attempts
-            if missing:
                 result.update(availability_status='partial', complete=False,
-                    reason='The tenant compliance settings response omitted usable values for: '+', '.join(missing)+'. No defaults are assumed.')
+                    reason='The tenant compliance settings response did not establish usable values for: '+', '.join(missing)+'. Raw values are retained; no defaults are assumed.')
         result['value'] = [obj.get('value', obj)] if isinstance(obj, dict) else []
         result.setdefault('reason', result.get('error', ''))
         return result

@@ -45,8 +45,8 @@ function Get-ProbeFailure($Record) {
     [pscustomobject]@{ Status='Request failed'; HttpStatus=$status; ErrorType=$Record.Exception.GetType().Name }
 }
 
-function New-SettingsProbeRow([string]$Label, $Object) {
-    $settings = Get-ProbeValue $Object 'settings'
+function New-SettingsProbeRow([string]$Label, $Object, [switch]$Direct) {
+    $settings = if ($Direct) { $Object } else { Get-ProbeValue $Object 'settings' }
     [pscustomobject]@{
         Request=$Label; Status='Returned'; SettingsObjectReturned=($null -ne $settings)
         SecureByDefault=(Get-ProbeValue $settings 'secureByDefault')
@@ -70,15 +70,17 @@ function Invoke-IntuneEvidenceProbe([guid]$ExpectedTenantId, [guid]$DeviceId = [
     }
     $settingsResults = @()
     $requests = @(
+        @{Label='REST v1.0 direct settings'; Path='/v1.0/deviceManagement/settings'; Direct=$true},
         @{Label='REST v1.0 selected'; Path='/v1.0/deviceManagement?$select=settings'},
         @{Label='REST v1.0 full'; Path='/v1.0/deviceManagement'}
     )
     if ($Beta) {
+        $requests += @{Label='REST beta direct settings (diagnostic)'; Path='/beta/deviceManagement/settings'; Direct=$true}
         $requests += @{Label='REST beta selected (diagnostic)'; Path='/beta/deviceManagement?$select=settings'}
         $requests += @{Label='REST beta full (diagnostic)'; Path='/beta/deviceManagement'}
     }
     foreach ($request in $requests) {
-        try { $settingsResults += New-SettingsProbeRow $request.Label (Invoke-ProbeGet $request.Path) }
+        try { $settingsResults += New-SettingsProbeRow $request.Label (Invoke-ProbeGet $request.Path) -Direct:([bool]$request.Direct) }
         catch { $settingsResults += [pscustomobject]@{Request=$request.Label; Failure=(Get-ProbeFailure $_)} }
     }
     if (Get-Command Get-MgDeviceManagement -ErrorAction SilentlyContinue) {

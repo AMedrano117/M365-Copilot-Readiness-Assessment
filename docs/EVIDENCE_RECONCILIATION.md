@@ -162,7 +162,7 @@ Stale and conflicting assignment checks require current targeting confirmation.
 This is a bounded retained-evidence worklist, not a replacement for Intune's
 [Devices without compliance policy report](https://learn.microsoft.com/en-us/mem/intune/fundamentals/reports#devices-without-compliance-policy-organizational).
 
-Future live Entra collection also reads `GET /v1.0/deviceManagement?$select=settings`
+Future live Entra collection also reads `GET /v1.0/deviceManagement/settings`
 as a singleton using the existing `DeviceManagementConfiguration.Read.All` setup
 permission. The Configuration sheet reports **Mark devices with no compliance
 policy assigned as** (`secureByDefault`: true means Noncompliant, false means
@@ -172,6 +172,10 @@ reporting date survive saved collection, technical evidence and snapshot replay.
 Omitted, denied, invalid and conflicting values remain qualified; older collections
 cannot supply settings they did not retain. These configuration rows neither prove
 effective enforcement nor change the separate assessment activity/reporting windows.
+An API validity value of 0 is retained and displayed as **API returned 0; effective
+period unverified**, never used as a zero-day threshold or silently changed to 30.
+The independent no-policy Boolean remains usable. Verify the effective period in
+Intune; see the [read-only diagnostic guide](INTUNE_EVIDENCE_VERIFICATION.md).
 See [Graph settings](https://learn.microsoft.com/graph/api/resources/intune-deviceconfig-devicemanagementsettings?view=graph-rest-1.0)
 and [supported read permissions](https://learn.microsoft.com/powershell/module/microsoft.graph.devicemanagement/get-mgdevicemanagement?view=graph-powershell-1.0).
 

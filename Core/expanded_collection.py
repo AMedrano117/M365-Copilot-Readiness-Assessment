@@ -7,7 +7,7 @@ from .collector_registry import source_allowed, supplemental_enabled
 
 
 USER_SIGNIN_ACTIVITY_PATH = '/v1.0/users?$select=id,displayName,userPrincipalName,signInActivity&$top=500'
-DEVICE_COMPLIANCE_SETTINGS_PATH = '/v1.0/deviceManagement?$select=settings'
+DEVICE_COMPLIANCE_SETTINGS_PATH = '/v1.0/deviceManagement/settings'
 
 
 def plain(value):

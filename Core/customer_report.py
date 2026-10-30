@@ -970,7 +970,7 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None, summ
                     + (table(summary['diagnostic_groups'], [('Check requiring confirmation', 'requirement'), ('Device/setting checks', 'checks'), ('Identified devices', 'devices')], mobile_labels=True) if summary.get('diagnostic_groups') else ''))
         if row.get('ConfigurationSettings') and row.get('Disposition') == 'Coverage':
             return ('<strong>What we found.</strong>' + render_details(_observation(row, bundle), prose, table)
-                    + table([dict(field, display='Not returned' if field['state'] == 'unknown' else field['display']) for field in row['ConfigurationSettings']],
+                    + table([dict(field, display='Not returned' if field['display'] == 'Unknown' else field['display']) for field in row['ConfigurationSettings']],
                             [('Tenant setting', 'label'), ('Saved value', 'display'), ('Why confirmation is needed', 'reason')], mobile_labels=True))
         return '<strong>What we found.</strong>' + render_details(_observation(row, bundle), prose, table)
 

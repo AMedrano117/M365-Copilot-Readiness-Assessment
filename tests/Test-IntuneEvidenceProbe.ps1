@@ -18,6 +18,7 @@ function Invoke-MgGraphRequest { param($Method,$Uri,$OutputType,$ErrorAction)
     Assert ($Method -eq 'GET') 'Probe attempted a mutation.'
     $script:requests += $Uri
     if ($script:loopPages) { return @{value=@(@{state='error'});'@odata.nextLink'='https://graph.microsoft.com/v1.0/deviceManagement'} }
+    if ($Uri -match '/deviceManagement/settings$') { return @{secureByDefault=$false;deviceComplianceCheckinThresholdDays=0} }
     if ($Uri -match '/settingStates$') {
         return @{value=@(@{settingName='RequireRemainContact';state='error';errorCode=42;
             errorDescription='PRIVATE diagnostic';sources=@(@{displayName='PRIVATE policy'})})}
@@ -33,9 +34,10 @@ function Invoke-MgGraphRequest { param($Method,$Uri,$OutputType,$ErrorAction)
 }
 $result = Invoke-IntuneEvidenceProbe -ExpectedTenantId $fakeTenant -DeviceId $fakeDevice
 Assert (-not ($script:requests -match '/beta/')) 'Default probe requested beta.'
-Assert ($result.TenantSettings[0].SettingsObjectReturned -eq $false) 'Null settings were not preserved.'
-Assert ($result.TenantSettings[1].SecureByDefault -ceq $false) 'False tenant setting was lost.'
-Assert ($result.TenantSettings[1].ComplianceValidityDays -eq 45) 'Validity days were lost.'
+Assert ($result.TenantSettings[1].SettingsObjectReturned -eq $false) 'Null parent projection was not preserved.'
+Assert ($result.TenantSettings[0].SecureByDefault -ceq $false) 'False direct tenant setting was lost.'
+Assert ($result.TenantSettings[0].ComplianceValidityDays -ceq 0) 'Raw zero validity value was lost.'
+Assert ($result.TenantSettings[2].ComplianceValidityDays -eq 45) 'Parent comparison validity days were lost.'
 Assert ($result.Device.OverallCompliance -eq 'noncompliant') 'Overall state was changed.'
 Assert ($result.SettingStates[0].State -eq 'error') 'Error was converted to noncompliant.'
 Assert ($result.SettingStates[0].DiagnosticCode -eq 42) 'Diagnostic code was lost.'
@@ -44,7 +46,7 @@ $json = $result | ConvertTo-Json -Depth 8
 Assert (-not ($json -match 'PRIVATE|private-policy-id|22222222')) 'Private names/IDs or diagnostic text leaked.'
 $script:requests = @()
 $betaResult = Invoke-IntuneEvidenceProbe -ExpectedTenantId $fakeTenant -Beta
-Assert (@($script:requests -match '/beta/').Count -eq 2) ('Explicit beta comparison mismatch: '+($script:requests -join ', '))
+Assert (@($script:requests -match '/beta/').Count -eq 3) ('Explicit beta comparison mismatch: '+($script:requests -join ', '))
 Assert ($null -eq $betaResult.Device) 'Device query ran without a selected device.'
 $script:wrongTenant = $true; $script:requests = @(); $rejected = $false
 try { Invoke-IntuneEvidenceProbe -ExpectedTenantId $fakeTenant | Out-Null } catch { $rejected = $true }

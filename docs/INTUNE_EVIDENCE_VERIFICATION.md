@@ -32,18 +32,29 @@ settings** (portal navigation may vary):
 | `SecureByDefault = true` | Mark devices with no compliance policy assigned as **Not compliant** |
 | `ComplianceValidityDays` | Compliance status validity period (days) |
 
-Null is not false or a default validity period. Compare the selected and full
-v1.0 responses and the SDK response. `-IncludeBeta` adds explicitly labeled beta
+The direct `/v1.0/deviceManagement/settings` response is the production source.
+Parent selected/full and SDK responses are diagnostic comparisons; they can be
+empty even when the direct endpoint returns values. Null is not false or a default
+validity period. `-IncludeBeta` adds explicitly labeled beta
 requests for troubleshooting; it does not enable beta in production collection.
 If only beta returns the values, retain that distinction when reporting the result.
 Testing another tenant checks API behavior; it does not establish the original
 customer's configuration. Do not copy its values into the customer's assessment.
 
-The production collector validates each required value, retries an incomplete
-selected response using the full v1.0 singleton and retains both attempts. A
-successful HTTP request with missing values remains partial evidence. An offline
+The production collector reads the direct settings singleton and validates each
+required value. A successful HTTP request with missing or unusable values remains
+partial evidence; the original response is retained. An offline
 rebuild cannot recover values that were never saved; future collection must use
 the updated collector.
+
+If the API returns `deviceComplianceCheckinThresholdDays: 0`, preserve that raw
+value and confirm the effective period in the portal. The assessment displays
+**API returned 0; effective period unverified**, and uses neither zero nor an
+assumed default for device inactivity calculations. Microsoft documents a default
+of 30 days and a configurable range of 1-120 days; a zero API response has also
+been reported on previously unchanged tenants. That does not independently verify
+the effective value in the tenant being assessed. Do not change the tenant setting
+just to make the diagnostic return a different value.
 
 ## Compare an incomplete check on one device
 
@@ -84,3 +95,5 @@ share the environment file or raw collection.
 - [Device-management settings](https://learn.microsoft.com/en-us/graph/api/resources/intune-deviceconfig-devicemanagementsettings?view=graph-rest-1.0)
 - [Detailed compliance setting states and diagnostics](https://learn.microsoft.com/en-us/graph/api/resources/intune-deviceconfig-devicecompliancepolicysettingstate?view=graph-rest-1.0)
 - [Get-MgDeviceManagement](https://learn.microsoft.com/en-us/powershell/module/microsoft.graph.devicemanagement/get-mgdevicemanagement?view=graph-powershell-1.0)
+- [Compliance policy settings and documented validity range](https://learn.microsoft.com/en-us/intune/device-security/compliance/overview)
+- [Microsoft365DSC report of a zero API value](https://github.com/Microsoft365DSC/Microsoft365DSC/issues/6450)
