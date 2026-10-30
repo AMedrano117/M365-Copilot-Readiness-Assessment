@@ -66,6 +66,26 @@ unverified. Confirm current provider health and intended operating mode before
 changing protection. This does not suppress explicit Intune security-policy
 failures or antivirus signature findings. See [Microsoft's compatibility guidance](https://learn.microsoft.com/en-us/defender-endpoint/microsoft-defender-antivirus-compatibility).
 
+Endpoint health conditions produce one finding per condition, regardless of
+reporting age. Real-time protection Off, overdue security intelligence and
+outdated antivirus signatures remain distinct conditions. Each finding labels
+current, stale, undated and invalid-dated observations with source-record and
+identified-device counts, report periods and evidence IDs. Subset device counts
+can overlap and are not added; the overall count uses distinct resolved IDs.
+Reporting recency does not establish device activity or inactivity.
+
+When current observations exist, the support date is the oldest report in that
+current subset only. It does not refresh other rows or claim their condition is
+still current. Stale, undated and invalid-dated observations require confirmation;
+an entirely stale/unknown finding retains normal stale/unknown qualification.
+HTML examples represent reporting subsets within the existing three-name limit,
+and include report date/recency separately from activity context. Shared technical
+evidence pages and workbook detail retain per-record subset membership; Device
+Finding Counts records the subset counts. Rebuilding saved native evidence
+consolidates earlier current/older findings and recalculates subsets for the
+evaluation date and configured reporting window. Frozen report rendering keeps
+its saved interpretation.
+
 ## Findings and counts
 
 Current, named security-setting failures remain separate from default-policy

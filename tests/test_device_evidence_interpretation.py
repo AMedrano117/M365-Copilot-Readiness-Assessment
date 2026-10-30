@@ -194,7 +194,9 @@ class DeviceEvidenceInterpretationTests(unittest.TestCase):
              'lastReportedDateTime':DAY if index<186 else '2026-01-01',
              'antiMalwareVersion':'0.0.0.0','lastQuickScanDateTime':'0001-01-01'} for index in range(252)])]
         findings=[row for row in expanded_findings(bundle,evaluation_date=DAY) if row.get('DeviceFindingType')=='DefenderRealTimeProtectionObservation']
-        self.assertEqual([row['DeviceEvidenceCounts']['source_record_count'] for row in findings],[186,66])
+        self.assertEqual([row['DeviceEvidenceCounts']['source_record_count'] for row in findings],[252])
+        self.assertEqual(findings[0]['EndpointObservationSubsets']['current']['counts']['source_record_count'],186)
+        self.assertEqual(findings[0]['EndpointObservationSubsets']['stale']['counts']['source_record_count'],66)
         self.assertTrue(all(row['DeviceEvidenceCounts']['distinct_intune_devices']==1 for row in findings))
         self.assertTrue(all(row['Priority']=='Low' and row['Disposition']=='Opportunity' for row in findings))
         self.assertTrue(all(not row['DevicePilotBlockerEligible'] for row in findings))
@@ -248,7 +250,7 @@ class DeviceEvidenceInterpretationTests(unittest.TestCase):
         self.assertCountEqual([raw for row in findings if row.get('DeviceFindingType')!='DefenderRealTimeProtectionObservation'
             for raw in row['InvestigationEvidence']['records']],settings)
         rtp=[row['DeviceEvidenceCounts']['source_record_count'] for row in findings if row.get('DeviceFindingType')=='DefenderRealTimeProtectionObservation']
-        self.assertEqual(rtp,[186,66])
+        self.assertEqual(rtp,[252])
         self.assertEqual(len(protection),266)
         self.assertEqual(len(bundle['assessment_sources']['machines'][0]['records']),5)
 

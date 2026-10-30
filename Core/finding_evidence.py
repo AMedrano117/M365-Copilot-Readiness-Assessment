@@ -393,6 +393,12 @@ def build_finding_evidence(payload):
                     'collected_at': (summary or {}).get('collected_at'), 'window_start': (summary or {}).get('window_start'),
                     'window_end': (summary or {}).get('window_end'), 'source_state': _state(summary),
                     'qualification': '; '.join(record.get('qualifications') or [])}
+            subsets = row.get('EndpointObservationSubsets') or {}
+            if subsets:
+                selected_subsets = [subset for subset in subsets.values()
+                                    if set(record.get('evidence_record_ids') or []).intersection(subset['evidence_ids'])]
+                base['reporting_subset'] = '; '.join(subset['label'] for subset in selected_subsets)
+                base['confirmation_required'] = any(subset['requires_confirmation'] for subset in selected_subsets)
             fields = OrderedDict()
             for name, value in (record.get('fields') or {}).items():
                 # A source attribute named like a common column is kept under a distinct name.

@@ -224,6 +224,13 @@ def _projection(row, record, devices, compliance=None):
     title = _category(row, fields, dataset, kind)
     observed = _value(fields, 'lastReportedDateTime', 'lastSeen', 'createdDateTime', 'Created UTC', 'Observed At', 'Report Date', 'lastUpdatedDateTime') or row.get('ObservationDate')
     common = {'ID': row['RecommendationId'], 'Evidence ID': record['evidence_id']}
+    subsets = row.get('EndpointObservationSubsets') or {}
+    if subsets:
+        selected = [(key, subset) for key, subset in subsets.items()
+                    if set(record.get('evidence_ids') or []).intersection(subset['evidence_ids'])]
+        common.update({'Reporting subset': '; '.join(subset['label'] for _, subset in selected),
+                       'Source report date': _value(fields, 'lastReportedDateTime', 'dataRefreshTimestamp') or 'Not retained',
+                       'Confirmation required': 'Yes' if any(subset['requires_confirmation'] for _, subset in selected) else 'No'})
     issue = _heading(row)
     if dataset in {'risky_users','risk_detections'}:
         return 'Users & Identity', dict(common, User='Restricted identity-risk record', UPN=None,
@@ -807,10 +814,18 @@ def split_workbook_layout(source_workbook, result, bundle, assessment_path, tech
                                   'Pilot impact':row.get('PilotImpact') or row.get('DevicePilotImpact'),
                                   'Native evidence IDs':row.get('DeviceEvidenceIds'),
                                   'Qualification':row.get('DeviceEvidenceQualification')})
+            if row.get('EndpointObservationSubsets'):
+                device_counts[-1]['Reporting window days'] = row['EndpointReportingDays']
+                from .endpoint_observations import LABELS
+                for key in LABELS:
+                    subset = row['EndpointObservationSubsets'][key]
+                    device_counts[-1][key.title()+' source records'] = subset['counts']['source_record_count']
+                    device_counts[-1][key.title()+' identified devices'] = subset['counts']['resolved_device_count']
+                device_counts[-1]['Subset qualification'] = 'Devices can appear in multiple subsets; device counts are not additive. Stale, undated and invalid-dated observations require confirmation.'
             assessment_rows['Devices'].append({'ID':identifier,
                 'Device':(row.get('DeviceSummary') or {}).get('display_count') or str(counts['resolved_device_count'])+' distinct device(s)',
                 'Issue':row.get('Feature'), 'Detail':(row.get('DeviceSummary') or {}).get('text') or count_text(counts)+' '+str(row.get('DeviceEvidenceQualification') or ''),
-                'Last reported':row.get('ObservationDate') or 'Not established',
+                'Last reported':'See reporting subsets' if row.get('EndpointObservationSubsets') else row.get('ObservationDate') or 'Not established',
                 'Intune compliance':'Per-record state retained in Technical Evidence',
                 'Evidence ID':identifier})
         for group in ([] if device_summary else groups_by_finding[identifier]):

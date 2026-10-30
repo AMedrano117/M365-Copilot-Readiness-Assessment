@@ -34,20 +34,28 @@ def qualify_device_findings(recommendations, bundle, compliance):
     inventory = compliance['inventory']
     day = parse_date(compliance['evaluation_date'])
     device_sources = {'compliance_setting_states','windows_protection','antivirus_health'}
+    rebuilt_health_sources = {str(row.get('FindingKey') or '').split('.')[1] for row in recommendations
+        if str(row.get('FindingKey') or '').startswith(('expanded.windows_protection.', 'expanded.antivirus_health.'))
+        and (str(row.get('FindingKey')).endswith(('.current', '.older'))
+             or not row.get('EndpointObservationVersion')
+             or row.get('EndpointEvaluationDate') != compliance['evaluation_date']
+             or row.get('EndpointReportingDays') != compliance['reporting_days'])}
     legacy_sources = {str(row.get('FindingKey') or '').split('.')[1] for row in recommendations
         if not row.get('DeviceEvidenceVersion') and str(row.get('FindingKey') or '').startswith('expanded.')
         and len(str(row.get('FindingKey')).split('.')) > 1
-        and str(row.get('FindingKey')).split('.')[1] in device_sources}
+        and str(row.get('FindingKey')).split('.')[1] in device_sources} | rebuilt_health_sources
     if legacy_sources:
         from .expanded_findings import expanded_findings
         fresh = [row for row in expanded_findings(bundle, profile=bundle.get('assessment_profile'),
             evaluation_date=day, tenant_id=bundle.get('expected_tenant_id'))
             if str(row.get('FindingKey') or '').split('.')[1] in legacy_sources]
-        present = {row.get('FindingKey') for row in recommendations if row.get('DeviceEvidenceVersion')}
+        def rebuilt_health_source(row):
+            return any(str(row.get('FindingKey') or '').startswith('expanded.'+source+'.') for source in rebuilt_health_sources)
+        present = {row.get('FindingKey') for row in recommendations if row.get('DeviceEvidenceVersion') and not rebuilt_health_source(row)}
         # Re-evaluation is explicit at build time. Frozen snapshot rendering never
         # enters this path. Rebuild only these endpoint families from native rows.
         recommendations = [row for row in recommendations if not (
-            not row.get('DeviceEvidenceVersion') and str(row.get('FindingKey') or '').startswith('expanded.') and
+            (not row.get('DeviceEvidenceVersion') or rebuilt_health_source(row)) and str(row.get('FindingKey') or '').startswith('expanded.') and
             str(row.get('FindingKey')).split('.')[1] in legacy_sources and
             (bundle.get('assessment_sources') or {}).get(str(row.get('FindingKey')).split('.')[1]))]
         recommendations += [row for row in fresh if row.get('FindingKey') not in present]

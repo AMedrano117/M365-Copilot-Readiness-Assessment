@@ -43,47 +43,42 @@ def expanded_findings(bundle, *, profile=None, evaluation_date=None, tenant_id=N
         output.append(row)
 
     def health_finding(name,selected,state,feature,explanation,recommendation,priority='Medium'):
-        # One finding per condition and freshness: devices that reported within the
-        # endpoint window, then older or undated reports that need confirmation.
-        # Grouping per report date repeated the same action for nearly every device.
+        # Recency qualifies observations within one condition, not finding identity.
+        import json
+        from collections import Counter
+        from .endpoint_observations import observation_subsets, subset_lines
         date_field='lastReportedDateTime' if name.startswith('windows_protection') else 'dataRefreshTimestamp'
-        groups={'current':[],'older':[]}
-        for record in selected:
-            observed=parse_date(timestamp(record.get(date_field), day)['date'])
-            groups['current' if observed and 0<=(day-observed).days<=reporting_days else 'older'].append((observed,record))
-        for group,entries in groups.items():
-            if not entries: continue
-            dates=sorted(observed for observed,_ in entries if observed)
-            # The oldest current report keeps the whole finding inside the window;
-            # older reports are dated by the newest one and still need confirmation.
-            date=(dates[0] if group=='current' else dates[-1]).isoformat() if dates else ''
-            span=('' if not dates else f' Last reported {dates[0].isoformat()}.' if dates[0]==dates[-1]
-                  else f' Last reported between {dates[0].isoformat()} and {dates[-1].isoformat()}.')
-            undated=len(entries)-len(dates)
-            span+=f' {undated} record(s) have no report date.' if undated else ''
-            finding(f'{name}.{group}',[record for _,record in entries],state,feature,
-                explanation.format(count=len(entries))+span,priority=priority,recommendation=recommendation)
-            output[-1].update(ObservationDate=date,EvidenceMaxAgeDays=reporting_days,
-                EvidenceComplete=bool(date) and not undated,ObservationDateBasis=date_field,
-                Qualification='State is dated by the endpoint report; recollection does not refresh stale or undated endpoint observations.')
-            import json
-            from collections import Counter
-            selected_keys = Counter(json.dumps(record,sort_keys=True,default=str) for _, record in entries)
-            selected_items = []
-            for item in health_items[name.split('.')[0]]:
-                key = json.dumps(item['record'],sort_keys=True,default=str)
-                if selected_keys[key]:
-                    selected_items.append(item)
-                    selected_keys[key] -= 1
-            kind = 'DefenderRealTimeProtectionObservation' if '.disabled' in name else 'DefenderSignatureObservation'
-            output[-1]['Observation'] = count_text(population(selected_items))+' '+output[-1]['Observation']
-            if kind == 'DefenderRealTimeProtectionObservation':
-                output[-1].update(Disposition='Opportunity', Status='Attention Required', Priority='Low', Confidence='Low')
-                output[-1]['Observation'] += (' Real-time protection off is an observation, not proof of an active unprotected device. '
-                    'Current protection effectiveness is not established without current AV mode, onboarding, approved third-party AV, platform and complete source correlation. '
-                    'Returned Defender machine records do not establish fleet coverage.')
-                output[-1]['CompletionEvidence'] = 'Dated protection-provider and AV-mode validation, onboarding status, approved antivirus exceptions and current device health.'
-            annotate_finding(output[-1], selected_items, kind)
+        selected_keys = Counter(json.dumps(record,sort_keys=True,default=str) for record in selected)
+        selected_items = []
+        for item in health_items[name.split('.')[0]]:
+            key = json.dumps(item['record'],sort_keys=True,default=str)
+            if selected_keys[key]:
+                selected_items.append(item)
+                selected_keys[key] -= 1
+        subsets = observation_subsets(selected_items, reporting_days)
+        current = subsets['current']['counts']
+        stale = subsets['stale']['counts']
+        # This is the date supporting the CURRENT subset only, never a refresh
+        # of older/undated rows. If none is current, normal stale/unknown evidence
+        # qualification still applies to the entire condition.
+        date = current['evidence_period']['start'] or stale['evidence_period']['end']
+        finding(name,selected,state,feature,explanation.format(count=len(selected))+' '+
+                ' '.join(subset_lines(subsets, reporting_days)), priority=priority,recommendation=recommendation)
+        row = output[-1]
+        row.update(ObservationDate=date,EvidenceMaxAgeDays=reporting_days,
+            EvidenceComplete=bool(date),ObservationDateBasis=date_field+'; current subset support only when present',
+            EndpointObservationVersion='1.0.0', EndpointObservationSubsets=subsets,
+            EndpointReportingDays=reporting_days, EndpointEvaluationDate=day.isoformat(),
+            Qualification='The support date applies only to the current subset when present. Every source report date is retained; stale, undated and invalid-dated observations require confirmation. Recollection does not refresh them.')
+        kind = 'DefenderRealTimeProtectionObservation' if '.disabled' in name else 'DefenderSignatureObservation'
+        row['Observation'] = count_text(population(selected_items))+' '+row['Observation']
+        if kind == 'DefenderRealTimeProtectionObservation':
+            row.update(Disposition='Opportunity', Status='Attention Required', Priority='Low', Confidence='Low')
+            row['Observation'] += (' Real-time protection off is an observation, not proof of an active unprotected device. '
+                'Current protection effectiveness is not established without current AV mode, onboarding, approved third-party AV, platform and complete source correlation. '
+                'Returned Defender machine records do not establish fleet coverage.')
+            row['CompletionEvidence'] = 'Dated protection-provider and AV-mode validation, onboarding status, approved antivirus exceptions and current device health.'
+        annotate_finding(row, selected_items, kind)
 
     def merged_state(states):
         # Per-object reads (one per device or setting summary) describe one source.

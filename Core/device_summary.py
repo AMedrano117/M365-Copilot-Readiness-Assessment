@@ -218,6 +218,9 @@ def finding_summary(row, model):
         lines = ['Earlier device findings could not be verified from native endpoint records.']
     else:
         return None
+    if row.get('EndpointObservationSubsets'):
+        from .endpoint_observations import subset_lines
+        lines.extend(subset_lines(row['EndpointObservationSubsets'], row['EndpointReportingDays']))
     if counts.get('unresolved_identity_count'):
         if not count and kind != 'CompliantDeviceAccessEnforcementNotEstablished':
             lines[0] = 'The affected device count could not be verified from the retained records.'

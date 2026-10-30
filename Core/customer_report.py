@@ -91,6 +91,8 @@ def table(rows, columns, caption='', *, mobile_labels=False):
 
 
 def _date_text(row):
+    if row.get('EndpointObservationSubsets'):
+        return 'Report dates and recency shown by subset'
     return row.get('ObservationDate') or row.get('observed_at') or 'Date not established'
 
 

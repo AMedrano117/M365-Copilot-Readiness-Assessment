@@ -6,6 +6,31 @@ from .device_summary import setting_reason
 from .device_examples import device_example, error_detail, status_name
 
 
+def _example_tables(finding, tables, subsets):
+    selected = [tables.get(key, {}) for key in finding['evidence'].get('tables', [])]
+    if not subsets:
+        return selected
+    # Offer a representative from each reporting-age subset before filling the
+    # three-example limit. The complete populations remain in linked evidence.
+    rows = [record for table in selected for record in table.get('rows', []) if record.get('finding_id') == finding['finding_id']]
+    preferred = []
+    seen_devices = set()
+    from .endpoint_observations import LABELS
+    for key in LABELS:
+        subset = subsets[key]
+        ids = set(subset['evidence_ids'])
+        for record in rows:
+            device = record.get('managedDeviceId') or record.get('ParentId') or record.get('machineId') or record.get('deviceId')
+            if device and str(device).casefold() in seen_devices:
+                continue
+            if ids.intersection(str(record.get('evidence_record_ids') or '').split('; ')):
+                preferred.append(record)
+                if device:
+                    seen_devices.add(str(device).casefold())
+                break
+    return [{'rows': preferred + [record for record in rows if record not in preferred]}]
+
+
 def render_technical_appendix(result, bundle, workbook_url, technical_url, model_findings, collection_rows):
     from .customer_report import _heading, prose, slug, table
     model = bundle.get('finding_evidence') or {}
@@ -25,6 +50,7 @@ def render_technical_appendix(result, bundle, workbook_url, technical_url, model
         used.add(identifier)
         row = rows_by_id.get(identifier, action)
         kind = row.get('DeviceFindingType')
+        subsets = row.get('EndpointObservationSubsets') or {}
         interpretations = {item['evidence_id']: item for item in row.get('DeviceEvidenceInterpretations', [])}
         selected_settings_by_device = {}
         for key in row.get('DeviceEvidenceIds', []):
@@ -32,8 +58,8 @@ def render_technical_appendix(result, bundle, workbook_url, technical_url, model
             if item and item.get('device_id'):
                 selected_settings_by_device.setdefault(str(item['device_id']).casefold(), []).append(item)
         examples, seen = [], set()
-        for table_id in finding['evidence'].get('tables', []):
-            for record in tables.get(table_id, {}).get('rows', []):
+        for evidence_table in _example_tables(finding, tables, subsets):
+            for record in evidence_table.get('rows', []):
                 if record.get('finding_id') != identifier:
                     continue
                 settings = [settings_by_id[key] for key in str(record.get('evidence_record_ids') or '').split('; ')
@@ -73,6 +99,15 @@ def render_technical_appendix(result, bundle, workbook_url, technical_url, model
                     'CompliantDeviceAccessEnforcementNotEstablished', 'UnverifiedLegacyDeviceObservation'} else
                     {'detail': note or 'No descriptive reason retained', 'status': status_name(status),
                      'diagnostic': error_detail(record) or 'Not retained'})
+                if subsets:
+                    ids = set(str(record.get('evidence_record_ids') or '').split('; '))
+                    labels = [subset['label'] for subset in subsets.values() if ids.intersection(subset['evidence_ids'])]
+                    reported = record.get('lastReportedDateTime') or record.get('dataRefreshTimestamp') or 'Date not retained'
+                    example['reporting'] = '; '.join(labels) + '; reported: ' + str(reported)
+                    activity = (interpreted[0].get('record_relevance') if interpreted else None) or 'ActivityUnknown'
+                    example['detail'] += '; device activity: ' + {'CurrentActiveDevice': 'current activity observed',
+                        'StaleDeviceRecord': 'stale activity record', 'RetiredOrDecommissioned': 'retired/decommissioned',
+                        'ActivityUnknown': 'unknown'}.get(activity, str(activity))
                 examples.append({'name': name[:120], **{key: str(value)[:240] for key, value in example.items()}})
                 if len(examples) == 3:
                     break
@@ -88,7 +123,8 @@ def render_technical_appendix(result, bundle, workbook_url, technical_url, model
         population = (str(count) + (' device' if count == 1 else ' devices') if count is not None else
                       str(evidence['record_count']) + ' ' + str(evidence['record_unit']))
         population = row.get('DeviceSummary', {}).get('display_count', population)
-        columns = ([('Example', 'name'), ('Observation', 'setting'), ('Status', 'status'), ('Context', 'detail')]
+        columns = ([('Example', 'name'), ('Observation', 'setting'), ('Status', 'status'),
+                    *([('Report date / recency', 'reporting')] if subsets else []), ('Context', 'detail')]
                    if kind in {'DefenderRealTimeProtectionObservation', 'DefenderSignatureObservation'} else
                    [('Example', 'name'), ('Compliance policy', 'policy'), ('Check / diagnostic' if kind == 'ReportingErrorOrConflict' else 'Requirement / result', 'setting'),
                     ('Status', 'status'), ('Details', 'detail')] if examples and 'policy' in examples[0] else
@@ -101,6 +137,9 @@ def render_technical_appendix(result, bundle, workbook_url, technical_url, model
                          '<p>Defender may be inactive when another antivirus is the primary provider. '
                          'An Off result alone does not establish missing protection; verify the provider and operating mode.</p>'
                          if kind == 'DefenderRealTimeProtectionObservation' else '')
+        if subsets:
+            from .endpoint_observations import subset_lines
+            qualification += '<ul>' + ''.join('<li>' + prose(line) + '</li>' for line in subset_lines(subsets, row['EndpointReportingDays'])) + '</ul>'
         rendered.append('<details class="technical-example" id="evidence-' + slug(identifier) + '" data-finding-id="' + escape(str(identifier), quote=True) + '"><summary>'
             + prose(_heading(row)) + '</summary><p>' + str(len(examples)) + (' named example from ' if len(examples) == 1 else ' named examples from ')
             + prose(population) + '. Examples are a sample, not the complete population.</p>'
