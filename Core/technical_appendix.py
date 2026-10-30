@@ -3,6 +3,32 @@ from html import escape
 from urllib.parse import quote
 
 from .device_summary import setting_reason
+from .device_examples import device_example, error_detail, status_name, example_timing
+
+
+def _example_tables(finding, tables, subsets):
+    selected = [tables.get(key, {}) for key in finding['evidence'].get('tables', [])]
+    if not subsets:
+        return selected
+    # Offer a representative from each reporting-age subset before filling the
+    # three-example limit. The complete populations remain in linked evidence.
+    rows = [record for table in selected for record in table.get('rows', []) if record.get('finding_id') == finding['finding_id']]
+    preferred = []
+    seen_devices = set()
+    from .endpoint_observations import LABELS
+    for key in LABELS:
+        subset = subsets[key]
+        ids = set(subset['evidence_ids'])
+        for record in rows:
+            device = record.get('managedDeviceId') or record.get('ParentId') or record.get('machineId') or record.get('deviceId')
+            if device and str(device).casefold() in seen_devices:
+                continue
+            if ids.intersection(str(record.get('evidence_record_ids') or '').split('; ')):
+                preferred.append(record)
+                if device:
+                    seen_devices.add(str(device).casefold())
+                break
+    return [{'rows': preferred + [record for record in rows if record not in preferred]}]
 
 
 def render_technical_appendix(result, bundle, workbook_url, technical_url, model_findings, collection_rows):
@@ -13,6 +39,8 @@ def render_technical_appendix(result, bundle, workbook_url, technical_url, model
                if item.get('device_id') and not item.get('conflict')}
     target_file = technical_url or workbook_url
     rows_by_id = {row.get('RecommendationId'): row for row in result.get('recommendations', [])}
+    settings_by_id = {item['evidence']['evidence_id']: item
+                      for item in (result.get('device_compliance') or {}).get('settings', [])}
     rendered, used = [], set()
     for action in [*result.get('actions', []), *result.get('opportunities', [])]:
         identifier = action.get('RecommendationId')
@@ -20,15 +48,38 @@ def render_technical_appendix(result, bundle, workbook_url, technical_url, model
         if not finding or identifier in used:
             continue
         used.add(identifier)
+        row = rows_by_id.get(identifier, action)
+        kind = row.get('DeviceFindingType')
+        if kind == 'InventoryComplianceState' and (result.get('device_compliance') or {}).get('summary'):
+            continue  # Aggregate context already appears once in the device overview.
+        subsets = row.get('EndpointObservationSubsets') or {}
+        interpretations = {item['evidence_id']: item for item in row.get('DeviceEvidenceInterpretations', [])}
+        selected_settings_by_device = {}
+        for key in row.get('DeviceEvidenceIds', []):
+            item = settings_by_id.get(key)
+            if item and item.get('device_id'):
+                selected_settings_by_device.setdefault(str(item['device_id']).casefold(), []).append(item)
         examples, seen = [], set()
-        for table_id in finding['evidence'].get('tables', []):
-            for record in tables.get(table_id, {}).get('rows', []):
+        for evidence_table in _example_tables(finding, tables, subsets):
+            for record in evidence_table.get('rows', []):
                 if record.get('finding_id') != identifier:
                     continue
-                device_id = record.get('managedDeviceId') or record.get('deviceId')
+                settings = [settings_by_id[key] for key in str(record.get('evidence_record_ids') or '').split('; ')
+                            if key in settings_by_id]
+                interpreted = [interpretations[key] for key in str(record.get('evidence_record_ids') or '').split('; ')
+                               if key in interpretations]
+                device_id = (settings[0].get('device_id') if settings else None) or record.get('managedDeviceId') or record.get('deviceId')
+                if not device_id and record.get('dataset') == 'managed_devices':
+                    device_id = record.get('id')
                 if not device_id and record.get('dataset') == 'windows_protection':
                     device_id = record.get('ParentId')
-                device = devices.get(str(device_id or '').casefold(), {}).get('device') or {}
+                if interpreted and not any(item.get('identity_unresolved') for item in interpreted):
+                    device_id = interpreted[0].get('intune_id') or device_id
+                unresolved = any(item.get('identity_unresolved') for item in interpreted) or (settings and not settings[0].get('device_id'))
+                device_model = {} if unresolved else devices.get(str(device_id or '').casefold(), {})
+                if settings and not unresolved:
+                    settings = selected_settings_by_device.get(str(device_id or '').casefold(), settings)
+                device = device_model.get('device') or {}
                 name = next((record.get(key) for key in ('deviceName', 'upn', 'userPrincipalName', 'userDisplayName',
                     'displayName', 'policyName', 'compliancePolicyName', 'name', 'title') if record.get(key)), None)
                 name = name or device.get('deviceName')
@@ -46,14 +97,23 @@ def render_technical_appendix(result, bundle, workbook_url, technical_url, model
                 policy = record.get('policyName') or record.get('compliancePolicyName')
                 if policy and policy != name:
                     note += '; policy: ' + str(policy)
-                examples.append({'name': name[:120], 'detail': (note or 'Review the linked evidence and finding.')[:240]})
+                example = (device_example(record, device_model, settings, kind) if kind and kind not in {
+                    'CompliantDeviceAccessEnforcementNotEstablished', 'UnverifiedLegacyDeviceObservation'} else
+                    {'detail': note or 'No descriptive reason retained', 'status': status_name(status),
+                     'diagnostic': error_detail(record) or 'Not retained'})
+                if kind and 'setting' in example:
+                    timing = example_timing(record, device_model, interpreted, settings,
+                        row.get('EndpointReportingDays') or (result.get('device_compliance') or {}).get('reporting_days', 7))
+                    example.update({key: timing[key] for key in ('activity', 'recency', 'reported')})
+                    if timing['date_basis']:
+                        example['detail'] += '; '+timing['date_basis']
+                examples.append({'name': name[:120], **{key: str(value)[:240] for key, value in example.items()}})
                 if len(examples) == 3:
                     break
             if len(examples) == 3:
                 break
         if not examples:
             continue
-        row = rows_by_id.get(identifier, action)
         location = next(iter(row.get('TechnicalEvidenceRanges') or []), '')
         target = target_file + ('#' + quote(location, safe='!:$') if location else '')
         link = '<p><a href="' + escape(target, quote=True) + '">Review the complete finding evidence in the workbook</a></p>' if target_file else ''
@@ -62,10 +122,27 @@ def render_technical_appendix(result, bundle, workbook_url, technical_url, model
         population = (str(count) + (' device' if count == 1 else ' devices') if count is not None else
                       str(evidence['record_count']) + ' ' + str(evidence['record_unit']))
         population = row.get('DeviceSummary', {}).get('display_count', population)
+        columns = ([('Example', 'name'), ('Observation', 'setting'), ('Status', 'status'),
+                    ('Device activity', 'activity'), ('Evidence recency', 'recency'), ('Reported time', 'reported'), ('Context', 'detail')]
+                   if kind in {'DefenderRealTimeProtectionObservation', 'DefenderSignatureObservation'} else
+                   [('Example', 'name'), ('Compliance policy', 'policy'), ('Check / diagnostic' if kind == 'ReportingErrorOrConflict' else 'Requirement / result', 'setting'),
+                    ('Status', 'status'), ('Device activity', 'activity'), ('Evidence recency', 'recency'), ('Reported time', 'reported'), ('Details', 'detail')] if examples and 'policy' in examples[0] else
+                   [('Example', 'name'), ('Reason', 'detail'), ('Status', 'status'), ('Diagnostic details', 'diagnostic')])
+        qualification = ('<p>Overall noncompliance is an inventory total, not an additional failure count. '
+                         'Devices can also appear in the setting and reporting findings below; do not add these counts.</p>'
+                         if kind == 'InventoryComplianceState' else
+                         '<p>Intune did not establish results for these checks. These are incomplete observations, separate from confirmed noncompliance; devices may appear in both populations.</p>'
+                         if kind == 'ReportingErrorOrConflict' else
+                         '<p>Defender may be inactive when another antivirus is the primary provider. '
+                         'An Off result alone does not establish missing protection; verify the provider and operating mode.</p>'
+                         if kind == 'DefenderRealTimeProtectionObservation' else '')
+        if subsets:
+            from .endpoint_observations import subset_lines
+            qualification += '<ul>' + ''.join('<li>' + prose(line) + '</li>' for line in subset_lines(subsets, row['EndpointReportingDays'])) + '</ul>'
         rendered.append('<details class="technical-example" id="evidence-' + slug(identifier) + '" data-finding-id="' + escape(str(identifier), quote=True) + '"><summary>'
-            + prose(_heading(row)) + '</summary><p>' + str(len(examples)) + ' named examples from '
+            + prose(_heading(row)) + '</summary><p>' + str(len(examples)) + (' named example from ' if len(examples) == 1 else ' named examples from ')
             + prose(population) + '. Examples are a sample, not the complete population.</p>'
-            + table(examples, [('Example', 'name'), ('Reason or status', 'detail')], mobile_labels=True) + link + '</details>')
+            + qualification + table(examples, columns, mobile_labels=True) + link + '</details>')
     # Keep existing report/summary anchors valid without embedding the entire
     # reference register. Those entries lead to the complete workbook links.
     for domain in result.get('domains', []):

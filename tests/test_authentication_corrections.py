@@ -493,10 +493,11 @@ class AuthenticationDeliverableTests(unittest.TestCase):
         from Core.pilot_summary import render_pilot_summary
         result, bundle, _ = self.fixture()
         before = copy.deepcopy(result)
-        for html in (render_customer_report(result, bundle, 'Fictional organization'),
-                     render_pilot_summary(result, bundle, 'Fictional organization')):
-            for text in ('MFA registration', 'MFA enforcement', 'Observed authentication', 'BlockedByConditionalAccess', 'InterruptedOrChallenged'):
-                self.assertIn(text, html)
+        main = render_customer_report(result, bundle, 'Fictional organization')
+        for text in ('MFA registration', 'MFA enforcement', 'Observed authentication', 'BlockedByConditionalAccess', 'InterruptedOrChallenged'):
+            self.assertIn(text, main)
+        for html in (main, render_pilot_summary(result, bundle, 'Fictional organization')):
+            self.assertNotIn('id="authentication-observations"', html)
             self.assertNotIn('fiction-private@example.invalid', html)
             self.assertNotIn('leaving Copilot access unprotected', html)
             self.assertNotIn('authenticationStepResultDetail', html)

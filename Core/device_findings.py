@@ -34,20 +34,28 @@ def qualify_device_findings(recommendations, bundle, compliance):
     inventory = compliance['inventory']
     day = parse_date(compliance['evaluation_date'])
     device_sources = {'compliance_setting_states','windows_protection','antivirus_health'}
+    rebuilt_health_sources = {str(row.get('FindingKey') or '').split('.')[1] for row in recommendations
+        if str(row.get('FindingKey') or '').startswith(('expanded.windows_protection.', 'expanded.antivirus_health.'))
+        and (str(row.get('FindingKey')).endswith(('.current', '.older'))
+             or not row.get('EndpointObservationVersion')
+             or row.get('EndpointEvaluationDate') != compliance['evaluation_date']
+             or row.get('EndpointReportingDays') != compliance['reporting_days'])}
     legacy_sources = {str(row.get('FindingKey') or '').split('.')[1] for row in recommendations
         if not row.get('DeviceEvidenceVersion') and str(row.get('FindingKey') or '').startswith('expanded.')
         and len(str(row.get('FindingKey')).split('.')) > 1
-        and str(row.get('FindingKey')).split('.')[1] in device_sources}
+        and str(row.get('FindingKey')).split('.')[1] in device_sources} | rebuilt_health_sources
     if legacy_sources:
         from .expanded_findings import expanded_findings
         fresh = [row for row in expanded_findings(bundle, profile=bundle.get('assessment_profile'),
             evaluation_date=day, tenant_id=bundle.get('expected_tenant_id'))
             if str(row.get('FindingKey') or '').split('.')[1] in legacy_sources]
-        present = {row.get('FindingKey') for row in recommendations if row.get('DeviceEvidenceVersion')}
+        def rebuilt_health_source(row):
+            return any(str(row.get('FindingKey') or '').startswith('expanded.'+source+'.') for source in rebuilt_health_sources)
+        present = {row.get('FindingKey') for row in recommendations if row.get('DeviceEvidenceVersion') and not rebuilt_health_source(row)}
         # Re-evaluation is explicit at build time. Frozen snapshot rendering never
         # enters this path. Rebuild only these endpoint families from native rows.
         recommendations = [row for row in recommendations if not (
-            not row.get('DeviceEvidenceVersion') and str(row.get('FindingKey') or '').startswith('expanded.') and
+            (not row.get('DeviceEvidenceVersion') or rebuilt_health_source(row)) and str(row.get('FindingKey') or '').startswith('expanded.') and
             str(row.get('FindingKey')).split('.')[1] in legacy_sources and
             (bundle.get('assessment_sources') or {}).get(str(row.get('FindingKey')).split('.')[1]))]
         recommendations += [row for row in fresh if row.get('FindingKey') not in present]
@@ -104,7 +112,7 @@ def qualify_device_findings(recommendations, bundle, compliance):
         elif is_noncompliant_device_finding(row):
             has_inventory = True
             selected = [item for item in inventory if str(value(item['record'], 'complianceState') or '').casefold() == 'noncompliant']
-            row.update(Feature='Review Intune device noncompliance reasons', Disposition='Opportunity', Priority='Medium',
+            row.update(Feature='Intune device inventory context', ActionTitle='Intune device inventory context', Disposition='Opportunity', Priority='Medium',
                 Observation=count_text(population(selected))+' Overall Intune noncompliance requires reconciliation with setting, activity and enrollment evidence. It does not establish a security-setting cause, Copilot use or successful access.',
                 InvestigationEvidence={'kind':'records','records':[item['record'] for item in selected],
                     'reason':'Retained overall noncompliant Intune inventory',
@@ -125,7 +133,7 @@ def qualify_device_findings(recommendations, bundle, compliance):
         for item in inventory:
             state = str(value(item['record'], 'complianceState') or 'unknown').casefold()
             states[state] = states.get(state, 0)+1
-        output.append(_finding('device.inventory.reconciliation', 'Reconcile device compliance inventory',
+        output.append(_finding('device.inventory.reconciliation', 'Intune device inventory context',
             count_text(counts)+f" Overall states: {states.get('noncompliant',0)} noncompliant; {states.get('compliant',0)} compliant; "
             f"{len(inventory)-states.get('noncompliant',0)-states.get('compliant',0)} other or unknown. "
             'Overall compliance is independent of each retained setting result and does not prove access or Copilot use.',

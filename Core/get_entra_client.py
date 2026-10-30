@@ -271,6 +271,12 @@ async def _fetch_graph_detail_via_http(path):
     if path.endswith('/windowsProtectionState') or path == DEVICE_COMPLIANCE_SETTINGS_PATH:
         result = await _fetch_graph_object_via_http(path)
         obj = result.pop('object', None)
+        if path == DEVICE_COMPLIANCE_SETTINGS_PATH and result.get('available') is True:
+            from .intune_compliance_settings import missing_settings
+            missing = missing_settings(obj) if isinstance(obj, dict) else ['secureByDefault', 'deviceComplianceCheckinThresholdDays']
+            if missing:
+                result.update(availability_status='partial', complete=False,
+                    reason='The tenant compliance settings response did not establish usable values for: '+', '.join(missing)+'. Raw values are retained; no defaults are assumed.')
         result['value'] = [obj.get('value', obj)] if isinstance(obj, dict) else []
         result.setdefault('reason', result.get('error', ''))
         return result

@@ -3,11 +3,14 @@
 from html import escape
 
 
-def authentication_summary_html(result):
+def authentication_summary_html(result, *, sections=None, embedded=False):
+    from .finding_presentation import render_details
+    from .customer_report import table
     comparison = (((result.get('authentication_assessment') or {}).get('registration') or {}).get('metric_reconciliation') or {}).get('comparison_explanation','')
     data = result.get('authentication_assessment') or {}
     if not data:
         return ''
+    selected = set(sections) if sections is not None else {'registration', 'enforcement', 'observed'}
     registration = data.get('registration') or {}
     counts = registration.get('counts') or {}
     registered = counts.get('ExplicitlyRegistered')
@@ -21,12 +24,19 @@ def authentication_summary_html(result):
     observed = data.get('observed_authentication') or {}
     legacy = observed.get('legacy') or {}
     outcomes = legacy.get('counts') or {}
-    observed_text = ', '.join(f'{name}: {count}' for name, count in outcomes.items())
-    observed_text += '. MFA satisfaction: ' + (', '.join(f'{name}: {count}' for name, count in (observed.get('mfa_satisfaction') or {}).items()) or 'unknown')
-    observed_text += '. Complete known source period: ' + ('yes' if legacy.get('complete') and legacy.get('known_population_and_period') else 'not established')
+    outcome_rows = [{'outcome': name, 'count': count} for name, count in outcomes.items()]
+    mfa_rows = [{'outcome': name, 'count': count} for name, count in (observed.get('mfa_satisfaction') or {}).items()]
+    observed_text = 'Complete known source period: ' + ('yes' if legacy.get('complete') and legacy.get('known_population_and_period') else 'not established')
     observed_text += '. ' + str(observed.get('qualification') or '')
     facts = [('MFA registration', registration_text),
-             ('MFA enforcement', str(enforcement.get('operational_result') or 'unknown') + '. ' + str(enforcement.get('qualification') or '')),
-             ('Observed authentication', observed_text)]
-    return ('<section id="authentication-observations"><h2>Authentication evidence</h2>'
-            + ''.join(f'<p><strong>{escape(label)}.</strong> {escape(text)}</p>' for label, text in facts) + '</section>')
+             ('MFA enforcement', str(enforcement.get('operational_result') or 'unknown') + '. ' + str(enforcement.get('qualification') or ''))]
+    observed_html = ('<h4>Observed authentication</h4>'
+            + (table(outcome_rows, [('Legacy authentication outcome', 'outcome'), ('Recorded count', 'count')], mobile_labels=True)
+               if outcome_rows else '<p>Legacy authentication outcomes not established.</p>')
+            + (table(mfa_rows, [('MFA satisfaction outcome', 'outcome'), ('Recorded count', 'count')], mobile_labels=True)
+               if mfa_rows else '<p>MFA satisfaction: unknown.</p>')
+            + render_details(observed_text, escape, table)) if 'observed' in selected else ''
+    content = ''.join('<h4>' + escape(label) + '</h4>' + render_details(text, escape, table)
+                      for key, (label, text) in zip(('registration', 'enforcement'), facts) if key in selected) + observed_html
+    return ('<div class="authentication-context">'+content+'</div>' if embedded else
+            '<section id="authentication-observations"><h2>Authentication evidence</h2>'+content+'</section>')

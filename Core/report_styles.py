@@ -468,10 +468,29 @@ REPORT_CSS += r'''
 .callout strong { color:var(--navy); }
 .device-summary { margin:10px 0; padding-left:22px; }
 .device-summary li { margin:8px 0; line-height:1.55; }
+.finding-facts, .finding-steps { margin:10px 0; padding-left:22px; }
+.finding-facts li, .finding-steps li { margin:7px 0; line-height:1.55; }
+.supporting-detail { margin:14px 0; padding:12px 16px; border:1px solid var(--line); border-radius:8px; }
+.supporting-detail > summary { color:var(--navy); font-weight:650; cursor:pointer; }
+.callout > .finding-facts, .callout > .finding-steps { font-size:14px; }
 .callout-found td:last-child { white-space:pre-line; }
 .technical-example { margin:14px 0; padding:14px 18px; border:1px solid var(--line); border-radius:8px; background:#fff; }
 .technical-example > summary { color:var(--navy); font-weight:650; cursor:pointer; }
 .technical-example table { margin-top:12px; }
+@media screen and (max-width:640px) {
+  .callout-found .table-scroll { overflow:visible; }
+  .callout-found table, .callout-found tbody, .callout-found tr { display:block; width:100%; }
+  .callout-found thead { display:none; }
+  .callout-found tr { margin:12px 0; padding:10px; border:1px solid var(--line); border-radius:6px; }
+  .callout-found td { display:block; width:auto; padding:6px 0; border:0; }
+  .callout-found td::before { content:attr(data-label); display:block; font-weight:700; color:var(--navy); }
+  .technical-example .table-scroll { overflow:visible; }
+  .technical-example table, .technical-example tbody, .technical-example tr { display:block; width:100%; }
+  .technical-example thead { display:none; }
+  .technical-example tr { margin:12px 0; padding:10px; border:1px solid var(--line); border-radius:6px; }
+  .technical-example td { display:block; width:auto; padding:6px 0; border:0; }
+  .technical-example td::before { content:attr(data-label); display:block; font-weight:700; color:var(--navy); }
+}
 .settings-change { margin-top:14px; }
 .callout-label { margin:0 0 6px !important; color:var(--red); font-size:12px !important; font-weight:750; letter-spacing:.35px; text-transform:uppercase; }
 .settings-change .qualification { margin-top:8px; }

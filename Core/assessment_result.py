@@ -160,6 +160,8 @@ def _provenance(row, bundle, expected_tenant_id):
         association = 'matched'
     matched = association == 'matched'
     qualifications = [] if matched else [f'Source association is {association}; confirm the retained dataset for this observation.']
+    if row.get('EndpointObservationSubsets'):
+        qualifications.append('The support date applies only to the current reporting subset when present. Stale, undated and invalid-dated observations are retained separately and require confirmation; their dates are not refreshed.')
     # Service caches carry their own timestamp; the report build does not refresh it.
     date = row.get("ObservationDate") or row.get("ObservedAt") or row.get("ReportDate") or source.get("collected_at") or source.get("refresh_date")
     if row.get('DeviceEvidenceVersion'):

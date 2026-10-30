@@ -142,7 +142,9 @@ class DeviceOccurrenceWorkbookTests(unittest.TestCase):
                 self.assertEqual(len(native_ids),470)
                 detail=technical['Device Detail']
                 columns=[cell.value for cell in detail[1]]
-                counts=Counter(detail.cell(index,columns.index('ID')+1).value for index in range(2,detail.max_row+1))
+                counts=Counter()
+                for index in range(2,detail.max_row+1):
+                    counts[detail.cell(index,columns.index('ID')+1).value] += detail.cell(index,columns.index('Source occurrences')+1).value or 1
                 for finding in device_findings(result):
                     expected=finding['DeviceEvidenceCounts']['source_record_count']
                     self.assertEqual(counts[finding['RecommendationId']],expected)

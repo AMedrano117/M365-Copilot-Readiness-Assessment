@@ -43,47 +43,42 @@ def expanded_findings(bundle, *, profile=None, evaluation_date=None, tenant_id=N
         output.append(row)
 
     def health_finding(name,selected,state,feature,explanation,recommendation,priority='Medium'):
-        # One finding per condition and freshness: devices that reported within the
-        # endpoint window, then older or undated reports that need confirmation.
-        # Grouping per report date repeated the same action for nearly every device.
+        # Recency qualifies observations within one condition, not finding identity.
+        import json
+        from collections import Counter
+        from .endpoint_observations import observation_subsets, subset_lines
         date_field='lastReportedDateTime' if name.startswith('windows_protection') else 'dataRefreshTimestamp'
-        groups={'current':[],'older':[]}
-        for record in selected:
-            observed=parse_date(timestamp(record.get(date_field), day)['date'])
-            groups['current' if observed and 0<=(day-observed).days<=reporting_days else 'older'].append((observed,record))
-        for group,entries in groups.items():
-            if not entries: continue
-            dates=sorted(observed for observed,_ in entries if observed)
-            # The oldest current report keeps the whole finding inside the window;
-            # older reports are dated by the newest one and still need confirmation.
-            date=(dates[0] if group=='current' else dates[-1]).isoformat() if dates else ''
-            span=('' if not dates else f' Last reported {dates[0].isoformat()}.' if dates[0]==dates[-1]
-                  else f' Last reported between {dates[0].isoformat()} and {dates[-1].isoformat()}.')
-            undated=len(entries)-len(dates)
-            span+=f' {undated} record(s) have no report date.' if undated else ''
-            finding(f'{name}.{group}',[record for _,record in entries],state,feature,
-                explanation.format(count=len(entries))+span,priority=priority,recommendation=recommendation)
-            output[-1].update(ObservationDate=date,EvidenceMaxAgeDays=reporting_days,
-                EvidenceComplete=bool(date) and not undated,ObservationDateBasis=date_field,
-                Qualification='State is dated by the endpoint report; recollection does not refresh stale or undated endpoint observations.')
-            import json
-            from collections import Counter
-            selected_keys = Counter(json.dumps(record,sort_keys=True,default=str) for _, record in entries)
-            selected_items = []
-            for item in health_items[name.split('.')[0]]:
-                key = json.dumps(item['record'],sort_keys=True,default=str)
-                if selected_keys[key]:
-                    selected_items.append(item)
-                    selected_keys[key] -= 1
-            kind = 'DefenderRealTimeProtectionObservation' if '.disabled' in name else 'DefenderSignatureObservation'
-            output[-1]['Observation'] = count_text(population(selected_items))+' '+output[-1]['Observation']
-            if kind == 'DefenderRealTimeProtectionObservation':
-                output[-1].update(Disposition='Opportunity', Status='Attention Required', Priority='Medium', Confidence='Low')
-                output[-1]['Observation'] += (' Real-time protection off is an observation, not proof of an active unprotected device. '
-                    'Current protection effectiveness is not established without current AV mode, onboarding, approved third-party AV, platform and complete source correlation. '
-                    'Returned Defender machine records do not establish fleet coverage.')
-                output[-1]['CompletionEvidence'] = 'Dated protection-provider and AV-mode validation, onboarding status, approved antivirus exceptions and current device health.'
-            annotate_finding(output[-1], selected_items, kind)
+        selected_keys = Counter(json.dumps(record,sort_keys=True,default=str) for record in selected)
+        selected_items = []
+        for item in health_items[name.split('.')[0]]:
+            key = json.dumps(item['record'],sort_keys=True,default=str)
+            if selected_keys[key]:
+                selected_items.append(item)
+                selected_keys[key] -= 1
+        subsets = observation_subsets(selected_items, reporting_days)
+        current = subsets['current']['counts']
+        stale = subsets['stale']['counts']
+        # This is the date supporting the CURRENT subset only, never a refresh
+        # of older/undated rows. If none is current, normal stale/unknown evidence
+        # qualification still applies to the entire condition.
+        date = current['evidence_period']['start'] or stale['evidence_period']['end']
+        finding(name,selected,state,feature,explanation.format(count=len(selected))+' '+
+                ' '.join(subset_lines(subsets, reporting_days)), priority=priority,recommendation=recommendation)
+        row = output[-1]
+        row.update(ObservationDate=date,EvidenceMaxAgeDays=reporting_days,
+            EvidenceComplete=bool(date),ObservationDateBasis=date_field+'; current subset support only when present',
+            EndpointObservationVersion='1.0.0', EndpointObservationSubsets=subsets,
+            EndpointReportingDays=reporting_days, EndpointEvaluationDate=day.isoformat(),
+            Qualification='The support date applies only to the current subset when present. Every source report date is retained; stale, undated and invalid-dated observations require confirmation. Recollection does not refresh them.')
+        kind = 'DefenderRealTimeProtectionObservation' if '.disabled' in name else 'DefenderSignatureObservation'
+        row['Observation'] = count_text(population(selected_items))+' '+row['Observation']
+        if kind == 'DefenderRealTimeProtectionObservation':
+            row.update(Disposition='Opportunity', Status='Attention Required', Priority='Low', Confidence='Low')
+            row['Observation'] += (' Real-time protection off is an observation, not proof of an active unprotected device. '
+                'Current protection effectiveness is not established without current AV mode, onboarding, approved third-party AV, platform and complete source correlation. '
+                'Returned Defender machine records do not establish fleet coverage.')
+            row['CompletionEvidence'] = 'Dated protection-provider and AV-mode validation, onboarding status, approved antivirus exceptions and current device health.'
+        annotate_finding(row, selected_items, kind)
 
     def merged_state(states):
         # Per-object reads (one per device or setting summary) describe one source.
@@ -107,17 +102,29 @@ def expanded_findings(bundle, *, profile=None, evaluation_date=None, tenant_id=N
             records=dataset.get('records',[])
             if name=='device_compliance_settings':
                 config = compliance['tenant_settings']
-                for key, field in config['fields'].items():
+                known = [[(key, field)] for key, field in config['fields'].items() if field['state'] == 'observed']
+                missing = [(key, field) for key, field in config['fields'].items() if field['state'] != 'observed']
+                for group in known + ([missing] if missing else []):
+                    key, field = group[0]
                     observed = field['state'] == 'observed'
-                    finding(f'{name}.{key}',records,state,field['label'],
-                        field['label']+': '+field['display']+'. '+config['qualification'],
+                    key = key if observed else 'confirmation'
+                    label = field['label'] if observed else 'Confirm tenant compliance settings'
+                    displays = {item['display'] for _, item in group}
+                    display = next(iter(displays)) if len(displays) == 1 else 'Needs confirmation'
+                    explanation = (field['label']+': '+field['display']+'. ' if observed else
+                                   (config.get('collection_issue') or 'The saved response did not establish all tenant compliance settings.')+' ')
+                    finding(f'{name}.{key}',records,state,label,
+                        explanation+(config['qualification'] if observed else
+                            'No default period or no-policy behavior is assumed. This is a collection limitation, not evidence of tenant misconfiguration.'),
                         disposition='Reference' if observed else 'Coverage',priority='Low' if observed else 'Medium',
                         recommendation='Review the retained tenant configuration and intended compliance design. Confirm missing or conflicting values in Intune.')
                     output[-1].update(Service='Entra',Status='Insight' if observed else 'Not Assessed',
                         EvidenceKey='device_compliance_settings_detail',EvidenceLevel='configuration',
                         EvidenceComplete=observed and state.get('complete') is True,
                         ObservationDate=field['observed_at'],EvidenceScope='Tenant-wide Intune compliance settings',
-                        ConfigurationSetting=key,ConfigurationLabel=field['label'],ConfigurationValue=field['display'],
+                        ConfigurationSetting=key,ConfigurationLabel=label,ConfigurationValue=display,
+                        ConfigurationSettings=[dict(item, key=setting) for setting, item in group],
+                        ConfigurationCollectionIssue=config.get('collection_issue', ''),
                         Qualification=config['qualification'])
             elif name=='windows_protection':
                 disabled=[row for row in records if reported_boolean(row.get('realTimeProtectionEnabled')) is False]
@@ -178,8 +185,8 @@ def expanded_findings(bundle, *, profile=None, evaluation_date=None, tenant_id=N
                         output[-1].update(Service='Entra', Status='Attention Required', Recommendation='Review the listed devices and confirm an applicable compliance policy is assigned to their users or devices. '
                             'Check targeting, exclusions and last check-in, document intended exceptions, and verify the assignment result after the device reports. '
                             'Older or conflicting results require confirmation; absence of returned checks does not establish that all devices have a policy.')
-                errors=[row for row in records if re.sub('[^a-z]','',str(row.get('state','')).lower()) in {'error','conflict','unknown','notevaluated'}]
-                if errors: finding(f'{name}.errors',errors,state,'Investigate device compliance reporting errors',
+                errors=[item['record'] for item in compliance['settings'] if item['classification']=='ReportingErrorOrConflict']
+                if errors: finding(f'{name}.errors',errors,state,'Confirm incomplete device compliance checks',
                     f'{len(errors)} setting record(s) report error, conflict or unknown. Effective compliance remains unresolved.',disposition='Coverage',
                     recommendation='Review the per-setting status in Intune for the listed records, resolve conflicting policy assignments '
                     'and devices that fail to report, then re-run the assessment.')

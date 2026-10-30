@@ -1,5 +1,19 @@
 # Device evidence interpretation
 
+Tenant compliance configuration is validated by returned values, not HTTP success
+alone. A null or incomplete settings object is partial evidence. Collection makes
+at most one additional read of the same v1.0 singleton without `$select`, retains
+both attempts and their original responses, and never assumes a validity period
+or no-policy default. Saved missing settings are one explained confirmation card.
+An offline rebuild cannot recover values that were never returned.
+
+The device overview contains the overall inventory population once. Inventory
+context and its native rows remain in workbooks/evidence pages but are not another
+customer finding or named-example panel. Incomplete setting checks remain distinct
+from explicit noncompliance: they may overlap inventory totals and are not added.
+The customer card groups checks by requirement and counts device/setting pairs;
+original status codes and diagnostics remain in technical evidence.
+
 Endpoint findings use retained evidence only. Intune device inventory, individual
 setting results, Windows protection reads and Defender machine inventory have
 different units. Counts must not be added across overlapping findings.
@@ -34,6 +48,57 @@ security counts, with their raw failures retained for investigation. Reporting
 errors remain separate. Policy and reason counts use distinct stable device IDs
 and may overlap. The HTML appendix shows up to three named examples per finding;
 the technical workbook retains complete populations and source records.
+
+Device examples separate the compliance policy, setting/reason and returned
+status. Policy names come from the selected native setting occurrence or its
+explicit policy ID; a setting name is not a policy name. Inventory examples use
+only settings linked to the resolved device ID. Missing causes and diagnostic
+messages are stated explicitly rather than inferred from overall noncompliance.
+Translations consider the returned result. Failed `RequireRemainContact` checks
+read "Device may be inactive/not recently checked in"; failed
+`RequireUserExistence` checks read "Enrolled user could not be confirmed."
+Positive portal check labels remain only in native source records. Error,
+unknown, conflict and not-evaluated checks are unresolved diagnostics, never
+confirmed noncompliance causes. Assignment Error does not establish a missing
+policy. Missing policy details and diagnostic messages remain unknown.
+
+Review summaries and the technical workbook's Device Detail group repeated
+records by stable device ID and setting within each finding. Different statuses
+and policy details remain visible; conflicting results do not establish a
+confirmed cause. Unknown identities/settings are not collapsed. Device Detail
+retains occurrence counts and all evidence IDs; native evidence tables and raw
+worksheets retain every original row and value for reconciliation.
+Reporting summaries distinguish Error, Conflict, Unknown and Not evaluated;
+technical examples show retained diagnostic codes/messages when present. Inventory and setting
+findings may describe the same devices and are not additive failure counts.
+
+Defender real-time protection Off is a low-priority observation, not a confirmed
+unprotected-device finding or readiness blocker. Another antivirus can be the
+primary provider while Defender is passive or disabled. Examples show the
+reported provider and mode when retained; missing provider evidence remains
+unverified. Confirm current provider health and intended operating mode before
+changing protection. This does not suppress explicit Intune security-policy
+failures or antivirus signature findings. See [Microsoft's compatibility guidance](https://learn.microsoft.com/en-us/defender-endpoint/microsoft-defender-antivirus-compatibility).
+
+Endpoint health conditions produce one finding per condition, regardless of
+reporting age. Real-time protection Off, overdue security intelligence and
+outdated antivirus signatures remain distinct conditions. Each finding labels
+current, stale, undated and invalid-dated observations with source-record and
+identified-device counts, report periods and evidence IDs. Subset device counts
+can overlap and are not added; the overall count uses distinct resolved IDs.
+Reporting recency does not establish device activity or inactivity.
+
+When current observations exist, the support date is the oldest report in that
+current subset only. It does not refresh other rows or claim their condition is
+still current. Stale, undated and invalid-dated observations require confirmation;
+an entirely stale/unknown finding retains normal stale/unknown qualification.
+HTML examples represent reporting subsets within the existing three-name limit,
+and include report date/recency separately from activity context. Shared technical
+evidence pages and workbook detail retain per-record subset membership; Device
+Finding Counts records the subset counts. Rebuilding saved native evidence
+consolidates earlier current/older findings and recalculates subsets for the
+evaluation date and configured reporting window. Frozen report rendering keeps
+its saved interpretation.
 
 ## Findings and counts
 

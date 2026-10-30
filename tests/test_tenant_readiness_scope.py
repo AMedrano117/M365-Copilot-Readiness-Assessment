@@ -165,6 +165,8 @@ class TenantScopeOutputsTests(unittest.TestCase):
             source = html.read_text(encoding='utf-8')
             self.assertIn('Tenant baseline ready', source)
             self.assertIn('handled outside this assessment', source)
+            self.assertNotIn('After the tenant assessment', source)
+            self.assertNotIn('href="#rollout"', source)
             for text in ('Choose and run the pilot', 'Record the pilot group that ran', 'Confirm pilot-device posture',
                          'Review the pilot use cases, baseline and success measures', 'For broader adoption, record the pilot outcomes',
                          'Pilot users, devices, content locations, applications and connectors'):

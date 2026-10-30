@@ -139,7 +139,10 @@ class WorkbookLayoutTests(unittest.TestCase):
         self.assertEqual(protection['Intune compliance'], 'Compliant')
         self.assertEqual(protection['Issue'], 'Real-time protection off')
         settings = [row for row in devices if row['ID'] == setting_finding['RecommendationId']]
-        self.assertEqual({row['Issue'] for row in settings}, {'Minimum OS version', 'Require encryption'})
+        self.assertEqual({row['Issue'] for row in settings}, {
+            'Reported: Minimum OS version requirement not met; current result unconfirmed',
+            'Reported: Require encryption requirement not met; current result unconfirmed'})
+        self.assertTrue(all(row['Result type'] == 'Unresolved diagnostic' for row in settings))
         self.assertEqual(sum(row['ID'] == signatures['RecommendationId'] for row in devices), 1, 'One source record supports both RTP and signature findings.')
         self.assertEqual(protection_finding['DeviceEvidenceIds'],signatures['DeviceEvidenceIds'])
         customer = '\n'.join(str(cell or '') for row in self.assessment['Devices'].values for cell in row)
