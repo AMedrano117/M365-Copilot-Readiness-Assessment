@@ -151,3 +151,13 @@ Reports/
 Reports/
 
 .env.recovery.*
+
+.env
+
+.env.restricted
+
+.env.*.recovery.*
+
+Reports/
+
+.env.recovery.*
