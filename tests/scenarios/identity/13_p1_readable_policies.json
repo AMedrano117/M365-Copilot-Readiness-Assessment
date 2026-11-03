@@ -1,0 +1,39 @@
+{
+ "name": "13_p1_readable_policies",
+ "declared_before_production_change": "2026-11-03",
+ "description": "Entra ID P1 tenant with readable, passing Conditional Access policies.",
+ "patch": {
+  "license_profile": "p1_only"
+ },
+ "expected": {
+  "source_states": {
+   "ca_policies": "available"
+  },
+  "population_scope": "All users",
+  "checks": [
+   {
+    "control": "IDENTITY.AUTH",
+    "finding_key": "baseline.identity.sign_in",
+    "disposition": "Assurance",
+    "evidence_status": "supported",
+    "readiness_treatment": "Pass",
+    "semantic_condition": [
+     "mfa=EnforcedForAllUsers",
+     "legacy=EnforcedForAllUsers"
+    ],
+    "configuration_result": "supported",
+    "control_actions": 1,
+    "action_types": [
+     "Evidence"
+    ],
+    "blocks_readiness": false,
+    "stable_recommendation_id": true,
+    "recommendation_id": "REC-4EFCEE02B8"
+   }
+  ],
+  "no_action_titles": [
+   "^Microsoft Entra ID P[12]$"
+  ],
+  "no_actions_without_finding_key": true
+ }
+}

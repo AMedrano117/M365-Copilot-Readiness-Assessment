@@ -1,0 +1,74 @@
+{
+ "name": "15_non_p2_consent_and_grants",
+ "declared_before_production_change": "2026-11-03",
+ "description": "Entra ID P1-only tenant; the authorization policy assigns the legacy allow-all user-consent policy and grant inventory flags high-privilege and unverified-publisher grants.",
+ "patch": {
+  "license_profile": "p1_only",
+  "client": {
+   "authorization_policy": {
+    "id": "authorizationPolicy",
+    "allowInvitesFrom": "adminsAndGuestInviters",
+    "defaultUserRolePermissions": {
+     "permissionGrantPoliciesAssigned": [
+      "ManagePermissionGrantsForSelf.microsoft-user-default-legacy"
+     ]
+    }
+   },
+   "consent_summary": {
+    "total_apps": 5,
+    "consent_configuration_available": true,
+    "assigned_user_consent_policies": [
+     "ManagePermissionGrantsForSelf.microsoft-user-default-legacy"
+    ],
+    "user_consent_allowed": true,
+    "admin_consent_required": false,
+    "high_privilege_apps": 2,
+    "unverified_publishers": 1,
+    "grant_inventory_available": true
+   }
+  }
+ },
+ "expected": {
+  "source_states": {
+   "authorization_policy": "available",
+   "oauth_grants": "available",
+   "service_principals": "available"
+  },
+  "population_scope": "Default user role; tenant application grants",
+  "checks": [
+   {
+    "control": "APPS.CONSENT",
+    "finding_key": "entra.apps.user_consent_assignment",
+    "disposition": "Action",
+    "priority": "High",
+    "evidence_status": "supported",
+    "readiness_treatment": "Remediate",
+    "semantic_condition": [
+     "consent=AnyApplication"
+    ],
+    "required": [
+     "microsoft-user-default-legacy"
+    ]
+   },
+   {
+    "control": "APPS.CONSENT",
+    "finding_key": "entra.app_consent.high_impact_grants",
+    "disposition": "Action",
+    "semantic_condition": [
+     "grants=HighImpactGrantsPresent"
+    ],
+    "required": [
+     "2 with high-privilege permissions"
+    ]
+   },
+   {
+    "control": "APPS.CONSENT",
+    "control_actions": 2,
+    "control_status": "Action required",
+    "prohibited": [
+     "were not collected"
+    ]
+   }
+  ]
+ }
+}

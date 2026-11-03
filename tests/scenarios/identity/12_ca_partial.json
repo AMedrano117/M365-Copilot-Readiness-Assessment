@@ -1,0 +1,39 @@
+{
+ "name": "12_ca_partial",
+ "declared_before_production_change": "2026-11-03",
+ "description": "The Conditional Access read was truncated after one page that contained an all-users MFA policy and a legacy block.",
+ "patch": {
+  "sources": {
+   "ca_policies": "partial"
+  }
+ },
+ "expected": {
+  "source_states": {
+   "ca_policies": "partial",
+   "security_defaults": "available (disabled)"
+  },
+  "population_scope": "Returned page only",
+  "checks": [
+   {
+    "control": "IDENTITY.AUTH",
+    "finding_key": "baseline.identity.source",
+    "disposition": "Coverage",
+    "evidence_status": "gap",
+    "readiness_treatment": "EvidenceGap",
+    "semantic_condition": [
+     "ca_policies=partial"
+    ],
+    "configuration_result": "not_established",
+    "control_actions": 1,
+    "blocks_readiness": false,
+    "required": [
+     "partial"
+    ],
+    "prohibited": [
+     "verified controls include",
+     "No Conditional Access policies were returned"
+    ]
+   }
+  ]
+ }
+}

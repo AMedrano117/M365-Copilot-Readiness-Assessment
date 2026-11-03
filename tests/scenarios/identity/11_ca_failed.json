@@ -1,0 +1,43 @@
+{
+ "name": "11_ca_failed",
+ "declared_before_production_change": "2026-11-03",
+ "description": "The Conditional Access policy read failed with HTTP 403; security defaults explicitly disabled.",
+ "patch": {
+  "client": {
+   "ca_policies": []
+  },
+  "sources": {
+   "ca_policies": "unavailable:403"
+  }
+ },
+ "expected": {
+  "source_states": {
+   "ca_policies": "unavailable (HTTP 403)",
+   "security_defaults": "available (disabled)"
+  },
+  "population_scope": "Conditional Access coverage not established",
+  "checks": [
+   {
+    "control": "IDENTITY.AUTH",
+    "finding_key": "baseline.identity.source",
+    "disposition": "Coverage",
+    "evidence_status": "gap",
+    "readiness_treatment": "EvidenceGap",
+    "semantic_condition": [
+     "ca_policies=unavailable"
+    ],
+    "configuration_result": "not_established",
+    "control_actions": 1,
+    "blocks_readiness": false,
+    "required": [
+     "HTTP 403"
+    ],
+    "prohibited": [
+     "No Conditional Access policies were returned",
+     "No enforced Conditional Access policy requires MFA",
+     "verified controls include"
+    ]
+   }
+  ]
+ }
+}

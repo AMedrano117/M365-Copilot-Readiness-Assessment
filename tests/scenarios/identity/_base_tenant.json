@@ -1,0 +1,278 @@
+{
+  "_comment": "Fictional clean identity tenant. Every scenario deep-merges a patch onto this base. Lists replace lists; objects merge; null deletes a key. No real tenant data. The base includes a complete, empty seven-day sign-in log read so that configuration scenarios do not also carry an unrelated operational sign-in evidence gap (added 2026-11-03 after the first run; see the PR).",
+  "tenant_id": "11111111-1111-4111-8111-111111111111",
+  "collected_at": "2026-10-30T12:00:00+00:00",
+  "evaluation_date": "2026-11-02",
+  "license_profile": "p1_p2",
+  "license_profiles": {
+    "p1_p2": [
+      {
+        "sku_part_number": "SPE_E5",
+        "entra_service_plans": [
+          {
+            "name": "AAD_PREMIUM",
+            "status": "Success"
+          },
+          {
+            "name": "AAD_PREMIUM_P2",
+            "status": "Success"
+          }
+        ]
+      }
+    ],
+    "p1_only": [
+      {
+        "sku_part_number": "O365_BUSINESS_PREMIUM",
+        "entra_service_plans": [
+          {
+            "name": "AAD_PREMIUM",
+            "status": "Success"
+          }
+        ]
+      }
+    ],
+    "p1_pending": [
+      {
+        "sku_part_number": "O365_BUSINESS_PREMIUM",
+        "entra_service_plans": [
+          {
+            "name": "AAD_PREMIUM",
+            "status": "PendingActivation"
+          }
+        ]
+      }
+    ],
+    "none": [
+      {
+        "sku_part_number": "O365_BUSINESS_ESSENTIALS",
+        "entra_service_plans": []
+      }
+    ]
+  },
+  "account_purposes": [],
+  "sources": {
+    "ca_policies": "available",
+    "security_defaults": "available",
+    "authorization_policy": "available",
+    "consent_policies": "available",
+    "oauth_grants": "available",
+    "service_principals": "available",
+    "guests": "available",
+    "access_reviews": "available",
+    "cross_tenant_policy": "available",
+    "signin_logs": "available"
+  },
+  "source_overrides": {
+    "signin_logs": {
+      "window_start": "2026-10-23T12:00:00+00:00",
+      "window_end": "2026-10-30T12:00:00+00:00",
+      "source_api": "https://graph.microsoft.com/v1.0/auditLogs/signIns",
+      "scope": "Returned user sign-ins"
+    }
+  },
+  "client": {
+    "available": true,
+    "tenant_id": "11111111-1111-4111-8111-111111111111",
+    "ca_policies": [
+      {
+        "id": "ca-mfa-all",
+        "displayName": "Require MFA for all users",
+        "state": "enabled",
+        "conditions": {
+          "users": {
+            "includeUsers": [
+              "All"
+            ],
+            "includeGroups": [],
+            "excludeUsers": [],
+            "excludeGroups": []
+          },
+          "applications": {
+            "includeApplications": [
+              "All"
+            ]
+          },
+          "clientAppTypes": [
+            "all"
+          ]
+        },
+        "grantControls": {
+          "operator": "OR",
+          "builtInControls": [
+            "mfa"
+          ]
+        }
+      },
+      {
+        "id": "ca-legacy-block",
+        "displayName": "Block legacy authentication",
+        "state": "enabled",
+        "conditions": {
+          "users": {
+            "includeUsers": [
+              "All"
+            ],
+            "includeGroups": [],
+            "excludeUsers": [],
+            "excludeGroups": []
+          },
+          "applications": {
+            "includeApplications": [
+              "All"
+            ]
+          },
+          "clientAppTypes": [
+            "exchangeActiveSync",
+            "other"
+          ]
+        },
+        "grantControls": {
+          "operator": "OR",
+          "builtInControls": [
+            "block"
+          ]
+        }
+      }
+    ],
+    "security_defaults": {
+      "available": true,
+      "is_enabled": false
+    },
+    "authorization_policy": {
+      "id": "authorizationPolicy",
+      "allowInvitesFrom": "adminsAndGuestInviters",
+      "defaultUserRolePermissions": {
+        "permissionGrantPoliciesAssigned": [
+          "ManagePermissionGrantsForOwnedResource.microsoft-dynamically-managed-permissions-for-team"
+        ]
+      }
+    },
+    "auth_policy_summary": {
+      "guest_invite_setting": "adminsAndGuestInviters"
+    },
+    "consent_summary": {
+      "total_apps": 3,
+      "consent_configuration_available": true,
+      "assigned_user_consent_policies": [],
+      "user_consent_allowed": false,
+      "admin_consent_required": true,
+      "high_privilege_apps": 0,
+      "unverified_publishers": 0,
+      "grant_inventory_available": true
+    },
+    "b2b_summary": {
+      "total_guests": 2,
+      "guests_with_licenses": 0,
+      "guest_invite_restrictions": "adminsAndGuestInviters",
+      "cross_tenant_access_configured": true,
+      "partner_configurations": 0
+    },
+    "guest_users": [
+      {
+        "id": "c0000000-0000-4000-8000-000000000001",
+        "displayName": "Guest one",
+        "userType": "Guest",
+        "assignedLicenses": []
+      },
+      {
+        "id": "c0000000-0000-4000-8000-000000000002",
+        "displayName": "Guest two",
+        "userType": "Guest",
+        "assignedLicenses": []
+      }
+    ],
+    "access_reviews": [
+      {
+        "id": "ar-guests",
+        "displayName": "Quarterly guest review",
+        "status": "InProgress",
+        "scope": {
+          "query": "/users?$filter=(userType eq 'Guest')"
+        },
+        "settings": {
+          "recurrence": {
+            "pattern": {
+              "type": "absoluteMonthly",
+              "interval": 3
+            }
+          }
+        }
+      }
+    ],
+    "access_review_summary": {
+      "total_definitions": 1,
+      "active_reviews": 1,
+      "group_membership_reviews": 0,
+      "role_assignment_reviews": 0,
+      "application_assignment_reviews": 0,
+      "guest_user_reviews": 1,
+      "recurring_reviews": 1,
+      "one_time_reviews": 0
+    },
+    "account_purpose_evidence": [],
+    "assessment_datasets": {
+      "user_signin_activity": [
+        {
+          "records": [
+            {
+              "id": "a0000000-0000-4000-8000-000000000001",
+              "displayName": "Staff member 1",
+              "userPrincipalName": "staff1@contoso.example"
+            },
+            {
+              "id": "a0000000-0000-4000-8000-000000000002",
+              "displayName": "Staff member 2",
+              "userPrincipalName": "staff2@contoso.example"
+            },
+            {
+              "id": "a0000000-0000-4000-8000-000000000003",
+              "displayName": "Staff member 3",
+              "userPrincipalName": "staff3@contoso.example"
+            },
+            {
+              "id": "a0000000-0000-4000-8000-000000000004",
+              "displayName": "Staff member 4",
+              "userPrincipalName": "staff4@contoso.example"
+            },
+            {
+              "id": "a0000000-0000-4000-8000-000000000005",
+              "displayName": "Staff member 5",
+              "userPrincipalName": "staff5@contoso.example"
+            },
+            {
+              "id": "a0000000-0000-4000-8000-000000000006",
+              "displayName": "Staff member 6",
+              "userPrincipalName": "staff6@contoso.example"
+            },
+            {
+              "id": "e0000000-0000-4000-8000-000000000001",
+              "displayName": "Emergency access 01",
+              "userPrincipalName": "ea01@contoso.example"
+            },
+            {
+              "id": "e0000000-0000-4000-8000-000000000002",
+              "displayName": "Break glass 02",
+              "userPrincipalName": "bg02@contoso.example"
+            }
+          ],
+          "source": {
+            "available": true,
+            "availability_status": "available",
+            "complete": true,
+            "truncated": false,
+            "records_collected": 8,
+            "pages_collected": 1,
+            "scope": "Returned tenant records",
+            "source_api": "https://graph.microsoft.com/v1.0/users",
+            "collected_at": "2026-10-30T12:00:00+00:00"
+          }
+        }
+      ],
+      "ca_group_members": []
+    },
+    "signin_logs": [],
+    "signin_summary": {
+      "legacy_auth_attempts": 0
+    }
+  }
+}

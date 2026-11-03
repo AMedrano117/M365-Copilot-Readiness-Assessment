@@ -1,0 +1,102 @@
+{
+ "name": "01_mfa_or_compliant_device",
+ "declared_before_production_change": "2026-11-03",
+ "description": "An enforced all-users policy grants access with MFA OR a compliant device; legacy authentication is blocked.",
+ "patch": {
+  "client": {
+   "ca_policies": [
+    {
+     "id": "ca-mfa-or-device",
+     "displayName": "MFA or compliant device",
+     "state": "enabled",
+     "conditions": {
+      "users": {
+       "includeUsers": [
+        "All"
+       ],
+       "includeGroups": [],
+       "excludeUsers": [],
+       "excludeGroups": []
+      },
+      "applications": {
+       "includeApplications": [
+        "All"
+       ]
+      },
+      "clientAppTypes": [
+       "all"
+      ]
+     },
+     "grantControls": {
+      "operator": "OR",
+      "builtInControls": [
+       "mfa",
+       "compliantDevice"
+      ]
+     }
+    },
+    {
+     "id": "ca-legacy-block",
+     "displayName": "Block legacy authentication",
+     "state": "enabled",
+     "conditions": {
+      "users": {
+       "includeUsers": [
+        "All"
+       ],
+       "includeGroups": [],
+       "excludeUsers": [],
+       "excludeGroups": []
+      },
+      "applications": {
+       "includeApplications": [
+        "All"
+       ]
+      },
+      "clientAppTypes": [
+       "exchangeActiveSync",
+       "other"
+      ]
+     },
+     "grantControls": {
+      "operator": "OR",
+      "builtInControls": [
+       "block"
+      ]
+     }
+    }
+   ]
+  }
+ },
+ "expected": {
+  "source_states": {
+   "ca_policies": "available",
+   "security_defaults": "available (disabled)"
+  },
+  "population_scope": "All users; all cloud apps; grant alternative compliantDevice",
+  "checks": [
+   {
+    "control": "IDENTITY.AUTH",
+    "finding_key": "baseline.identity.scope",
+    "disposition": "Coverage",
+    "evidence_status": "gap",
+    "readiness_treatment": "ScopeReviewRequired",
+    "semantic_condition": [
+     "mfa=AlternativeGrantPathRequiresReview",
+     "legacy=EnforcedForAllUsers"
+    ],
+    "configuration_result": "not_established",
+    "control_actions": 1,
+    "blocks_readiness": false,
+    "required": [
+     "compliant ?device",
+     "alternative"
+    ],
+    "prohibited": [
+     "No enforced Conditional Access policy requires MFA",
+     "security defaults are off"
+    ]
+   }
+  ]
+ }
+}

@@ -1,0 +1,59 @@
+{
+ "name": "15b_microsoft_managed_consent",
+ "declared_before_production_change": "2026-11-03",
+ "description": "Default user consent is governed by the Microsoft-managed recommended and mail-client policies (the shape retained for the Cavehouse tenant).",
+ "patch": {
+  "client": {
+   "authorization_policy": {
+    "id": "authorizationPolicy",
+    "allowInvitesFrom": "adminsAndGuestInviters",
+    "defaultUserRolePermissions": {
+     "permissionGrantPoliciesAssigned": [
+      "ManagePermissionGrantsForOwnedResource.microsoft-dynamically-managed-permissions-for-team",
+      "ManagePermissionGrantsForSelf.microsoft-user-default-allow-consent-apps",
+      "ManagePermissionGrantsForSelf.microsoft-user-default-recommended"
+     ]
+    }
+   },
+   "consent_summary": {
+    "total_apps": 3,
+    "consent_configuration_available": true,
+    "assigned_user_consent_policies": [
+     "ManagePermissionGrantsForSelf.microsoft-user-default-allow-consent-apps",
+     "ManagePermissionGrantsForSelf.microsoft-user-default-recommended"
+    ],
+    "user_consent_allowed": true,
+    "admin_consent_required": false,
+    "high_privilege_apps": 0,
+    "unverified_publishers": 0,
+    "grant_inventory_available": true
+   }
+  }
+ },
+ "expected": {
+  "source_states": {
+   "authorization_policy": "available"
+  },
+  "population_scope": "Default user role",
+  "checks": [
+   {
+    "control": "APPS.CONSENT",
+    "finding_key": "entra.apps.user_consent_assignment",
+    "disposition": "Action",
+    "priority": "Medium",
+    "evidence_status": "supported",
+    "readiness_treatment": "ConfirmBeforePilot",
+    "semantic_condition": [
+     "consent=PolicyBounded"
+    ],
+    "blocks_readiness": false,
+    "required": [
+     "Microsoft-managed"
+    ],
+    "prohibited": [
+     "without admin review"
+    ]
+   }
+  ]
+ }
+}

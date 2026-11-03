@@ -1,0 +1,40 @@
+{
+ "name": "16b_access_reviews_unread",
+ "declared_before_production_change": "2026-11-03",
+ "description": "The access-review definitions read failed with HTTP 403 in a tenant with P2.",
+ "patch": {
+  "sources": {
+   "access_reviews": "unavailable:403"
+  },
+  "client": {
+   "access_reviews": [],
+   "access_review_summary": {
+    "total_definitions": 0,
+    "active_reviews": 0,
+    "recurring_reviews": 0
+   }
+  }
+ },
+ "expected": {
+  "source_states": {
+   "access_reviews": "unavailable (HTTP 403)"
+  },
+  "population_scope": "Access review definitions not established",
+  "checks": [
+   {
+    "finding_key": "entra.access_reviews.definitions",
+    "disposition": "Reference",
+    "semantic_condition": [
+     "access_reviews=SourceUnavailable"
+    ],
+    "required": [
+     "HTTP 403"
+    ]
+   }
+  ],
+  "prohibited_anywhere": [
+   "No access review definitions were returned",
+   "No active access reviews were returned"
+  ]
+ }
+}
