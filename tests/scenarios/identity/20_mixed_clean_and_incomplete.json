@@ -56,10 +56,10 @@
    },
    {
     "control": "APPS.CONSENT",
-    "control_status_not": "Action required",
     "open_action_types": [
      "Evidence"
-    ]
+    ],
+    "control_status": "Not established"
    },
    {
     "finding_key": "entra.access_reviews.definitions",
@@ -75,5 +75,5 @@
   ],
   "decision_not": "Tenant remediation required"
  },
- "expectation_note": "The first declaration expected APPS.CONSENT status \"Not established\". The shared result reports a control as Observed when one component (admin-only consent) is supported; the unread grant inventory remains an open Evidence action. Control-status aggregation across components is recorded as a methodology backlog item."
+ "expectation_note": "Originally declared \"Not established\". It was relaxed after the first identity run because the shared result then reported a control Observed when one component was supported. The 2026-11-03 methodology reconciliation adopts per-component aggregation, so the original declaration is restored."
 }

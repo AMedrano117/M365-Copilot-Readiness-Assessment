@@ -1,0 +1,56 @@
+{
+ "name": "M11_one_required_component_unread",
+ "declared_before_production_change": "2026-11-03",
+ "description": "Admin-only consent is supported but the delegated grant read failed with HTTP 403.",
+ "patch": {
+  "client": {
+   "authorization_policy": {
+    "id": "authorizationPolicy",
+    "allowInvitesFrom": "adminsAndGuestInviters",
+    "allowUserConsentForRiskyApps": false,
+    "defaultUserRolePermissions": {
+     "permissionGrantPoliciesAssigned": [
+      "ManagePermissionGrantsForOwnedResource.microsoft-dynamically-managed-permissions-for-team"
+     ]
+    }
+   },
+   "consent_summary": {
+    "total_apps": 3,
+    "consent_configuration_available": true,
+    "assigned_user_consent_policies": [],
+    "user_consent_allowed": false,
+    "admin_consent_required": true,
+    "high_privilege_apps": null,
+    "unverified_publishers": null,
+    "grant_inventory_available": false
+   }
+  },
+  "sources": {
+   "oauth_grants": "unavailable:403"
+  }
+ },
+ "expected": {
+  "checks": [
+   {
+    "finding_key": "entra.apps.user_consent_assignment",
+    "component_result": "supported"
+   },
+   {
+    "finding_key": "entra.app_consent.grant_inventory_not_assessed",
+    "component_result": "not_established",
+    "evidence_status": "gap",
+    "required": [
+     "HTTP 403"
+    ]
+   },
+   {
+    "control": "APPS.CONSENT",
+    "control_status": "Not established",
+    "control_actions": 1,
+    "open_action_types": [
+     "Evidence"
+    ]
+   }
+  ]
+ }
+}

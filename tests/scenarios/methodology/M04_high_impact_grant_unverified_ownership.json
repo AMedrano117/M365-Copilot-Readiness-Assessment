@@ -1,0 +1,58 @@
+{
+ "name": "M04_high_impact_grant_unverified_ownership",
+ "declared_before_production_change": "2026-11-03",
+ "description": "Admin-only consent; the grant inventory flags one high-privilege application whose owner and purpose are not established.",
+ "patch": {
+  "client": {
+   "authorization_policy": {
+    "id": "authorizationPolicy",
+    "allowInvitesFrom": "adminsAndGuestInviters",
+    "allowUserConsentForRiskyApps": false,
+    "defaultUserRolePermissions": {
+     "permissionGrantPoliciesAssigned": [
+      "ManagePermissionGrantsForOwnedResource.microsoft-dynamically-managed-permissions-for-team"
+     ]
+    }
+   },
+   "consent_summary": {
+    "total_apps": 3,
+    "consent_configuration_available": true,
+    "assigned_user_consent_policies": [],
+    "user_consent_allowed": false,
+    "admin_consent_required": true,
+    "high_privilege_apps": 1,
+    "unverified_publishers": 0,
+    "grant_inventory_available": true
+   }
+  }
+ },
+ "expected": {
+  "checks": [
+   {
+    "finding_key": "entra.app_consent.high_impact_grants",
+    "disposition": "Action",
+    "evidence_status": "supported",
+    "readiness_treatment": "ScopeReviewRequired",
+    "semantic_condition": [
+     "severity_basis=presence_only"
+    ],
+    "action_type": "Confirmation",
+    "pilot_impact": "Evidence review",
+    "blocks_readiness": false,
+    "component_result": "not_established",
+    "required": [
+     "do not revoke solely from the aggregate count"
+    ]
+   },
+   {
+    "finding_key": "entra.apps.user_consent_assignment",
+    "component_result": "supported"
+   },
+   {
+    "control": "APPS.CONSENT",
+    "control_status": "Not established",
+    "control_actions": 1
+   }
+  ]
+ }
+}

@@ -1,0 +1,59 @@
+{
+ "name": "M03_exposures_outside_material_scope",
+ "declared_before_production_change": "2026-11-03",
+ "description": "Anyone links on three sites whose retained labels are General: confirmed exposure of content not classified as sensitive.",
+ "exposure": {
+  "sam_rows": [
+   {
+    "Report Date": "2026-11-01",
+    "Site Name": "Events",
+    "Site URL": "https://contoso.sharepoint.example/sites/events",
+    "Primary Admin": "owner@contoso.example",
+    "Anyone link count": "2",
+    "Sensitivity Label": "General"
+   },
+   {
+    "Report Date": "2026-11-01",
+    "Site Name": "Canteen",
+    "Site URL": "https://contoso.sharepoint.example/sites/canteen",
+    "Primary Admin": "owner@contoso.example",
+    "Anyone link count": "2",
+    "Sensitivity Label": "General"
+   },
+   {
+    "Report Date": "2026-11-01",
+    "Site Name": "Social",
+    "Site URL": "https://contoso.sharepoint.example/sites/social",
+    "Primary Admin": "owner@contoso.example",
+    "Anyone link count": "2",
+    "Sensitivity Label": "General"
+   }
+  ]
+ },
+ "expected": {
+  "checks": [
+   {
+    "finding_key": "data_exposure.anonymous_links",
+    "disposition": "Action",
+    "evidence_status": "supported",
+    "readiness_treatment": "Remediate",
+    "semantic_condition": [
+     "severity_basis=confirmed_not_material"
+    ],
+    "action_type": "Remediation",
+    "pilot_impact": "Tenant remediation",
+    "blocks_readiness": false,
+    "component_result": "failed",
+    "family_actions": 1,
+    "required": [
+     "6 Anyone links",
+     "not classified as sensitive"
+    ]
+   },
+   {
+    "control": "CONTENT.PERMISSIONS",
+    "control_status": "Action required"
+   }
+  ]
+ }
+}

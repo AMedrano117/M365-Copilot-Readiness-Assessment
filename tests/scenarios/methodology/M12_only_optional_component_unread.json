@@ -1,0 +1,34 @@
+{
+ "name": "M12_only_optional_component_unread",
+ "declared_before_production_change": "2026-11-03",
+ "description": "Shared-result contract: a required component is supported and a component marked OptionalEvidence is unread.",
+ "component_rows": [
+  {
+   "key": "fixture.required.supported",
+   "disposition": "Assurance"
+  },
+  {
+   "key": "fixture.optional.unread",
+   "disposition": "Coverage",
+   "optional": true
+  }
+ ],
+ "expected": {
+  "checks": [
+   {
+    "finding_key": "fixture.required.supported",
+    "component_result": "supported"
+   },
+   {
+    "finding_key": "fixture.optional.unread",
+    "component_result": "not_established",
+    "component_required": false
+   },
+   {
+    "control": "APPS.CONNECTIONS",
+    "control_status": "Observed",
+    "control_qualification": "[Oo]ptional component .*not established"
+   }
+  ]
+ }
+}

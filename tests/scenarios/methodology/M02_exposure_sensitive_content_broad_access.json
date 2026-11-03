@@ -1,0 +1,45 @@
+{
+ "name": "M02_exposure_sensitive_content_broad_access",
+ "declared_before_production_change": "2026-11-03",
+ "description": "One Anyone link on a site whose retained label is Confidential: sensitive content is reachable by anyone, including every tenant user.",
+ "exposure": {
+  "sam_rows": [
+   {
+    "Report Date": "2026-11-01",
+    "Site Name": "Finance",
+    "Site URL": "https://contoso.sharepoint.example/sites/finance",
+    "Primary Admin": "owner@contoso.example",
+    "Anyone link count": "1",
+    "Sensitivity Label": "Confidential"
+   }
+  ]
+ },
+ "expected": {
+  "checks": [
+   {
+    "finding_key": "data_exposure.anonymous_links",
+    "disposition": "Action",
+    "evidence_status": "supported",
+    "readiness_treatment": "Remediate",
+    "semantic_condition": [
+     "severity_basis=material_sensitive_access"
+    ],
+    "action_type": "Remediation",
+    "pilot_impact": "Blocks readiness",
+    "blocks_readiness": true,
+    "component_result": "failed",
+    "family_actions": 1,
+    "required": [
+     "sensitive"
+    ],
+    "prohibited": [
+     "No exposure threshold is defined"
+    ]
+   },
+   {
+    "control": "CONTENT.PERMISSIONS",
+    "control_status": "Action required"
+   }
+  ]
+ }
+}

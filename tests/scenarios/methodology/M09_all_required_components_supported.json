@@ -1,0 +1,46 @@
+{
+ "name": "M09_all_required_components_supported",
+ "declared_before_production_change": "2026-11-03",
+ "description": "Admin-only consent and a complete grant inventory with nothing flagged.",
+ "patch": {
+  "client": {
+   "authorization_policy": {
+    "id": "authorizationPolicy",
+    "allowInvitesFrom": "adminsAndGuestInviters",
+    "allowUserConsentForRiskyApps": false,
+    "defaultUserRolePermissions": {
+     "permissionGrantPoliciesAssigned": [
+      "ManagePermissionGrantsForOwnedResource.microsoft-dynamically-managed-permissions-for-team"
+     ]
+    }
+   },
+   "consent_summary": {
+    "total_apps": 3,
+    "consent_configuration_available": true,
+    "assigned_user_consent_policies": [],
+    "user_consent_allowed": false,
+    "admin_consent_required": true,
+    "high_privilege_apps": 0,
+    "unverified_publishers": 0,
+    "grant_inventory_available": true
+   }
+  }
+ },
+ "expected": {
+  "checks": [
+   {
+    "finding_key": "entra.apps.user_consent_assignment",
+    "component_result": "supported"
+   },
+   {
+    "finding_key": "entra.app_consent.grants_reviewed",
+    "component_result": "supported"
+   },
+   {
+    "control": "APPS.CONSENT",
+    "control_status": "Observed",
+    "control_actions": 0
+   }
+  ]
+ }
+}

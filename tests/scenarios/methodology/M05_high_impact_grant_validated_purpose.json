@@ -1,0 +1,53 @@
+{
+ "name": "M05_high_impact_grant_validated_purpose",
+ "declared_before_production_change": "2026-11-03",
+ "description": "Same evidence as M04 plus a current tenant-scope owner review of APPS.CONSENT that records the validated purpose and scoped permissions.",
+ "patch": {
+  "client": {
+   "authorization_policy": {
+    "id": "authorizationPolicy",
+    "allowInvitesFrom": "adminsAndGuestInviters",
+    "allowUserConsentForRiskyApps": false,
+    "defaultUserRolePermissions": {
+     "permissionGrantPoliciesAssigned": [
+      "ManagePermissionGrantsForOwnedResource.microsoft-dynamically-managed-permissions-for-team"
+     ]
+    }
+   },
+   "consent_summary": {
+    "total_apps": 3,
+    "consent_configuration_available": true,
+    "assigned_user_consent_policies": [],
+    "user_consent_allowed": false,
+    "admin_consent_required": true,
+    "high_privilege_apps": 1,
+    "unverified_publishers": 0,
+    "grant_inventory_available": true
+   }
+  },
+  "readiness_review": {
+   "control_id": "APPS.CONSENT",
+   "result": "pass",
+   "reviewed_at": "2026-10-25",
+   "rationale": "The application owner validated the business purpose and the granted scopes for the flagged application.",
+   "evidence_reference": "Application review APP-007"
+  }
+ },
+ "expected": {
+  "checks": [
+   {
+    "finding_key": "entra.app_consent.high_impact_grants",
+    "disposition": "Reference",
+    "review_closure": true,
+    "semantic_condition": [
+     "severity_basis=presence_only"
+    ]
+   },
+   {
+    "control": "APPS.CONSENT",
+    "control_status": "Observed",
+    "control_actions": 0
+   }
+  ]
+ }
+}

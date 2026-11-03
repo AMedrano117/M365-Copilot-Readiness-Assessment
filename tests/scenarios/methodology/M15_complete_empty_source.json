@@ -1,0 +1,47 @@
+{
+ "name": "M15_complete_empty_source",
+ "declared_before_production_change": "2026-11-03",
+ "description": "Admin-only consent; the complete grant inventory returned zero enterprise applications and zero grants.",
+ "patch": {
+  "client": {
+   "authorization_policy": {
+    "id": "authorizationPolicy",
+    "allowInvitesFrom": "adminsAndGuestInviters",
+    "allowUserConsentForRiskyApps": false,
+    "defaultUserRolePermissions": {
+     "permissionGrantPoliciesAssigned": [
+      "ManagePermissionGrantsForOwnedResource.microsoft-dynamically-managed-permissions-for-team"
+     ]
+    }
+   },
+   "consent_summary": {
+    "total_apps": 0,
+    "consent_configuration_available": true,
+    "assigned_user_consent_policies": [],
+    "user_consent_allowed": false,
+    "admin_consent_required": true,
+    "high_privilege_apps": 0,
+    "unverified_publishers": 0,
+    "grant_inventory_available": true
+   }
+  }
+ },
+ "expected": {
+  "checks": [
+   {
+    "finding_key": "entra.app_consent.grants_reviewed",
+    "disposition": "Assurance",
+    "evidence_status": "supported",
+    "component_result": "supported",
+    "prohibited": [
+     "not assessed",
+     "could not be read"
+    ]
+   },
+   {
+    "control": "APPS.CONSENT",
+    "control_status": "Observed"
+   }
+  ]
+ }
+}
