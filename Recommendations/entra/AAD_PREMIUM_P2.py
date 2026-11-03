@@ -56,7 +56,7 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
             status=status
         ))
         if entra_insights and entra_insights.get('available'):
-            recommendations.extend(governance_recommendations(entra_insights, feature_name))
+            recommendations.extend(governance_recommendations(entra_insights, feature_name, client))
         return recommendations
 
     # Non-Success: license-check context only
@@ -70,6 +70,47 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
         priority="High",
         status=status
     )
+
+
+def _publisher_bounded(condition):
+    """A condition set limits client applications (verified, certified, own-tenant or named apps)."""
+    apps = [str(value).lower() for value in condition.get('clientApplicationIds') or ['all']]
+    tenants = [str(value).lower() for value in condition.get('clientApplicationTenantIds') or ['all']]
+    return (condition.get('clientApplicationsFromVerifiedPublisherOnly') is True
+            or condition.get('certifiedClientApplicationsOnly') is True
+            or 'all' not in apps or 'all' not in tenants)
+
+
+def _permission_bounded(condition):
+    permissions = [str(value).lower() for value in condition.get('permissions') or ['all']]
+    return str(condition.get('permissionClassification') or '').lower() == 'low' or 'all' not in permissions
+
+
+def consent_boundary_gaps(policy_ids, definitions, risky_app_consent):
+    """Elements of the user-consent boundary the retained conditions do not establish.
+
+    Microsoft recommends allowing user consent only for applications from
+    verified publishers; each include condition must also limit permissions or
+    the policy must exclude permissions. Risky-app consent must be explicitly off.
+    """
+    gaps = []
+    for policy_id in policy_ids:
+        policy = definitions.get(policy_id) or {}
+        includes = [row for row in policy.get('includes') or [] if isinstance(row, dict)]
+        excluded = bool(policy.get('excludes'))
+        if not includes:
+            gaps.append(f'{policy_id} has no retained include conditions')
+            continue
+        if not all(_publisher_bounded(row) for row in includes):
+            gaps.append(f'{policy_id} admits applications from any publisher; Microsoft recommends user consent only for '
+                        'applications from a verified publisher')
+        if not excluded and not all(_permission_bounded(row) for row in includes):
+            gaps.append(f'{policy_id} does not limit the permissions users can grant')
+    if risky_app_consent is True:
+        gaps.append('risky-app consent (allowUserConsentForRiskyApps) is enabled')
+    elif risky_app_consent is not False:
+        gaps.append('the risky-app consent setting (allowUserConsentForRiskyApps) was not retained')
+    return gaps
 
 
 def _features(features):
@@ -97,7 +138,7 @@ def _structured(row, **fields):
     return row
 
 
-def governance_recommendations(entra_insights, features=None):
+def governance_recommendations(entra_insights, features=None, client=None):
     """Technical identity governance rows; the license inventory is not an input."""
     feature = _features(features)
     recommendations = []
@@ -209,7 +250,7 @@ def governance_recommendations(entra_insights, features=None):
         ))
 
     recommendations.extend(_guest_rows(entra_insights, feature))
-    recommendations.extend(_consent_rows(entra_insights, feature))
+    recommendations.extend(_consent_rows(entra_insights, feature, client))
     recommendations.extend(_access_review_rows(entra_insights, feature))
     return recommendations
 
@@ -325,7 +366,7 @@ def _guest_rows(entra_insights, feature):
     return rows
 
 
-def _consent_rows(entra_insights, feature):
+def _consent_rows(entra_insights, feature, client=None):
     rows = []
     consent_metrics = entra_insights.get('consent_summary', {})
     policy_read, _, policy_note = source_state(entra_insights, 'authorization_policy')
@@ -381,15 +422,57 @@ def _consent_rows(entra_insights, feature):
             evidence_summary="See Application Consent Policy for the effective default-user consent assignments and App Access Detail for existing grants."
         ), SemanticCondition='consent=AnyApplication', ReadinessTreatment='Remediate', CompletionEvidence=closure, **common))
     else:
-        managed = [MICROSOFT_CONSENT_POLICIES[value] for value in policy_ids if value in MICROSOFT_CONSENT_POLICIES]
-        custom = [value for value in policy_ids if value not in MICROSOFT_CONSENT_POLICIES]
         described = ', '.join(policy_ids)
+        definitions_read, _, definitions_note = source_state(entra_insights, 'consent_policies')
+        definitions = {str(row.get('id')): row for row in (getattr(client, 'permission_grant_policies', None) or [])
+                       if isinstance(row, dict)} if client is not None else {}
+        retained = definitions_read and all(isinstance(definitions.get(value, {}).get('includes'), list) for value in policy_ids)
+        if not retained:
+            rows.append(_structured(new_recommendation(
+                service="Entra",
+                feature=feature['consent'],
+                observation=(f"Default users can grant application consent within {len(policy_ids)} assigned consent "
+                             f"polic{'y' if len(policy_ids) == 1 else 'ies'} ({described}), but the policies' include and exclude "
+                             f"conditions were not retained (permission grant policy read: {definitions_note}). The consent boundary "
+                             "is not established; policy presence alone does not support the consent configuration."),
+                recommendation="Read the permission grant policies (Microsoft Graph Policy.Read.All) and rebuild, or record the assigned policies' conditions from the Microsoft Entra admin center with their date.",
+                link_text="Manage app consent policies",
+                link_url="https://learn.microsoft.com/entra/identity/enterprise-apps/manage-app-consent-policies",
+                priority="Medium",
+                status="Not Assessed",
+                disposition="Coverage",
+                finding_key="entra.apps.user_consent_assignment",
+                evidence_key="app_consent_policy_detail",
+                evidence_summary="The assigned consent policies' conditions were not retained."
+            ), SemanticCondition='consent=PolicyConditionsNotRetained', ReadinessTreatment='EvidenceGap', CompletionEvidence=closure, **common))
+            return rows + _grant_rows(entra_insights, feature)
+        gaps = consent_boundary_gaps(policy_ids, definitions,
+                                     (getattr(client, 'authorization_policy', {}) or {}).get('allowUserConsentForRiskyApps'))
+        if not gaps:
+            rows.append(_structured(new_recommendation(
+                service="Entra",
+                feature=feature['consent'],
+                observation=(f"Default users can consent only within {len(policy_ids)} assigned consent "
+                             f"polic{'y' if len(policy_ids) == 1 else 'ies'} ({described}). The retained conditions limit consent to "
+                             "verified publishers, the tenant's own applications or named client applications, and to selected "
+                             "permissions; risky-app consent is off. This supports the user-consent configuration component only. "
+                             "Existing grants, their purpose and the admin-consent process are evaluated separately."),
+                recommendation="",
+                link_text="Configure User Consent",
+                link_url="https://learn.microsoft.com/entra/identity/enterprise-apps/configure-user-consent",
+                status="Success",
+                finding_key="entra.apps.user_consent_assignment",
+                evidence_key="app_consent_policy_detail",
+                evidence_summary="See Application Consent Policy for the assigned policies and their retained conditions."
+            ), SemanticCondition='consent=BoundedUserConsent', ReadinessTreatment='Pass', **common))
+            return rows + _grant_rows(entra_insights, feature)
         observation = (f"Default users can grant application consent within {len(policy_ids)} assigned consent "
-                       f"polic{'y' if len(policy_ids) == 1 else 'ies'} ({described}).")
+                       f"polic{'y' if len(policy_ids) == 1 else 'ies'} ({described}). The retained conditions do not establish "
+                       "the consent boundary: " + '; '.join(gaps) + ".")
+        managed = [f'{value} ({MICROSOFT_CONSENT_POLICIES[value]})' for value in policy_ids if value in MICROSOFT_CONSENT_POLICIES]
         if managed:
-            observation += f" Microsoft-managed or built-in conditions apply ({'; '.join(managed)}); they limit which publishers and permissions users can approve."
-        if custom:
-            observation += f" Custom policy conditions ({', '.join(custom)}) were not evaluated by this assessment."
+            observation += (" Microsoft-managed or built-in policies: " + ', '.join(managed) + "; Microsoft maintains their "
+                            "conditions, so the retained conditions are a snapshot at collection time.")
         rows.append(_structured(new_recommendation(
             service="Entra",
             feature=feature['consent'],
@@ -403,7 +486,12 @@ def _consent_rows(entra_insights, feature):
             evidence_key="app_consent_policy_detail; app_access_detail",
             evidence_summary="See Application Consent Policy for the assigned policies and their retained conditions."
         ), SemanticCondition='consent=PolicyBounded', ReadinessTreatment='ConfirmBeforePilot', CompletionEvidence=closure, **common))
+    return rows + _grant_rows(entra_insights, feature)
 
+
+def _grant_rows(entra_insights, feature):
+    rows = []
+    consent_metrics = entra_insights.get('consent_summary', {})
     # Application grants
     high_privilege_apps = consent_metrics.get('high_privilege_apps') or 0
     unverified_publishers = consent_metrics.get('unverified_publishers') or 0

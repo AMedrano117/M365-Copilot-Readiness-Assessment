@@ -50,7 +50,7 @@ def assess_identity_configuration(entra_client, entra_insights=None):
     rows = [*authentication_recommendations(entra_insights, 'Multifactor authentication registration',
                                             passwordless_feature='Passwordless authentication registration'),
             *group_licensing_recommendations(entra_insights, 'Group-based licensing'),
-            *governance_recommendations(entra_insights, FEATURES)]
+            *governance_recommendations(entra_insights, FEATURES, client=entra_client)]
     from Core.authentication_findings import qualify_legacy_finding
     from Core.signin_evidence import is_legacy_signin_finding
     return [qualify_legacy_finding(row, entra_client) if is_legacy_signin_finding(row)

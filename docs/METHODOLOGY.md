@@ -173,18 +173,39 @@ each control they can evaluate:
   grants, guests, access reviews, MFA registration, legacy sign-ins, privileged schedules and
   identity risk are evaluated from retained evidence for every tenant. Service-plan rows are
   capability context (`LicenseContext`), never findings or actions, whatever their provisioning status.
-- **Application consent**: the legacy allow-all policy (`microsoft-user-default-legacy`) is a
-  high-priority remediation. Microsoft-managed, built-in or custom consent policies bound what users
-  can approve and are a medium-priority confirmation (`ConfirmBeforePilot`); whether a
-  Microsoft-managed policy alone is acceptable is an open methodology decision.
-- **Data exposure counts** from exported reports (Anyone links, broad internal access, external
-  exposure, DSPM oversharing and unlabeled sensitive items) keep their observed priority, affected
-  locations and source period, but carry `SeverityBasis: presence_only` and
-  `ReadinessTreatment: ScopeReviewRequired`. No exposure threshold is defined, so presence alone does
-  not block tenant readiness. The aggregate count of high-impact application grants is treated the
-  same way: it stays a high-priority remediation to review per application, without blocking on
-  presence alone. Current explicit device-setting failures keep their documented
-  blocking rule (see [Tenant readiness scope](TENANT_READINESS_SCOPE.md)).
+- **Application consent** (`APPS.CONSENT`) has separate components: the user-consent
+  configuration (`entra.apps.user_consent_assignment`) and the existing grants
+  (`entra.app_consent.*`). Microsoft documents that changing consent settings does not change
+  existing grants, so one component never answers the other.
+  - No self-consent policy assigned: the configuration component is supported.
+  - The legacy allow-all policy (`microsoft-user-default-legacy`): a high-priority remediation.
+  - Any other assigned policy, including a Microsoft-managed one, supports the configuration
+    component only when the retained permission grant policy definitions show that every include
+    condition limits client applications (verified publisher, certified, the tenant's own apps or
+    named apps, following Microsoft's verified-publisher recommendation) and limits permissions
+    (low classification, named permissions or excluded permissions), and
+    `allowUserConsentForRiskyApps` is retained as false.
+  - Policies present with conditions that do not establish that boundary are a medium-priority
+    confirmation (`ConfirmBeforePilot`). Policies whose conditions were not retained are an evidence
+    gap. Policy presence alone never supports the control.
+  - Grant purpose, ownership and scope that collected evidence cannot establish are answered by a
+    current tenant-scope owner review ([Readiness reviews](READINESS_REVIEWS.md)).
+- **Materiality.** Counts describe scale; no universal numeric threshold blocks readiness. A
+  condition blocks readiness only when retained evidence establishes material impact on a required
+  tenant control. Every observation stays visible with its affected objects, scope and source period.
+  Exposure findings from exported reports (Anyone links, broad internal access, external exposure,
+  DSPM oversharing and unlabeled sensitive items) record `SeverityBasis` from the supporting rows:
+  - `material_sensitive_access`: a supporting row records explicitly sensitive content reachable by
+    a tenant-wide or anonymous audience (Anyone, Everyone, Everyone except external users,
+    organization links or DSPM oversharing). That audience includes every tenant user, so no pilot
+    roster is needed. Supported high-priority remediation blocks readiness.
+  - `confirmed_not_material`: every supporting row carries a retained label classifying the content
+    as not sensitive (Public, General, Non-Business). This is tenant remediation that does not block.
+  - `presence_only`: sensitivity or audience is not established. `ReadinessTreatment:
+    ScopeReviewRequired` makes it an evidence-review confirmation that does not block.
+  The aggregate count of high-impact application grants is `presence_only` in the same way, because
+  owner and purpose are not collected. Current explicit device-setting failures on active devices keep
+  their documented blocking rule (see [Tenant readiness scope](TENANT_READINESS_SCOPE.md)).
 - **DLP configuration** is supported when an enforced policy applies to all users or locations for Exchange,
   SharePoint, OneDrive, Teams or Microsoft 365 Copilot. The absence of a Copilot-location policy is
   assessed against planned requirements. Configuration must be accompanied by a dated review of tested protection behavior; simulation alone cannot establish enforcement.
@@ -203,6 +224,37 @@ The shared result then chooses the deployment recommendation in this order:
    evidence could not answer (**Confirm before pilot**) produce **Controlled pilot with conditions**.
    An unanswered check is never counted as a failure.
 4. With no open required actions, the result is **Ready for a controlled pilot**.
+
+**Composite controls.** Each required control is judged from its components: the result rows
+matched to it. The shared result records each component's result in `controls[].component_results`,
+and the control status follows from them. Results are never averaged, and one component's evidence
+never fills another's gap. The rules, in order:
+
+| Components | Control status |
+| --- | --- |
+| A conflict in the control's evidence | Not established |
+| Any required component with a confirmed, supported failure, or a supported `fail` control result | Action required |
+| A current tenant-wide owner review or supported `pass` control result, with no confirmed failure | Observed; answered components are listed in `controls[].qualifications` |
+| Any required component unread, partial, unavailable, stale or not established, including unresolved applicability | Not established |
+| Every required component supported | Observed |
+
+Components proven not applicable are excluded. An unsupported positive claim, such as a strength
+summary with an unknown date, neither supports the control nor opens a gap. A baseline confirm row
+for a source that was read can be answered by supported evidence of the same question, meaning the
+same evidence key. A row for an unread, partial or scope-review source (`EvidenceGap` or
+`ScopeReviewRequired`) is never answered that way. A component marked `OptionalEvidence: Yes` never
+decides the status; when it is not supported, the control stays Observed and records the
+qualification. Failed, unread, unavailable, partial and complete-empty source states stay distinct in
+the component rows. A complete-empty read is a measurement. A failed technical result is not
+automatically a blocker; the deployment rules above decide that.
+
+**Readiness treatment** stays separate from the technical result. `ReadinessTreatment` on a result
+row uses `Pass`, `Remediate`, `ConfirmBeforePilot`, `ScopeReviewRequired` and `EvidenceGap`. The
+existing customer labels are: Blocks readiness (supported Critical or High remediation with material
+impact); Tenant remediation (a confirmed condition that does not block, including
+`confirmed_not_material`); and Evidence review (confirmation or evidence work). A supported condition
+whose treatment is `ConfirmBeforePilot` or `ScopeReviewRequired` is an evidence-review confirmation,
+not a remediation. A current tenant-scope owner review can answer it, but never a confirmed failure.
 
 A documented pilot treatment in a readiness review can turn a supported high-priority remediation
 into a pilot condition; it stays open for broader adoption. Critical conditions cannot be treated.

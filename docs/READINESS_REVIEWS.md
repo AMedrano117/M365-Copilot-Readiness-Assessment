@@ -16,7 +16,11 @@ evidence reference. Each control review references that tenant scope and records
 its control ID, review date, responsible role, result, rationale and evidence.
 Operational controls also need observed-operation evidence, tested behavior and
 tested scope. Record only reviews actually performed; an attestation cannot
-silently close an observed technical failure.
+silently close an observed technical failure. A current tenant-scope pass can
+answer an evidence gap or an open review question for its control, such as the
+purpose and scope of flagged application grants or the audience of a
+presence-only exposure (`ConfirmBeforePilot` or `ScopeReviewRequired`). The
+original observation stays visible with its review closure.
 
 Current progress covers evidence collection, tenant readiness review and the
 assessed tenant baseline. Pilot/expansion inputs, when supplied, remain optional
