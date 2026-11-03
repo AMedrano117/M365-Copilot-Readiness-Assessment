@@ -135,6 +135,18 @@ class IdentityInvariantTests(unittest.TestCase):
         return [row for row in result['recommendations'] if row.get('DomainId') in {'identity', 'applications'}
                 and row.get('EvidenceBasis') != 'License signal']
 
+    # Conclusions that would claim a state or an absence the unread source never established.
+    SOURCE_CLAIMS = {
+        'ca_policies': r'No Conditional Access policies were returned|No enforced Conditional Access policy|verified controls include|Conditional Access requires MFA',
+        'security_defaults': r'security defaults are (?:off|disabled|enabled)',
+        'authorization_policy': r'Admin consent required|User consent enabled|No self-consent policy|consent policy, which lets users|Guest invitation eligibility|Guest user invitations restricted',
+        'oauth_grants': r'did not flag high-impact|Application grants requiring review were detected',
+        'guests': r'guest users have an M365 license|none with M365 licenses',
+        'access_reviews': r'No access review definitions were returned|No active access reviews were returned|returned 0 access review',
+    }
+    # Every source below has a structured producer, so the check is never vacuous.
+    PRODUCED = {'ca_policies', 'authorization_policy', 'oauth_grants', 'access_reviews'}
+
     def test_unread_failed_or_partial_source_never_creates_absence_pass_or_fail(self):
         spec = harness.load('17_license_inventory_parity')
         for source in self.SOURCES:
@@ -142,9 +154,16 @@ class IdentityInvariantTests(unittest.TestCase):
                 patched = dict(spec, patch=harness.merge(spec['patch'], {'sources': {source: state}}))
                 with self.subTest(source=source, state=state):
                     result, _, _ = harness.run(patched)
-                    for row in self.identity_rows(result):
-                        if row.get('EvidenceSource') != source:
-                            continue
+                    rows = self.identity_rows(result)
+                    for row in rows:
+                        self.assertNotRegex(harness.text(row), self.SOURCE_CLAIMS[source],
+                                            f"{row.get('FindingKey') or row.get('Feature')} claims a state of unread {source}")
+                    sourced = [row for row in rows if row.get('EvidenceSource') == source]
+                    # With no recorded Conditional Access outcome, the shared gap logic
+                    # answers IDENTITY.AUTH instead of a structured baseline row.
+                    if source in self.PRODUCED and not (source == 'ca_policies' and state == 'absent'):
+                        self.assertTrue(sourced, f'no structured row records the {source} outcome')
+                    for row in sourced:
                         self.assertIn(row['Disposition'], {'Coverage', 'Reference'}, f"{row.get('FindingKey')} from unread {source}")
                         self.assertNotRegex(row.get('Observation') or '', self.ABSENCE)
 
