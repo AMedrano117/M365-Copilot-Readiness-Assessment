@@ -1,0 +1,48 @@
+{
+ "name": "06_security_defaults_enabled",
+ "declared_before_production_change": "2026-11-03",
+ "description": "No Conditional Access policies; security defaults explicitly read as enabled.",
+ "patch": {
+  "client": {
+   "ca_policies": [],
+   "security_defaults": {
+    "available": true,
+    "is_enabled": true
+   }
+  }
+ },
+ "expected": {
+  "source_states": {
+   "ca_policies": "available (empty)",
+   "security_defaults": "available (enabled)"
+  },
+  "population_scope": "Tenant-wide security defaults",
+  "checks": [
+   {
+    "control": "IDENTITY.AUTH",
+    "finding_key": "baseline.identity.sign_in",
+    "disposition": "Assurance",
+    "evidence_status": "supported",
+    "readiness_treatment": "Pass",
+    "semantic_condition": [
+     "mfa=SecurityDefaults",
+     "legacy=SecurityDefaults"
+    ],
+    "configuration_result": "supported",
+    "control_actions": 1,
+    "action_types": [
+     "Evidence"
+    ],
+    "blocks_readiness": false,
+    "stable_recommendation_id": true,
+    "required": [
+     "Security defaults are enabled"
+    ],
+    "prohibited": [
+     "No Conditional Access policies were returned"
+    ],
+    "recommendation_id": "REC-4EFCEE02B8"
+   }
+  ]
+ }
+}

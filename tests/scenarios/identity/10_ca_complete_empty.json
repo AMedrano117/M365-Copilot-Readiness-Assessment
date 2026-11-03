@@ -1,0 +1,39 @@
+{
+ "name": "10_ca_complete_empty",
+ "declared_before_production_change": "2026-11-03",
+ "description": "A complete Conditional Access read returned zero policies; security defaults explicitly disabled.",
+ "patch": {
+  "client": {
+   "ca_policies": []
+  }
+ },
+ "expected": {
+  "source_states": {
+   "ca_policies": "available (empty)",
+   "security_defaults": "available (disabled)"
+  },
+  "population_scope": "Measured absence of enforced policies",
+  "checks": [
+   {
+    "control": "IDENTITY.AUTH",
+    "finding_key": "baseline.identity.sign_in",
+    "disposition": "Action",
+    "priority": "High",
+    "evidence_status": "supported",
+    "readiness_treatment": "Remediate",
+    "semantic_condition": [
+     "mfa=NoEnforcedPolicy",
+     "legacy=NoEnforcedPolicy"
+    ],
+    "control_actions": 1,
+    "blocks_readiness": true,
+    "required": [
+     "returned 0 Conditional Access polic"
+    ],
+    "prohibited": [
+     "security defaults are off"
+    ]
+   }
+  ]
+ }
+}

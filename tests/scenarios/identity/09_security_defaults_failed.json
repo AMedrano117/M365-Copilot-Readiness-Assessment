@@ -1,0 +1,47 @@
+{
+ "name": "09_security_defaults_failed",
+ "declared_before_production_change": "2026-11-03",
+ "description": "No Conditional Access policies; the security defaults read failed with HTTP 403.",
+ "patch": {
+  "client": {
+   "ca_policies": [],
+   "security_defaults": {
+    "available": false,
+    "is_enabled": null
+   }
+  },
+  "sources": {
+   "security_defaults": "unavailable:403"
+  }
+ },
+ "expected": {
+  "source_states": {
+   "ca_policies": "available (empty)",
+   "security_defaults": "unavailable (HTTP 403)"
+  },
+  "population_scope": "Tenant-wide MFA not established",
+  "checks": [
+   {
+    "control": "IDENTITY.AUTH",
+    "finding_key": "baseline.identity.source",
+    "disposition": "Coverage",
+    "evidence_status": "gap",
+    "readiness_treatment": "EvidenceGap",
+    "semantic_condition": [
+     "mfa=SecurityDefaultsUnknown"
+    ],
+    "control_actions": 1,
+    "blocks_readiness": false,
+    "required": [
+     "HTTP 403",
+     "not established"
+    ],
+    "prohibited": [
+     "security defaults are off",
+     "security defaults are disabled",
+     "No Conditional Access policies were returned"
+    ]
+   }
+  ]
+ }
+}

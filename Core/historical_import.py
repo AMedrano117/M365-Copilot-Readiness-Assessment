@@ -9,7 +9,6 @@ import hashlib
 import json
 from io import BytesIO
 from pathlib import Path
-from uuid import UUID
 
 VERSION = '1.0.0'
 NOTICE = ('Historical report import: original conclusions are unverified historical context. '
@@ -91,11 +90,13 @@ def inspect_historical(args):
         raise ValueError('Historical evaluation date cannot be in the future.')
     tenants = [row['Value'] for row in rows if row.get('Item') == 'Tenant ID' and row.get('Value')]
     declared = getattr(args, 'tenant_id', None)
-    try:
-        recorded = {str(UUID(str(value).strip())) for value in tenants}
-        tenant = str(UUID(str(declared).strip())) if declared else next(iter(recorded), None)
-    except (ValueError, TypeError, AttributeError):
-        raise ValueError('Historical tenant ID must be a valid GUID; correct the source metadata or supply --tenant-id if unrecorded.') from None
+    from .assessment_identity import tenant_guid
+    # Placeholders mean the workbook never recorded a tenant; other non-GUID values are malformed.
+    tenants = [value for value in tenants if str(value).strip().lower() not in {'not established', 'unrecorded'}]
+    recorded = {tenant_guid(value) for value in tenants}
+    if None in recorded or (declared and not tenant_guid(declared)):
+        raise ValueError('Historical tenant ID must be a valid GUID; correct the source metadata or supply --tenant-id if unrecorded.')
+    tenant = tenant_guid(declared) if declared else next(iter(recorded), None)
     if len(recorded) > 1 or recorded and tenant not in recorded:
         raise ValueError('Historical workbook and selected tenant identities conflict.')
     if not tenant:

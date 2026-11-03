@@ -1,0 +1,45 @@
+{
+ "name": "08_security_defaults_unread",
+ "declared_before_production_change": "2026-11-03",
+ "description": "A complete read returned no Conditional Access policies; the security defaults policy was never read (no outcome retained).",
+ "patch": {
+  "client": {
+   "ca_policies": [],
+   "security_defaults": null
+  },
+  "sources": {
+   "security_defaults": "absent"
+  }
+ },
+ "expected": {
+  "source_states": {
+   "ca_policies": "available (empty)",
+   "security_defaults": "not retained"
+  },
+  "population_scope": "Tenant-wide MFA not established",
+  "checks": [
+   {
+    "control": "IDENTITY.AUTH",
+    "finding_key": "baseline.identity.source",
+    "disposition": "Coverage",
+    "evidence_status": "gap",
+    "readiness_treatment": "EvidenceGap",
+    "semantic_condition": [
+     "mfa=SecurityDefaultsUnknown"
+    ],
+    "configuration_result": "not_established",
+    "control_actions": 1,
+    "blocks_readiness": false,
+    "required": [
+     "not established"
+    ],
+    "prohibited": [
+     "security defaults are off",
+     "security defaults are disabled",
+     "No Conditional Access policies were returned"
+    ]
+   }
+  ]
+ },
+ "fixture_note": "security_defaults is null (removed) because an empty object merges into the base value; corrected 2026-11-03 after the first run."
+}

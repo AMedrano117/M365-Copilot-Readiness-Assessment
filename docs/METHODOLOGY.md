@@ -151,6 +151,40 @@ each control they can evaluate:
 - **Sign-in configuration** is supported when an enforced Conditional Access policy requires MFA for all users and
   cloud apps and legacy authentication is blocked for all users, or security defaults are on.
   Assignments, exclusions, conditions, grant alternatives and authentication strengths must establish scope. Suitable sign-in results or a dated tenant-wide test review must also establish operation; registration alone cannot.
+  The check evaluates MFA and legacy-authentication blocking separately and records a structured
+  `SemanticCondition`, `ReadinessTreatment` and `SourceStates` on the result row:
+  - A grant that accepts MFA **or** another control (for example a compliant device) is
+    `AlternativeGrantPathRequiresReview`, not an MFA failure.
+  - Group-targeted policies count only through retained, complete transitive group membership
+    compared with a complete user inventory. Missing or partial membership is `ScopeNotEstablished`;
+    complete membership that leaves accounts untargeted is a measured `NotEnforcedForAllUsers` result.
+    Group scope is never inferred from names.
+  - Excluded accounts pass only as documented emergency access (see
+    [Privileged identity](PRIVILEGED_IDENTITY.md#explicit-configuration-and-purpose)); otherwise they are
+    `ExclusionReviewRequired`. Name patterns only identify candidates.
+  - Security defaults are enabled or disabled only from an explicit value in a completed read. An
+    unread, failed, partial or unrequested read is an evidence gap and is never described as off.
+  - A failed, partial or unrequested Conditional Access read is an evidence gap row
+    (`baseline.identity.source`) that states the source outcome. A complete read that returned no
+    policies is a measurement.
+  - Review states produce an evidence-review action; only a measured failure with security defaults
+    read as disabled produces remediation.
+- **Licensing** never decides whether a technical identity condition exists. Consent, application
+  grants, guests, access reviews, MFA registration, legacy sign-ins, privileged schedules and
+  identity risk are evaluated from retained evidence for every tenant. Service-plan rows are
+  capability context (`LicenseContext`), never findings or actions, whatever their provisioning status.
+- **Application consent**: the legacy allow-all policy (`microsoft-user-default-legacy`) is a
+  high-priority remediation. Microsoft-managed, built-in or custom consent policies bound what users
+  can approve and are a medium-priority confirmation (`ConfirmBeforePilot`); whether a
+  Microsoft-managed policy alone is acceptable is an open methodology decision.
+- **Data exposure counts** from exported reports (Anyone links, broad internal access, external
+  exposure, DSPM oversharing and unlabeled sensitive items) keep their observed priority, affected
+  locations and source period, but carry `SeverityBasis: presence_only` and
+  `ReadinessTreatment: ScopeReviewRequired`. No exposure threshold is defined, so presence alone does
+  not block tenant readiness. The aggregate count of high-impact application grants is treated the
+  same way: it stays a high-priority remediation to review per application, without blocking on
+  presence alone. Current explicit device-setting failures keep their documented
+  blocking rule (see [Tenant readiness scope](TENANT_READINESS_SCOPE.md)).
 - **DLP configuration** is supported when an enforced policy applies to all users or locations for Exchange,
   SharePoint, OneDrive, Teams or Microsoft 365 Copilot. The absence of a Copilot-location policy is
   assessed against planned requirements. Configuration must be accompanied by a dated review of tested protection behavior; simulation alone cannot establish enforcement.

@@ -12,6 +12,9 @@ def normalize_reassessment(args):
     result.assessment_history = result.reassess
     result._reassessment_candidates = []
     from .assessment_history import read_history
+    from .assessment_identity import tenant_guid
+    if not tenant_guid(result.tenant_id):
+        return result, ['reassessment_tenant_unverified']
     try:
         history = read_history(result.assessment_history)
         if history.get('State') == 'legacy':
@@ -101,7 +104,8 @@ def resolve_reassessment(args, tenant_id):
     if errors:
         messages = {
             'reassessment_history_environment_mismatch': 'The selected customer environment does not match this assessment history.',
-            'reassessment_history_invalid': 'Assessment history is missing, unreadable or invalid. Use the history created by a completed Initial run; do not populate it manually.',
+            'reassessment_tenant_unverified': 'Reassessment requires a verified tenant GUID; supply --tenant-id with the tenant GUID.',
+            'reassessment_history_invalid':'Assessment history is missing, unreadable or invalid. Use the history created by a completed Initial run; do not populate it manually.',
             'reassessment_history_legacy': 'Legacy history cannot establish assessment ownership. Use a completed explicit Initial run.',
             'reassessment_history_no_completed_runs': 'Assessment history has no completed runs to compare against.',
             'reassessment_history_changed_after_selection': 'Assessment history changed during baseline selection; retry explicitly.',

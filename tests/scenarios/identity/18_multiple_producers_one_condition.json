@@ -1,0 +1,31 @@
+{
+ "name": "18_multiple_producers_one_condition",
+ "declared_before_production_change": "2026-11-03",
+ "description": "P1 and P2 tenant; a complete read returned zero Conditional Access policies and security defaults are disabled. The baseline and legacy license modules both describe this condition.",
+ "patch": {
+  "client": {
+   "ca_policies": []
+  }
+ },
+ "expected": {
+  "source_states": {
+   "ca_policies": "available (empty)",
+   "security_defaults": "available (disabled)"
+  },
+  "population_scope": "Tenant",
+  "checks": [
+   {
+    "control": "IDENTITY.AUTH",
+    "finding_key": "baseline.identity.sign_in",
+    "disposition": "Action",
+    "control_actions": 1,
+    "blocks_readiness": true
+   }
+  ],
+  "one_action_per_condition": true,
+  "no_action_titles": [
+   "^Microsoft Entra ID P[12]$"
+  ],
+  "no_actions_without_finding_key": true
+ }
+}

@@ -1,0 +1,147 @@
+{
+ "name": "05b_emergency_declaration_incomplete",
+ "declared_before_production_change": "2026-11-03",
+ "description": "Declarations exist but omit monitoring expectations; the exclusions remain review-required.",
+ "patch": {
+  "client": {
+   "ca_policies": [
+    {
+     "id": "ca-mfa-all",
+     "displayName": "Require MFA for all users",
+     "state": "enabled",
+     "conditions": {
+      "users": {
+       "includeUsers": [
+        "All"
+       ],
+       "includeGroups": [],
+       "excludeUsers": [
+        "e0000000-0000-4000-8000-000000000001",
+        "e0000000-0000-4000-8000-000000000002"
+       ],
+       "excludeGroups": []
+      },
+      "applications": {
+       "includeApplications": [
+        "All"
+       ]
+      },
+      "clientAppTypes": [
+       "all"
+      ]
+     },
+     "grantControls": {
+      "operator": "OR",
+      "builtInControls": [
+       "mfa"
+      ]
+     }
+    },
+    {
+     "id": "ca-legacy-block",
+     "displayName": "Block legacy authentication",
+     "state": "enabled",
+     "conditions": {
+      "users": {
+       "includeUsers": [
+        "All"
+       ],
+       "includeGroups": [],
+       "excludeUsers": [],
+       "excludeGroups": []
+      },
+      "applications": {
+       "includeApplications": [
+        "All"
+       ]
+      },
+      "clientAppTypes": [
+       "exchangeActiveSync",
+       "other"
+      ]
+     },
+     "grantControls": {
+      "operator": "OR",
+      "builtInControls": [
+       "block"
+      ]
+     }
+    }
+   ],
+   "account_purpose_evidence": [
+    {
+     "id": "purpose-ea01",
+     "principal_id": "e0000000-0000-4000-8000-000000000001",
+     "purpose": "emergency",
+     "document": "Emergency access standard v3, section 2"
+    },
+    {
+     "id": "purpose-bg02",
+     "principal_id": "e0000000-0000-4000-8000-000000000002",
+     "purpose": "emergency",
+     "document": "Emergency access standard v3, section 2"
+    }
+   ]
+  },
+  "account_purposes": [
+   {
+    "principal_id": "e0000000-0000-4000-8000-000000000001",
+    "purpose": "emergency",
+    "owner": "Identity operations lead",
+    "source_type": "customer_declaration",
+    "evidence_refs": [
+     {
+      "dataset": "account_purpose_evidence",
+      "dataset_index": 0,
+      "record_index": 0
+     }
+    ],
+    "authentication_design": "Two FIDO2 security keys held in separate safes; excluded only from MFA and legacy-block policies",
+    "reviewed_at": "2026-10-01"
+   },
+   {
+    "principal_id": "e0000000-0000-4000-8000-000000000002",
+    "purpose": "emergency",
+    "owner": "Identity operations lead",
+    "source_type": "customer_declaration",
+    "evidence_refs": [
+     {
+      "dataset": "account_purpose_evidence",
+      "dataset_index": 0,
+      "record_index": 1
+     }
+    ],
+    "authentication_design": "Two FIDO2 security keys held in separate safes; excluded only from MFA and legacy-block policies",
+    "reviewed_at": "2026-10-01"
+   }
+  ]
+ },
+ "expected": {
+  "source_states": {
+   "ca_policies": "available",
+   "account_purpose_evidence": "retained but incomplete"
+  },
+  "population_scope": "All users except 2 excluded accounts without complete emergency-access evidence",
+  "checks": [
+   {
+    "control": "IDENTITY.AUTH",
+    "finding_key": "baseline.identity.scope",
+    "disposition": "Coverage",
+    "evidence_status": "gap",
+    "readiness_treatment": "ScopeReviewRequired",
+    "semantic_condition": [
+     "mfa=ExclusionReviewRequired",
+     "legacy=EnforcedForAllUsers"
+    ],
+    "control_actions": 1,
+    "blocks_readiness": false,
+    "required": [
+     "not validated"
+    ],
+    "prohibited": [
+     "security defaults are off"
+    ]
+   }
+  ]
+ }
+}

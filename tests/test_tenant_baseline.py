@@ -40,11 +40,19 @@ class ConditionalAccessTests(unittest.TestCase):
         self.assertEqual(facts["report_only_mfa_all"], ["MFA all users (report-only)"])
         self.assertEqual(facts["enforced_mfa_scoped"], ["MFA admins"])
         self.assertEqual(enforced_mfa_policy_count(policies), 1)
-        [row] = assess_identity_baseline(entra(policies))
+        # Without the group-targeted policy, the report-only all-users policy is
+        # a measured failure because security defaults were read as disabled.
+        [row] = assess_identity_baseline(entra([policy for policy in policies if policy["displayName"] != "MFA admins"]))
         self.assertEqual(row["Disposition"], "Action")
         self.assertEqual(row["Priority"], "High")
         self.assertIn("report-only mode (not enforced)", row["Observation"])
         self.assertIn("switch the all-users MFA policy to On", row["Recommendation"])
+        # An enforced group-targeted policy whose membership was not retained may
+        # cover everyone, so tenant-wide MFA is a scope gap, not a failure.
+        [row] = assess_identity_baseline(entra(policies))
+        self.assertEqual((row["Disposition"], row["FindingKey"]), ("Coverage", "baseline.identity.scope"))
+        self.assertIn("mfa=ScopeNotEstablished", row["SemanticCondition"])
+        self.assertIn("membership of included group admins was not retained completely", row["Observation"])
 
     def test_enforced_all_user_mfa_and_legacy_block_pass(self):
         [row] = assess_identity_baseline(entra([policy("MFA all users"), LEGACY_BLOCK]))
@@ -62,9 +70,16 @@ class ConditionalAccessTests(unittest.TestCase):
         self.assertEqual(row["Disposition"], "Assurance")
         self.assertIn("Security defaults", row["Observation"])
 
-    def test_uncollected_policies_leave_the_question_to_the_gap_logic(self):
+    def test_uncollected_policies_are_an_evidence_gap_never_an_absence(self):
         client = entra([])
-        client.collection_status = {"ca_policies": {"available": False, "availability_status": "unavailable"}}
+        client.collection_status = {"ca_policies": {"available": False, "availability_status": "unavailable", "status_code": 403}}
+        [row] = assess_identity_baseline(client)
+        self.assertEqual((row["Disposition"], row["FindingKey"], row["ReadinessTreatment"]),
+                         ("Coverage", "baseline.identity.source", "EvidenceGap"))
+        self.assertIn("unavailable (HTTP 403)", row["Observation"])
+        self.assertNotRegex(row["Observation"], r"No (enforced )?Conditional Access polic")
+        # With no recorded request outcome, the shared gap logic answers the question.
+        client.collection_status = {}
         self.assertEqual(assess_identity_baseline(client), [])
 
 

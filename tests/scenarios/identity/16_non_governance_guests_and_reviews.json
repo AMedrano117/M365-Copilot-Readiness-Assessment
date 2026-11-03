@@ -1,0 +1,99 @@
+{
+ "name": "16_non_governance_guests_and_reviews",
+ "declared_before_production_change": "2026-11-03",
+ "description": "Entra ID P1-only tenant with readable guest inventory (1 of 3 guests licensed), invitation setting 'everyone' and a complete, empty access-review inventory.",
+ "patch": {
+  "license_profile": "p1_only",
+  "client": {
+   "authorization_policy": {
+    "id": "authorizationPolicy",
+    "allowInvitesFrom": "everyone",
+    "defaultUserRolePermissions": {
+     "permissionGrantPoliciesAssigned": []
+    }
+   },
+   "b2b_summary": {
+    "total_guests": 3,
+    "guests_with_licenses": 1,
+    "guest_invite_restrictions": "everyone",
+    "cross_tenant_access_configured": true,
+    "partner_configurations": 0
+   },
+   "guest_users": [
+    {
+     "id": "c0000000-0000-4000-8000-000000000001",
+     "displayName": "Guest one",
+     "userType": "Guest",
+     "assignedLicenses": [
+      {
+       "skuId": "sku-e3"
+      }
+     ]
+    },
+    {
+     "id": "c0000000-0000-4000-8000-000000000002",
+     "displayName": "Guest two",
+     "userType": "Guest",
+     "assignedLicenses": []
+    },
+    {
+     "id": "c0000000-0000-4000-8000-000000000003",
+     "displayName": "Guest three",
+     "userType": "Guest",
+     "assignedLicenses": []
+    }
+   ],
+   "access_reviews": [],
+   "access_review_summary": {
+    "total_definitions": 0,
+    "active_reviews": 0,
+    "group_membership_reviews": 0,
+    "role_assignment_reviews": 0,
+    "application_assignment_reviews": 0,
+    "guest_user_reviews": 0,
+    "recurring_reviews": 0,
+    "one_time_reviews": 0
+   }
+  }
+ },
+ "expected": {
+  "source_states": {
+   "guests": "available",
+   "authorization_policy": "available",
+   "access_reviews": "available (empty)"
+  },
+  "population_scope": "Guest accounts; tenant invitation setting; access review definitions",
+  "checks": [
+   {
+    "finding_key": "entra.guests.licensed",
+    "disposition": "Opportunity",
+    "semantic_condition": [
+     "guests=LicensedGuestsPresent"
+    ],
+    "required": [
+     "1 of 3 guest"
+    ]
+   },
+   {
+    "finding_key": "entra.guests.invitation",
+    "disposition": "Opportunity",
+    "semantic_condition": [
+     "guest_invitations=everyone"
+    ]
+   },
+   {
+    "finding_key": "entra.access_reviews.definitions",
+    "disposition": "Opportunity",
+    "semantic_condition": [
+     "access_reviews=NoDefinitions"
+    ],
+    "required": [
+     "returned 0 access review definition"
+    ]
+   }
+  ],
+  "unique_finding_keys": [
+   "entra.access_reviews.definitions"
+  ]
+ }
+}

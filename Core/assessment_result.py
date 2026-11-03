@@ -908,7 +908,10 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
     from .device_evidence import tenant_blocker_eligible
     # Native device blockers require current explicit security failures and
     # stable identity. Pilot membership does not change tenant eligibility.
-    confirmed_actions = [row for row in actions if row["ActionType"] == "Remediation" and row["SecurityGate"] and tenant_blocker_eligible(row)]
+    # A presence-only exposure count has no declared threshold, so it is a tenant
+    # condition to review, never an automatic readiness blocker.
+    confirmed_actions = [row for row in actions if row["ActionType"] == "Remediation" and row["SecurityGate"] and tenant_blocker_eligible(row)
+                         and row.get("SeverityBasis") != "presence_only"]
     critical = [row for row in confirmed_actions if str(row.get("Status", "")).lower() == "critical"]
     high = [row for row in confirmed_actions if row.get("Priority") == "High"]
     medium = [row for row in confirmed_actions if row.get("Priority") == "Medium"]
