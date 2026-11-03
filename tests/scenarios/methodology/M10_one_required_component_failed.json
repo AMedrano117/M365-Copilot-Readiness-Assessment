@@ -1,0 +1,139 @@
+{
+ "name": "M10_one_required_component_failed",
+ "declared_before_production_change": "2026-11-03",
+ "description": "The legacy allow-all consent policy is assigned; the grant inventory is clean.",
+ "patch": {
+  "client": {
+   "authorization_policy": {
+    "id": "authorizationPolicy",
+    "allowInvitesFrom": "adminsAndGuestInviters",
+    "defaultUserRolePermissions": {
+     "permissionGrantPoliciesAssigned": [
+      "ManagePermissionGrantsForSelf.microsoft-user-default-legacy"
+     ]
+    },
+    "allowUserConsentForRiskyApps": false
+   },
+   "consent_summary": {
+    "total_apps": 3,
+    "consent_configuration_available": true,
+    "assigned_user_consent_policies": [
+     "ManagePermissionGrantsForSelf.microsoft-user-default-legacy"
+    ],
+    "user_consent_allowed": true,
+    "admin_consent_required": false,
+    "high_privilege_apps": 0,
+    "unverified_publishers": 0,
+    "grant_inventory_available": true
+   },
+   "permission_grant_policies": [
+    {
+     "id": "microsoft-user-default-allow-consent-apps",
+     "displayName": "Microsoft-managed mail-client consent",
+     "includes": [
+      {
+       "permissionType": "delegated",
+       "permissionClassification": "all",
+       "clientApplicationsFromVerifiedPublisherOnly": false,
+       "clientApplicationIds": [
+        "f8d98a96-0999-43f5-8af3-69971c7bb423",
+        "b50c1dbd-1855-4e54-b07c-d3c3029e93d3"
+       ],
+       "clientApplicationTenantIds": [
+        "all"
+       ],
+       "permissions": [
+        "89fe6a52-be36-487e-b7d8-d061c450a026"
+       ],
+       "resourceApplication": "00000003-0000-0000-c000-000000000000"
+      }
+     ],
+     "excludes": []
+    },
+    {
+     "id": "microsoft-user-default-recommended",
+     "displayName": "Microsoft-managed recommended consent",
+     "includes": [
+      {
+       "permissionType": "delegated",
+       "permissionClassification": "all",
+       "clientApplicationsFromVerifiedPublisherOnly": false,
+       "clientApplicationIds": [
+        "all"
+       ],
+       "clientApplicationTenantIds": [
+        "all"
+       ],
+       "permissions": [
+        "all"
+       ],
+       "resourceApplication": "any"
+      }
+     ],
+     "excludes": [
+      {
+       "permissionType": "delegated",
+       "permissionClassification": "all",
+       "clientApplicationsFromVerifiedPublisherOnly": false,
+       "clientApplicationIds": [
+        "all"
+       ],
+       "clientApplicationTenantIds": [
+        "all"
+       ],
+       "permissions": [
+        "89fe6a52-be36-487e-b7d8-d061c450a026"
+       ],
+       "resourceApplication": "00000003-0000-0000-c000-000000000000"
+      }
+     ]
+    },
+    {
+     "id": "microsoft-user-default-legacy",
+     "displayName": "Allow user consent for apps",
+     "includes": [
+      {
+       "permissionType": "delegatedUserConsentable",
+       "permissionClassification": "all",
+       "clientApplicationsFromVerifiedPublisherOnly": false,
+       "clientApplicationIds": [
+        "all"
+       ],
+       "clientApplicationTenantIds": [
+        "all"
+       ],
+       "permissions": [
+        "all"
+       ],
+       "resourceApplication": "any"
+      }
+     ],
+     "excludes": []
+    }
+   ]
+  }
+ },
+ "expected": {
+  "checks": [
+   {
+    "finding_key": "entra.apps.user_consent_assignment",
+    "disposition": "Action",
+    "priority": "High",
+    "readiness_treatment": "Remediate",
+    "component_result": "failed",
+    "action_type": "Remediation",
+    "pilot_impact": "Blocks readiness",
+    "blocks_readiness": true
+   },
+   {
+    "finding_key": "entra.app_consent.grants_reviewed",
+    "component_result": "supported"
+   },
+   {
+    "control": "APPS.CONSENT",
+    "control_status": "Action required",
+    "control_actions": 1
+   }
+  ]
+ }
+}

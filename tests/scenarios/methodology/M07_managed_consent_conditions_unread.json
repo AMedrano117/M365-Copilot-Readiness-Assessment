@@ -1,0 +1,59 @@
+{
+ "name": "M07_managed_consent_conditions_unread",
+ "declared_before_production_change": "2026-11-03",
+ "description": "The Microsoft-managed recommended policy is assigned but the permission grant policy read failed with HTTP 403.",
+ "patch": {
+  "client": {
+   "authorization_policy": {
+    "id": "authorizationPolicy",
+    "allowInvitesFrom": "adminsAndGuestInviters",
+    "defaultUserRolePermissions": {
+     "permissionGrantPoliciesAssigned": [
+      "ManagePermissionGrantsForSelf.microsoft-user-default-recommended"
+     ]
+    },
+    "allowUserConsentForRiskyApps": false
+   },
+   "consent_summary": {
+    "total_apps": 3,
+    "consent_configuration_available": true,
+    "assigned_user_consent_policies": [
+     "ManagePermissionGrantsForSelf.microsoft-user-default-recommended"
+    ],
+    "user_consent_allowed": true,
+    "admin_consent_required": false,
+    "high_privilege_apps": 0,
+    "unverified_publishers": 0,
+    "grant_inventory_available": true
+   },
+   "permission_grant_policies": []
+  },
+  "sources": {
+   "consent_policies": "unavailable:403"
+  }
+ },
+ "expected": {
+  "checks": [
+   {
+    "finding_key": "entra.apps.user_consent_assignment",
+    "disposition": "Coverage",
+    "evidence_status": "gap",
+    "readiness_treatment": "EvidenceGap",
+    "semantic_condition": [
+     "consent=PolicyConditionsNotRetained"
+    ],
+    "component_result": "not_established",
+    "required": [
+     "HTTP 403"
+    ],
+    "prohibited": [
+     "limit which publishers and permissions users can approve"
+    ]
+   },
+   {
+    "control": "APPS.CONSENT",
+    "control_status": "Not established"
+   }
+  ]
+ }
+}

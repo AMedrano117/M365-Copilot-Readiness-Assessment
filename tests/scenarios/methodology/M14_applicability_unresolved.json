@@ -1,0 +1,29 @@
+{
+ "name": "M14_applicability_unresolved",
+ "declared_before_production_change": "2026-11-03",
+ "description": "Shared-result contract: a requirements-dependent component has no applicability decision and is unread.",
+ "component_rows": [
+  {
+   "key": "fixture.required.supported",
+   "disposition": "Assurance"
+  },
+  {
+   "key": "fixture.applicability_unresolved",
+   "disposition": "Coverage",
+   "applicability": "requirements-dependent"
+  }
+ ],
+ "expected": {
+  "checks": [
+   {
+    "finding_key": "fixture.applicability_unresolved",
+    "component_result": "not_established",
+    "component_required": true
+   },
+   {
+    "control": "APPS.CONNECTIONS",
+    "control_status": "Not established"
+   }
+  ]
+ }
+}

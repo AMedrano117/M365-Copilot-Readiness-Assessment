@@ -1,0 +1,143 @@
+{
+ "name": "M06b_managed_recommended_policy_any_publisher",
+ "declared_before_production_change": "2026-11-03",
+ "description": "The Microsoft-managed recommended policy is assigned; its retained conditions admit any publisher (the retained Cavehouse shape).",
+ "patch": {
+  "client": {
+   "authorization_policy": {
+    "id": "authorizationPolicy",
+    "allowInvitesFrom": "adminsAndGuestInviters",
+    "defaultUserRolePermissions": {
+     "permissionGrantPoliciesAssigned": [
+      "ManagePermissionGrantsForSelf.microsoft-user-default-recommended"
+     ]
+    }
+   },
+   "consent_summary": {
+    "total_apps": 3,
+    "consent_configuration_available": true,
+    "assigned_user_consent_policies": [
+     "ManagePermissionGrantsForSelf.microsoft-user-default-recommended"
+    ],
+    "user_consent_allowed": true,
+    "admin_consent_required": false,
+    "high_privilege_apps": 0,
+    "unverified_publishers": 0,
+    "grant_inventory_available": true
+   },
+   "permission_grant_policies": [
+    {
+     "id": "microsoft-user-default-allow-consent-apps",
+     "displayName": "Microsoft-managed mail-client consent",
+     "includes": [
+      {
+       "permissionType": "delegated",
+       "permissionClassification": "all",
+       "clientApplicationsFromVerifiedPublisherOnly": false,
+       "clientApplicationIds": [
+        "f8d98a96-0999-43f5-8af3-69971c7bb423",
+        "b50c1dbd-1855-4e54-b07c-d3c3029e93d3"
+       ],
+       "clientApplicationTenantIds": [
+        "all"
+       ],
+       "permissions": [
+        "89fe6a52-be36-487e-b7d8-d061c450a026"
+       ],
+       "resourceApplication": "00000003-0000-0000-c000-000000000000"
+      }
+     ],
+     "excludes": []
+    },
+    {
+     "id": "microsoft-user-default-recommended",
+     "displayName": "Microsoft-managed recommended consent",
+     "includes": [
+      {
+       "permissionType": "delegated",
+       "permissionClassification": "all",
+       "clientApplicationsFromVerifiedPublisherOnly": false,
+       "clientApplicationIds": [
+        "all"
+       ],
+       "clientApplicationTenantIds": [
+        "all"
+       ],
+       "permissions": [
+        "all"
+       ],
+       "resourceApplication": "any"
+      }
+     ],
+     "excludes": [
+      {
+       "permissionType": "delegated",
+       "permissionClassification": "all",
+       "clientApplicationsFromVerifiedPublisherOnly": false,
+       "clientApplicationIds": [
+        "all"
+       ],
+       "clientApplicationTenantIds": [
+        "all"
+       ],
+       "permissions": [
+        "89fe6a52-be36-487e-b7d8-d061c450a026"
+       ],
+       "resourceApplication": "00000003-0000-0000-c000-000000000000"
+      }
+     ]
+    },
+    {
+     "id": "microsoft-user-default-legacy",
+     "displayName": "Allow user consent for apps",
+     "includes": [
+      {
+       "permissionType": "delegatedUserConsentable",
+       "permissionClassification": "all",
+       "clientApplicationsFromVerifiedPublisherOnly": false,
+       "clientApplicationIds": [
+        "all"
+       ],
+       "clientApplicationTenantIds": [
+        "all"
+       ],
+       "permissions": [
+        "all"
+       ],
+       "resourceApplication": "any"
+      }
+     ],
+     "excludes": []
+    }
+   ]
+  }
+ },
+ "expected": {
+  "checks": [
+   {
+    "finding_key": "entra.apps.user_consent_assignment",
+    "disposition": "Action",
+    "priority": "Medium",
+    "readiness_treatment": "ConfirmBeforePilot",
+    "semantic_condition": [
+     "consent=PolicyBounded"
+    ],
+    "action_type": "Confirmation",
+    "pilot_impact": "Evidence review",
+    "blocks_readiness": false,
+    "component_result": "not_established",
+    "required": [
+     "verified publisher",
+     "allowUserConsentForRiskyApps"
+    ],
+    "prohibited": [
+     "without administrator review"
+    ]
+   },
+   {
+    "control": "APPS.CONSENT",
+    "control_status": "Not established"
+   }
+  ]
+ }
+}

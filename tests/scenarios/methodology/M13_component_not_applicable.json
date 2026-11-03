@@ -1,0 +1,28 @@
+{
+ "name": "M13_component_not_applicable",
+ "declared_before_production_change": "2026-11-03",
+ "description": "Shared-result contract: a required component is supported and a second component is proven not applicable.",
+ "component_rows": [
+  {
+   "key": "fixture.required.supported",
+   "disposition": "Assurance"
+  },
+  {
+   "key": "fixture.not_applicable",
+   "disposition": "Coverage",
+   "applicability": "not_applicable"
+  }
+ ],
+ "expected": {
+  "checks": [
+   {
+    "finding_key": "fixture.not_applicable",
+    "component_result": "not_applicable"
+   },
+   {
+    "control": "APPS.CONNECTIONS",
+    "control_status": "Observed"
+   }
+  ]
+ }
+}
