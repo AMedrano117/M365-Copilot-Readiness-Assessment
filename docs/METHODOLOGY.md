@@ -181,7 +181,9 @@ each control they can evaluate:
   exposure, DSPM oversharing and unlabeled sensitive items) keep their observed priority, affected
   locations and source period, but carry `SeverityBasis: presence_only` and
   `ReadinessTreatment: ScopeReviewRequired`. No exposure threshold is defined, so presence alone does
-  not block tenant readiness. Current explicit device-setting failures keep their documented
+  not block tenant readiness. The aggregate count of high-impact application grants is treated the
+  same way: it stays a high-priority remediation to review per application, without blocking on
+  presence alone. Current explicit device-setting failures keep their documented
   blocking rule (see [Tenant readiness scope](TENANT_READINESS_SCOPE.md)).
 - **DLP configuration** is supported when an enforced policy applies to all users or locations for Exchange,
   SharePoint, OneDrive, Teams or Microsoft 365 Copilot. The absence of a Copilot-location policy is

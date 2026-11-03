@@ -55,11 +55,14 @@
     "finding_key": "entra.app_consent.high_impact_grants",
     "disposition": "Action",
     "semantic_condition": [
-     "grants=HighImpactGrantsPresent"
+     "grants=HighImpactGrantsPresent",
+     "severity_basis=presence_only"
     ],
     "required": [
      "2 with high-privilege permissions"
-    ]
+    ],
+    "readiness_treatment": "ScopeReviewRequired",
+    "blocks_readiness": false
    },
    {
     "control": "APPS.CONSENT",
@@ -70,5 +73,6 @@
     ]
    }
   ]
- }
+ },
+ "expectation_note": "Added 2026-11-03 before the grant correction: the Cavehouse comparison showed that a supported aggregate grant count became a blocker once its provenance was retained. No threshold is defined, so a presence count is reviewed, not blocking."
 }

@@ -444,7 +444,10 @@ def _consent_rows(entra_insights, feature):
             finding_key="entra.app_consent.high_impact_grants",
             evidence_key="app_access_detail",
             evidence_summary="See App Access Detail for the exact risky applications, granted scopes, count logic, and available 30-day activity."
-        ), SemanticCondition='grants=HighImpactGrantsPresent', ReadinessTreatment='Remediate', **grant_common))
+        ), SemanticCondition='grants=HighImpactGrantsPresent; severity_basis=presence_only', ReadinessTreatment='ScopeReviewRequired',
+            # An aggregate count of flagged grants has no declared threshold, so its
+            # presence is reviewed per application rather than blocking readiness.
+            SeverityBasis='presence_only', **grant_common))
     elif unverified_publishers > 0:
         rows.append(_structured(new_recommendation(
             service="Entra",
