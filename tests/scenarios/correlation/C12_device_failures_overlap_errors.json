@@ -1,0 +1,81 @@
+{
+ "name": "C12_device_failures_overlap_errors",
+ "kind": "device",
+ "declared_before_production_change": "2026-11-03",
+ "description": "One device has a confirmed BitLocker failure and a reporting error; a second device has only a reporting error.",
+ "declaration": {
+  "observed_condition": "1 confirmed setting failure; 2 devices with reporting errors",
+  "existing_control": "Compliance policy 'Windows encryption baseline'",
+  "effective_scope": "2 managed devices",
+  "operation_evidence": "Recent device reports",
+  "exclusion_evidence": "None",
+  "source_states": "managed devices, setting states and policies complete",
+  "expected_technical_result": "Error records are not failures; 1 device overlaps",
+  "expected_action_lane": "InvestigateAffectedObjects/CollectMissingEvidence",
+  "expected_readiness_treatment": "None",
+  "expected_customer_action_count": 2,
+  "prohibited_conclusion": "That an error-state device is a confirmed security failure",
+  "required_qualification": "Overlap reported from stable device IDs"
+ },
+ "devices": [
+  {
+   "id": "intune-1",
+   "azureADDeviceId": "entra-1"
+  },
+  {
+   "id": "intune-2",
+   "azureADDeviceId": "entra-2"
+  }
+ ],
+ "settings": [
+  {
+   "id": "setting-1",
+   "deviceId": "intune-1",
+   "settingName": "Require BitLocker",
+   "state": "noncompliant",
+   "policyId": "policy-1"
+  },
+  {
+   "id": "setting-2",
+   "deviceId": "intune-1",
+   "settingName": "Require Secure Boot",
+   "state": "error",
+   "policyId": "policy-1"
+  },
+  {
+   "id": "setting-3",
+   "deviceId": "intune-2",
+   "settingName": "Require Secure Boot",
+   "state": "error",
+   "policyId": "policy-1"
+  }
+ ],
+ "policies": [
+  {
+   "id": "policy-1",
+   "displayName": "Windows encryption baseline"
+  }
+ ],
+ "expected": {
+  "rows": [
+   {
+    "finding_key": "expanded.compliance_setting_states.errors",
+    "lane_not": "FixNow",
+    "prohibited": [
+     "confirmed (?:security )?failure"
+    ]
+   }
+  ],
+  "overlaps": [
+   {
+    "keys": [
+     "expanded.compliance_setting_states.noncompliant",
+     "expanded.compliance_setting_states.errors"
+    ],
+    "devices": 1
+   }
+  ],
+  "customer_actions": [],
+  "controls": []
+ }
+}

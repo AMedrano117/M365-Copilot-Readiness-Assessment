@@ -1,0 +1,60 @@
+{
+ "name": "C17_multiple_findings_one_action",
+ "kind": "bundle",
+ "declared_before_production_change": "2026-11-03",
+ "description": "Zero sensitivity labels and zero label policies: one owner and decision, two retained findings.",
+ "declaration": {
+  "observed_condition": "0 labels; 0 label policies",
+  "existing_control": "None",
+  "effective_scope": "Tenant",
+  "operation_evidence": "Configuration",
+  "exclusion_evidence": "None",
+  "source_states": "Purview complete",
+  "expected_technical_result": "Two findings, one customer action",
+  "expected_action_lane": "FixNow",
+  "expected_readiness_treatment": "Remediate",
+  "expected_customer_action_count": 1,
+  "prohibited_conclusion": "Two separate customer actions",
+  "required_qualification": "Both findings remain as evidence"
+ },
+ "rows": [
+  {
+   "key": "purview.raw.sensitivity_labels",
+   "feature": "Define sensitivity labels for business content",
+   "control": "DATA.LABELS",
+   "observation": "The collected configuration contains zero sensitivity labels."
+  },
+  {
+   "key": "purview.raw.label_policies",
+   "feature": "Publish sensitivity labels to the intended users",
+   "control": "DATA.PUBLISHING",
+   "observation": "The collected configuration contains zero label policies."
+  }
+ ],
+ "expected": {
+  "rows": [
+   {
+    "finding_key": "purview.raw.sensitivity_labels",
+    "open_action": true,
+    "lane": "FixNow"
+   },
+   {
+    "finding_key": "purview.raw.label_policies",
+    "open_action": true,
+    "lane": "FixNow"
+   }
+  ],
+  "customer_actions": [
+   {
+    "keys": [
+     "purview.raw.sensitivity_labels",
+     "purview.raw.label_policies"
+    ],
+    "count": 1,
+    "lane": "FixNow",
+    "members": 2
+   }
+  ],
+  "controls": []
+ }
+}

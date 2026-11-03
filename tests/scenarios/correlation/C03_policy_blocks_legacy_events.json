@@ -1,0 +1,156 @@
+{
+ "name": "C03_policy_blocks_legacy_events",
+ "kind": "identity",
+ "declared_before_production_change": "2026-11-03",
+ "description": "Legacy sign-in attempts blocked by the enforced legacy-block policy.",
+ "declaration": {
+  "observed_condition": "2 legacy attempts blocked by CA",
+  "existing_control": "Enabled 'Block legacy authentication' for all users",
+  "effective_scope": "All users",
+  "operation_evidence": "Applied-policy result failure (blocked) for both events",
+  "exclusion_evidence": "None",
+  "source_states": "CA complete; sign-ins complete",
+  "expected_technical_result": "ControlOperatingAsExpected",
+  "expected_action_lane": "None",
+  "expected_readiness_treatment": "None",
+  "expected_customer_action_count": 0,
+  "prohibited_conclusion": "That blocked attempts are a failure",
+  "required_qualification": "Observed blocking within the returned sample"
+ },
+ "patch": {
+  "client": {
+   "ca_policies": [
+    {
+     "id": "ca-mfa-all",
+     "displayName": "Require MFA for all users",
+     "state": "enabled",
+     "conditions": {
+      "users": {
+       "includeUsers": [
+        "All"
+       ],
+       "includeGroups": [],
+       "excludeUsers": [],
+       "excludeGroups": []
+      },
+      "applications": {
+       "includeApplications": [
+        "All"
+       ]
+      },
+      "clientAppTypes": [
+       "all"
+      ]
+     },
+     "grantControls": {
+      "operator": "OR",
+      "builtInControls": [
+       "mfa"
+      ]
+     }
+    },
+    {
+     "id": "ca-legacy-block",
+     "displayName": "Block legacy authentication",
+     "state": "enabled",
+     "conditions": {
+      "users": {
+       "includeUsers": [
+        "All"
+       ],
+       "includeGroups": [],
+       "excludeUsers": [],
+       "excludeGroups": []
+      },
+      "applications": {
+       "includeApplications": [
+        "All"
+       ]
+      },
+      "clientAppTypes": [
+       "exchangeActiveSync",
+       "other"
+      ]
+     },
+     "grantControls": {
+      "operator": "OR",
+      "builtInControls": [
+       "block"
+      ]
+     },
+     "createdDateTime": "2026-06-01T00:00:00Z",
+     "modifiedDateTime": "2026-09-01T00:00:00Z"
+    }
+   ],
+   "signin_logs": [
+    {
+     "id": "signin-001",
+     "createdDateTime": "2026-10-29T10:00:00Z",
+     "clientAppUsed": "Authenticated SMTP",
+     "appDisplayName": "Office 365 Exchange Online",
+     "resourceDisplayName": "Office 365 Exchange Online",
+     "conditionalAccessStatus": "failure",
+     "status": {
+      "errorCode": 53003
+     },
+     "userId": "a0000000-0000-4000-8000-000000000001",
+     "appliedConditionalAccessPolicies": [
+      {
+       "id": "ca-legacy-block",
+       "displayName": "Block legacy authentication",
+       "result": "failure",
+       "enforcedGrantControls": [
+        "Block"
+       ]
+      }
+     ]
+    },
+    {
+     "id": "signin-002",
+     "createdDateTime": "2026-10-29T12:00:00Z",
+     "clientAppUsed": "Authenticated SMTP",
+     "appDisplayName": "Office 365 Exchange Online",
+     "resourceDisplayName": "Office 365 Exchange Online",
+     "conditionalAccessStatus": "failure",
+     "status": {
+      "errorCode": 53003
+     },
+     "userId": "a0000000-0000-4000-8000-000000000002",
+     "appliedConditionalAccessPolicies": [
+      {
+       "id": "ca-legacy-block",
+       "displayName": "Block legacy authentication",
+       "result": "failure",
+       "enforcedGrantControls": [
+        "Block"
+       ]
+      }
+     ]
+    }
+   ],
+   "signin_summary": {
+    "legacy_auth_attempts": 2
+   }
+  }
+ },
+ "expected": {
+  "rows": [
+   {
+    "finding_key": "entra.signins.legacy_auth",
+    "correlation_state": "ControlOperatingAsExpected",
+    "operation_state": "ControlOperatingAsExpected",
+    "disposition": "Reference",
+    "open_action": false
+   }
+  ],
+  "customer_actions": [
+   {
+    "keys": [
+     "entra.signins.legacy_auth"
+    ],
+    "count": 0
+   }
+  ],
+  "controls": []
+ }
+}

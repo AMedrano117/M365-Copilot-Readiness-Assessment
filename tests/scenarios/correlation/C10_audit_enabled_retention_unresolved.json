@@ -1,0 +1,85 @@
+{
+ "name": "C10_audit_enabled_retention_unresolved",
+ "kind": "bundle",
+ "declared_before_production_change": "2026-11-03",
+ "description": "Unified and admin audit are enabled and Copilot audit events were retained; retention and response remain unresolved.",
+ "declaration": {
+  "observed_condition": "Audit configuration and events retained",
+  "existing_control": "Unified audit and admin audit enabled",
+  "effective_scope": "Tenant",
+  "operation_evidence": "3 Copilot audit events in a 7-day window",
+  "exclusion_evidence": "None",
+  "source_states": "audit_config complete; copilot_audit complete",
+  "expected_technical_result": "ControlScopeUnresolved",
+  "expected_action_lane": "ValidateExistingControl",
+  "expected_readiness_treatment": "None (coverage row)",
+  "expected_customer_action_count": 1,
+  "prohibited_conclusion": "That audit evidence is unavailable",
+  "required_qualification": "Only workload, retention, ownership and response remain"
+ },
+ "sources": {
+  "audit_config": {
+   "records": [
+    {
+     "unified_audit_enabled": true,
+     "admin_audit_enabled": true
+    }
+   ]
+  },
+  "copilot_audit": {
+   "records": [
+    {
+     "id": "audit-0",
+     "Operation": "CopilotInteraction"
+    },
+    {
+     "id": "audit-1",
+     "Operation": "CopilotInteraction"
+    },
+    {
+     "id": "audit-2",
+     "Operation": "CopilotInteraction"
+    }
+   ],
+   "source": {
+    "window_start": "2026-10-23T12:00:00+00:00",
+    "window_end": "2026-10-30T12:00:00+00:00",
+    "evidence_level": "observed_operation"
+   }
+  }
+ },
+ "expected": {
+  "rows": [
+   {
+    "finding_key": "coverage.data.audit",
+    "correlation_state": "ControlScopeUnresolved",
+    "lane": "ValidateExistingControl",
+    "open_action": true,
+    "components": {
+     "configuration": "observed",
+     "operation": "observed",
+     "retention_coverage": "unresolved",
+     "workload_coverage": "unresolved",
+     "monitoring_ownership": "unresolved",
+     "investigation_process": "unresolved"
+    },
+    "required": [
+     "enabled",
+     "3 Copilot audit events",
+     "retention"
+    ],
+    "prohibited": [
+     "could not be answered from the collected evidence",
+     "Provide dated audit configuration"
+    ]
+   }
+  ],
+  "controls": [
+   {
+    "control": "DATA.AUDIT",
+    "control_status": "Not established"
+   }
+  ],
+  "customer_actions": []
+ }
+}

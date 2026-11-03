@@ -1,0 +1,117 @@
+{
+ "name": "C01_legacy_events_no_blocking_policy",
+ "kind": "identity",
+ "declared_before_production_change": "2026-11-03",
+ "description": "Successful legacy sign-ins with no Conditional Access policy that blocks legacy authentication.",
+ "declaration": {
+  "observed_condition": "2 successful legacy SMTP sign-ins by one user",
+  "existing_control": "None: only an all-users MFA policy is enforced",
+  "effective_scope": "Not applicable",
+  "operation_evidence": "Successful token requests",
+  "exclusion_evidence": "None",
+  "source_states": "CA complete; sign-ins complete",
+  "expected_technical_result": "ControlAbsent",
+  "expected_action_lane": "FixNow",
+  "expected_readiness_treatment": "Remediate",
+  "expected_customer_action_count": 1,
+  "prohibited_conclusion": "That an existing control was validated",
+  "required_qualification": "No enforced policy blocks legacy authentication"
+ },
+ "patch": {
+  "client": {
+   "ca_policies": [
+    {
+     "id": "ca-mfa-all",
+     "displayName": "Require MFA for all users",
+     "state": "enabled",
+     "conditions": {
+      "users": {
+       "includeUsers": [
+        "All"
+       ],
+       "includeGroups": [],
+       "excludeUsers": [],
+       "excludeGroups": []
+      },
+      "applications": {
+       "includeApplications": [
+        "All"
+       ]
+      },
+      "clientAppTypes": [
+       "all"
+      ]
+     },
+     "grantControls": {
+      "operator": "OR",
+      "builtInControls": [
+       "mfa"
+      ]
+     }
+    }
+   ],
+   "signin_logs": [
+    {
+     "id": "signin-001",
+     "createdDateTime": "2026-10-29T10:00:00Z",
+     "clientAppUsed": "Authenticated SMTP",
+     "appDisplayName": "Office 365 Exchange Online",
+     "resourceDisplayName": "Office 365 Exchange Online",
+     "conditionalAccessStatus": "notApplied",
+     "status": {
+      "errorCode": 0
+     },
+     "userId": "a0000000-0000-4000-8000-000000000001",
+     "appliedConditionalAccessPolicies": []
+    },
+    {
+     "id": "signin-002",
+     "createdDateTime": "2026-10-29T11:00:00Z",
+     "clientAppUsed": "Authenticated SMTP",
+     "appDisplayName": "Office 365 Exchange Online",
+     "resourceDisplayName": "Office 365 Exchange Online",
+     "conditionalAccessStatus": "notApplied",
+     "status": {
+      "errorCode": 0
+     },
+     "userId": "a0000000-0000-4000-8000-000000000001",
+     "appliedConditionalAccessPolicies": []
+    }
+   ],
+   "signin_summary": {
+    "legacy_auth_attempts": 2
+   }
+  }
+ },
+ "expected": {
+  "rows": [
+   {
+    "finding_key": "entra.signins.legacy_auth",
+    "correlation_state": "ControlAbsent",
+    "configuration_state": "ControlAbsent",
+    "lane": "FixNow",
+    "readiness_treatment": "Remediate",
+    "disposition": "Action",
+    "open_action": true,
+    "required": [
+     "No enforced Conditional Access policy blocks legacy authentication",
+     "2 successful"
+    ],
+    "prohibited": [
+     "did not establish whether those events preceded enforcement"
+    ]
+   }
+  ],
+  "customer_actions": [
+   {
+    "keys": [
+     "entra.signins.legacy_auth",
+     "baseline.identity.sign_in"
+    ],
+    "count": 1,
+    "lane": "FixNow"
+   }
+  ],
+  "controls": []
+ }
+}

@@ -1,0 +1,154 @@
+{
+ "name": "C06_correlation_unavailable",
+ "kind": "identity",
+ "declared_before_production_change": "2026-11-03",
+ "description": "Successful legacy sign-ins whose user, applied-policy result and policy dates were not retained.",
+ "declaration": {
+  "observed_condition": "2 successful legacy SMTP sign-ins with no retained user or applied-policy result",
+  "existing_control": "Enabled 'Block legacy authentication' for all users except 1 account",
+  "effective_scope": "All users except 1 account",
+  "operation_evidence": "Not correlatable: no user, applied-policy result or policy dates",
+  "exclusion_evidence": "1 excluded account, purpose not validated",
+  "source_states": "CA complete; sign-ins complete",
+  "expected_technical_result": "ControlOperationUnresolved",
+  "expected_action_lane": "ValidateExistingControl",
+  "expected_readiness_treatment": "ConfirmBeforePilot",
+  "expected_customer_action_count": 1,
+  "prohibited_conclusion": "That the policy failed or that a new policy is needed",
+  "required_qualification": "The event-to-policy relationship was not established"
+ },
+ "patch": {
+  "client": {
+   "ca_policies": [
+    {
+     "id": "ca-mfa-all",
+     "displayName": "Require MFA for all users",
+     "state": "enabled",
+     "conditions": {
+      "users": {
+       "includeUsers": [
+        "All"
+       ],
+       "includeGroups": [],
+       "excludeUsers": [],
+       "excludeGroups": []
+      },
+      "applications": {
+       "includeApplications": [
+        "All"
+       ]
+      },
+      "clientAppTypes": [
+       "all"
+      ]
+     },
+     "grantControls": {
+      "operator": "OR",
+      "builtInControls": [
+       "mfa"
+      ]
+     }
+    },
+    {
+     "id": "ca-legacy-block",
+     "displayName": "Block legacy authentication",
+     "state": "enabled",
+     "conditions": {
+      "users": {
+       "includeUsers": [
+        "All"
+       ],
+       "includeGroups": [],
+       "excludeUsers": [
+        "b0000000-0000-4000-8000-000000000001"
+       ],
+       "excludeGroups": []
+      },
+      "applications": {
+       "includeApplications": [
+        "All"
+       ]
+      },
+      "clientAppTypes": [
+       "exchangeActiveSync",
+       "other"
+      ]
+     },
+     "grantControls": {
+      "operator": "OR",
+      "builtInControls": [
+       "block"
+      ]
+     }
+    }
+   ],
+   "signin_logs": [
+    {
+     "id": "signin-001",
+     "createdDateTime": "2026-10-29T10:00:00Z",
+     "clientAppUsed": "Authenticated SMTP",
+     "appDisplayName": "Office 365 Exchange Online",
+     "resourceDisplayName": "Office 365 Exchange Online",
+     "conditionalAccessStatus": "notApplied",
+     "status": {
+      "errorCode": 0
+     }
+    },
+    {
+     "id": "signin-002",
+     "createdDateTime": "2026-10-29T11:00:00Z",
+     "clientAppUsed": "Authenticated SMTP",
+     "appDisplayName": "Office 365 Exchange Online",
+     "resourceDisplayName": "Office 365 Exchange Online",
+     "conditionalAccessStatus": "notApplied",
+     "status": {
+      "errorCode": 0
+     }
+    }
+   ],
+   "signin_summary": {
+    "legacy_auth_attempts": 2
+   }
+  }
+ },
+ "expected": {
+  "rows": [
+   {
+    "finding_key": "entra.signins.legacy_auth",
+    "correlation_state": "ControlOperationUnresolved",
+    "configuration_state": "ControlConfigured",
+    "lane": "ValidateExistingControl",
+    "readiness_treatment": "ConfirmBeforePilot",
+    "disposition": "Action",
+    "open_action": true,
+    "exclusions_separate": true,
+    "required": [
+     "did not establish whether those events preceded enforcement, involved excluded accounts, or fell outside the effective policy conditions",
+     "before treating this as a policy failure"
+    ],
+    "prohibited": [
+     "[Cc]reate (?:a|an) (?:new )?(?:Conditional Access )?policy",
+     "[Nn]o (?:enforced )?(?:legacy[- ]authentication )?blocking policy (?:exists|was found)",
+     "policy (?:has )?failed|control failure"
+    ],
+    "next_steps_required": [
+     "enforcement date",
+     "client-app conditions",
+     "applied-policy result",
+     "excluded accounts",
+     "nonexcluded test identity"
+    ]
+   }
+  ],
+  "customer_actions": [
+   {
+    "keys": [
+     "entra.signins.legacy_auth"
+    ],
+    "count": 1,
+    "lane": "ValidateExistingControl"
+   }
+  ],
+  "controls": []
+ }
+}
