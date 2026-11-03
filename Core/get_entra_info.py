@@ -107,6 +107,19 @@ async def get_entra_info(client, services_and_licenses=None, entra_client=None):
         tenant_id = entra_info.get('tenant_id')
         entra_client = await get_entra_client(client, tenant_id)
     
+    recommendations = build_entra_recommendations(entra_info.get('licenses', []), entra_client)
+    
+    entra_info['recommendations'] = recommendations
+    return entra_info
+
+
+def build_entra_recommendations(licenses, entra_client):
+    """Entra findings from the retained license inventory and client evidence.
+
+    Live collection and saved-collection replay call this same function, so a
+    rebuilt package applies the current rules to the retained evidence.
+    """
+    recommendations = []
     # Pre-compute entra insights once (similar to pp_insights pattern)
     from Recommendations.entra.entra_insights import extract_entra_insights_from_client
     entra_insights = extract_entra_insights_from_client(entra_client)
@@ -116,9 +129,10 @@ async def get_entra_info(client, services_and_licenses=None, entra_client=None):
     
     # Resolve each plan to its best status across every SKU: a plan disabled in one SKU
     # but active in another is available to the tenant.
-    resolved_plans = resolve_plan_statuses(entra_info.get('licenses', []), plans_key='entra_service_plans')
+    resolved_plans = resolve_plan_statuses(licenses, plans_key='entra_service_plans')
+    from .identity_configuration import IDENTITY_LICENSE_PLANS, assess_identity_configuration, license_context
 
-    for lic in entra_info.get('licenses', []):
+    for lic in licenses:
         sku_name = lic.get('sku_part_number', 'Unknown')
         for plan in lic.get('entra_service_plans', []):
             plan_name = plan.get('name')
@@ -138,14 +152,15 @@ async def get_entra_info(client, services_and_licenses=None, entra_client=None):
             
             # Entra feature modules read retained evidence, not Graph endpoints.
             # The transport's dynamic attributes are not collection-status maps.
-            rec = get_recommendation('entra', plan_name, sku_name, status, client=entra_client, entra_insights=entra_insights)
-            
-            # Handle both single recommendations and lists
-            if isinstance(rec, list):
-                recommendations.extend(item for item in rec if item)
-            else:
-                if rec:
-                    recommendations.append(rec)
+            # Identity plans contribute license context only; their technical
+            # conclusions come from the license-independent identity producer.
+            license_only = plan_name in IDENTITY_LICENSE_PLANS
+            rec = get_recommendation('entra', plan_name, sku_name, status, client=entra_client,
+                                     entra_insights=None if license_only else entra_insights)
+            rows = [item for item in rec if item] if isinstance(rec, list) else [rec] if rec else []
+            if license_only:
+                rows = [license_context(item, plan_name, status) for item in rows]
+            recommendations.extend(rows)
     
     # Global Secure Access (Entra Internet Access) doesn't have a service plan
     # It's API-only, so manually invoke if we collected network access data
@@ -222,6 +237,6 @@ async def get_entra_info(client, services_and_licenses=None, entra_client=None):
             else:
                 recommendations.append(frontline_rec)
     
-    entra_info['recommendations'] = recommendations
-    return entra_info
-
+    # Identity conclusions from retained evidence, identical for every license inventory.
+    recommendations.extend(assess_identity_configuration(entra_client, entra_insights))
+    return recommendations

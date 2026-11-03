@@ -909,7 +909,24 @@ def _freshness_finding(feature, source_name, scan, cli_option, env_name, documen
     return finding
 
 
+PRESENCE_ONLY_KEYS = {"anonymous_links", "broad_internal_access", "external_exposure",
+                      "potentially_overshared", "unlabeled_sensitive"}
+
+
 def _risk_finding(feature, observation, recommendation, priority, key, url, confidence="High"):
+    row = _exposure_finding(feature, observation, recommendation, priority, key, url, confidence)
+    if key in PRESENCE_ONLY_KEYS:
+        # The priority records the observed condition. No methodology threshold
+        # defines when an exported count blocks tenant readiness, so presence
+        # alone never does; the affected scope needs review first.
+        row.update(SeverityBasis="presence_only", ReadinessTreatment="ScopeReviewRequired", ExposureThreshold="not_defined",
+                   SemanticCondition=f"severity_basis=presence_only; condition={key}")
+        row["Recommendation"] = (recommendation + " No exposure threshold is defined, so this count does not block tenant "
+                                 "readiness on its own; confirm the affected sites, audiences and business need.")
+    return row
+
+
+def _exposure_finding(feature, observation, recommendation, priority, key, url, confidence="High"):
     return new_recommendation(
         "Data Exposure",
         feature,

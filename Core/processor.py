@@ -38,6 +38,27 @@ def collect_all_recommendations(m365_recommendations, entra_info, purview_info,
     return reconcile_overlapping_evidence(all_recommendations)
 
 
+def entra_recommendations(entra_info, *, collected_at='', profile=None):
+    """Entra findings for live and replayed collections through one shared path.
+
+    When the saved collection retains the Entra client and license inventory,
+    its findings are rebuilt from that evidence with the current rules, as for
+    SharePoint. Saved finding text is never an input. Remaining saved rows are
+    revalidated against their source outcomes, then the tenant-wide identity
+    baseline is evaluated from the retained client.
+    """
+    from .saved_control_checks import qualify_saved_recommendations
+    from .tenant_baseline import account_purposes_from_profile, assess_identity_baseline
+    entra_info = entra_info if isinstance(entra_info, dict) else {}
+    client = entra_info.get('_client')
+    rows = entra_info.get('recommendations', [])
+    if client is not None and isinstance(entra_info.get('licenses'), list):
+        from .get_entra_info import build_entra_recommendations
+        rows = build_entra_recommendations(entra_info['licenses'], client)
+    rows = qualify_saved_recommendations(rows, 'Entra', client)
+    return rows + assess_identity_baseline(client, collected_at, account_purposes=account_purposes_from_profile(profile))
+
+
 def reconcile_overlapping_evidence(recommendations):
     """Prevent one collector's duplicate miss from contradicting evidence read elsewhere."""
     records = [dict(row) for row in (recommendations or [])]
@@ -285,7 +306,9 @@ def process_and_print_all_information(m365_result, entra_info,
     # Collect all recommendations
     from .saved_control_checks import assess_purview_configuration, assess_defender_configuration, qualify_saved_recommendations
     entra_info = dict(entra_info)
-    entra_info['recommendations'] = qualify_saved_recommendations(entra_info.get('recommendations', []), 'Entra', entra_info.get('_client'))
+    profile = load_assessment_profile(assessment_profile)
+    entra_info['recommendations'] = entra_recommendations(
+        entra_info, collected_at=(collection_context or {}).get('collected_at') or '', profile=profile)
     purview_info = dict(purview_info)
     purview_info['recommendations'] = list(purview_info.get('recommendations', [])) + assess_purview_configuration(
         purview_info.get('_client'), (collection_context or {}).get('collected_at'))
@@ -298,10 +321,10 @@ def process_and_print_all_information(m365_result, entra_info,
     from .tenant_baseline import assess_tenant_baseline
     _m365_baseline_client = m365_info.get('_client') if isinstance(m365_info, dict) else None
     _collected_at = (collection_context or {}).get('collected_at') or ''
+    # Identity baseline rows are part of entra_recommendations above.
     baseline_rows = assess_tenant_baseline(
-        m365_client=_m365_baseline_client, entra_client=entra_info.get('_client'),
+        m365_client=_m365_baseline_client, entra_client=None,
         purview_client=purview_info.get('_client'), collected_at=_collected_at)
-    entra_info['recommendations'] += [row for row in baseline_rows if row['Service'] == 'Entra']
     purview_info['recommendations'] += [row for row in baseline_rows if row['Service'] == 'Purview']
     m365_recommendations = list(m365_recommendations) + [row for row in baseline_rows if row['Service'] == 'M365']
     all_recommendations = collect_all_recommendations(
@@ -337,7 +360,6 @@ def process_and_print_all_information(m365_result, entra_info,
             row['Methodology Version'] = source.get('MethodologyVersion', '')
             row['Finding Fingerprint'] = source.get('FindingFingerprint', '')
 
-        profile = load_assessment_profile(assessment_profile)
         providers = load_provider_evidence(provider_evidence,
             max_age_days=(collection_context or {}).get('assessment_settings', {}).get('provider_evidence_max_age_days'),
             evaluation_date=evaluation_date)
