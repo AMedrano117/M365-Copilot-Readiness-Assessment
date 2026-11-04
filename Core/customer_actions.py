@@ -205,6 +205,21 @@ def build_customer_actions(actions, blockers, overlaps=()):
     return result
 
 
+def qualify_capability_claims(records):
+    """Rights Management enabled is supporting context; it never claims protected content.
+
+    Applied after display IDs are assigned, so equivalent producer rows keep
+    their identities; Feature and FindingKey are unchanged.
+    """
+    from .control_correlation import RMS_ENABLED_OBSERVATION
+    for row in records:
+        if _key(row) == 'purview.rms.state' and row.get('Status') == 'Success' and row.get('Disposition') in {'Opportunity', 'Assurance', 'Reference'}:
+            row.setdefault('OriginalObservation', row.get('Observation'))
+            row.setdefault('OriginalRecommendation', row.get('Recommendation'))
+            row.update(Observation=RMS_ENABLED_OBSERVATION, Recommendation='', OriginalDisposition=row.get('Disposition'),
+                       Disposition='Reference')
+
+
 def retire_superseded(records):
     """A producer whose condition is reported by a more specific finding becomes reference context."""
     present = {_key(row) for row in records if row.get('Disposition') in {'Action', 'Coverage'}}

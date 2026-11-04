@@ -183,6 +183,34 @@ class CorrelationInvariantTests(unittest.TestCase):
                          [a['customer_action_id'] for a in second['customer_actions']])
         self.assertEqual(legacy_row(first)['ControlCorrelation']['state'], legacy_row(second)['ControlCorrelation']['state'])
 
+    def test_capability_normalization_keeps_display_ids(self):
+        """Regression: two saved RMS rows made identical before numbering shifted later Purview IDs."""
+        from Core.assessment_result import build_assessment_result
+        from Core.evidence_layer import build_evidence_bundle
+        from Core.new_recommendation import new_recommendation
+        rows = [new_recommendation('Purview', 'Azure Rights Management', 'Azure Rights Management is active in E3.', ''),
+                new_recommendation('Purview', 'Azure Rights Management - Configuration', 'Azure RMS licensing is ENABLED - documents can be protected.',
+                                   'Configure labels.', priority='Low', status='Success', finding_key='purview.rms.state'),
+                new_recommendation('Purview', 'Azure Information Protection Premium P1 - Configuration',
+                                   'Azure Rights Management (Azure RMS) is ENABLED - documents accessed by Copilot can be encrypted with rights management',
+                                   'Azure RMS is properly enabled.', priority='Low', status='Success', finding_key='purview.rms.state'),
+                new_recommendation('Purview', 'Define sensitivity labels for business content', 'The collected configuration contains zero sensitivity labels.',
+                                   'Agree the classifications.', status='Attention Required', disposition='Action',
+                                   finding_key='purview.raw.sensitivity_labels')]
+        from Core.saved_control_checks import qualify_saved_recommendations
+        rows = qualify_saved_recommendations(rows, 'Purview', harness._purview_client())
+        numbered = build_evidence_bundle(rows, ({}, []), {}, {}, {}, {}, {}, None,
+                                         collection_context={'tenant_id': harness.TENANT, 'collected_at': harness.COLLECTED})['recommendations']
+        assigned = {row.get('FindingKey') or row['Feature']: row['RecommendationId'] for row in numbered}
+        result = build_assessment_result(numbered, harness._bundle(), evaluation_date=harness.EVALUATION, expected_tenant_id=harness.TENANT)
+        final = {row.get('FindingKey') or row['Feature']: row for row in result['recommendations'] if row.get('Service') == 'Purview'}
+        # Declared independently: the labels finding is the fourth Purview producer row.
+        self.assertEqual(final['purview.raw.sensitivity_labels']['RecommendationId'], 'PUR-004')
+        self.assertEqual(assigned['purview.raw.sensitivity_labels'], 'PUR-004')
+        self.assertEqual(final['purview.rms.state']['RecommendationId'], assigned['purview.rms.state'])
+        self.assertIn('does not establish that content is protected', final['purview.rms.state']['Observation'])
+        self.assertEqual(final['purview.rms.state']['Disposition'], 'Reference')
+
     def test_offline_replay_preserves_the_correlated_conclusion(self):
         spec = harness.load('C04_successful_events_excluded_accounts')
         live, _ = harness.run(spec)

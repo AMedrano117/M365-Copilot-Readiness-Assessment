@@ -158,11 +158,6 @@ def qualify_saved_recommendations(rows, service, client):
                                   "The tenant-wide sign-in check states whether all users are covered.")
             if row.get("Disposition") == "Assurance" or row.get("Status") == "Success":
                 row.update(Disposition="Reference", Status="Insight", Recommendation="")
-        if row.get('FindingKey') == 'purview.rms.state' and row.get('Status') == 'Success':
-            # A saved enabled-state row is supporting context; it never claims protected content.
-            from .control_correlation import RMS_ENABLED_OBSERVATION
-            row.setdefault('OriginalObservation', row.get('Observation'))
-            row.update(Observation=RMS_ENABLED_OBSERVATION, Recommendation='', Disposition='Reference')
         if row.get("Feature") == "Microsoft 365 data governance evidence" and row.get("Disposition") == "Coverage":
             # Collection summary for the engineer register; each required check
             # carries its own gap, so this is not a second action (3.0).

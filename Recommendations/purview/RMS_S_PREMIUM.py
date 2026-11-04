@@ -43,18 +43,16 @@ async def get_recommendation(sku_name, status="Success", client=None, purview_cl
             azure_rms_enabled = irm_data.get('azure_rms_enabled', False)
             
             if azure_rms_enabled:
-                from Core.control_correlation import RMS_ENABLED_OBSERVATION
                 deployment_rec = new_recommendation(
                     service="Purview",
                     feature=f"{feature_name} - Configuration",
-                    observation=RMS_ENABLED_OBSERVATION,
+                    observation="Azure Rights Management (Azure RMS) is ENABLED - documents accessed by Copilot can be encrypted with rights management",
                     finding_key="purview.rms.state",
-                    recommendation="",
+                    recommendation="Azure RMS is properly enabled. Ensure rights management policies protect Copilot-accessed content: 1) Configure sensitivity labels to automatically apply encryption when Copilot accesses confidential documents, 2) Set rights policies that persist even when content is summarized or copied via AI, 3) Restrict forwarding/copying of emails containing Copilot-generated sensitive summaries, 4) Apply usage rights (view-only, no-print, no-copy) to documents created through AI assistance. This ensures that even if Copilot makes sensitive data discoverable, rights management controls prevent unauthorized access. Use Get-IRMConfiguration to verify Azure RMS is active and Get-Label to review label-based protection policies.",
                     link_text="Configure Rights Management",
                     link_url="https://learn.microsoft.com/azure/information-protection/configure-policy",
                     priority="Low",
-                    status="Success",
-                    disposition="Reference"
+                    status="Success"
                 )
                 deployment_recs.append(deployment_rec)
             else:

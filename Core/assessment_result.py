@@ -982,7 +982,8 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
     from .finding_reconciliation import allocate_display_ids
     collision_diagnostics = allocate_display_ids([*records, *optional_records],
         lambda row: "REC-" + stable_id([_finding_identity(row), row.get("SourceType"), row.get("EvidenceScope")])[:10].upper())
-    from .customer_actions import qualify_device_protection, retire_superseded
+    from .customer_actions import qualify_capability_claims, qualify_device_protection, retire_superseded
+    qualify_capability_claims(records)
     retire_superseded(records)
     qualify_device_protection(records)
     actions = [_action(row) for row in records if row.get("Disposition") in {"Action", "Coverage"}]
