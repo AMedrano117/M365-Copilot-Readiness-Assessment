@@ -30,15 +30,18 @@
    "records": [
     {
      "id": "audit-0",
-     "Operation": "CopilotInteraction"
+     "createdDateTime": "2026-10-29T10:00:00Z",
+     "operation": "CopilotInteraction"
     },
     {
      "id": "audit-1",
-     "Operation": "CopilotInteraction"
+     "createdDateTime": "2026-10-29T11:00:00Z",
+     "operation": "CopilotInteraction"
     },
     {
      "id": "audit-2",
-     "Operation": "CopilotInteraction"
+     "createdDateTime": "2026-10-29T12:00:00Z",
+     "operation": "CopilotInteraction"
     }
    ],
    "source": {

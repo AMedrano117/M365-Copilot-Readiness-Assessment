@@ -67,6 +67,10 @@
   ],
   "customer_actions": [],
   "controls": [],
-  "customer_action_total": 0
+  "features_without_customer_action": [
+   "Windows Autopatch",
+   "Yammer Enterprise",
+   "Power Automate for Copilot Studio - Action Agents"
+  ]
  }
 }

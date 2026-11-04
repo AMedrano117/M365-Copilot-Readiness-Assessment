@@ -94,6 +94,11 @@ class CorrelationScenarioTests(unittest.TestCase):
             overlaps = [item for item in result.get('population_overlaps') or [] if set(item.get('finding_keys') or []) == set(check['keys'])]
             self.assertEqual(len(overlaps), 1, 'population overlap not reported')
             self.assertEqual(overlaps[0]['overlapping_devices'], check['devices'])
+        for feature in expected.get('features_without_customer_action', []):
+            ids = {row['RecommendationId'] for row in result['recommendations'] if row.get('Feature') == feature}
+            members = {member['recommendation_id'] for action in result['customer_actions'] for member in action['members']}
+            self.assertTrue(ids, feature)
+            self.assertFalse(ids & members, f'{feature} became a customer action')
         if 'customer_action_total' in expected:
             self.assertEqual(result['counts'].get('customer_actions'), expected['customer_action_total'])
         if 'planning_total' in expected:

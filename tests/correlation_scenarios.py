@@ -42,7 +42,9 @@ def dataset(records, **metadata):
 
 
 def _bundle(sources=None, **extra):
-    return {'assessment_sources': sources or {}, 'expected_tenant_id': TENANT,
+    # Declared rows name this retained source, as a collection records it.
+    state = dataset([])['source']
+    return {'assessment_sources': sources or {}, 'expected_tenant_id': TENANT, 'source_statuses': {'purview_policies': state},
             'collection_context': {'tenant_id': TENANT, 'collected_at': COLLECTED, 'source_file': 'collection.json',
                                    'evaluation_date': EVALUATION, 'mode': 'offline'}, **extra}
 

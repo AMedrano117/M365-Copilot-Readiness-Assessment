@@ -76,11 +76,15 @@ class CorrelationInvariantTests(unittest.TestCase):
         self.assertEqual(control['status'], 'Not established')
 
     def test_license_only_rows_never_become_actions_or_blockers(self):
+        # Unanswered required controls still produce their own evidence gaps.
         result, _ = scenario('C18_license_only_capability')
-        self.assertEqual(result['actions'], [])
+        license_rows = [row for row in result['recommendations'] if row.get('SourceType') == 'tenant_collection']
+        self.assertEqual(len(license_rows), 3)
+        ids = {row['RecommendationId'] for row in license_rows}
+        self.assertFalse(ids & {row['RecommendationId'] for row in result['actions']})
+        self.assertFalse(ids & {member['recommendation_id'] for action in result['customer_actions'] for member in action['members']})
         self.assertEqual(result['blockers'], [])
-        self.assertEqual(result.get('customer_actions'), [])
-        for row in result['recommendations']:
+        for row in license_rows:
             self.assertNotEqual(row.get('Status'), 'Action Required')
             self.assertIn(row.get('FindingClass'), {'Reference inventory', 'Adoption context'})
 
