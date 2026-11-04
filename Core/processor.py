@@ -56,7 +56,13 @@ def entra_recommendations(entra_info, *, collected_at='', profile=None):
         from .get_entra_info import build_entra_recommendations
         rows = build_entra_recommendations(entra_info['licenses'], client)
     rows = qualify_saved_recommendations(rows, 'Entra', client)
-    return rows + assess_identity_baseline(client, collected_at, account_purposes=account_purposes_from_profile(profile))
+    purposes = account_purposes_from_profile(profile)
+    if client is not None:
+        # Successful legacy sign-ins are evaluated against the retained blocking
+        # policies and their exclusions before any treatment is chosen.
+        from .control_correlation import LEGACY_KEY, apply_legacy_correlation
+        rows = [apply_legacy_correlation(row, client, purposes) if row.get('FindingKey') == LEGACY_KEY else row for row in rows]
+    return rows + assess_identity_baseline(client, collected_at, account_purposes=purposes)
 
 
 def reconcile_overlapping_evidence(recommendations):

@@ -54,7 +54,7 @@ class RuntimeEvidenceTests(unittest.TestCase):
         result,bundle=runtime_fixture(); row=gap(result,'LICENSE.ASSIGNMENT')
         self.assertEqual(bundle['ai_usage']['license_coverage']['copilot_subscription_capacity']['enabled_seats'],106)
         self.assertEqual(row['ObservedEvidence']['subscription_capacity']['unassigned_seats'],19)
-        for text in ('106 seats','87 assigned','19 unassigned','87 enabled users','not proof of assigned entitlement'):
+        for text in ('106 paid seats','87 assigned','19 unassigned','87 enabled users','not proof of assigned entitlement'):
             self.assertIn(text,row['Observation'])
         self.assertEqual(row['ObservedEvidence']['pilot_entitlement'],'not_established')
 
@@ -67,8 +67,10 @@ class RuntimeEvidenceTests(unittest.TestCase):
 
     def test_actual_audit_config_and_3620_bounded_events_do_not_pass(self):
         result,_=runtime_fixture(); row=gap(result,'DATA.AUDIT')
-        self.assertIn('1 audit-configuration record',row['Observation'])
-        self.assertIn('3620 Copilot audit-event',row['Observation'])
+        counts={item['dataset']:item['record_count'] for item in row['ObservedEvidence']['components']}
+        self.assertEqual(counts['audit_config'],1)
+        self.assertIn('3620 Copilot audit records were retained',row['Observation'])
+        self.assertIn('observed operation was not established',row['Observation'])
         self.assertIn('2026-10-20 through 2026-10-27',row['Observation'])
         self.assertEqual(next(c for c in result['controls'] if c['control_id']=='DATA.AUDIT')['status'],'Not established')
 
@@ -219,13 +221,13 @@ class CrossOutputTests(unittest.TestCase):
                 self.assertNotIn('--reports-dir',output); self.assertNotIn('24 hours',output)
                 from tools.audit_report_signal import public_report_source
                 self.assertNotIn('restricted-0@example.invalid',public_report_source(output))
-                if result['blocker_control_mapping']['explanation']:
-                    self.assertIn(result['blocker_control_mapping']['explanation'],output)
+                for sentence in result['readiness_outcome']['sentences']:
+                    self.assertIn(sentence,output)
             self.assertEqual(result,before)
             customer=load_workbook(path); technical=load_workbook(technical_workbook_path(path))
             try:
                 texts='\n'.join(str(c.value or '') for s in customer for row in s for c in row)
-                self.assertIn('106 seats',texts); self.assertIn('4 of 586',texts); self.assertIn('6 of 586',texts)
+                self.assertIn('106 paid seats',texts); self.assertIn('4 of 586',texts); self.assertIn('6 of 586',texts)
                 self.assertNotIn('--reports-dir',texts); self.assertNotIn('24 hours',texts)
                 for phrase in ('Copilot license information was not collected','Sensitivity label definitions were not collected','The audit configuration was not collected'):
                     leaked=[(s.title,c.coordinate,str(s.cell(1,c.column).value)) for s in customer for row in s for c in row

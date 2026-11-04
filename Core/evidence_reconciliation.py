@@ -83,7 +83,7 @@ def _active_policy_count(datasets):
     return count
 
 
-def qualify_gap(row, bundle):
+def qualify_gap(row, bundle, operation=None):
     control = row['ControlId']
     row.setdefault('OriginalRecommendation',row.get('Recommendation'))
     original_observation = row.get('Observation')
@@ -115,6 +115,20 @@ def qualify_gap(row, bundle):
         enabled_users = ((usage.get('periods') or {}).get(period) or {}).get('enabled_users',usage.get('enabled_users'))
         if type(enabled_users) is int:
             row['Observation'] += f' Usage reporting covers {enabled_users} enabled users ({period}); this is a usage population, not purchased seats or verified pilot assignment.'
+        licensed = capacity.get('copilot_licensed_users')
+        if type(licensed) is not int:
+            licensed = next((item['source'].get('copilot_licensed_users') for item in components if item['dataset'] == 'licenses'
+                             and type(item['source'].get('copilot_licensed_users')) is int), None)
+        active = ((usage.get('periods') or {}).get(period) or {}).get('active_users')
+        from .control_correlation import correlate_license_assignment
+        correlation = correlate_license_assignment(seats, licensed, enabled_users if type(enabled_users) is int else None, period,
+                                                   active if type(active) is int else None)
+        if correlation:
+            # Retained capacity answers availability; differing populations are a reconciliation question.
+            row.update(ControlCorrelation=correlation, Observation=correlation['customer_narrative'],
+                       Recommendation=' '.join(correlation['next_steps']), ReadinessTreatment='ConfirmBeforePilot',
+                       CompletionEvidence=correlation['closure_evidence'],
+                       Qualification='Subscription capacity was retained; population reconciliation remains unresolved. This is not a measured control failure.')
     elif control in {'DATA.LABELS','DATA.PUBLISHING'} and components:
         definitions = sum(item['record_count'] for item in components if item['dataset']=='sensitivity_labels')
         policies = sum(item['record_count'] for item in components if item['dataset']=='label_policies')
@@ -155,12 +169,20 @@ def qualify_gap(row, bundle):
             'and review and response procedures were not established.')
         row['ObservedEvidence'] = {'components':components, 'configuration_settings':settings, 'query_windows':periods,
             'tenant_configuration':'not_established', 'retention_coverage':'not_established', 'review_ownership':'not_established'}
+        from .control_correlation import correlate_audit
+        correlation = correlate_audit(settings, events, sorted(set(known_periods)), (operation or {}).get('result'))
+        if correlation:
+            # Ask only for the components the retained configuration and events cannot answer.
+            row.update(ControlCorrelation=correlation, Observation=correlation['customer_narrative'],
+                       Recommendation=' '.join(correlation['next_steps']) or row['Recommendation'],
+                       ReadinessTreatment='ConfirmBeforePilot', CompletionEvidence=correlation['closure_evidence'],
+                       Qualification='Audit configuration and observed operation were retained; the listed components remain unresolved. This is not a measured control failure.')
     if row.get('ObservedEvidence'):
         row.setdefault('OriginalObservation',original_observation)
         row['EvidenceAvailable'] = 'Yes'
         row['EvidenceBasis'] = 'Limited component evidence; required control remains unresolved'
         qualification = 'Returned component records do not establish effective scope, coverage, entitlement or operation.'
-        if qualification not in str(row.get('Qualification') or ''):
+        if qualification not in str(row.get('Qualification') or '') and not row.get('ControlCorrelation'):
             row['Qualification'] = (str(row.get('Qualification') or '') + ' ' + qualification).strip()
     return row
 
