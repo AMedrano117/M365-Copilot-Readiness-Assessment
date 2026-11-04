@@ -90,6 +90,31 @@ def table(rows, columns, caption='', *, mobile_labels=False):
     return f'<div class="table-scroll"><table><caption>{escape(caption)}</caption><thead><tr>{heading}</tr></thead><tbody>{body}</tbody></table></div>'
 
 
+def _governance_outcomes(result, table):
+    """SharePoint governance outcomes and the SAM capability state, from the shared result only."""
+    model = result.get('sharepoint_governance') or {}
+    outcomes = model.get('outcomes') or []
+    if not outcomes:
+        return ''
+    capability = model.get('capability') or {}
+    labels = {'sam': 'Content Management Assessment', 'equivalent': 'Equivalent evidence', 'other_source': 'Other retained evidence',
+              'none': 'None'}
+    results = {'Supported': 'Supported', 'Failed': 'Not satisfied', 'NotEstablished': 'Not established',
+               'EvidenceRequest': 'Evidence requested'}
+    rows = [{'outcome': item['title'], 'workstream': item['workstream_label'], 'path': labels.get(item['evidence_path'], item['evidence_path']),
+             'result': results.get(item['technical_result'], item['technical_result']),
+             'sites': '' if item['affected_sites'] is None else f"{item['affected_sites']:,}",
+             'issues': '' if item['issue_count'] is None else f"{item['issue_count']:,}"} for item in outcomes]
+    state = {'Available': 'available', 'PartiallyAvailable': 'partially available', 'DAGOnly': 'Data access governance reports only',
+             'NotLicensed': 'not licensed', 'NotRequested': 'not requested', 'Unavailable': 'unavailable',
+             'Unsupported': 'unsupported', 'Unknown': 'not established'}.get(capability.get('state'), 'not established')
+    note = (f"SharePoint Advanced Management: {state}. It is optional; each outcome is assessed from SAM-assisted or "
+            'equivalent evidence. Affected-site counts are distinct sites; issue counts are occurrences and can overlap.')
+    return ('<h3>SharePoint governance outcomes</h3><p class="section-description">' + prose(note) + '</p>'
+            + table(rows, [('Outcome', 'outcome'), ('Workstream', 'workstream'), ('Evidence', 'path'), ('Result', 'result'),
+                           ('Affected sites', 'sites'), ('Issues', 'issues')], mobile_labels=True))
+
+
 def _date_text(row):
     if row.get('EndpointObservationSubsets'):
         return 'Report dates and recency shown by subset'
@@ -1047,21 +1072,45 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None, summ
         # Finding titles match the workbook registers, so each card maps to its retained findings.
         related = (f'<p class="action-findings"><strong>Related finding{"s" if not single else ""}.</strong> '
                    + '; '.join(prose(_heading(row)) for row in members) + '</p>')
+        sharepoint = item.get('sharepoint') or {}
+        # SharePoint actions: what is in place, the evidence behind it and both remediation paths, kept short.
+        sharepoint_html = ('<ul class="control-correlation">' + ''.join(
+            f'<li><strong>{escape(label)}.</strong> {prose(value)}</li>' for label, value in (
+                ('Existing capability', 'SharePoint Advanced Management ' + str(sharepoint.get('existing_capability')) if sharepoint.get('existing_capability') not in (None, 'Not recorded') else 'Not recorded'),
+                ('Source and evidence date', f"{sharepoint.get('source')} · {sharepoint.get('evidence_date')}"),
+                ('Affected sites', '' if sharepoint.get('affected_sites') is None else f"{sharepoint['affected_sites']:,} ({sharepoint.get('affected_sites_basis')})"),
+                ('Issue count', '' if sharepoint.get('issue_count') is None else f"{sharepoint['issue_count']:,} occurrences"),
+                ('Source completeness', sharepoint.get('source_completeness')), ('Residual risk', sharepoint.get('residual_risk')),
+                ('With SharePoint Advanced Management', sharepoint.get('sam_path')), ('Without SharePoint Advanced Management', sharepoint.get('non_sam_path')))
+            if value) + '</ul>') if sharepoint else ''
+        workstream_tag = ('<span class="action-domain">' + prose(item['workstream_label']) + '</span>') if item.get('workstream_label') else ''
         action_html.append(f'''<article class="action" data-priority="{slug(item.get('priority'))}" data-lane="{slug(item['lane'])}" id="action-{index}"><div class="action-number">{index:02d}</div><details class="action-detail"><summary>
-          <div class="action-tags"><span class="priority-badge" data-priority="{slug(item.get('priority'))}">{prose(item.get('priority') or 'Review')} priority</span>{('<span class="action-kind">' + prose(item.get('pilot_impact')) + '</span>') if item.get('pilot_impact') else ''}<span class="action-kind">{prose(item['lane_label'])}</span><span class="action-domain">{prose(item.get('domain'))}</span></div>
+          <div class="action-tags"><span class="priority-badge" data-priority="{slug(item.get('priority'))}">{prose(item.get('priority') or 'Review')} priority</span>{('<span class="action-kind">' + prose(item.get('pilot_impact')) + '</span>') if item.get('pilot_impact') else ''}<span class="action-kind">{prose(item['lane_label'])}</span><span class="action-domain">{prose(item.get('domain'))}</span>{workstream_tag}</div>
           <h3>{prose(item['title'])}</h3><p class="action-preview"><span class="preview-label" data-kind="issue">Issue</span>{prose(short_text(preview))}</p>
           <p class="action-preview"><span class="preview-label" data-kind="fix">{step_label}</span>{prose(short_text(fix))}</p><span class="detail-prompt">Details, next step and supporting logs</span></summary><div class="action-body">
           <div class="callout callout-found" data-priority="{slug(item.get('priority'))}">{found}{settings_html}</div>
-          <div class="callout callout-fix">{fix_html}{decision}</div>
+          <div class="callout callout-fix">{fix_html}{decision}{sharepoint_html}</div>
           <div class="action-meta"><p><strong>Responsible role</strong><br>{prose(item.get('owner_role'))}</p>
           <p><strong>Rollout stage</strong><br>{prose(item.get('readiness_stage'))}</p></div>
           <strong>Evidence of completion.</strong>{render_details(completion, prose, table)}{guidance_link}{related}
           {details}</div></details></article>''')
     planning = result.get('planning') or []
     if planning:
+        from .sharepoint_governance_evidence import INFORMATION_PROTECTION_SEQUENCE, WORKSTREAMS
+        # Planning grouped by workstream; information protection carries its recommended sequence.
+        groups = {}
+        for entry in planning:
+            groups.setdefault(entry.get('workstream_label') or '', []).append(entry)
+        body = ''
+        for label in sorted(groups, key=lambda value: (value == '', value)):
+            sequence = ('<p class="section-description">Recommended sequence:</p><ol>' + ''.join(
+                '<li>' + prose(step) + '</li>' for step in INFORMATION_PROTECTION_SEQUENCE) + '</ol>'
+                if label == WORKSTREAMS['information_protection'] else '')
+            heading = label or ('Other planning items' if len(groups) > 1 else '')
+            body += (('<h4>' + prose(heading) + '</h4>' if heading else '') + sequence + '<ul>'
+                     + ''.join(f'<li>{prose(entry.get("title"))}</li>' for entry in groups[label]) + '</ul>')
         action_html.append('<details class="domain-evidence" id="lane-plan-improvement"><summary>' + prose(LANES['PlanImprovement'][0])
-                           + f' ({len(planning)}, not counted as open actions)</summary><ul>'
-                           + ''.join(f'<li>{prose(entry.get("title"))}</li>' for entry in planning) + '</ul></details>')
+                           + f' ({len(planning)}, not counted as open actions)</summary>' + body + '</details>')
 
     domain_html = []
     for domain_index, domain in enumerate(domains, 1):
@@ -1081,7 +1130,7 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None, summ
             summary = result['device_compliance']['summary']
             extra = '<h3>Device compliance at a glance</h3><ul class="device-summary">' + ''.join('<li>' + prose(line) + '</li>' for line in summary['lines']) + '</ul>'
         if domain['id'] == 'content':
-            extra = _settings(bundle) + _lifecycle(bundle)
+            extra = _settings(bundle) + _lifecycle(bundle) + _governance_outcomes(result, table)
         if domain['id'] in {'data_protection','classification'}:
             extra = _purview_policy_table(bundle, technical_url or workbook_url)
         if domain['id'] in {'licensing','scope'}:

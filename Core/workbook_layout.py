@@ -977,6 +977,13 @@ def split_workbook_layout(source_workbook, result, bundle, assessment_path, tech
         _write(technical, 'Correlated Events', event_rows)
     if result.get('customer_actions'):
         _write(technical, 'Customer Actions', _customer_action_rows(result))
+    governance_outcomes, governance_metrics, governance_diagnostics = _sharepoint_governance_rows(result)
+    if governance_outcomes:
+        _write(technical, 'SharePoint Governance', governance_outcomes)
+    if governance_metrics:
+        _write(technical, 'SharePoint Governance Counts', governance_metrics)
+    if governance_diagnostics:
+        _write(technical, 'SharePoint Import Diagnostics', governance_diagnostics)
     diagnostics = [diagnostic for item in device_model.get('inventory', []) for diagnostic in item['diagnostics']]
     diagnostics.extend(diagnostic for row in result['recommendations'] for diagnostic in row.get('DeviceEvidenceDiagnostics', []))
     if diagnostics:
@@ -1309,5 +1316,34 @@ def _customer_action_rows(result):
              'Readiness effect': item['pilot_impact'], 'Responsible role': item['owner_role'],
              'Members': '; '.join(member['recommendation_id'] for member in item['members']),
              'Required decision': item.get('required_decision'), 'Next steps': '\n'.join(item.get('next_steps') or []),
-             'Closure evidence': item.get('closure_evidence'), 'Narrative': item.get('narrative')}
+             'Closure evidence': item.get('closure_evidence'), 'Narrative': item.get('narrative'),
+             'Workstream': item.get('workstream_label') or '',
+             'Affected sites': (item.get('sharepoint') or {}).get('affected_sites'),
+             'Affected-site basis': (item.get('sharepoint') or {}).get('affected_sites_basis', ''),
+             'Issue count': (item.get('sharepoint') or {}).get('issue_count'),
+             'SAM-assisted path': (item.get('sharepoint') or {}).get('sam_path', ''),
+             'Non-SAM alternative': (item.get('sharepoint') or {}).get('non_sam_path', '')}
             for item in result.get('customer_actions') or []]
+
+
+def _sharepoint_governance_rows(result):
+    """Outcome results and every imported count with its unit, basis and overlap qualification."""
+    model = result.get('sharepoint_governance') or {}
+    capability = model.get('capability') or {}
+    outcomes = [{'Outcome': item['title'], 'Control ID': item['control_id'], 'Workstream': item['workstream_label'],
+                 'SAM capability state': item['capability_state'], 'Capability result': item['capability_result'],
+                 'License evidence': capability.get('license_evidence', ''), 'Entitlement verified': capability.get('entitlement_verified'),
+                 'Evidence path': item['evidence_path'], 'Evidence sufficiency': item['evidence_sufficiency'],
+                 'Technical result': item['technical_result'], 'Readiness treatment': item['readiness_treatment'] or '',
+                 'Affected sites (distinct)': item['affected_sites'], 'Issue occurrences': item['issue_count'],
+                 'Overlap qualification': item['overlap_qualification'], 'Categories': '; '.join(item['categories']),
+                 'Affected site IDs': '; '.join(item['affected_site_ids']), 'Qualification': item['qualification'],
+                 'RecommendationId': item.get('recommendation_id', ''), 'SAM-assisted path': item['sam_path'],
+                 'Non-SAM alternative': item['non_sam_path']} for item in model.get('outcomes') or []]
+    metrics = [{'Metric': metric['metric'], 'Unit': metric['unit'], 'Basis': metric['basis'], 'Numerator': metric['numerator'],
+                'Denominator': metric['denominator'], 'Population': metric['population'], 'Period': metric['period'],
+                'Source': metric['source'], 'Overlap qualification': metric['overlap_qualification']}
+               for metric in ((model.get('cma') or {}).get('metrics') or [])]
+    diagnostics = [{'Code': item.get('code'), 'Field': item.get('field', ''), 'Source': item.get('source', ''),
+                    'Detail': item.get('detail', '')} for item in model.get('diagnostics') or []]
+    return outcomes, metrics, diagnostics

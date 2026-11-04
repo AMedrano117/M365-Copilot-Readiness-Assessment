@@ -6,7 +6,9 @@ GUIDES = {
         'title': 'SharePoint permission and sharing reports',
         'owner': 'SharePoint administrator and content owners.',
         'prerequisites': (
-            'Confirm a supported base subscription and SharePoint Advanced Management entitlement. '
+            'SharePoint Advanced Management is optional; without it, supply dated equivalent evidence through '
+            'the SharePoint governance evidence import. For these reports, confirm a supported base subscription '
+            'and SharePoint Advanced Management entitlement. '
             'Microsoft documents qualifying Copilot, SAM Plan 1 and E7 routes. E5-only access '
             'provides limited activity reports, without permission snapshots. If activity '
             'collection needs enabling, allow 24 hours; history starts from enablement.'

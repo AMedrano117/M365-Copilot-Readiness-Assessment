@@ -129,6 +129,53 @@ capture of those same fields.
 
 Report recognition uses column headers, not filenames. Keep the original exports and headers. Explicit `--sam-report PATH` and `--dspm-report PATH` options remain available and can be repeated. SAM/DSPM readers support CSV, TSV, JSON, XLSX and supported ZIP contents; automatic `--reports-dir` discovery scans CSV, TSV, XLSX and ZIP. Copilot readiness requires CSV. Power Platform inventory and Copilot Dashboard exports use their separate existing switches.
 
+### SharePoint governance evidence import
+
+SharePoint Advanced Management is optional. Content Management Assessment results have no
+supported API, so supply them, and any equivalent governance evidence, as one JSON document in
+the `--reports-dir` folder. The document's `schema` field identifies it; the filename does not.
+It is packaged with the run and replayed offline.
+
+```json
+{
+  "schema": "m365-readiness.sharepoint-governance-evidence",
+  "schema_version": "1.0",
+  "tenant_id": "<tenant GUID>",
+  "capability": {"sam_license": "Licensed | NotLicensed | Unknown", "entitlement_verified": false, "basis": "license_inventory"},
+  "content_management_assessment": {
+    "assessment_id": "...", "assessment_date": "YYYY-MM-DD", "completion_state": "Completed",
+    "source_completeness": "complete", "total_sites_assessed": {"value": 0, "unit": "sites", "basis": "distinct"},
+    "lifecycle": {"distinct_sites": {"value": 0, "unit": "sites", "basis": "distinct"},
+                  "categories": {"inactive_sites": {"affected_sites": {...}, "issues": {"value": 0, "unit": "issues", "basis": "occurrence"}},
+                                 "site_ownership": {"affected_sites": {...}, "no_owner": {...}, "single_owner": {...}}}},
+    "oversharing": {"distinct_sites": {...}, "categories": {"broken_inheritance": {...}, "eeeu": {...}, "unrestricted_links": {...}}},
+    "sites": [{"site_id": "...", "url": "...", "categories": ["inactive_sites"]}],
+    "previous_assessment_date": "YYYY-MM-DD", "trend": "...", "source_qualification": "..."
+  },
+  "equivalent_evidence": [{"outcome": "site_owners", "source": "SharePoint Online PowerShell owner inventory",
+                           "observed_at": "YYYY-MM-DD", "population": "...", "scope": "...", "complete": true,
+                           "dimensions": {"ownership": "..."}, "result": "satisfied | not_satisfied",
+                           "affected_sites": 0, "issue_count": 0}],
+  "policies": [{"type": "site_ownership | inactive_site | site_attestation | restricted_content_discovery | restricted_search | restricted_access_control | block_download | site_access_review",
+                "state": "Active | Simulation | Off", "scope": "..."}]
+}
+```
+
+- **Fields.** Supply only the fields the source contains. Missing fields stay missing.
+- **Entitlement basis.** `portal_visibility` never verifies entitlement.
+- **Counts.**
+  - Every count needs a `unit` and a `basis`.
+  - Site counts are distinct. Issue counts are occurrences, and they can overlap across categories.
+- **Site records.** Without site records, summary counts identify no sites and establish no outcome.
+- **Validation.** The import rejects or qualifies:
+  - dates that are invalid, future or stale;
+  - missing totals or negative counts;
+  - duplicate sites or conflicting identifiers;
+  - conflicting totals or conflicting assessment runs;
+  - incomplete exports, unknown schemas and tenant mismatches.
+
+See [METHODOLOGY.md](METHODOLOGY.md#sharepoint-governance-outcomes-and-sharepoint-advanced-management).
+
 ### Sample compatibility matrix
 
 Checked against supplied local CSVs and repository fixtures on September 15, 2026, including readiness exports with nine and ten columns. No customer filenames, identities or rows are copied into this guide.

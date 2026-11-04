@@ -275,7 +275,7 @@ def assess_defender_configuration(client, collected_at=None):
         disposition, status = "Action", "Action Required"
         action = "Review and resolve the active incidents, starting with high severity, or record the security owner's approved treatment."
     elif complete:
-        observation = "No active incidents were returned by the completed Microsoft Graph Security incident query. This observation covers the incidents visible to that service at collection time."
+        observation = "No active incidents were returned by the completed Microsoft Graph Security incident query. This observation covers the incidents visible to that service at collection time; it does not demonstrate incident-response readiness."
         disposition, status, action = "Assurance", "Success", ""
     else:
         observation = "The security incident query did not complete. The presence and severity of active incidents remain unverified; alert or device results do not establish incident status."
