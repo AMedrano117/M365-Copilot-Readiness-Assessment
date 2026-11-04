@@ -1043,6 +1043,11 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
         row['ActionLane'] = action_lane(row)
     overlaps = population_overlaps(records)
     customer_actions = build_customer_actions(actions, blockers, overlaps)
+    # Every SharePoint action states the assessed SAM capability, not only rows from the governance import.
+    capability_state = (((bundle.get('data_exposure') or {}).get('sharepoint_governance') or {}).get('capability') or {}).get('state')
+    for item in customer_actions:
+        if item.get('sharepoint') and item['sharepoint']['existing_capability'] == 'Not recorded' and capability_state:
+            item['sharepoint']['existing_capability'] = capability_state
     finding_classes = classify_findings(records, actions)
     if critical:
         decision, rationale = 'Tenant remediation required', 'Confirmed critical tenant conditions require remediation. Review the affected population and evidence qualifications.'

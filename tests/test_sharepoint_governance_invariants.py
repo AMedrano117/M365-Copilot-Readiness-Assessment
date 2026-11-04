@@ -184,6 +184,13 @@ class SharePointGovernanceInvariantTests(unittest.TestCase):
             if len(members) == 1 and members[0].get('AffectedSiteCount') is not None:
                 self.assertEqual(action['sharepoint']['affected_sites'], members[0]['AffectedSiteCount'])
 
+    def test_every_sharepoint_action_states_the_assessed_capability(self):
+        # Regression: actions from other producers showed "Not recorded" while the capability was assessed.
+        result, _, _ = h.run([h.document(capability=NOT_LICENSED)])
+        actions = h.sharepoint_actions(result)
+        self.assertTrue(actions)
+        self.assertEqual({item['sharepoint']['existing_capability'] for item in actions}, {'NotLicensed'})
+
     def test_technical_detail_is_preserved(self):
         result, assessment, _ = h.run([h.document(content_management_assessment=h.cma())])
         rows = [row for row in result['recommendations'] if str(row.get('FindingKey')).startswith('sharepoint_governance.')]
