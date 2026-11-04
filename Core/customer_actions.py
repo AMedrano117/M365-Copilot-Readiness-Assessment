@@ -47,7 +47,6 @@ TITLES = {
     'coverage.license.assignment': 'Reconcile Copilot license assignment populations',
     'coverage.license.apps': 'Collect Microsoft 365 Apps version and update-channel evidence',
     'entra.devices.compliant_access': 'Validate Conditional Access use of compliant-device signals',
-    'entra.identity_risk.users': 'Collect the current risky-user report',
     'baseline.identity.scope': 'Validate Conditional Access MFA coverage and exclusions',
     'purview.raw.dlp_mode': 'Review the DLP simulation results and approve enforcement',
     'purview.raw.sensitivity_labels': 'Define sensitivity labels for business content',
@@ -60,6 +59,14 @@ TITLES = {
     'expanded.compliance_setting_states.errors': 'Investigate device compliance reporting errors',
     'expanded.compliance_setting_states.noncompliant': 'Remediate failed device compliance settings',
     'expanded.windows_protection.overdue.current': 'Update overdue endpoint protection signatures',
+}
+# Titles whose decision depends on the lane (a confirmed condition versus missing evidence).
+LANE_TITLES = {
+    ('entra.identity_risk.users', 'FixNow'): 'Investigate and remediate risky users',
+    ('entra.identity_risk.users', 'InvestigateAffectedObjects'): 'Investigate and remediate risky users',
+    ('entra.identity_risk.users', 'CollectMissingEvidence'): 'Collect the current risky-user report',
+    ('baseline.identity.sign_in', 'FixNow'): 'Enforce MFA and legacy-authentication blocking for all users',
+    ('baseline.identity.sign_in', 'CollectMissingEvidence'): 'Confirm MFA and legacy-authentication enforcement',
 }
 LEGACY_TITLES = {
     'ControlScopeUnresolved': 'Validate legacy-authentication exclusions and their successful sign-ins',
@@ -130,6 +137,9 @@ def member_title(row):
         state = (row.get('ControlCorrelation') or {}).get('state')
         if state in LEGACY_TITLES:
             return LEGACY_TITLES[state]
+    lane_title = LANE_TITLES.get((key.lower(), row.get('ActionLane')))
+    if lane_title:
+        return lane_title
     if key.lower() in TITLES:
         return TITLES[key.lower()]
     # Otherwise the shared finding-title authority used by every output.

@@ -183,6 +183,20 @@ class CorrelationInvariantTests(unittest.TestCase):
                          [a['customer_action_id'] for a in second['customer_actions']])
         self.assertEqual(legacy_row(first)['ControlCorrelation']['state'], legacy_row(second)['ControlCorrelation']['state'])
 
+    def test_customer_action_titles_are_decisions_not_license_labels(self):
+        """Regression from the Cavehouse comparison: lane-blind and license-labelled titles."""
+        from Core.customer_actions import member_title
+        from Core.identity_finding_taxonomy import resolve_identity_finding
+        intune = resolve_identity_finding({'Service': 'Entra', 'Feature': 'Microsoft Intune (Plan A)', 'Disposition': 'Coverage',
+                                           'Observation': 'The Intune query returned no managed devices. This alone does not establish control.'})
+        self.assertEqual(intune['TaxonomyState'], 'unresolved')
+        self.assertEqual(member_title(intune), 'Verify device and browser protection')
+        risk = {'FindingKey': 'entra.identity_risk.users', 'Disposition': 'Action'}
+        self.assertEqual(member_title(dict(risk, ActionLane='FixNow')), 'Investigate and remediate risky users')
+        self.assertEqual(member_title(dict(risk, ActionLane='CollectMissingEvidence')), 'Collect the current risky-user report')
+        self.assertEqual(member_title({'FindingKey': 'baseline.identity.sign_in', 'ActionLane': 'FixNow'}),
+                         'Enforce MFA and legacy-authentication blocking for all users')
+
     def test_capability_normalization_keeps_display_ids(self):
         """Regression: two saved RMS rows made identical before numbering shifted later Purview IDs."""
         from Core.assessment_result import build_assessment_result

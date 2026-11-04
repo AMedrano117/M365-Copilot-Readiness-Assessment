@@ -98,7 +98,8 @@ def _heading(row):
     """Use reviewed topic labels for the parser-facing report families."""
     from .identity_finding_taxonomy import resolve_identity_finding
     taxonomy = resolve_identity_finding(row)
-    if taxonomy.get('FindingTitle'):
+    # An unresolved taxonomy only echoes the source label (often a license name).
+    if taxonomy.get('FindingTitle') and taxonomy.get('TaxonomyState') != 'unresolved':
         return taxonomy['FindingTitle']
     if row.get('Historical')=='Yes':
         return str(row.get('OriginalFeature') or row.get('Feature') or 'Historical observation')
