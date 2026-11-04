@@ -32,7 +32,9 @@ def privilege_summary(model):
                'Effective privileged-user population completeness is not established. ') + model.get('qualification', ''))
 
 
-def privileged_summary_html(result):
+def privileged_summary_html(result, *, embedded=False):
+    from .finding_presentation import render_details
+    from .customer_report import table
     model = result.get('privileged_assessment') or {}
     if not model or not model.get('assignments'):
         return ''
@@ -51,7 +53,9 @@ def privileged_summary_html(result):
               'Inactivity candidates require an explicit policy and qualified successful activity. Special-purpose candidates require validation.')
     metrics = '<ul>' + ''.join('<li>' + escape(f"{r['Metric']}: {r['Value']} {r['Unit']}. {r['Source']}.") + '</li>'
                               for r in model.get('metric_reconciliation', [])) + '</ul>'
-    return '<section id="privileged-identity-observations"><h2>Privileged identity review</h2><p>' + escape(text) + '</p><p>' + escape(detail) + '</p>' + metrics + '</section>'
+    content = render_details(text, escape, table) + render_details(detail, escape, table) + metrics
+    return ('<div class="privilege-context"><h4>Tenant privilege context</h4>'+content+'</div>' if embedded else
+            '<section id="privileged-identity-observations"><h2>Privileged identity review</h2>'+content+'</section>')
 
 
 def assignment_sheet(model):

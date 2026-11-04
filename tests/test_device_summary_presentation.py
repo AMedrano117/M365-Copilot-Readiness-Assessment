@@ -171,7 +171,7 @@ class TechnicalExamplesTests(unittest.TestCase):
             self.assertTrue('<ul class="device-summary">' in source)
             self.assertTrue('Compliance policy' in source and 'Windows baseline' in source)
             self.assertIn('Device compliance at a glance', source)
-            self.assertIn('2 noncompliant devices failed', source)
+            self.assertIn('2 noncompliant devices may be inactive/not recently checked in', source)
             self.assertNotIn('Example-active-0', public_report_source(source))
             self.assertTrue('Example-active-0' in source, 'Named technical examples should be available.')
             examples = re.findall(r'<details class="technical-example"[^>]*>(.*?)</details>', source, re.S)

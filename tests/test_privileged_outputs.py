@@ -56,9 +56,11 @@ class PrivilegedOutputTests(unittest.TestCase):
         from Core.pilot_summary import render_pilot_summary
         result, bundle = self.fixture(); before = copy.deepcopy(result)
         with patch('Core.privileged_identity.build_privileged_assessment', side_effect=AssertionError('Renderer must not evaluate')):
-            for html in (render_customer_report(result, bundle, 'Fictional'), render_pilot_summary(result, bundle, 'Fictional')):
-                self.assertIn('Privileged identity review', html)
-                self.assertIn('1 unique users with current active privilege', html)
+            main = render_customer_report(result, bundle, 'Fictional')
+            self.assertIn('Privilege supporting details', main)
+            self.assertIn('unique users with current active privilege', main)
+            for html in (main, render_pilot_summary(result, bundle, 'Fictional')):
+                self.assertNotIn('id="privileged-identity-observations"', html)
                 self.assertNotIn('Fictional protected administrator', html)
                 self.assertNotIn('user-1', html)
         self.assertEqual(result, before)

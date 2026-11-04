@@ -1,6 +1,7 @@
 """Fictional singleton collection and tenant configuration projections."""
 
 from copy import deepcopy
+from datetime import date, timedelta
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -31,11 +32,72 @@ def config_bundle(settings=None, **metadata):
 
 
 class ComplianceSettingsCollectionTests(unittest.IsolatedAsyncioTestCase):
-    async def test_singleton_get_selects_settings_and_preserves_false_value_and_source(self):
+    async def test_direct_zero_is_retained_and_uses_default_without_retry(self):
+        calls = []
+        async def fetch(path):
+            calls.append(path)
+            return {'available': True, 'availability_status': 'available',
+                    'object': {'secureByDefault': False, 'deviceComplianceCheckinThresholdDays': 0}}
+        with patch('Core.get_entra_client._fetch_graph_object_via_http', side_effect=fetch):
+            source = await _fetch_graph_detail_via_http(DEVICE_COMPLIANCE_SETTINGS_PATH)
+        self.assertEqual(calls, ['/v1.0/deviceManagement/settings'])
+        self.assertEqual(source['availability_status'], 'available')
+        self.assertIs(source['value'][0]['secureByDefault'], False)
+        self.assertEqual(source['value'][0]['deviceComplianceCheckinThresholdDays'], 0)
+        bundle = {'assessment_sources': {'device_compliance_settings': [
+            {'source': source, 'records': source['value']}]}}
+        fields = tenant_compliance_settings(bundle)['fields']
+        self.assertIs(fields['secureByDefault']['value'], False)
+        self.assertEqual(fields['deviceComplianceCheckinThresholdDays']['raw_values'], [0])
+        self.assertEqual(fields['deviceComplianceCheckinThresholdDays']['value'], 30)
+        self.assertTrue(fields['deviceComplianceCheckinThresholdDays']['assumed_default'])
+
+    async def test_direct_settings_returns_flat_values_without_parent_projection(self):
+        calls = []
+        def respond(request):
+            if request.url.path == '/v1.0/deviceManagement/settings':
+                calls.append(str(request.url))
+                return httpx.Response(200, json={'secureByDefault': False, 'deviceComplianceCheckinThresholdDays': 45})
+            return httpx.Response(200, json={'value': []})
+        async def factory():
+            return httpx.AsyncClient(base_url='https://graph.microsoft.com', transport=httpx.MockTransport(respond))
+        client = empty_client()
+        with patch('Core.get_entra_client._get_graph_http_client', side_effect=factory):
+            await collect_entra_details(client, _fetch_graph_detail_via_http, preview_collectors='none')
+        self.assertEqual(len(calls), 1)
+        saved = client.assessment_datasets['device_compliance_settings'][0]
+        self.assertIs(saved['records'][0]['secureByDefault'], False)
+        self.assertTrue(saved['source']['complete'])
+        self.assertEqual(saved['source']['source_api'], 'https://graph.microsoft.com/v1.0/deviceManagement/settings')
+        model = tenant_compliance_settings({'assessment_sources': collect_assessment_sources([client])})
+        self.assertIs(model['fields']['secureByDefault']['value'], False)
+        self.assertEqual(model['fields']['deviceComplianceCheckinThresholdDays']['value'], 45)
+
+    async def test_null_success_is_partial_not_complete_and_does_not_invent_defaults(self):
+        calls = []
+        def respond(request):
+            if request.url.path == '/v1.0/deviceManagement/settings':
+                calls.append(request)
+                return httpx.Response(200, json={'settings': None})
+            return httpx.Response(200, json={'value': []})
+        async def factory():
+            return httpx.AsyncClient(base_url='https://graph.microsoft.com', transport=httpx.MockTransport(respond))
+        client = empty_client()
+        with patch('Core.get_entra_client._get_graph_http_client', side_effect=factory):
+            await collect_entra_details(client, _fetch_graph_detail_via_http, preview_collectors='none')
+        saved = client.assessment_datasets['device_compliance_settings'][0]
+        self.assertEqual(len(calls), 1)
+        self.assertFalse(saved['source']['complete'])
+        self.assertEqual(saved['source']['availability_status'], 'partial')
+        self.assertIsNone(saved['records'][0]['settings'])
+        model = tenant_compliance_settings({'assessment_sources': collect_assessment_sources([client])})
+        self.assertTrue(all(field['value'] is None for field in model['fields'].values()))
+
+    async def test_singleton_get_preserves_nested_legacy_values_and_source(self):
         calls = []
         def respond(request):
             calls.append(request)
-            if request.url.path == '/v1.0/deviceManagement':
+            if request.url.path == '/v1.0/deviceManagement/settings':
                 return httpx.Response(200, json={'settings': {'secureByDefault': False, 'deviceComplianceCheckinThresholdDays': 45}})
             return httpx.Response(200, json={'value': []})
         async def client_factory():
@@ -43,10 +105,10 @@ class ComplianceSettingsCollectionTests(unittest.IsolatedAsyncioTestCase):
         client = empty_client()
         with patch('Core.get_entra_client._get_graph_http_client', side_effect=client_factory):
             await collect_entra_details(client, _fetch_graph_detail_via_http, preview_collectors='none')
-        requests = [request for request in calls if request.url.path == '/v1.0/deviceManagement']
+        requests = [request for request in calls if request.url.path == '/v1.0/deviceManagement/settings']
         self.assertEqual(len(requests), 1)
         self.assertEqual(requests[0].method, 'GET')
-        self.assertEqual(requests[0].url.params['$select'], 'settings')
+        self.assertNotIn('$select', requests[0].url.params)
         source = client.assessment_datasets['device_compliance_settings'][0]
         self.assertIs(source['records'][0]['settings']['secureByDefault'], False)
         self.assertEqual(source['records'][0]['settings']['deviceComplianceCheckinThresholdDays'], 45)
@@ -58,7 +120,7 @@ class ComplianceSettingsCollectionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_denied_settings_do_not_interrupt_other_sources_or_assume_defaults(self):
         def respond(request):
-            if request.url.path == '/v1.0/deviceManagement':
+            if request.url.path == '/v1.0/deviceManagement/settings':
                 return httpx.Response(403, json={'error': {'code': 'Forbidden', 'message': 'Fictional denied read'}})
             return httpx.Response(200, json={'value': []})
         async def client_factory():
@@ -76,6 +138,38 @@ class ComplianceSettingsCollectionTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ComplianceSettingsTests(unittest.TestCase):
+    def test_zero_uses_labeled_default_and_preserves_raw_value(self):
+        bundle = config_bundle({'secureByDefault': False, 'deviceComplianceCheckinThresholdDays': 0})
+        before = deepcopy(bundle)
+        model = build_device_compliance(bundle, evaluation_date=DAY)
+        field = model['tenant_settings']['fields']['deviceComplianceCheckinThresholdDays']
+        self.assertEqual(field['display'], '30 (assumed default; API returned 0)')
+        self.assertEqual(field['value'], 30)
+        self.assertTrue(field['assumed_default'])
+        self.assertEqual(field['raw_values'], [0])
+        self.assertEqual(model['summary']['validity_days'], 30)
+        self.assertEqual(model['reporting_days'], 7)
+        self.assertEqual(model['activity_days'], 30)
+        self.assertFalse(any(device.get('compliance_activity') == 'overdue' for device in model['devices']))
+        self.assertEqual(bundle, before)
+
+    def test_assumed_default_controls_thirty_day_checkin_boundary(self):
+        for age, expected in [(30, 'active'), (31, 'overdue')]:
+            bundle = config_bundle({'secureByDefault': False, 'deviceComplianceCheckinThresholdDays': 0})
+            bundle['assessment_sources']['managed_devices'][0]['records'][0]['lastSyncDateTime'] = (
+                date.fromisoformat(DAY)-timedelta(days=age)).isoformat()
+            model = build_device_compliance(bundle, evaluation_date=DAY)
+            self.assertEqual(model['devices'][0]['compliance_activity'], expected)
+
+    def test_assumed_default_conflicts_with_different_explicit_period(self):
+        bundle = config_bundle({'secureByDefault': False, 'deviceComplianceCheckinThresholdDays': 0})
+        bundle['assessment_sources']['device_compliance_settings'].append(dataset([{
+            'deviceComplianceCheckinThresholdDays': 45}]))
+        field = tenant_compliance_settings(bundle)['fields']['deviceComplianceCheckinThresholdDays']
+        self.assertEqual(field['state'], 'conflict')
+        self.assertIsNone(field['value'])
+        self.assertEqual(field['raw_values'], [0, 45])
+
     def test_existing_setup_permission_covers_both_permission_profiles(self):
         for profile in ('standard', 'restricted'):
             self.assertIn('DeviceManagementConfiguration.Read.All', collector_permissions('entra_controls', profile))
@@ -108,7 +202,7 @@ class ComplianceSettingsTests(unittest.TestCase):
         self.assertTrue(all(row['Disposition'] == 'Coverage' and row['ConfigurationValue'] == 'Conflicting retained values' for row in rows))
 
     def test_invalid_periods_remain_unknown_and_valid_boundaries_survive(self):
-        for period in (0, 121, 1024, False, '45', None):
+        for period in (-1, 121, 1024, False, '0', '45', None):
             self.assertIsNone(tenant_compliance_settings(config_bundle({'deviceComplianceCheckinThresholdDays': period}))['fields']['deviceComplianceCheckinThresholdDays']['value'])
         for period in (1, 120):
             self.assertEqual(tenant_compliance_settings(config_bundle({'deviceComplianceCheckinThresholdDays': period}))['fields']['deviceComplianceCheckinThresholdDays']['value'], period)
@@ -130,6 +224,26 @@ class ComplianceSettingsTests(unittest.TestCase):
 
 @fictional_publication
 class ComplianceSettingsOutputTests(unittest.TestCase):
+    def test_zero_period_is_visible_as_assumed_default_in_html_and_workbook(self):
+        from Core.customer_report import render_customer_report
+        from Core.export_recommendations import export_to_excel
+        from openpyxl import load_workbook
+        bundle = config_bundle({'secureByDefault': False, 'deviceComplianceCheckinThresholdDays': 0})
+        result = build_assessment_result(expanded_findings(bundle, evaluation_date=DAY), bundle,
+                                        evaluation_date=DAY, expected_tenant_id=TENANT)
+        bundle['assessment_result'] = result
+        html = render_customer_report(result, bundle, 'Fictional')
+        self.assertTrue('30 days (assumed default; API returned 0)' in html)
+        self.assertNotIn('Compliance status validity period: 0 days', html)
+        with TemporaryDirectory() as folder:
+            path = export_to_excel(result['recommendations'], filename='Fictional.xlsx', evidence_bundle=bundle, output_dir=folder)
+            book = load_workbook(path)
+            try:
+                self.assertTrue(any('30 (assumed default; API returned 0)' in str(cell.value)
+                                    for row in book['Configuration'] for cell in row))
+            finally:
+                book.close()
+
     def test_configuration_sheet_html_lineage_and_snapshot_use_same_values(self):
         from openpyxl import load_workbook
         from Core.export_recommendations import export_to_excel

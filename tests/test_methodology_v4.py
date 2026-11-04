@@ -332,24 +332,24 @@ class DeviceAndSourceTests(unittest.TestCase):
         self.assertIn('effectiveness is not established',findings[0]['Observation'])
         self.assertEqual(findings[0]['InvestigationEvidence']['records'][0]['ParentId'],'intune')
 
-    def test_per_device_protection_reads_produce_one_action_per_condition_and_freshness(self):
+    def test_per_device_protection_reads_produce_one_finding_with_reporting_subsets(self):
         dates=['2026-09-14T08:00:00Z','2026-09-13T09:00:00Z','2026-09-10T10:00:00Z','2026-07-06T00:00:00Z','2025-11-01T00:00:00Z']
         reads=[dataset([{'ParentId':f'device-{n}','realTimeProtectionEnabled':False,'signatureUpdateOverdue':False,
                          'lastReportedDateTime':date}],source_api=f'https://graph.microsoft.com/v1.0/deviceManagement/managedDevices/device-{n}/windowsProtectionState')[0]
                for n,date in enumerate(dates)]
         findings=expanded_findings({'assessment_sources':{'windows_protection':reads}},evaluation_date=DAY)
         self.assertEqual([row['FindingKey'] for row in findings],
-                         ['expanded.windows_protection.disabled.current','expanded.windows_protection.disabled.older'])
-        current,older=findings
-        self.assertEqual(len(current['InvestigationEvidence']['records']),3)
+                         ['expanded.windows_protection.disabled'])
+        current=findings[0]
+        self.assertEqual(len(current['InvestigationEvidence']['records']),5)
         self.assertEqual(current['ObservationDate'],'2026-09-10')
-        self.assertEqual(current['DeviceEvidenceCounts']['source_record_count'],3)
-        self.assertEqual(current['DeviceEvidenceCounts']['distinct_intune_devices'],3)
-        self.assertIn('3 Windows protection record',current['Observation'])
-        self.assertIn('between 2026-09-10 and 2026-09-14',current['Observation'])
+        self.assertEqual(current['DeviceEvidenceCounts']['source_record_count'],5)
+        self.assertEqual(current['DeviceEvidenceCounts']['distinct_intune_devices'],5)
+        self.assertIn('5 Windows protection record',current['Observation'])
+        self.assertIn('reports 2026-09-10 to 2026-09-14',current['Observation'])
         self.assertIn('current antivirus provider',current['Recommendation'])
         self.assertIn('approved third-party antivirus',current['Recommendation'])
-        self.assertEqual(older['ObservationDate'],'2026-07-06')
+        self.assertEqual(current['EndpointObservationSubsets']['stale']['counts']['evidence_period']['end'],'2026-07-06')
         self.assertIn('{id}',current['InvestigationEvidence']['source']['source_api'])
         result=build_assessment_result([dict(row,TenantId=TENANT) for row in findings],{'assessment_sources':{'windows_protection':reads}},
                                        evaluation_date=DAY,expected_tenant_id=TENANT)

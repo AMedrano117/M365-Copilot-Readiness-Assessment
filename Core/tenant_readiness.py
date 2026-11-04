@@ -73,8 +73,7 @@ def build_tenant_progress(result):
 
 
 def scope_handoff_html(result):
-    return ('<section id="rollout"><h2>After the tenant assessment</h2><p>' + QUALIFICATION
-            + '</p><p>Use the technical findings and their evidence qualifications to inform the separate deployment engagement.</p></section>')
+    return ''
 
 
 def getting_started_html():
