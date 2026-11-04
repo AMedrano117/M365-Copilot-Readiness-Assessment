@@ -217,6 +217,11 @@ def compare_results(before, after, *, mode='rebuild', collected_at=None):
     stable = {rid: item for rid, item in findings.items()
               if item['change'] != 'changed' or set(item['fields']) & set(identity_fields)}
     customer = _diff(a['customer_actions'], b['customer_actions'])
+    # Fingerprints identify a finding independently of its positional display ID.
+    prints = lambda view: {row.get('FindingFingerprint'): rid for rid, row in view['recommendations'].items() if row.get('FindingFingerprint')}
+    before_prints, after_prints = prints(a), prints(b)
+    reassigned = sorted((before_prints[fp], after_prints[fp]) for fp in set(before_prints) & set(after_prints)
+                        if before_prints[fp] != after_prints[fp])
     by_field = lambda name: sorted(rid for rid, item in findings.items() if item['change'] == 'changed' and name in item['fields'])
     semantic = {
         'decision': (a['decision'], b['decision']) if a['decision'] != b['decision'] else None,
@@ -227,6 +232,9 @@ def compare_results(before, after, *, mode='rebuild', collected_at=None):
         'customer_actions_changed': customer,
         'priorities_changed': by_field('Priority'), 'readiness_treatment_changed': by_field('ReadinessTreatment'),
         'evidence_references_changed': by_field('EvidenceId'), 'stable_ids_changed': stable,
+        'display_ids_reassigned': reassigned,
+        'findings_added_by_fingerprint': len(set(after_prints) - set(before_prints)),
+        'findings_removed_by_fingerprint': len(set(before_prints) - set(after_prints)),
         # A rebuild is a new Standalone run with its own identity; only a render must keep it.
         'identity': (a['identity'], b['identity']) if mode == 'render' and a['identity'] != b['identity'] else None,
         'lifecycle': (a['lifecycle'], b['lifecycle']) if a['lifecycle'] != b['lifecycle'] else None,
@@ -547,7 +555,9 @@ def summary_lines(report):
              f"- Priorities / readiness treatments changed: {count(semantic['priorities_changed'])} / "
              f"{count(semantic['readiness_treatment_changed'])}",
              f"- Evidence references changed: {count(semantic['evidence_references_changed'])}",
-             f"- Stable IDs changed: {count(semantic['stable_ids_changed'])}",
+             f"- Stable IDs changed: {count(semantic['stable_ids_changed'])} (same finding under a new display ID: "
+             f"{len(semantic.get('display_ids_reassigned') or [])}; added / removed by fingerprint: "
+             f"{semantic.get('findings_added_by_fingerprint', 0)} / {semantic.get('findings_removed_by_fingerprint', 0)})",
              f"- Semantic differences: {'yes' if report['semantic_differences'] else 'none'}",
              f"- Presentation-only differences: {len(report['presentation_differences'])}",
              f"- Output files: {', '.join(name for names in report['output_files'].values() for name in names) or 'none'}"]
