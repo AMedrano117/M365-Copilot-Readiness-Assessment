@@ -115,10 +115,17 @@ class LayeredValidationTests(unittest.TestCase):
         with patch.object(assessment_serialization, 'write_assessment_result', side_effect=altered):
             report = v.render_only(self.snapshot, self.temp / 'render-altered', revision=fictional_revision())
         self.assertFalse(report['passed'])
-        self.assertIn('Render-only output changed semantic results.', report['failures'])
+        self.assertEqual((report['execution_status'], report['comparison_status'], report['exit_code']),
+                         ('Completed', 'UnexpectedSemanticRegression', 1))
+        self.assertIn('Render-only output changed semantic results.', report['unexpected_regressions'])
         result = json.loads(self.snapshot.read_text(encoding='utf-8'))
         changed = v.compare_results(result, dict(result, controls=[]), mode='render')
         self.assertIn('Render-only output changed semantic results.', changed['unexpected_regressions'])
+        # A declared transition never explains a render-only difference.
+        anything = [{'id': 'T-any', 'kind': 'methodology_rule', 'reason': 'r', 'rule': 'r', 'introduced_by': 'c' * 40,
+                     'matches': [{'scope': 'decision', 'field': 'decision', 'from': [result['decision']], 'to': ['Altered by renderer']}]}]
+        altered = v.compare_results(result, dict(result, decision='Altered by renderer'), mode='render', transitions=anything)
+        self.assertEqual((altered['expected_changes'], v.comparison_status(altered, [])), ([], 'UnexpectedSemanticRegression'))
 
     def test_render_only_creates_no_history_baseline_or_delta(self):
         self.assertFalse(self.render['history_created'])
