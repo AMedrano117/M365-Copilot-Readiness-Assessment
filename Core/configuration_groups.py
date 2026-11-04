@@ -161,9 +161,57 @@ def validate_configuration_groups(model):
     return ['Configuration grouping identity, membership or counts do not reconcile.']
 
 
-def summary_html(model):
+# SharePoint settings that belong to the identity narrative, not the content-sharing table.
+IDENTITY_SETTINGS = frozenset({'LegacyAuthProtocolsEnabled'})
+SEMANTIC = ('configuration_key', 'configuration', 'provider', 'scope', 'observed', 'recommended', 'assessment', 'object_type')
+
+
+def customer_rows(model, *, include=None, exclude=()):
+    """One row per semantic setting result; repeated finding occurrences are counted, not repeated.
+
+    Distinct objects are counted across the merged groups' members, so
+    overlapping occurrences are never added together.
+    """
+    members = defaultdict(list)
+    for member in model.get('members') or []:
+        members[member.get('group_id')].append(member)
+    merged = {}
+    for group in model.get('groups') or []:
+        key = group.get('configuration_key')
+        if key in exclude or (include is not None and key not in include):
+            continue
+        semantic = _key(group, SEMANTIC)
+        entry = merged.setdefault(semantic, dict({name: group.get(name) for name in SEMANTIC}, objects=set(),
+                                                 occurrences=0, findings=set(), fallback_objects=0))
+        objects = {row['object_id'] for row in members.get(group['group_id'], []) if row.get('object_id')}
+        entry['objects'] |= objects
+        entry['fallback_objects'] = max(entry['fallback_objects'], group.get('affected_object_count') or 0)
+        entry['occurrences'] += group.get('member_count') or 0
+        entry['findings'].add(group.get('finding_id'))
+    rows = []
+    for entry in merged.values():
+        objects, findings = entry.pop('objects'), entry.pop('findings')
+        fallback = entry.pop('fallback_objects')
+        rows.append(dict(entry, affected_objects=len(objects) or fallback, source_occurrences=entry.pop('occurrences'),
+                         findings=len(findings)))
+    order = {'Change': 0, 'Review': 1, 'Conflict': 1, 'Meets': 2}
+    return sorted(rows, key=lambda row: (order.get(row['assessment'], 3), str(row['configuration']), str(row['provider'])))
+
+
+def summary_html(model, *, customer=False, include=None, exclude=(), title='Grouped configuration results'):
     """Customer summary deliberately excludes object identity and protected lineage."""
     from html import escape
+    if customer:
+        rows = customer_rows(model, include=include, exclude=exclude)
+        if not rows:
+            return ''
+        headers = ('Configuration', 'Observed', 'Recommended', 'Assessment', 'Object type', 'Scope', 'Provider', 'Affected objects', 'Source occurrences')
+        body = ''.join('<tr>' + ''.join('<td>' + escape(str(value)) + '</td>' for value in (
+            row['configuration'], row['observed'], row['recommended'], row['assessment'], row['object_type'], row['scope'],
+            row['provider'], row['affected_objects'], row['source_occurrences'])) + '</tr>' for row in rows)
+        return (f'<h3>{escape(title)}</h3><div class="table-scroll"><table><thead><tr>' + ''.join('<th>' + h + '</th>' for h in headers)
+                + '</tr></thead><tbody>' + body + '</tbody></table></div><p class="qualification">Each setting result appears once; '
+                'affected objects are distinct, and source occurrences count the findings that retained it. Full records remain in Technical Evidence.</p>')
     rows = []
     for group in model.get('groups') or []:
         cells = [group['configuration'], group['observed'], group['recommended'], group['assessment'], group['object_type'],

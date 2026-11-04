@@ -1,0 +1,43 @@
+{
+ "name": "C16_rms_enabled_no_labels",
+ "kind": "purview",
+ "declared_before_production_change": "2026-11-03",
+ "description": "Azure Rights Management is enabled but no sensitivity labels or label policies exist.",
+ "declaration": {
+  "observed_condition": "RMS enabled; 0 labels and 0 label policies",
+  "existing_control": "Azure Rights Management",
+  "effective_scope": "Tenant",
+  "operation_evidence": "Configuration only",
+  "exclusion_evidence": "None",
+  "source_states": "irm_config, labels and label policies complete",
+  "expected_technical_result": "RMS is supporting context; labels absent",
+  "expected_action_lane": "FixNow (labels)",
+  "expected_readiness_treatment": "None",
+  "expected_customer_action_count": 1,
+  "prohibited_conclusion": "That content is protected because RMS is enabled",
+  "required_qualification": "RMS does not establish label protection"
+ },
+ "expected": {
+  "rows": [
+   {
+    "finding_key": "purview.rms.state",
+    "disposition": "Reference",
+    "finding_class": "Supporting observation",
+    "required": [
+     "does not establish that content is protected"
+    ],
+    "prohibited": [
+     "documents accessed by Copilot can be encrypted",
+     "properly enabled"
+    ]
+   }
+  ],
+  "controls": [
+   {
+    "control": "DATA.LABELS",
+    "control_status_not": "Observed"
+   }
+  ],
+  "customer_actions": []
+ }
+}

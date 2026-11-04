@@ -73,10 +73,16 @@ class ConfigurationOutputTests(unittest.TestCase):
         self.assertTrue(evidence <= all_values)
 
     def test_html_summary_is_shared_and_has_no_object_locators(self):
-        from Core.configuration_groups import summary_html
+        from Core.configuration_groups import IDENTITY_SETTINGS, customer_rows, summary_html
         from Core.customer_report import _settings
         html=_settings(self.bundle)
-        self.assertIn(summary_html(self.result['configuration_groups']),html)
+        model=self.result['configuration_groups']
+        self.assertIn(summary_html(model,customer=True,exclude=IDENTITY_SETTINGS,title='Sharing configuration'),html)
+        # Each semantic setting result appears once; the full groups stay in Technical Evidence.
+        rows=customer_rows(model,exclude=IDENTITY_SETTINGS)
+        semantic={(g['configuration_key'],g['provider'],g['scope'],g['observed'],g['recommended'],g['assessment'],g['object_type'])
+                  for g in model['groups'] if g['configuration_key'] not in IDENTITY_SETTINGS}
+        self.assertEqual(len(rows),len(semantic))
         self.assertNotIn('https://example.invalid/a',html)
         self.assertNotIn('site-a',html)
         self.assertNotIn('EVD-',html)

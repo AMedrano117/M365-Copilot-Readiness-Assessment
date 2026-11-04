@@ -1,0 +1,76 @@
+{
+ "name": "C18_license_only_capability",
+ "kind": "bundle",
+ "declared_before_production_change": "2026-11-03",
+ "description": "Service-plan presence and speculative capability rows with no configuration evidence.",
+ "declaration": {
+  "observed_condition": "Windows Autopatch and Yammer service plans; speculative agent row",
+  "existing_control": "None",
+  "effective_scope": "Not applicable",
+  "operation_evidence": "None",
+  "exclusion_evidence": "None",
+  "source_states": "License inventory only",
+  "expected_technical_result": "Reference inventory / adoption context",
+  "expected_action_lane": "None",
+  "expected_readiness_treatment": "None",
+  "expected_customer_action_count": 0,
+  "prohibited_conclusion": "A remediation action, configured-feature claim or blocker",
+  "required_qualification": "License presence only"
+ },
+ "rows": [
+  {
+   "key": "",
+   "feature": "Windows Autopatch",
+   "disposition": "Reference",
+   "basis": "License signal",
+   "status": "Success",
+   "observation": "The Windows Autopatch service plan was present in the collected license inventory."
+  },
+  {
+   "key": "",
+   "feature": "Yammer Enterprise",
+   "disposition": "Reference",
+   "basis": "Workload inventory context",
+   "status": "Success",
+   "control": "ADOPTION-001",
+   "observation": "Large user base of 708 active users provides a foundation for Copilot communities."
+  },
+  {
+   "key": "",
+   "feature": "Power Automate for Copilot Studio - Action Agents",
+   "disposition": "Reference",
+   "basis": "License signal",
+   "status": "Action Required",
+   "priority": "High",
+   "observation": "Organization with 1656 users and data - ready for action-oriented agents"
+  }
+ ],
+ "expected": {
+  "rows": [
+   {
+    "feature": "Windows Autopatch",
+    "open_action": false,
+    "finding_class": "Reference inventory"
+   },
+   {
+    "feature": "Yammer Enterprise",
+    "open_action": false,
+    "finding_class": "Adoption context"
+   },
+   {
+    "feature": "Power Automate for Copilot Studio - Action Agents",
+    "open_action": false,
+    "finding_class": "Reference inventory",
+    "status_not": "Action Required",
+    "blocks_readiness": false
+   }
+  ],
+  "customer_actions": [],
+  "controls": [],
+  "features_without_customer_action": [
+   "Windows Autopatch",
+   "Yammer Enterprise",
+   "Power Automate for Copilot Studio - Action Agents"
+  ]
+ }
+}

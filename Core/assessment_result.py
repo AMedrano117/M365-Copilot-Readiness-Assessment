@@ -558,7 +558,7 @@ GAP_GUIDANCE = {
 }
 
 
-def _gap(question, day, bundle=None):
+def _gap(question, day, bundle=None, operation=None):
     control, domain, title, keys, _, security_gate = question
     identifier = "GAP-" + control.replace(".", "-")
     observation, next_step = GAP_GUIDANCE.get(control, ("The collected evidence does not answer this check.",
@@ -581,7 +581,7 @@ def _gap(question, day, bundle=None):
         "EvidenceId": "", "EvidenceScope": "", "EvidenceComplete": False,
     }
     from .evidence_reconciliation import qualify_gap
-    return qualify_gap(row, bundle or {})
+    return qualify_gap(row, bundle or {}, operation)
 
 
 def _supports_question(row, control):
@@ -898,7 +898,7 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
                 if row.get('Disposition') == 'Assurance' and operation[control]['result'] != 'pass':
                     row['Qualification'] = (str(row.get('Qualification') or '') + ' Configuration component only; operational confirmation remains unresolved.').strip()
             if operation[control]['result'] != 'pass' and not any(row.get('Disposition') in {'Action','Coverage'} for row in matching):
-                gap = _gap(question, day, bundle)
+                gap = _gap(question, day, bundle, operation.get(control))
                 gap.update(FindingKey='coverage.operation.' + control.lower(),
                            Observation=(gap['Observation'] + ' ' if gap.get('ObservedEvidence') or not matching else '') + operation[control]['reason'], EvidenceLevel='observed_operation',
                            Recommendation=gap['Recommendation'] if gap.get('ObservedEvidence') else
@@ -915,7 +915,7 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
         existing_gap = [row for row in matching if row.get("Disposition") == "Coverage"
                         or (row.get('Disposition') == 'Action' and row.get('EvidenceStatus') != 'supported')]
         if not supported and not known_facts and not existing_gap:
-            gap = _gap(question, day, bundle)
+            gap = _gap(question, day, bundle, operation.get(control))
             records.append(gap)
             matching.append(gap)
         components = []
@@ -982,6 +982,10 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
     from .finding_reconciliation import allocate_display_ids
     collision_diagnostics = allocate_display_ids([*records, *optional_records],
         lambda row: "REC-" + stable_id([_finding_identity(row), row.get("SourceType"), row.get("EvidenceScope")])[:10].upper())
+    from .customer_actions import qualify_capability_claims, qualify_device_protection, retire_superseded
+    qualify_capability_claims(records)
+    retire_superseded(records)
+    qualify_device_protection(records)
     actions = [_action(row) for row in records if row.get("Disposition") in {"Action", "Coverage"}]
     from .evidence_reconciliation import qualify_device_action_titles
     actions = qualify_device_action_titles(actions)
@@ -1028,6 +1032,14 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
                               'Tenant remediation' if row['ActionType'] == 'Remediation' else 'Evidence review')
         row['ReadinessStage'] = 'Tenant remediation' if row['ActionType'] == 'Remediation' else 'Evidence review'
     readiness_conditions = [row for row in actions if row['SecurityGate'] and row not in blockers]
+    # The customer plan is a projection of the decision above: lanes, one action
+    # per semantic condition and decision, and a class for every finding.
+    from .customer_actions import action_lane, build_customer_actions, classify_findings, population_overlaps, readiness_outcome
+    for row in records:
+        row['ActionLane'] = action_lane(row)
+    overlaps = population_overlaps(records)
+    customer_actions = build_customer_actions(actions, blockers, overlaps)
+    finding_classes = classify_findings(records, actions)
     if critical:
         decision, rationale = 'Tenant remediation required', 'Confirmed critical tenant conditions require remediation. Review the affected population and evidence qualifications.'
     elif blockers:
@@ -1056,6 +1068,7 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
         "critical": len(critical), "high": sum(row.get("Priority") == "High" for row in actions),
         "medium": sum(row.get("Priority") == "Medium" for row in actions),
         "low": sum(row.get("Priority") == "Low" for row in actions),
+        "customer_actions": len(customer_actions), "planning": len(opportunities),
     }
     domains = []
     for domain, title, owner, why in (*DOMAINS, *OPTIONAL_DOMAINS):
@@ -1126,6 +1139,10 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
         "answered_controls": len(answered), "required_controls": len(gates),
         "evidence": observations, "adoption_metrics": [row for row in metrics if row["selection"] == "selected"],
         "superseded_findings": superseded, "evidence_period": {"start": dates[0] if dates else None, "end": dates[-1] if dates else None},
+        "customer_actions": customer_actions, "population_overlaps": overlaps, "finding_classification": finding_classes,
+        "planning": [{'recommendation_id': row.get('RecommendationId'), 'finding_key': row.get('FindingKey') or '',
+                      'title': row.get('FindingTitle') or row.get('Feature'), 'domain_id': row.get('DomainId')} for row in opportunities],
+        "readiness_outcome": readiness_outcome(controls, blockers, customer_actions, opportunities),
         "rollout_conditions": [
             {'stage': 'Remediate', 'condition': 'Resolve the retained tenant security findings.'},
             {'stage': 'Verify', 'condition': 'Confirm required control coverage with current, scoped evidence.'},

@@ -138,7 +138,70 @@ Every observation is placed in exactly one lane:
 
 A licensed feature is not proof that the feature is configured, scoped correctly, or effective.
 License-only observations are low-confidence assurance or opportunities unless deployment data
-shows a concrete gap.
+shows a concrete gap. Service-plan presence alone never creates a control failure, a customer
+action, a configured-feature claim, an implementation requirement or a readiness blocker; such
+rows are classified as reference inventory or adoption context and never keep an action status.
+
+### Control correlation
+
+Before an observed condition becomes an action, `Core/control_correlation.py` correlates it
+with the retained controls that may mitigate it: preventive and detective controls, enforcement
+mode, exclusions, compensating controls, observed operation, conflicting evidence, source
+completeness, effective scope, affected population and observation period. The structured
+`ControlCorrelation` on the finding records one state:
+
+| State | Meaning |
+| --- | --- |
+| `ControlAbsent` | No applicable control is retained (a disabled policy counts as absent) |
+| `ControlConfigured` | The control is configured; operation was not observed, or the events are explained (for example they preceded the policy) |
+| `ControlScopeUnresolved` | The control exists, but its effective scope is unresolved (for example unvalidated exclusions) |
+| `ControlOperationUnresolved` | The control exists, but event-to-control correlation or a complete sample is missing |
+| `ControlOperatingAsExpected` | Retained events show the control applying as configured |
+| `ControlBypassObserved` | A targeted object succeeded after the control's last change and the control did not apply |
+| `ControlIneffective` | The control exists but does not enforce (for example report-only) |
+| `ControlConflict` | Retained results contradict each other |
+| `ControlNotApplicable` | The component does not apply to tenant readiness |
+
+A configured control does not prove operation, an adverse event does not prove control failure,
+exclusions stay separate from general policy scope, partial operational evidence does not negate
+complete configuration evidence, and complete configuration never fills an operational gap.
+Recommendation text and renderers display the correlation; they never decide it. Unknown
+narrative fields stay unknown.
+
+For successful legacy-client sign-ins, each event is compared with every legacy-blocking policy:
+account membership (including excluded users and completely retained excluded groups), event time
+against the policy's creation and last-change dates, the event's applied-policy result, client
+application, resource and result code. Events from excluded accounts are attributed to the
+exclusions, whose purpose is validated only from retained account-purpose declarations; events
+that preceded the policy are not failures; a targeted account succeeding after the last change
+with the policy not applied is an observed bypass; anything else is unresolved and is validated,
+not treated as a policy failure. When an applicable policy exists, the next step corrects or
+validates that policy; it never recommends creating a duplicate one. Audit and Copilot licensing
+gaps separate their components the same way (configuration, operation within the shared
+operational result, workload and retention coverage, ownership; subscription capacity, licensed
+users, usage populations), and ask only for the unresolved components. Differing license
+populations are a reconciliation question, not evidence that licenses are missing.
+
+### Customer action plan
+
+Open findings are grouped into customer actions: one semantic condition, scope, population and
+required decision is one customer action, which several retained findings can support. Related
+work is grouped only where the same owner closes it with the same decision, and only within one
+lane; unrelated findings are never merged because of similar wording. Each finding keeps its stable
+ID, evidence and workbook row. Lanes are a projection of existing treatments:
+
+| Lane | Readiness treatment | Meaning |
+| --- | --- | --- |
+| Fix now | `Remediate` | Confirmed failure requiring remediation |
+| Validate existing control | `ConfirmBeforePilot` | A relevant control exists; effective scope or operation is unresolved |
+| Investigate affected objects | `ScopeReviewRequired` | Affected objects are retained; ownership, purpose, materiality or need requires review |
+| Collect missing evidence | `EvidenceGap` | A required question cannot be answered from retained evidence |
+| Plan improvement | Opportunity lane | Hardening, maturity or adoption work; not counted as an open action |
+
+Every retained finding is also classified as a customer action, supporting observation,
+assurance, coverage gap, technical investigation detail, planning opportunity, adoption context,
+reference inventory or deprecated/superseded producer. Classification and consolidation never
+change a control result, a blocker or the readiness decision.
 
 ## Deployment decision
 

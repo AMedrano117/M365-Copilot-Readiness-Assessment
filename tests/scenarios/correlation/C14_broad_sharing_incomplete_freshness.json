@@ -1,0 +1,59 @@
+{
+ "name": "C14_broad_sharing_incomplete_freshness",
+ "kind": "exposure",
+ "declared_before_production_change": "2026-11-03",
+ "description": "Anyone links on one site from an export whose report date is missing.",
+ "declaration": {
+  "observed_condition": "2 Anyone links on 1 site; report date missing",
+  "existing_control": "None retained",
+  "effective_scope": "1 site",
+  "operation_evidence": "Report freshness unknown",
+  "exclusion_evidence": "None",
+  "source_states": "SAM export without a date",
+  "expected_technical_result": "Exposure review plus evidence freshness",
+  "expected_action_lane": "InvestigateAffectedObjects + CollectMissingEvidence",
+  "expected_readiness_treatment": "ScopeReviewRequired",
+  "expected_customer_action_count": 2,
+  "prohibited_conclusion": "That an unknown date is proof the report is old",
+  "required_qualification": "Freshness not verified"
+ },
+ "exposure": {
+  "sam_rows": [
+   {
+    "Site Name": "Projects",
+    "Site URL": "https://contoso.sharepoint.example/sites/projects",
+    "Primary Admin": "owner@contoso.example",
+    "Anyone link count": "2"
+   }
+  ]
+ },
+ "expected": {
+  "rows": [
+   {
+    "finding_key": "data_exposure.anonymous_links",
+    "lane": "InvestigateAffectedObjects"
+   },
+   {
+    "finding_key": "data_exposure.freshness.sam",
+    "lane": "CollectMissingEvidence"
+   }
+  ],
+  "customer_actions": [
+   {
+    "keys": [
+     "data_exposure.anonymous_links"
+    ],
+    "count": 1,
+    "lane": "InvestigateAffectedObjects"
+   },
+   {
+    "keys": [
+     "data_exposure.freshness.sam"
+    ],
+    "count": 1,
+    "lane": "CollectMissingEvidence"
+   }
+  ],
+  "controls": []
+ }
+}

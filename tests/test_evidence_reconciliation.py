@@ -94,8 +94,10 @@ class ComponentEvidenceTests(unittest.TestCase):
         result,_=self.audit(); row=gap(result,'DATA.AUDIT')
         counts={r['dataset']:r['record_count'] for r in row['ObservedEvidence']['components']}
         self.assertEqual(counts,{'audit_config':1,'copilot_audit':3554})
-        self.assertIn('unified_audit_enabled=True',row['Observation'])
-        self.assertIn('admin_audit_enabled=False',row['Observation'])
+        # Raw settings stay in the retained evidence; the customer text states each one.
+        self.assertEqual(row['ObservedEvidence']['configuration_settings'][0]['unified_audit_enabled'],True)
+        self.assertEqual(row['ObservedEvidence']['configuration_settings'][0]['admin_audit_enabled'],False)
+        self.assertIn('Unified audit logging is enabled, and admin audit logging is disabled',row['Observation'])
         self.assertIn('2026-10-20 through 2026-10-27',row['Observation'])
 
     def test_audit_events_do_not_pass_tenant_retention_or_review(self):

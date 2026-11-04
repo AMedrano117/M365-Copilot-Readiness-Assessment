@@ -877,6 +877,7 @@ def export_to_excel(recommendations, filename=None, tenant_name=None, evidence_b
             'License Evidence State':row.get('LicenseEvidenceState'),
             **licensing_columns(row),
             'Responsible role':row.get('OwnerRole'),
+            'Finding class':row.get('FindingClass'), 'Action lane':row.get('ActionLane'),
             'Evidence level':row.get('EvidenceLevel'), 'Operational result':row.get('OperationalResult'),
             'Observed':row.get('ObservationDate'), 'Qualification':row.get('Qualification'),
             'Guidance verification':row.get('GuidanceVerification'), 'Guidance verified at':row.get('GuidanceVerifiedAt'),
