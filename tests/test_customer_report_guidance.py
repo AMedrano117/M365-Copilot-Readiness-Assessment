@@ -25,12 +25,16 @@ class CustomerReportGuidanceTests(unittest.TestCase):
         html = render_customer_report(result, {}, 'Example tenant', 'evidence.xlsx')
         self.assertEqual(html.count('id="report-guide-sharepoint"'), 1)
         self.assertEqual(html.count('id="report-guide-dspm"'), 1)
-        self.assertEqual(html.count('href="#report-guide-sharepoint"'), 3)
+        # The coverage and freshness findings share one evidence action; snapshot scope keeps its own.
+        from Core.customer_actions import build_customer_actions
+        plan = build_customer_actions(result['actions'], [])
+        self.assertEqual(len(plan), 3)
+        self.assertEqual(html.count('href="#report-guide-sharepoint"'), 2)
         self.assertEqual(html.count('href="#report-guide-dspm"'), 1)
         ids = set(re.findall(r'\bid="([^"]+)"', html))
         self.assertTrue(all(anchor in ids for anchor in re.findall(r'href="#([^"]+)"', html)))
-        for index in range(1, 5):
-            self.assertIn(f'Open action {index}</a>', html)
+        for item in plan:
+            self.assertIn(f'Open action {item["number"]}</a>', html)
         self.assertIn('Purview data-risk export compatibility still needs validation', html)
         self.assertEqual(result, before)
 

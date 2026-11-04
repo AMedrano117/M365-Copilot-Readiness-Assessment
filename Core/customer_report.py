@@ -435,9 +435,10 @@ def _sharing_changes(bundle):
     """Settings to change, shown inside the sharing action card."""
     grouped = (bundle.get('assessment_result') or {}).get('configuration_groups') or (bundle.get('finding_evidence') or {}).get('configuration_groups')
     if grouped and grouped.get('groups'):
-        from .configuration_groups import summary_html
+        from .configuration_groups import IDENTITY_SETTINGS, summary_html
         rows = [g for g in grouped['groups'] if g['assessment'] != 'Meets']
-        return summary_html({'groups':rows})
+        return summary_html({'groups':rows, 'members':grouped.get('members') or []}, customer=True, exclude=IDENTITY_SETTINGS,
+                            title='Settings to review')
     rows = [row for row in _sharing_review(bundle) if row['state'] != 'ok']
     if not rows:
         return ''
@@ -450,8 +451,8 @@ def _sharing_changes(bundle):
 def _settings(bundle):
     grouped = (bundle.get('assessment_result') or {}).get('configuration_groups') or (bundle.get('finding_evidence') or {}).get('configuration_groups')
     if grouped and grouped.get('groups'):
-        from .configuration_groups import summary_html
-        return summary_html(grouped) + '<p class="qualification">Configuration describes permitted behavior; it does not establish actual content access. Object-level membership remains in Technical Evidence.</p>'
+        from .configuration_groups import IDENTITY_SETTINGS, summary_html
+        return summary_html(grouped, customer=True, exclude=IDENTITY_SETTINGS, title='Sharing configuration') + '<p class="qualification">Configuration describes permitted behavior; it does not establish actual content access. Object-level membership remains in Technical Evidence.</p>'
     rows = _sharing_review(bundle)
     if not rows:
         return ''
@@ -461,6 +462,15 @@ def _settings(bundle):
                '<p class="settings-summary" data-state="ok"><strong>Collected settings meet the recommended values.</strong></p>')
     return ('<h3>Tenant sharing settings</h3>' + summary + _sharing_table(rows)
             + '<p class="qualification">Configuration describes permitted behavior; it does not establish who currently has access to each file.</p>')
+
+
+def _identity_settings(bundle):
+    """SharePoint authentication settings belong with identity, not the sharing table."""
+    grouped = (bundle.get('assessment_result') or {}).get('configuration_groups') or (bundle.get('finding_evidence') or {}).get('configuration_groups')
+    if not (grouped and grouped.get('groups')):
+        return ''
+    from .configuration_groups import IDENTITY_SETTINGS, summary_html
+    return summary_html(grouped, customer=True, include=IDENTITY_SETTINGS, title='SharePoint authentication setting')
 
 
 def _license_context(bundle):
@@ -857,8 +867,8 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None, summ
     domains = result.get('assessment_domains') or result['domains']
     counts = result['counts']
     from .evidence_reconciliation import blocker_explanation
-    explanation = blocker_explanation(result)
-    blocker_note = '<p class="qualification">' + prose(explanation) + '</p>' if explanation else ''
+    explanation = ' '.join((result.get('readiness_outcome') or {}).get('sentences') or []) or blocker_explanation(result)
+    blocker_note = '<p class="qualification readiness-outcome">' + prose(explanation) + '</p>' if explanation else ''
     workbook_name = Path(workbook_path).name if workbook_path else ''
     workbook_url = quote(workbook_name) if workbook_name else ''
     technical_name = Path(technical_workbook_path).name if technical_workbook_path else ''
@@ -956,26 +966,83 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None, summ
 
     action_html = []
     sharing_changes = _sharing_changes(bundle)
-    for index, row in enumerate(actions, 1):
-        guide = guide_for(row)
+    from .customer_actions import LANE_DESCRIPTIONS, build_customer_actions
+    from .control_correlation import LANES
+    # Customer actions come from the shared result; older snapshots use the same production consolidation.
+    plan = result.get('customer_actions')
+    if plan is None:
+        plan = build_customer_actions(actions, result.get('blockers') or [])
+    rows_by_id = {row.get('RecommendationId'): row for row in actions}
+    action_numbers = {member['recommendation_id']: item['number'] for item in plan for member in item['members']}
+
+    def member_detail(row):
+        return (f"{investigation_link(row)}{technical_evidence(row)}"
+                + (('<p class="qualification">' + prose(licensing_context(row)) + '</p>') if row.get('FindingTaxonomyVersion') else '')
+                + f"<p class=\"qualification\">{prose(_date_text(row))}{(' · ' + prose(row.get('Qualification'))) if row.get('Qualification') else ''}</p>"
+                + f"{evidence_link(row)}{finding_html(result,row)}{governance_finding(result,row)}")
+
+    def control_fields(item):
+        fields = item.get('control_narrative') or {}
+        shown = [(label, fields.get(label)) for label in ('Existing control', 'Control scope', 'Exclusions or exceptions', 'Observed operation',
+                                                           'Residual risk', 'Evidence completeness', 'Affected population')]
+        items = ''.join(f'<li><strong>{escape(label)}.</strong> {prose(value)}</li>' for label, value in shown if value)
+        return '<ul class="control-correlation">' + items + '</ul>' if items else ''
+
+    current_lane = None
+    for item in plan:
+        members = [rows_by_id[member['recommendation_id']] for member in item['members'] if member['recommendation_id'] in rows_by_id]
+        if not members:
+            continue
+        first, single = members[0], len(members) == 1
+        if item['lane'] != current_lane:
+            current_lane = item['lane']
+            action_html.append(f'<h3 class="lane-heading" id="lane-{slug(current_lane)}">{prose(LANES[current_lane][0])}</h3>'
+                               f'<p class="section-description">{prose(LANE_DESCRIPTIONS.get(current_lane, ""))}</p>')
+        index = item['number']
+        guide = guide_for(first)
         guidance_link = (f'<p class="evidence-link"><a href="#report-guide-{guide}">How to obtain the reports</a> · <a href="#report-handoff">How to return the evidence</a></p>' if guide else '')
-        step_label = 'Fix' if row.get('ActionType') == 'Remediation' else 'Next step'
-        settings_html = sharing_changes if row.get('FindingKey') in SHARING_FINDINGS else ''
-        action_html.append(f'''<article class="action" data-priority="{slug(row.get('Priority'))}" id="action-{index}"><div class="action-number">{index:02d}</div><details class="action-detail"><summary>
-          <div class="action-tags"><span class="priority-badge" data-priority="{slug(row.get('Priority'))}">{prose(row.get('Priority') or 'Review')} priority</span>{('<span class="action-kind">' + prose(row.get('PilotImpact')) + '</span>') if row.get('PilotImpact') else ''}<span class="action-kind">{prose(row.get('ActionType'))}</span><span class="action-domain">{prose(row.get('Domain'))}</span></div>
-          <h3>{prose(_heading(row))}</h3><p class="action-preview"><span class="preview-label" data-kind="issue">Issue</span>{prose(short_text(_observation(row,bundle)))}</p>
-          <p class="action-preview"><span class="preview-label" data-kind="fix">{step_label}</span>{prose(short_text(_action_text(row)))}</p><span class="detail-prompt">Details, next step and supporting logs</span></summary><div class="action-body">
-          <div class="callout callout-found" data-priority="{slug(row.get('Priority'))}">{device_found(row)}{settings_html}</div>
-          <div class="callout callout-fix"><p><strong>What to do.</strong> {prose(_action_text(row))}</p></div>{investigation_link(row)}{technical_evidence(row)}
-          {('<p class="qualification">' + prose(licensing_context(row)) + '</p>') if row.get('FindingTaxonomyVersion') else ''}
-          <div class="action-meta"><p><strong>Responsible role</strong><br>{prose(row.get('OwnerRole'))}</p>
-          <p><strong>Rollout stage</strong><br>{prose(row.get('ReadinessStage'))}</p></div>
-          <p><strong>Evidence of completion.</strong> {prose(_completion(row))}</p>{guidance_link}
-          <p class="qualification">{prose(_date_text(row))}{(' · ' + prose(row.get('Qualification'))) if row.get('Qualification') else ''}</p>
-          {evidence_link(row)}{finding_html(result,row)}{governance_finding(result,row)}</div></details></article>''')
+        step_label = 'Fix' if item['lane'] == 'FixNow' else 'Next step'
+        settings_html = sharing_changes if any(row.get('FindingKey') in SHARING_FINDINGS for row in members) else ''
+        steps = item.get('next_steps') or []
+        if single and not item.get('narrative'):
+            found, fix, completion = device_found(first), _action_text(first), _completion(first)
+            fix_html = '<p><strong>What to do.</strong> ' + prose(fix) + '</p>'
+            details = member_detail(first)
+        else:
+            found = (('<p><strong>What we found.</strong> ' + prose(item['narrative']) + '</p>' + control_fields(item)) if item.get('narrative') else '')
+            if not single or not item.get('narrative'):
+                found += '<ul class="action-members">' + ''.join(
+                    f'<li><strong>{prose(member["title"])}.</strong> {prose(_observation(rows_by_id[member["recommendation_id"]], bundle))}</li>'
+                    for member in item['members'] if member['recommendation_id'] in rows_by_id) + '</ul>'
+            fix = steps[0] if steps else _action_text(first)
+            fix_html = ('<p><strong>What to do.</strong></p><ol>' + ''.join('<li>' + prose(step) + '</li>' for step in steps) + '</ol>'
+                        if len(steps) > 1 else '<p><strong>What to do.</strong> ' + prose(fix) + '</p>')
+            completion = item.get('closure_evidence') or _completion(first)
+            details = member_detail(first) if single else ''.join(
+                f'<details class="member-evidence"><summary>Technical detail: {prose(_heading(row))}</summary>{member_detail(row)}</details>'
+                for row in members)
+        preview = item.get('narrative') or _observation(first, bundle)
+        decision = ('<p><strong>Decision required.</strong> ' + prose(item['required_decision']) + '</p>') if item.get('required_decision') else ''
+        # Finding titles match the workbook registers, so each card maps to its retained findings.
+        related = (f'<p class="action-findings"><strong>Related finding{"s" if not single else ""}.</strong> '
+                   + '; '.join(prose(_heading(row)) for row in members) + '</p>')
+        action_html.append(f'''<article class="action" data-priority="{slug(item.get('priority'))}" data-lane="{slug(item['lane'])}" id="action-{index}"><div class="action-number">{index:02d}</div><details class="action-detail"><summary>
+          <div class="action-tags"><span class="priority-badge" data-priority="{slug(item.get('priority'))}">{prose(item.get('priority') or 'Review')} priority</span>{('<span class="action-kind">' + prose(item.get('pilot_impact')) + '</span>') if item.get('pilot_impact') else ''}<span class="action-kind">{prose(item['lane_label'])}</span><span class="action-domain">{prose(item.get('domain'))}</span></div>
+          <h3>{prose(item['title'])}</h3><p class="action-preview"><span class="preview-label" data-kind="issue">Issue</span>{prose(short_text(preview))}</p>
+          <p class="action-preview"><span class="preview-label" data-kind="fix">{step_label}</span>{prose(short_text(fix))}</p><span class="detail-prompt">Details, next step and supporting logs</span></summary><div class="action-body">
+          <div class="callout callout-found" data-priority="{slug(item.get('priority'))}">{found}{settings_html}</div>
+          <div class="callout callout-fix">{fix_html}{decision}</div>
+          <div class="action-meta"><p><strong>Responsible role</strong><br>{prose(item.get('owner_role'))}</p>
+          <p><strong>Rollout stage</strong><br>{prose(item.get('readiness_stage'))}</p></div>
+          <p><strong>Evidence of completion.</strong> {prose(completion)}</p>{guidance_link}{related}
+          {details}</div></details></article>''')
+    planning = result.get('planning') or []
+    if planning:
+        action_html.append('<details class="domain-evidence" id="lane-plan-improvement"><summary>' + prose(LANES['PlanImprovement'][0])
+                           + f' ({len(planning)}, not counted as open actions)</summary><ul>'
+                           + ''.join(f'<li>{prose(entry.get("title"))}</li>' for entry in planning) + '</ul></details>')
 
     domain_html = []
-    action_numbers = {r.get('RecommendationId'): i for i, r in enumerate(actions, 1)}
     for domain_index, domain in enumerate(domains, 1):
         rows = domain.get('customer_findings', domain.get('findings')) or []
         # Findings are already selected and qualified by the shared model.
@@ -987,7 +1054,7 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None, summ
                  for r in domain.get('actions', []) if r.get('RecommendationId') in action_numbers]
         extra = ''
         if domain['id'] == 'identity':
-            extra = _authentication_methods(bundle, result)
+            extra = _authentication_methods(bundle, result) + _identity_settings(bundle)
         if domain['id'] in {'endpoints', 'devices'} and (result.get('device_compliance') or {}).get('summary'):
             summary = result['device_compliance']['summary']
             extra = '<h3>Device compliance at a glance</h3><ul class="device-summary">' + ''.join('<li>' + prose(line) + '</li>' for line in summary['lines']) + '</ul>'
@@ -1008,7 +1075,10 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None, summ
             # The nine-domain layout includes licensing and adoption in Scope.
             # Keep the separate paid-user prompt aggregates visible there too.
             extra += _collected_admin_context(bundle, 'adoption')
-        relevant = ''.join(f'<li><a href="#action-{action_numbers[r.get("RecommendationId")]}">{prose(_heading(r))}</a> <span class="muted">{prose(r.get("ActionType"))}</span></li>' for r in domain.get('actions',[]) if r.get('RecommendationId') in action_numbers)
+        plan_by_number = {item['number']: item for item in plan}
+        numbers = dict.fromkeys(action_numbers[r.get('RecommendationId')] for r in domain.get('actions', []) if r.get('RecommendationId') in action_numbers)
+        relevant = ''.join(f'<li><a href="#action-{number}">{prose(plan_by_number[number]["title"])}</a> <span class="muted">{prose(plan_by_number[number]["lane_label"])}</span></li>'
+                           for number in numbers)
         extra = ('<details class="domain-context"' + (' open' if domain['id'] in {'endpoints', 'devices'} else '')
                  + '><summary>Collected settings, metrics and report context</summary>'+extra+'</details>') if extra else ''
         domain_html.append(f'''<details class="domain domain-panel" data-state="{slug(domain.get('status'))}" id="domain-{escape(domain['id'])}"><summary><span class="domain-index">{domain_index:02d}</span><h2>{prose(domain['title'])}</h2><span class="badge" data-state="{slug(domain.get('status'))}">{prose(domain.get('status'))}</span></summary>
@@ -1018,13 +1088,15 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None, summ
     strengths = ''.join(f'<li>{prose(short_text(r.get("Observation") or r.get("Strength")))} <span class="muted">({prose(_date_text(r))})</span></li>' for r in strength_rows[:4])
     if not strengths:
         strengths = '<li>No current safeguard has enough dated, scoped evidence to be described as verified. Dated positive observations remain in the relevant assessment areas.</li>'
-    concerns = [r for r in actions if r.get('ActionType') != 'Evidence'][:3] or actions[:3]
-    first_actions = ''.join(f'<li><a href="#action-{action_numbers.get(r.get("RecommendationId"), 1)}">{prose(_heading(r))}</a></li>' for r in concerns)
-    cards = ''.join(f'<div class="stat" data-kind="{key}"><div class="value">{counts.get(key, 0)}</div><div class="stat-label">{label}</div><p class="stat-note">{note}</p></div>' for key, label, note in (
-        ('remediation', 'Remediation actions', 'Address observed conditions'),
-        ('confirmation', 'Findings to confirm', 'Check current status and scope'),
-        ('evidence_gaps', 'Evidence checks', 'Close unanswered questions'),
-        ('strengths', 'Supported observations', 'Configuration or observed results')))
+    concerns = [item for item in plan if item['lane'] != 'CollectMissingEvidence'][:3] or plan[:3]
+    first_actions = ''.join(f'<li><a href="#action-{item["number"]}">{prose(item["title"])}</a></li>' for item in concerns)
+    lane_counts = {lane: sum(item['lane'] == lane for item in plan) for lane in LANES}
+    cards = ''.join(f'<div class="stat" data-kind="{key}"><div class="value">{value}</div><div class="stat-label">{label}</div><p class="stat-note">{note}</p></div>' for key, value, label, note in (
+        ('remediation', lane_counts['FixNow'], 'Fix now', 'Confirmed conditions to remediate'),
+        ('confirmation', lane_counts['ValidateExistingControl'] + lane_counts['InvestigateAffectedObjects'], 'Validate or investigate',
+         'Existing controls and affected objects to review'),
+        ('evidence_gaps', lane_counts['CollectMissingEvidence'], 'Collect missing evidence', 'Questions the evidence cannot answer'),
+        ('strengths', counts.get('strengths', 0), 'Supported observations', 'Configuration or observed results')))
     report_guides = _report_guides(actions) + _remaining_portal_review(bundle)
     from .coverage_summary import coverage_projection
     collection_projection = coverage_projection(result, bundle)
@@ -1100,10 +1172,10 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None, summ
       <header class="report-header"><div class="brand"><span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span><span></span></span><div>AI READINESS<span class="brand-subtitle">Microsoft 365 hardening</span></div></div><div class="header-meta"><strong>{escape(str(tenant_name or 'Tenant assessment'))}</strong><span>Executive briefing · {prose(result.get('evaluation_date'))}</span></div></header>
       <nav class="report-nav" aria-label="Report sections"><div class="nav-links"><a href="#executive">Overview</a><a href="#action-plan">Action plan</a><a href="#readiness-domains">Areas</a>{portal_nav}<a href="#rollout">{handoff_label}</a><a href="#getting-started">Getting started</a><a href="#remaining-evidence">Open checks</a><a href="#engineer-appendix">Evidence</a></div><div class="nav-tools">{workbook_button}<button class="button button-secondary" id="print-report" type="button" hidden>Print report</button></div></nav>
       <main><section class="executive" id="executive"><div class="hero-grid"><div class="hero-main"><div class="hero-kicker">{hero_caption}</div><div class="decision-label" data-state="{decision_state}">{prose(decision_badge)}</div>
-      <h1>{prose(headline)}</h1><p class="hero-copy">{prose(result.get('rationale'))}</p>{adoption_note}</div><aside class="hero-aside" aria-label="Assessment scope and dates"><div class="hero-kicker">ASSESSMENT SCOPE</div><h2>{prose(scope)}</h2><div class="hero-meta"><dl><div><dt>Evaluation date</dt><dd>{prose(result.get('evaluation_date'))}</dd></div><div><dt>Evidence period</dt><dd>{prose(period_text)}</dd></div><div><dt>Open actions</dt><dd>{len(actions)} to resolve or verify</dd></div></dl></div></aside></div>
+      <h1>{prose(headline)}</h1><p class="hero-copy">{prose(result.get('rationale'))}</p>{adoption_note}</div><aside class="hero-aside" aria-label="Assessment scope and dates"><div class="hero-kicker">ASSESSMENT SCOPE</div><h2>{prose(scope)}</h2><div class="hero-meta"><dl><div><dt>Evaluation date</dt><dd>{prose(result.get('evaluation_date'))}</dd></div><div><dt>Evidence period</dt><dd>{prose(period_text)}</dd></div><div><dt>Open actions</dt><dd>{len(plan)} to resolve or verify</dd></div></dl></div></aside></div>
       {_progress_timeline(result)}<div class="stats">{cards}</div>{blocker_note}<div class="executive-brief two-column"><div class="brief-card"><div class="eyebrow">WHERE TO START</div><h2>First actions</h2><ol>{first_actions or default_first_actions}</ol></div><div class="brief-card strengths-card"><div class="eyebrow">WHAT IS WORKING</div><h2>Supported observations</h2><ul>{strengths}</ul></div></div></section>{baseline_panel(result)}{pdf_highlights}
       <section id="readiness-domains"><div class="section-heading"><span class="section-index">01</span><div><div class="eyebrow">THE ASSESSMENT AT A GLANCE</div><h2>Readiness by assessment area</h2></div></div><p class="section-description">Open actions by assessment area. Counts reflect the action plan and workbook; they describe the work remaining.</p>{portal_intro}{domain_tiles(result)}</section>
-      <section id="action-plan"><div class="section-title"><div class="section-heading"><span class="section-index">02</span><div><div class="eyebrow">PRIORITIES AND ACCOUNTABILITY</div><h2>Prioritized action plan</h2></div></div><span class="badge">{len(actions)} actions</span></div><p class="section-description">Start with the highest-priority conditions. Remediation actions address observed issues. Confirmation actions check whether earlier or limited findings still apply. Evidence checks need a report, validation or owner decision.</p>{''.join(action_html) or '<p>No outstanding actions were identified.</p>'}</section>
+      <section id="action-plan"><div class="section-title"><div class="section-heading"><span class="section-index">02</span><div><div class="eyebrow">PRIORITIES AND ACCOUNTABILITY</div><h2>Prioritized action plan</h2></div></div><span class="badge">{len(plan)} actions</span></div><p class="section-description">Actions are grouped by what closes them: fix confirmed conditions, validate existing controls, investigate affected objects, or collect missing evidence. Related findings that one owner closes with one decision share an action; each finding keeps its own technical evidence. Planning items are listed separately and are not counted.</p>{''.join(action_html) or '<p>No outstanding actions were identified.</p>'}</section>
 {''.join(domain_html)}{portal_section}
       {scope_handoff}
       {executive_html}<details class="appendix-panel"><summary>{'Tenant readiness requirements and next steps' if result.get('assessment_scope') == 'tenant_readiness' else 'Rollout requirements and the first 90 days'}</summary>{_progress_requirements(result)}{_getting_started(result, action_numbers)}</details>
