@@ -528,7 +528,7 @@ GAP_GUIDANCE = {
     "CONTENT.SHARING": ("SharePoint tenant sharing settings were not collected.",
                         "Grant SharePointTenantSettings.Read.All and rerun, or confirm the external sharing and default link settings in SharePoint admin center > Policies > Sharing."),
     "CONTENT.PERMISSIONS": ("No SharePoint permissions or oversharing report was available.",
-                            "Run the SharePoint Advanced Management Data access governance reports and supply them with --reports-dir, or run with a SharePoint administrator sign-in or certificate."),
+                            "Supply current Data access governance reports with --reports-dir where SharePoint Advanced Management is available, or dated equivalent evidence (site permission and sharing-link inventories with owner reviews) through the SharePoint governance evidence import. SharePoint Advanced Management is not required."),
     "CONTENT.OWNERSHIP": ("Site ownership and activity were not collected.",
                           "Run with a SharePoint administrator sign-in or certificate, or review SharePoint admin center > Active sites for sites without owners and sites with no recent activity."),
     "DATA.LABELS": ("Sensitivity label definitions were not collected.",
@@ -945,8 +945,9 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
             "evidence_ids": [row["EvidenceId"] for row in supported] + [row["evidence_id"] for row in known_facts],
             "recommendation_ids": [row.get("RecommendationId", "") for row in matching],
         })
+    # Sufficient equivalent SharePoint governance evidence answers its question as an owner review does.
     reviewed_passes = {fact["control_id"]: fact for fact in explicit
-                       if fact.get("source_type") == "operator_attestation" and fact.get("control_result") == "pass"
+                       if fact.get("source_type") in {"operator_attestation", "governance_evidence_import"} and fact.get("control_result") == "pass"
                        and fact["selection"] == "selected" and fact["complete"] and fact["freshness"] == "current"
                        and (fact['control_id'] not in operation or fact.get('evidence_level')=='observed_operation' and operation[fact['control_id']]['result']=='pass')}
     for row in records:
@@ -1037,6 +1038,7 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
     # The customer plan is a projection of the decision above: lanes, one action
     # per semantic condition and decision, and a class for every finding.
     from .customer_actions import action_lane, build_customer_actions, classify_findings, population_overlaps, readiness_outcome
+    from .sharepoint_governance_evidence import WORKSTREAMS, governance_workstream, project_outcomes
     for row in records:
         row['ActionLane'] = action_lane(row)
     overlaps = population_overlaps(records)
@@ -1143,8 +1145,10 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
         "superseded_findings": superseded, "evidence_period": {"start": dates[0] if dates else None, "end": dates[-1] if dates else None},
         "customer_actions": customer_actions, "population_overlaps": overlaps, "finding_classification": finding_classes,
         "planning": [{'recommendation_id': row.get('RecommendationId'), 'finding_key': row.get('FindingKey') or '',
-                      'title': row.get('FindingTitle') or row.get('Feature'), 'domain_id': row.get('DomainId')} for row in opportunities],
+                      'title': row.get('FindingTitle') or row.get('Feature'), 'domain_id': row.get('DomainId'),
+                      'workstream_label': WORKSTREAMS.get(governance_workstream(row), '')} for row in opportunities],
         "readiness_outcome": readiness_outcome(controls, blockers, customer_actions, opportunities),
+        "sharepoint_governance": project_outcomes((bundle.get('data_exposure') or {}).get('sharepoint_governance'), records),
         "rollout_conditions": [
             {'stage': 'Remediate', 'condition': 'Resolve the retained tenant security findings.'},
             {'stage': 'Verify', 'condition': 'Confirm required control coverage with current, scoped evidence.'},

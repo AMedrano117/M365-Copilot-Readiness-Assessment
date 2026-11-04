@@ -195,6 +195,11 @@ def package_inputs(folder, supplemental_inputs):
                     if role == 'reports_dir' and candidate.is_dir():
                         continue  # Nested PDFs are retained by the generated portal-review manifest.
                     suffixes = DATA_SUFFIXES - {'.json'} if role == 'reports_dir' else DATA_SUFFIXES
+                    if role == 'reports_dir' and candidate.suffix.lower() == '.json':
+                        # The versioned SharePoint governance contract is the only JSON a report folder supplies.
+                        from .sharepoint_governance_evidence import is_governance_evidence
+                        if is_governance_evidence(candidate):
+                            suffixes = DATA_SUFFIXES
                     if not candidate.is_file() or candidate.suffix.lower() not in suffixes:
                         if role == 'reports_dir' and candidate.is_file() and candidate.suffix.lower() == '.pdf':
                             manifest['diagnostics'].append({'role': role, 'source_file': candidate.name,

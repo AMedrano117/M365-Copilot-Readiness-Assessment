@@ -304,6 +304,20 @@ def process_and_print_all_information(m365_result, entra_info,
     from .sharepoint_governance import reconcile_dag_coverage
     m365_recommendations = reconcile_dag_coverage(
         m365_recommendations, ((data_exposure_info.get('sources') or {}).get('sam') or {}).get('reports'))
+    # SharePoint governance outcomes are assessed independently of SAM licensing,
+    # from SAM-assisted or equivalent evidence supplied with the versioned import.
+    from .sharepoint_governance import summarize_sharepoint_governance
+    from .sharepoint_governance_evidence import assess_sharepoint_governance, load_governance_evidence
+    sharepoint_assessment = assess_sharepoint_governance(
+        summarize_sharepoint_governance(sharepoint_payload or {}, evaluation_date=evaluation_date),
+        data_exposure_info,
+        load_governance_evidence(routed['sharepoint_governance'], evaluation_date=evaluation_date,
+                                 expected_tenant_id=expected_tenant_id),
+        m365_recommendations, evaluation_date=evaluation_date)
+    data_exposure_info = dict(data_exposure_info,
+        recommendations=list(data_exposure_info.get('recommendations') or []) + sharepoint_assessment['recommendations'],
+        observations=list(data_exposure_info.get('observations') or []) + sharepoint_assessment['observations'],
+        sharepoint_governance=sharepoint_assessment)
     if data_exposure_info.get('operator_messages'):
         from .console_reporting import detail
         for message in data_exposure_info['operator_messages']:
