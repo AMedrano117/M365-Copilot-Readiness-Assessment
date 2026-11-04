@@ -69,6 +69,8 @@ class CorrelationScenarioTests(unittest.TestCase):
                 self.assertEqual(len(action.get('members') or []), check['members'], 'customer action members')
             for pattern in check.get('prohibited', []):
                 self.assertNotRegex(harness.customer_action_text(action), pattern, 'customer action prohibited text')
+            for pattern in check.get('required', []):
+                self.assertRegex(harness.customer_action_text(action), pattern, 'customer action required text')
 
     def run_scenario(self, name):
         spec = harness.load(name)

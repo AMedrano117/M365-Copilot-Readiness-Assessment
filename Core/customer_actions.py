@@ -170,10 +170,11 @@ def build_customer_actions(actions, blockers, overlaps=()):
         title = (WORKSTREAM_TITLES.get((workstream, lane)) or WORKSTREAM_TITLES.get(workstream)) if workstream else member_title(members[0])
         narrative = single['customer_narrative'] if single else None
         if workstream == 'endpoint.evidence_quality':
-            for overlap in overlaps:
-                if 'expanded.compliance_setting_states.errors' in overlap['finding_keys'] and overlap['overlapping_devices']:
-                    narrative = (f"{overlap['overlapping_devices']} of the devices with reporting errors also have confirmed failed settings "
-                                 '(matched by stable device identity); reporting errors alone are not confirmed failures.')
+            pair = {'expanded.compliance_setting_states.errors', 'expanded.compliance_setting_states.noncompliant'}
+            shared = next((overlap['overlapping_devices'] for overlap in overlaps if set(overlap['finding_keys']) == pair), 0)
+            if shared:
+                narrative = (f"{shared} of the devices with reporting errors also {'has' if shared == 1 else 'have'} confirmed failed settings "
+                             '(matched by stable device identity); reporting errors alone are not confirmed failures.')
         steps = (single.get('next_steps') if single else None) or _unique(row.get('Recommendation') for row in members)
         decision = (single.get('required_decision') if single else WORKSTREAM_DECISIONS.get(workstream))
         result.append({

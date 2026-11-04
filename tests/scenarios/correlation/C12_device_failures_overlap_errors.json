@@ -4,7 +4,7 @@
  "declared_before_production_change": "2026-11-03",
  "description": "One device has a confirmed BitLocker failure and a reporting error; a second device has only a reporting error.",
  "declaration": {
-  "observed_condition": "1 confirmed setting failure; 2 devices with reporting errors",
+  "observed_condition": "1 confirmed setting failure; 3 devices with reporting errors; 2 with activity review records",
   "existing_control": "Compliance policy 'Windows encryption baseline'",
   "effective_scope": "2 managed devices",
   "operation_evidence": "Recent device reports",
@@ -25,6 +25,10 @@
   {
    "id": "intune-2",
    "azureADDeviceId": "entra-2"
+  },
+  {
+   "id": "intune-3",
+   "azureADDeviceId": "entra-3"
   }
  ],
  "settings": [
@@ -48,6 +52,25 @@
    "settingName": "Require Secure Boot",
    "state": "error",
    "policyId": "policy-1"
+  },
+  {
+   "id": "setting-4",
+   "deviceId": "intune-3",
+   "settingName": "Require Secure Boot",
+   "state": "error",
+   "policyId": "policy-1"
+  },
+  {
+   "id": "setting-5",
+   "deviceId": "intune-2",
+   "settingName": "Is active",
+   "state": "noncompliant"
+  },
+  {
+   "id": "setting-6",
+   "deviceId": "intune-3",
+   "settingName": "Is active",
+   "state": "noncompliant"
   }
  ],
  "policies": [
@@ -75,7 +98,17 @@
     "devices": 1
    }
   ],
-  "customer_actions": [],
+  "customer_actions": [
+   {
+    "keys": [
+     "expanded.compliance_setting_states.errors"
+    ],
+    "count": 1,
+    "required": [
+     "1 of the devices with reporting errors also has confirmed failed settings"
+    ]
+   }
+  ],
   "controls": []
  }
 }
