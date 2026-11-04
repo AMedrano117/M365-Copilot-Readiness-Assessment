@@ -1,0 +1,91 @@
+{
+ "name": "17_license_inventory_parity",
+ "declared_before_production_change": "2026-11-03",
+ "description": "One technical evidence set (passing CA, legacy user consent, flagged grants, licensed guests, empty access reviews) evaluated under four license inventories.",
+ "patch": {
+  "client": {
+   "authorization_policy": {
+    "id": "authorizationPolicy",
+    "allowInvitesFrom": "everyone",
+    "defaultUserRolePermissions": {
+     "permissionGrantPoliciesAssigned": [
+      "ManagePermissionGrantsForSelf.microsoft-user-default-legacy"
+     ]
+    }
+   },
+   "consent_summary": {
+    "total_apps": 5,
+    "consent_configuration_available": true,
+    "assigned_user_consent_policies": [
+     "ManagePermissionGrantsForSelf.microsoft-user-default-legacy"
+    ],
+    "user_consent_allowed": true,
+    "admin_consent_required": false,
+    "high_privilege_apps": 2,
+    "unverified_publishers": 1,
+    "grant_inventory_available": true
+   },
+   "b2b_summary": {
+    "total_guests": 2,
+    "guests_with_licenses": 1,
+    "guest_invite_restrictions": "everyone",
+    "cross_tenant_access_configured": true,
+    "partner_configurations": 0
+   },
+   "guest_users": [
+    {
+     "id": "c0000000-0000-4000-8000-000000000001",
+     "displayName": "Guest one",
+     "userType": "Guest",
+     "assignedLicenses": [
+      {
+       "skuId": "sku-e3"
+      }
+     ]
+    },
+    {
+     "id": "c0000000-0000-4000-8000-000000000002",
+     "displayName": "Guest two",
+     "userType": "Guest",
+     "assignedLicenses": []
+    }
+   ],
+   "access_reviews": [],
+   "access_review_summary": {
+    "total_definitions": 0,
+    "active_reviews": 0,
+    "group_membership_reviews": 0,
+    "role_assignment_reviews": 0,
+    "application_assignment_reviews": 0,
+    "guest_user_reviews": 0,
+    "recurring_reviews": 0,
+    "one_time_reviews": 0
+   }
+  }
+ },
+ "expected": {
+  "source_states": {
+   "identity sources": "available"
+  },
+  "population_scope": "Tenant",
+  "license_profiles_with_identical_technical_conclusions": [
+   "p1_p2",
+   "p1_only",
+   "p1_pending",
+   "none"
+  ],
+  "checks": [
+   {
+    "control": "IDENTITY.AUTH",
+    "finding_key": "baseline.identity.sign_in",
+    "disposition": "Assurance",
+    "readiness_treatment": "Pass"
+   },
+   {
+    "control": "APPS.CONSENT",
+    "finding_key": "entra.apps.user_consent_assignment",
+    "disposition": "Action"
+   }
+  ]
+ }
+}

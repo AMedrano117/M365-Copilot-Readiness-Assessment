@@ -909,7 +909,68 @@ def _freshness_finding(feature, source_name, scan, cli_option, env_name, documen
     return finding
 
 
-def _risk_finding(feature, observation, recommendation, priority, key, url, confidence="High"):
+PRESENCE_ONLY_KEYS = {"anonymous_links", "broad_internal_access", "external_exposure",
+                      "potentially_overshared", "unlabeled_sensitive"}
+# Signals for each finding family, and the audiences that reach every user in
+# the tenant (and therefore any pilot drawn from it).
+FAMILY_SIGNALS = {
+    "anonymous_links": {"Anyone links"},
+    "broad_internal_access": {"Everyone permissions", "EEEU permissions", "Organization links"},
+    "external_exposure": {"External exposure"},
+    "potentially_overshared": {"Potentially overshared items"},
+    "unlabeled_sensitive": {"Unlabeled sensitive items"},
+}
+TENANT_WIDE_AUDIENCE = {"Anyone links", "Everyone permissions", "EEEU permissions", "Organization links",
+                        "Potentially overshared items"}
+NON_SENSITIVE_LABELS = {"public", "general", "non-business"}
+
+
+def exposure_materiality(key, risk_rows):
+    """Materiality basis from retained per-row sensitivity and audience, never from a count.
+
+    material_sensitive_access: a supporting row records explicitly sensitive
+    content (row Severity High) reachable by a tenant-wide or anonymous audience.
+    confirmed_not_material: every supporting row carries a retained label that
+    classifies the content as not sensitive. presence_only: otherwise.
+    """
+    signals = FAMILY_SIGNALS.get(key, set())
+    rows = [row for row in risk_rows or [] if signals.intersection(str(row.get("Risk Signals", "")).split("; "))]
+    audience = signals & TENANT_WIDE_AUDIENCE
+    if audience and any(row.get("Severity") == "High" and audience.intersection(str(row.get("Risk Signals", "")).split("; "))
+                        for row in rows):
+        return "material_sensitive_access"
+    if key != "unlabeled_sensitive" and rows and all(
+            row.get("Severity") != "High" and str(row.get("Sensitivity Label") or "").strip().lower() in NON_SENSITIVE_LABELS
+            for row in rows):
+        return "confirmed_not_material"
+    return "presence_only"
+
+
+def _risk_finding(feature, observation, recommendation, priority, key, url, confidence="High", basis="presence_only"):
+    row = _exposure_finding(feature, observation, recommendation, priority, key, url, confidence)
+    if key not in PRESENCE_ONLY_KEYS:
+        return row
+    # The priority records the observed condition. Counts describe scale; only
+    # retained sensitivity and audience evidence establish material impact.
+    row.update(SeverityBasis=basis, ExposureThreshold="not_defined",
+               SemanticCondition=f"severity_basis={basis}; condition={key}")
+    if basis == "material_sensitive_access":
+        row.update(ReadinessTreatment="Remediate", MaterialityBasis="Explicitly sensitive content reachable by a tenant-wide or anonymous audience")
+        row["Recommendation"] = (recommendation + " The supporting detail records sensitive content reachable by everyone in the "
+                                 "organization or by anyone with the link, which includes every tenant user who could use Copilot.")
+    elif basis == "confirmed_not_material":
+        row.update(ReadinessTreatment="Remediate", MaterialityBasis="Retained labels classify the affected content as not sensitive")
+        row["Recommendation"] = (recommendation + " The retained labels show the affected content is not classified as sensitive, "
+                                 "so this is tenant hardening and does not block readiness on its own.")
+    else:
+        row.update(ReadinessTreatment="ScopeReviewRequired",
+                   MaterialityBasis="Sensitivity or audience of the affected content is not established")
+        row["Recommendation"] = (recommendation + " No exposure threshold is defined, so this count does not block tenant "
+                                 "readiness on its own; confirm the affected sites, audiences and business need.")
+    return row
+
+
+def _exposure_finding(feature, observation, recommendation, priority, key, url, confidence="High"):
     return new_recommendation(
         "Data Exposure",
         feature,
@@ -967,6 +1028,7 @@ def _findings_from_scan(scan):
             + location_text("Anyone links"),
             "Validate business need, remove anonymous links that are not explicitly required, replace them with least-privilege links, and use sensitivity labels or DLP for sensitive content.",
             "High", "anonymous_links", "https://learn.microsoft.com/en-us/sharepoint/data-access-governance-reports", confidence,
+            basis=exposure_materiality("anonymous_links", scan.get("risk_rows")),
         ))
 
     broad_parts = []
@@ -985,6 +1047,7 @@ def _findings_from_scan(scan):
             + location_text("Everyone permissions", "EEEU permissions", "Organization links"),
             "Have site owners validate the audience, remove broad permissions that are not required, and initiate site access reviews for the affected sites.",
             "High", "broad_internal_access", "https://learn.microsoft.com/en-us/sharepoint/site-access-review", confidence,
+            basis=exposure_materiality("broad_internal_access", scan.get("risk_rows")),
         ))
 
     external = signals.get("External exposure", 0)
@@ -995,6 +1058,7 @@ def _findings_from_scan(scan):
             + location_text("External exposure"),
             "Review the external recipients and link purpose, remove expired or unjustified access, and apply expiration and least-privilege sharing defaults.",
             "High", "external_exposure", "https://learn.microsoft.com/en-us/sharepoint/turn-external-sharing-on-or-off", confidence,
+            basis=exposure_materiality("external_exposure", scan.get("risk_rows")),
         ))
 
     potential = signals.get("Potentially overshared items", 0)
@@ -1005,6 +1069,7 @@ def _findings_from_scan(scan):
             + location_text("Potentially overshared items"),
             "Use the DSPM item-level results to resolve false positives, notify owners, apply labels, or remove excessive sharing links. Prioritize sensitive and unlabeled content first.",
             "High", "potentially_overshared", "https://learn.microsoft.com/en-us/purview/data-security-posture-management-oversharing", confidence,
+            basis=exposure_materiality("potentially_overshared", scan.get("risk_rows")),
         ))
 
     unlabeled = signals.get("Unlabeled sensitive items", 0)
@@ -1015,6 +1080,7 @@ def _findings_from_scan(scan):
             + location_text("Unlabeled sensitive items"),
             "Validate the classifications and deploy an appropriate sensitivity label or auto-labeling policy before expanding AI access to the affected content.",
             "High", "unlabeled_sensitive", "https://learn.microsoft.com/en-us/purview/apply-sensitivity-label-automatically", confidence,
+            basis=exposure_materiality("unlabeled_sensitive", scan.get("risk_rows")),
         ))
 
     ownerless = signals.get("Ownerless site", 0)

@@ -1,0 +1,156 @@
+{
+ "name": "04_emergency_exclusions_validated",
+ "declared_before_production_change": "2026-11-03",
+ "description": "All-users MFA and legacy-block policies exclude two accounts with retained emergency-access declarations (owner, authentication design, monitoring, review date, evidence record).",
+ "patch": {
+  "client": {
+   "ca_policies": [
+    {
+     "id": "ca-mfa-all",
+     "displayName": "Require MFA for all users",
+     "state": "enabled",
+     "conditions": {
+      "users": {
+       "includeUsers": [
+        "All"
+       ],
+       "includeGroups": [],
+       "excludeUsers": [
+        "e0000000-0000-4000-8000-000000000001",
+        "e0000000-0000-4000-8000-000000000002"
+       ],
+       "excludeGroups": []
+      },
+      "applications": {
+       "includeApplications": [
+        "All"
+       ]
+      },
+      "clientAppTypes": [
+       "all"
+      ]
+     },
+     "grantControls": {
+      "operator": "OR",
+      "builtInControls": [
+       "mfa"
+      ]
+     }
+    },
+    {
+     "id": "ca-legacy-block",
+     "displayName": "Block legacy authentication",
+     "state": "enabled",
+     "conditions": {
+      "users": {
+       "includeUsers": [
+        "All"
+       ],
+       "includeGroups": [],
+       "excludeUsers": [
+        "e0000000-0000-4000-8000-000000000001",
+        "e0000000-0000-4000-8000-000000000002"
+       ],
+       "excludeGroups": []
+      },
+      "applications": {
+       "includeApplications": [
+        "All"
+       ]
+      },
+      "clientAppTypes": [
+       "exchangeActiveSync",
+       "other"
+      ]
+     },
+     "grantControls": {
+      "operator": "OR",
+      "builtInControls": [
+       "block"
+      ]
+     }
+    }
+   ],
+   "account_purpose_evidence": [
+    {
+     "id": "purpose-ea01",
+     "principal_id": "e0000000-0000-4000-8000-000000000001",
+     "purpose": "emergency",
+     "document": "Emergency access standard v3, section 2"
+    },
+    {
+     "id": "purpose-bg02",
+     "principal_id": "e0000000-0000-4000-8000-000000000002",
+     "purpose": "emergency",
+     "document": "Emergency access standard v3, section 2"
+    }
+   ]
+  },
+  "account_purposes": [
+   {
+    "principal_id": "e0000000-0000-4000-8000-000000000001",
+    "purpose": "emergency",
+    "owner": "Identity operations lead",
+    "source_type": "customer_declaration",
+    "evidence_refs": [
+     {
+      "dataset": "account_purpose_evidence",
+      "dataset_index": 0,
+      "record_index": 0
+     }
+    ],
+    "authentication_design": "Two FIDO2 security keys held in separate safes; excluded only from MFA and legacy-block policies",
+    "monitoring": "Every sign-in raises a security operations alert",
+    "reviewed_at": "2026-10-01"
+   },
+   {
+    "principal_id": "e0000000-0000-4000-8000-000000000002",
+    "purpose": "emergency",
+    "owner": "Identity operations lead",
+    "source_type": "customer_declaration",
+    "evidence_refs": [
+     {
+      "dataset": "account_purpose_evidence",
+      "dataset_index": 0,
+      "record_index": 1
+     }
+    ],
+    "authentication_design": "Two FIDO2 security keys held in separate safes; excluded only from MFA and legacy-block policies",
+    "monitoring": "Every sign-in raises a security operations alert",
+    "reviewed_at": "2026-10-01"
+   }
+  ]
+ },
+ "expected": {
+  "source_states": {
+   "ca_policies": "available",
+   "account_purpose_evidence": "retained"
+  },
+  "population_scope": "All users except 2 validated emergency-access accounts",
+  "checks": [
+   {
+    "control": "IDENTITY.AUTH",
+    "finding_key": "baseline.identity.sign_in",
+    "disposition": "Assurance",
+    "evidence_status": "supported",
+    "readiness_treatment": "Pass",
+    "semantic_condition": [
+     "mfa=EnforcedWithValidatedEmergencyExclusions",
+     "legacy=EnforcedWithValidatedEmergencyExclusions"
+    ],
+    "configuration_result": "supported",
+    "control_actions": 1,
+    "action_types": [
+     "Evidence"
+    ],
+    "blocks_readiness": false,
+    "required": [
+     "2 documented emergency-access account"
+    ],
+    "prohibited": [
+     "whose emergency-access purpose is not validated"
+    ]
+   }
+  ]
+ }
+}

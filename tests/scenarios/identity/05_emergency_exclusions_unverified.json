@@ -1,0 +1,107 @@
+{
+ "name": "05_emergency_exclusions_unverified",
+ "declared_before_production_change": "2026-11-03",
+ "description": "The same exclusions with no account-purpose declarations; the excluded accounts only have emergency-style display names.",
+ "patch": {
+  "client": {
+   "ca_policies": [
+    {
+     "id": "ca-mfa-all",
+     "displayName": "Require MFA for all users",
+     "state": "enabled",
+     "conditions": {
+      "users": {
+       "includeUsers": [
+        "All"
+       ],
+       "includeGroups": [],
+       "excludeUsers": [
+        "e0000000-0000-4000-8000-000000000001",
+        "e0000000-0000-4000-8000-000000000002"
+       ],
+       "excludeGroups": []
+      },
+      "applications": {
+       "includeApplications": [
+        "All"
+       ]
+      },
+      "clientAppTypes": [
+       "all"
+      ]
+     },
+     "grantControls": {
+      "operator": "OR",
+      "builtInControls": [
+       "mfa"
+      ]
+     }
+    },
+    {
+     "id": "ca-legacy-block",
+     "displayName": "Block legacy authentication",
+     "state": "enabled",
+     "conditions": {
+      "users": {
+       "includeUsers": [
+        "All"
+       ],
+       "includeGroups": [],
+       "excludeUsers": [
+        "e0000000-0000-4000-8000-000000000001",
+        "e0000000-0000-4000-8000-000000000002"
+       ],
+       "excludeGroups": []
+      },
+      "applications": {
+       "includeApplications": [
+        "All"
+       ]
+      },
+      "clientAppTypes": [
+       "exchangeActiveSync",
+       "other"
+      ]
+     },
+     "grantControls": {
+      "operator": "OR",
+      "builtInControls": [
+       "block"
+      ]
+     }
+    }
+   ]
+  }
+ },
+ "expected": {
+  "source_states": {
+   "ca_policies": "available",
+   "account_purpose_evidence": "not supplied"
+  },
+  "population_scope": "All users except 2 unverified excluded accounts",
+  "checks": [
+   {
+    "control": "IDENTITY.AUTH",
+    "finding_key": "baseline.identity.scope",
+    "disposition": "Coverage",
+    "evidence_status": "gap",
+    "readiness_treatment": "ScopeReviewRequired",
+    "semantic_condition": [
+     "mfa=ExclusionReviewRequired",
+     "legacy=ExclusionReviewRequired"
+    ],
+    "configuration_result": "not_established",
+    "control_actions": 1,
+    "blocks_readiness": false,
+    "required": [
+     "not validated",
+     "[Nn]ame patterns"
+    ],
+    "prohibited": [
+     "No enforced Conditional Access policy requires MFA",
+     "security defaults are off"
+    ]
+   }
+  ]
+ }
+}

@@ -138,7 +138,70 @@ Every observation is placed in exactly one lane:
 
 A licensed feature is not proof that the feature is configured, scoped correctly, or effective.
 License-only observations are low-confidence assurance or opportunities unless deployment data
-shows a concrete gap.
+shows a concrete gap. Service-plan presence alone never creates a control failure, a customer
+action, a configured-feature claim, an implementation requirement or a readiness blocker; such
+rows are classified as reference inventory or adoption context and never keep an action status.
+
+### Control correlation
+
+Before an observed condition becomes an action, `Core/control_correlation.py` correlates it
+with the retained controls that may mitigate it: preventive and detective controls, enforcement
+mode, exclusions, compensating controls, observed operation, conflicting evidence, source
+completeness, effective scope, affected population and observation period. The structured
+`ControlCorrelation` on the finding records one state:
+
+| State | Meaning |
+| --- | --- |
+| `ControlAbsent` | No applicable control is retained (a disabled policy counts as absent) |
+| `ControlConfigured` | The control is configured; operation was not observed, or the events are explained (for example they preceded the policy) |
+| `ControlScopeUnresolved` | The control exists, but its effective scope is unresolved (for example unvalidated exclusions) |
+| `ControlOperationUnresolved` | The control exists, but event-to-control correlation or a complete sample is missing |
+| `ControlOperatingAsExpected` | Retained events show the control applying as configured |
+| `ControlBypassObserved` | A targeted object succeeded after the control's last change and the control did not apply |
+| `ControlIneffective` | The control exists but does not enforce (for example report-only) |
+| `ControlConflict` | Retained results contradict each other |
+| `ControlNotApplicable` | The component does not apply to tenant readiness |
+
+A configured control does not prove operation, an adverse event does not prove control failure,
+exclusions stay separate from general policy scope, partial operational evidence does not negate
+complete configuration evidence, and complete configuration never fills an operational gap.
+Recommendation text and renderers display the correlation; they never decide it. Unknown
+narrative fields stay unknown.
+
+For successful legacy-client sign-ins, each event is compared with every legacy-blocking policy:
+account membership (including excluded users and completely retained excluded groups), event time
+against the policy's creation and last-change dates, the event's applied-policy result, client
+application, resource and result code. Events from excluded accounts are attributed to the
+exclusions, whose purpose is validated only from retained account-purpose declarations; events
+that preceded the policy are not failures; a targeted account succeeding after the last change
+with the policy not applied is an observed bypass; anything else is unresolved and is validated,
+not treated as a policy failure. When an applicable policy exists, the next step corrects or
+validates that policy; it never recommends creating a duplicate one. Audit and Copilot licensing
+gaps separate their components the same way (configuration, operation within the shared
+operational result, workload and retention coverage, ownership; subscription capacity, licensed
+users, usage populations), and ask only for the unresolved components. Differing license
+populations are a reconciliation question, not evidence that licenses are missing.
+
+### Customer action plan
+
+Open findings are grouped into customer actions: one semantic condition, scope, population and
+required decision is one customer action, which several retained findings can support. Related
+work is grouped only where the same owner closes it with the same decision, and only within one
+lane; unrelated findings are never merged because of similar wording. Each finding keeps its stable
+ID, evidence and workbook row. Lanes are a projection of existing treatments:
+
+| Lane | Readiness treatment | Meaning |
+| --- | --- | --- |
+| Fix now | `Remediate` | Confirmed failure requiring remediation |
+| Validate existing control | `ConfirmBeforePilot` | A relevant control exists; effective scope or operation is unresolved |
+| Investigate affected objects | `ScopeReviewRequired` | Affected objects are retained; ownership, purpose, materiality or need requires review |
+| Collect missing evidence | `EvidenceGap` | A required question cannot be answered from retained evidence |
+| Plan improvement | Opportunity lane | Hardening, maturity or adoption work; not counted as an open action |
+
+Every retained finding is also classified as a customer action, supporting observation,
+assurance, coverage gap, technical investigation detail, planning opportunity, adoption context,
+reference inventory or deprecated/superseded producer. Classification and consolidation never
+change a control result, a blocker or the readiness decision.
 
 ## Deployment decision
 
@@ -151,6 +214,61 @@ each control they can evaluate:
 - **Sign-in configuration** is supported when an enforced Conditional Access policy requires MFA for all users and
   cloud apps and legacy authentication is blocked for all users, or security defaults are on.
   Assignments, exclusions, conditions, grant alternatives and authentication strengths must establish scope. Suitable sign-in results or a dated tenant-wide test review must also establish operation; registration alone cannot.
+  The check evaluates MFA and legacy-authentication blocking separately and records a structured
+  `SemanticCondition`, `ReadinessTreatment` and `SourceStates` on the result row:
+  - A grant that accepts MFA **or** another control (for example a compliant device) is
+    `AlternativeGrantPathRequiresReview`, not an MFA failure.
+  - Group-targeted policies count only through retained, complete transitive group membership
+    compared with a complete user inventory. Missing or partial membership is `ScopeNotEstablished`;
+    complete membership that leaves accounts untargeted is a measured `NotEnforcedForAllUsers` result.
+    Group scope is never inferred from names.
+  - Excluded accounts pass only as documented emergency access (see
+    [Privileged identity](PRIVILEGED_IDENTITY.md#explicit-configuration-and-purpose)); otherwise they are
+    `ExclusionReviewRequired`. Name patterns only identify candidates.
+  - Security defaults are enabled or disabled only from an explicit value in a completed read. An
+    unread, failed, partial or unrequested read is an evidence gap and is never described as off.
+  - A failed, partial or unrequested Conditional Access read is an evidence gap row
+    (`baseline.identity.source`) that states the source outcome. A complete read that returned no
+    policies is a measurement.
+  - Review states produce an evidence-review action; only a measured failure with security defaults
+    read as disabled produces remediation.
+- **Licensing** never decides whether a technical identity condition exists. Consent, application
+  grants, guests, access reviews, MFA registration, legacy sign-ins, privileged schedules and
+  identity risk are evaluated from retained evidence for every tenant. Service-plan rows are
+  capability context (`LicenseContext`), never findings or actions, whatever their provisioning status.
+- **Application consent** (`APPS.CONSENT`) has separate components: the user-consent
+  configuration (`entra.apps.user_consent_assignment`) and the existing grants
+  (`entra.app_consent.*`). Microsoft documents that changing consent settings does not change
+  existing grants, so one component never answers the other.
+  - No self-consent policy assigned: the configuration component is supported.
+  - The legacy allow-all policy (`microsoft-user-default-legacy`): a high-priority remediation.
+  - Any other assigned policy, including a Microsoft-managed one, supports the configuration
+    component only when the retained permission grant policy definitions show that every include
+    condition limits client applications (verified publisher, certified, the tenant's own apps or
+    named apps, following Microsoft's verified-publisher recommendation) and limits permissions
+    (low classification, named permissions or excluded permissions), and
+    `allowUserConsentForRiskyApps` is retained as false.
+  - Policies present with conditions that do not establish that boundary are a medium-priority
+    confirmation (`ConfirmBeforePilot`). Policies whose conditions were not retained are an evidence
+    gap. Policy presence alone never supports the control.
+  - Grant purpose, ownership and scope that collected evidence cannot establish are answered by a
+    current tenant-scope owner review ([Readiness reviews](READINESS_REVIEWS.md)).
+- **Materiality.** Counts describe scale; no universal numeric threshold blocks readiness. A
+  condition blocks readiness only when retained evidence establishes material impact on a required
+  tenant control. Every observation stays visible with its affected objects, scope and source period.
+  Exposure findings from exported reports (Anyone links, broad internal access, external exposure,
+  DSPM oversharing and unlabeled sensitive items) record `SeverityBasis` from the supporting rows:
+  - `material_sensitive_access`: a supporting row records explicitly sensitive content reachable by
+    a tenant-wide or anonymous audience (Anyone, Everyone, Everyone except external users,
+    organization links or DSPM oversharing). That audience includes every tenant user, so no pilot
+    roster is needed. Supported high-priority remediation blocks readiness.
+  - `confirmed_not_material`: every supporting row carries a retained label classifying the content
+    as not sensitive (Public, General, Non-Business). This is tenant remediation that does not block.
+  - `presence_only`: sensitivity or audience is not established. `ReadinessTreatment:
+    ScopeReviewRequired` makes it an evidence-review confirmation that does not block.
+  The aggregate count of high-impact application grants is `presence_only` in the same way, because
+  owner and purpose are not collected. Current explicit device-setting failures on active devices keep
+  their documented blocking rule (see [Tenant readiness scope](TENANT_READINESS_SCOPE.md)).
 - **DLP configuration** is supported when an enforced policy applies to all users or locations for Exchange,
   SharePoint, OneDrive, Teams or Microsoft 365 Copilot. The absence of a Copilot-location policy is
   assessed against planned requirements. Configuration must be accompanied by a dated review of tested protection behavior; simulation alone cannot establish enforcement.
@@ -169,6 +287,37 @@ The shared result then chooses the deployment recommendation in this order:
    evidence could not answer (**Confirm before pilot**) produce **Controlled pilot with conditions**.
    An unanswered check is never counted as a failure.
 4. With no open required actions, the result is **Ready for a controlled pilot**.
+
+**Composite controls.** Each required control is judged from its components: the result rows
+matched to it. The shared result records each component's result in `controls[].component_results`,
+and the control status follows from them. Results are never averaged, and one component's evidence
+never fills another's gap. The rules, in order:
+
+| Components | Control status |
+| --- | --- |
+| A conflict in the control's evidence | Not established |
+| Any required component with a confirmed, supported failure, or a supported `fail` control result | Action required |
+| A current tenant-wide owner review or supported `pass` control result, with no confirmed failure | Observed; answered components are listed in `controls[].qualifications` |
+| Any required component unread, partial, unavailable, stale or not established, including unresolved applicability | Not established |
+| Every required component supported | Observed |
+
+Components proven not applicable are excluded. An unsupported positive claim, such as a strength
+summary with an unknown date, neither supports the control nor opens a gap. A baseline confirm row
+for a source that was read can be answered by supported evidence of the same question, meaning the
+same evidence key. A row for an unread, partial or scope-review source (`EvidenceGap` or
+`ScopeReviewRequired`) is never answered that way. A component marked `OptionalEvidence: Yes` never
+decides the status; when it is not supported, the control stays Observed and records the
+qualification. Failed, unread, unavailable, partial and complete-empty source states stay distinct in
+the component rows. A complete-empty read is a measurement. A failed technical result is not
+automatically a blocker; the deployment rules above decide that.
+
+**Readiness treatment** stays separate from the technical result. `ReadinessTreatment` on a result
+row uses `Pass`, `Remediate`, `ConfirmBeforePilot`, `ScopeReviewRequired` and `EvidenceGap`. The
+existing customer labels are: Blocks readiness (supported Critical or High remediation with material
+impact); Tenant remediation (a confirmed condition that does not block, including
+`confirmed_not_material`); and Evidence review (confirmation or evidence work). A supported condition
+whose treatment is `ConfirmBeforePilot` or `ScopeReviewRequired` is an evidence-review confirmation,
+not a remediation. A current tenant-scope owner review can answer it, but never a confirmed failure.
 
 A documented pilot treatment in a readiness review can turn a supported high-priority remediation
 into a pilot condition; it stays open for broader adoption. Critical conditions cannot be treated.

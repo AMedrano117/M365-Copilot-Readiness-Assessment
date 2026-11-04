@@ -83,63 +83,9 @@ def get_recommendation(sku_name, status="Success", client=None, entra_insights=N
             print(f"[DEBUG P1] mfa_metrics total_users: {mfa_metrics.get('total_users', 0)}")
             print(f"[DEBUG P1] signin_metrics legacy_auth: {signin_metrics.get('legacy_auth_sign_ins', 0)}")
             
-            # Observation 1: Conditional Access policy coverage
-            total_policies = ca_metrics.get('total_policies', 0)
-            policy_label = "policy" if total_policies == 1 else "policies"
-            policy_verb = "was" if total_policies == 1 else "were"
-            require_mfa = ca_metrics.get('require_mfa', 0)
-            require_compliant_device = ca_metrics.get('require_compliant_device', 0)
-            block_legacy_auth = ca_metrics.get('block_legacy_auth', 0)
-            verified_controls = []
-            if require_mfa:
-                verified_controls.append(f"{require_mfa} requiring MFA")
-            if require_compliant_device:
-                verified_controls.append(f"{require_compliant_device} requiring compliant devices")
-            if block_legacy_auth:
-                verified_controls.append(f"{block_legacy_auth} blocking legacy authentication")
-            if not verified_controls:
-                verified_control_text = ""
-            elif len(verified_controls) == 1:
-                verified_control_text = verified_controls[0]
-            elif len(verified_controls) == 2:
-                verified_control_text = " and ".join(verified_controls)
-            else:
-                verified_control_text = ", ".join(verified_controls[:-1]) + f", and {verified_controls[-1]}"
-            
-            if total_policies == 0:
-                # Action Required: No CA policies
-                recommendations.append(new_recommendation(
-                    service="Entra",
-                    feature=feature_name,
-                    observation="No Conditional Access policies were returned by this inventory; effective authentication protection requires separate confirmation",
-                    recommendation="Review Security Defaults, Conditional Access scope, authentication strengths and documented external-provider requirements. Validate the intended population and observed sign-in results before changing enforcement.",
-                    link_text="Configure Conditional Access",
-                    link_url="https://learn.microsoft.com/entra/identity/conditional-access/overview",
-                    priority="High",
-                    status="Action Required"
-                ))
-            elif not any((require_mfa, require_compliant_device, block_legacy_auth)):
-                recommendations.append(new_recommendation(
-                    service="Entra",
-                    feature=feature_name,
-                    observation=f"{total_policies} Conditional Access {policy_label} {policy_verb} found, but the inventory did not detect MFA, compliant-device, or legacy-authentication controls",
-                    recommendation="Review policy assignments and grant controls using report-only mode. Protect Microsoft 365 and other Entra-integrated AI resources through appropriately scoped Conditional Access policies; do not rely on an application name containing 'Copilot' as proof of coverage.",
-                    link_text="Conditional Access target resources",
-                    link_url="https://learn.microsoft.com/entra/identity/conditional-access/concept-conditional-access-cloud-apps",
-                    priority="Medium",
-                    status="Action Required"
-                ))
-            else:
-                recommendations.append(new_recommendation(
-                    service="Entra",
-                    feature=feature_name,
-                    observation=f"{total_policies} Conditional Access {policy_label} found; verified controls include {verified_control_text}",
-                    recommendation="",
-                    link_text="Conditional Access Best Practices",
-                    link_url="https://learn.microsoft.com/entra/identity/conditional-access/plan-conditional-access",
-                    status="Success"
-                ))
-            
+            # Conditional Access coverage is judged only by the tenant-wide baseline
+            # (Core/tenant_baseline.py) from the raw policies and source state.
+
             # Registration uses reconciled known flags, never the complement of an aggregate.
             from Core.authentication_findings import registration_recommendation
             recommendations.append(registration_recommendation(mfa_metrics, feature_name))

@@ -435,10 +435,18 @@ class ExportRecommendationsTests(unittest.TestCase):
         self.assertNotIn("Built offline", executive)
         self.assertNotIn("source_file", executive)
         self.assertNotIn("Not established to Not established", html)
-        for key, label in (("remediation", "Remediation actions"), ("confirmation", "Findings to confirm"), ("evidence_gaps", "Evidence checks"), ("strengths", "Supported observations")):
-            self.assertIn(f'<div class="value">{result["counts"][key]}</div><div class="stat-label">{label}</div>', executive)
-        self.assertIn(f'>{len(result["actions"])} actions</span>', html)
-        self.assertEqual(len(re.findall(r'<article class="action" ', html)), len(result["actions"]))
+        # Stat cards count customer actions by lane; supported observations count strengths.
+        lanes = {lane: sum(item['lane'] == lane for item in result['customer_actions']) for lane in
+                 ('FixNow', 'ValidateExistingControl', 'InvestigateAffectedObjects', 'CollectMissingEvidence')}
+        for value, label in ((lanes['FixNow'], 'Fix now'),
+                             (lanes['ValidateExistingControl'] + lanes['InvestigateAffectedObjects'], 'Validate or investigate'),
+                             (lanes['CollectMissingEvidence'], 'Collect missing evidence'),
+                             (result['counts']['strengths'], 'Supported observations')):
+            self.assertIn(f'<div class="value">{value}</div><div class="stat-label">{label}</div>', executive)
+        self.assertIn(f'>{len(result["customer_actions"])} actions</span>', html)
+        self.assertEqual(len(re.findall(r'<article class="action" ', html)), len(result["customer_actions"]))
+        members = sorted(member['recommendation_id'] for item in result['customer_actions'] for member in item['members'])
+        self.assertEqual(members, sorted(row['RecommendationId'] for row in result['actions']))
         self.assertIn("Active users", html)
         self.assertIn("85", html)
         self.assertIn('id="domain-external_ai"', html)

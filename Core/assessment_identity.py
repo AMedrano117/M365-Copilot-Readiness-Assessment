@@ -51,6 +51,14 @@ def digest(value):
         separators=(',', ':'), allow_nan=False).encode('utf-8')).hexdigest()
 
 
+def tenant_guid(value):
+    """Canonical tenant GUID, or None for blank, placeholder or non-GUID values."""
+    try:
+        return str(UUID(str(value).strip()))
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
 def environment_id(tenant_id):
     """Only verified tenant GUIDs can establish a Microsoft 365 environment."""
     try:

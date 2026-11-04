@@ -280,6 +280,12 @@ class HistoricalImportTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'existing XLSX'):
             inspect_historical(arguments('--import-historical', self.html))
 
+    def test_placeholder_manifest_tenant_is_unrecorded_and_accepts_declared_tenant(self):
+        self.write_workbook(tenant='Not established')
+        self.assertEqual(inspect_historical(self.args('--tenant-id', TENANT))['tenant_id'], TENANT)
+        with self.assertRaisesRegex(ValueError, 'unrecorded'):
+            inspect_historical(self.args())
+
     def test_source_parent_environment_cannot_supply_identity_or_date(self):
         self.write_workbook(tenant=None, day=None)
         with patch.dict('os.environ', {'TENANT_ID': TENANT, 'EVALUATION_DATE': DAY}):

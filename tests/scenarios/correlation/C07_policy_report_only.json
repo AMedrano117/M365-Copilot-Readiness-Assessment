@@ -1,0 +1,167 @@
+{
+ "name": "C07_policy_report_only",
+ "kind": "identity",
+ "declared_before_production_change": "2026-11-03",
+ "description": "The legacy-block policy is report-only; successful legacy sign-ins would have been blocked.",
+ "declaration": {
+  "observed_condition": "2 successful legacy SMTP sign-ins",
+  "existing_control": "Report-only 'Block legacy authentication' for all users",
+  "effective_scope": "All users (report-only)",
+  "operation_evidence": "Applied-policy result reportOnlyFailure",
+  "exclusion_evidence": "None",
+  "source_states": "CA complete; sign-ins complete",
+  "expected_technical_result": "ControlIneffective",
+  "expected_action_lane": "FixNow",
+  "expected_readiness_treatment": "Remediate",
+  "expected_customer_action_count": 1,
+  "prohibited_conclusion": "That no policy exists or a new one must be created",
+  "required_qualification": "The existing policy is report-only"
+ },
+ "patch": {
+  "client": {
+   "ca_policies": [
+    {
+     "id": "ca-mfa-all",
+     "displayName": "Require MFA for all users",
+     "state": "enabled",
+     "conditions": {
+      "users": {
+       "includeUsers": [
+        "All"
+       ],
+       "includeGroups": [],
+       "excludeUsers": [],
+       "excludeGroups": []
+      },
+      "applications": {
+       "includeApplications": [
+        "All"
+       ]
+      },
+      "clientAppTypes": [
+       "all"
+      ]
+     },
+     "grantControls": {
+      "operator": "OR",
+      "builtInControls": [
+       "mfa"
+      ]
+     }
+    },
+    {
+     "id": "ca-legacy-block",
+     "displayName": "Block legacy authentication",
+     "state": "enabledForReportingButNotEnforced",
+     "conditions": {
+      "users": {
+       "includeUsers": [
+        "All"
+       ],
+       "includeGroups": [],
+       "excludeUsers": [],
+       "excludeGroups": []
+      },
+      "applications": {
+       "includeApplications": [
+        "All"
+       ]
+      },
+      "clientAppTypes": [
+       "exchangeActiveSync",
+       "other"
+      ]
+     },
+     "grantControls": {
+      "operator": "OR",
+      "builtInControls": [
+       "block"
+      ]
+     },
+     "createdDateTime": "2026-06-01T00:00:00Z",
+     "modifiedDateTime": "2026-09-01T00:00:00Z"
+    }
+   ],
+   "signin_logs": [
+    {
+     "id": "signin-001",
+     "createdDateTime": "2026-10-29T10:00:00Z",
+     "clientAppUsed": "Authenticated SMTP",
+     "appDisplayName": "Office 365 Exchange Online",
+     "resourceDisplayName": "Office 365 Exchange Online",
+     "conditionalAccessStatus": "notApplied",
+     "status": {
+      "errorCode": 0
+     },
+     "userId": "a0000000-0000-4000-8000-000000000001",
+     "appliedConditionalAccessPolicies": [
+      {
+       "id": "ca-legacy-block",
+       "displayName": "Block legacy authentication",
+       "result": "reportOnlyFailure",
+       "enforcedGrantControls": [
+        "Block"
+       ]
+      }
+     ]
+    },
+    {
+     "id": "signin-002",
+     "createdDateTime": "2026-10-29T11:00:00Z",
+     "clientAppUsed": "Authenticated SMTP",
+     "appDisplayName": "Office 365 Exchange Online",
+     "resourceDisplayName": "Office 365 Exchange Online",
+     "conditionalAccessStatus": "notApplied",
+     "status": {
+      "errorCode": 0
+     },
+     "userId": "a0000000-0000-4000-8000-000000000001",
+     "appliedConditionalAccessPolicies": [
+      {
+       "id": "ca-legacy-block",
+       "displayName": "Block legacy authentication",
+       "result": "reportOnlyFailure",
+       "enforcedGrantControls": [
+        "Block"
+       ]
+      }
+     ]
+    }
+   ],
+   "signin_summary": {
+    "legacy_auth_attempts": 2
+   }
+  }
+ },
+ "expected": {
+  "rows": [
+   {
+    "finding_key": "entra.signins.legacy_auth",
+    "correlation_state": "ControlIneffective",
+    "configuration_state": "ControlConfigured",
+    "lane": "FixNow",
+    "readiness_treatment": "Remediate",
+    "disposition": "Action",
+    "open_action": true,
+    "required": [
+     "report-only"
+    ],
+    "prohibited": [
+     "[Cc]reate (?:a|an) (?:new )?(?:Conditional Access )?policy",
+     "[Nn]o (?:enforced )?(?:legacy[- ]authentication )?blocking policy (?:exists|was found)"
+    ]
+   }
+  ],
+  "customer_actions": [
+   {
+    "keys": [
+     "entra.signins.legacy_auth",
+     "baseline.identity.sign_in"
+    ],
+    "count": 1,
+    "lane": "FixNow"
+   }
+  ],
+  "controls": []
+ }
+}

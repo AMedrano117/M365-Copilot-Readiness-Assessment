@@ -1,0 +1,49 @@
+{
+ "name": "C13_defender_rtp_off_third_party_unresolved",
+ "kind": "device",
+ "declared_before_production_change": "2026-11-03",
+ "description": "Defender real-time protection reports off; whether a third-party antivirus is active was not retained.",
+ "declaration": {
+  "observed_condition": "Real-time protection off on 1 device",
+  "existing_control": "Possible third-party antivirus or Defender passive mode",
+  "effective_scope": "1 managed device",
+  "operation_evidence": "Current protection report",
+  "exclusion_evidence": "None",
+  "source_states": "windows protection complete; antivirus health absent",
+  "expected_technical_result": "ControlOperationUnresolved",
+  "expected_action_lane": "Not FixNow",
+  "expected_readiness_treatment": "None",
+  "expected_customer_action_count": 0,
+  "prohibited_conclusion": "That the device is unprotected",
+  "required_qualification": "Third-party antivirus or passive mode is unresolved"
+ },
+ "devices": [
+  {
+   "id": "intune-1",
+   "azureADDeviceId": "entra-1"
+  }
+ ],
+ "protection": [
+  {
+   "id": "wp-1",
+   "managedDeviceId": "intune-1",
+   "realTimeProtectionEnabled": false,
+   "malwareProtectionEnabled": true
+  }
+ ],
+ "expected": {
+  "rows": [
+   {
+    "finding_key_prefix": "expanded.windows_protection.disabled",
+    "lane_not": "FixNow",
+    "disposition_not": "Action",
+    "correlation_state": "ControlOperationUnresolved",
+    "required": [
+     "third-party antivirus"
+    ]
+   }
+  ],
+  "customer_actions": [],
+  "controls": []
+ }
+}

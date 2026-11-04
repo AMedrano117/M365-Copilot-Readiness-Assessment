@@ -183,9 +183,11 @@ def load_ai_baseline_export(path, expected_tenant_id=None):
         if len(identities) > 1:
             raise ValueError('AI Baseline export identifies multiple tenants. Use one tenant per build.')
         identifier = next(iter(identities), '')
-        if identifier and expected_tenant_id and identifier != _identifier(expected_tenant_id):
+        from .assessment_identity import tenant_guid
+        expected = tenant_guid(expected_tenant_id)
+        if identifier and expected and identifier != expected:
             raise ValueError('AI Baseline export tenant ID does not match the assessed tenant. Use the tenant GUID for comparison.')
-        verified = bool(identifier and expected_tenant_id)
+        verified = bool(identifier and expected)
         identity = 'Verified' if verified else 'Unverified: confirm the export belongs to this customer'
         for row in rows:
             row['Identity verification'] = identity

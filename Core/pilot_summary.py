@@ -121,13 +121,16 @@ def render_pilot_summary(result, bundle, tenant_name, report_path=None, workbook
     from .identity_finding_taxonomy import ensure_identity_result
     result = ensure_identity_result(result, bundle)
     from .evidence_reconciliation import blocker_explanation
-    explanation = blocker_explanation(result)
+    explanation = ' '.join((result.get('readiness_outcome') or {}).get('sentences') or []) or blocker_explanation(result)
     blocker_note = '<p class="intro">' + prose(explanation) + '</p>' if explanation else ''
     comparison = (((result.get('authentication_assessment') or {}).get('registration') or {}).get('metric_reconciliation') or {}).get('comparison_explanation','')
     registration_note = '<p class="intro">' + prose(comparison) + '</p>' if comparison else ''
     from .report_presentation import decision_groups
     actions = result.get("actions") or []
     numbers = {row.get("RecommendationId"): index for index, row in enumerate(actions, 1)}
+    # The full report numbers its cards by customer action; links follow the same numbers.
+    numbers.update({member["recommendation_id"]: item["number"] for item in result.get("customer_actions") or []
+                    for member in item["members"]})
     report_name = Path(report_path).name if report_path else ""
     workbook_name = Path(workbook_path).name if workbook_path else ""
     technical_name = Path(technical_workbook_path).name if technical_workbook_path else ""

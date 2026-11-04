@@ -20,7 +20,8 @@ COMPATIBILITY_TITLES = ('Recommendations', 'Evidence Index', 'Control Results',
                         # These optional registers are also read by the existing audit tools.
                         'Findings Register', 'App Access Detail', 'Admin Role Detail', 'AI Adoption Usage')
 FINDING_COLUMNS = ('ID', 'Priority', 'Readiness effect', 'Area', 'Finding', 'What we found',
-                   'What to do', 'Affected', 'Evidence', 'Observed', 'Owner', 'Status', 'Target date')
+                   'What to do', 'Affected', 'Evidence', 'Observed', 'Owner', 'Status', 'Target date',
+                   'Customer action', 'Action lane', 'Finding class')
 EVIDENCE_COLUMNS = {
     'Configuration': ('ID', 'Setting', 'Current', 'Recommended', 'Status', 'Observed', 'Object type', 'Scope',
                       'Provider', 'Environment', 'Configuration source', 'Collection state', 'Qualification',
@@ -969,6 +970,13 @@ def split_workbook_layout(source_workbook, result, bundle, assessment_path, tech
         _write(technical, 'Device Identity', [{key:value for key,value in identity.items() if key!='sources'} |
             {'Evidence IDs':[entry['evidence_id'] for entry in identity['sources']],
              'Sources':[entry['source'] for entry in identity['sources']]} for identity in identities])
+    correlation_rows, event_rows = _correlation_rows(result)
+    if correlation_rows:
+        _write(technical, 'Control Correlation', correlation_rows)
+    if event_rows:
+        _write(technical, 'Correlated Events', event_rows)
+    if result.get('customer_actions'):
+        _write(technical, 'Customer Actions', _customer_action_rows(result))
     diagnostics = [diagnostic for item in device_model.get('inventory', []) for diagnostic in item['diagnostics']]
     diagnostics.extend(diagnostic for row in result['recommendations'] for diagnostic in row.get('DeviceEvidenceDiagnostics', []))
     if diagnostics:
@@ -989,6 +997,7 @@ def split_workbook_layout(source_workbook, result, bundle, assessment_path, tech
                         row.get('InvestigationStatus') or 'Evidence unavailable', row.get('ObservationDate'),
                         row.get('OwnerRole'), 'Open', None))))
         findings[-1].update(treatment_fields(result,row))
+        findings[-1].update(_plan_fields(result, row))
     governance_columns=tuple(dict.fromkeys(key for finding in findings for key in finding if key not in FINDING_COLUMNS))
     register = _write(assessment, 'Findings', findings, FINDING_COLUMNS+governance_columns)
     for number, row in enumerate(ordered, 2):
@@ -1011,6 +1020,7 @@ def split_workbook_layout(source_workbook, result, bundle, assessment_path, tech
                             if row.get('InvestigationCount') else ': '.join(dict.fromkeys(_text(row.get(key)) for key in
                             ('InvestigationStatus', 'InvestigationSummary') if row.get(key)))})
         action_rows[-1].update(treatment_fields(result,row))
+        action_rows[-1].update(_plan_fields(result, row))
     from .workbook_readers import ACTION_COLUMNS, action_rows as reader_actions, coverage_rows, evidence_discrepancies, write_coverage
     discrepancies = evidence_discrepancies(result)
     reader_rows, action_details = reader_actions(result.get('actions') or [], result.get('recommendations') or [], action_rows, discrepancies)
@@ -1256,3 +1266,48 @@ def validate_workbook_layout(assessment, technical, result, assessment_path, tec
                    for number in range(int(match[3]), int(match[5] or match[3]) + 1)):
                 issues.append(f'{row["RecommendationId"]}: assessment evidence link targets another finding.')
     return list(dict.fromkeys(issues))
+
+
+def _plan_fields(result, row):
+    """Customer action, lane and finding class from the shared result; nothing is recalculated."""
+    from .control_correlation import LANES
+    number = next((item for item in result.get('customer_actions') or []
+                   if any(member['recommendation_id'] == row.get('RecommendationId') for member in item['members'])), None)
+    lane = row.get('ActionLane')
+    return {'Customer action': f"{number['number']}. {number['title']}" if number else None,
+            'Action lane': LANES[lane][0] if lane in LANES else None, 'Finding class': row.get('FindingClass')}
+
+
+def _correlation_rows(result):
+    rows, events = [], []
+    for row in result.get('recommendations') or []:
+        correlation = row.get('ControlCorrelation')
+        if not correlation:
+            continue
+        fields = correlation.get('narrative_fields') or {}
+        rows.append({'RecommendationId': row.get('RecommendationId'), 'Finding key': row.get('FindingKey'),
+                     'Correlation state': correlation.get('state'), 'Configuration': correlation.get('configuration_state'),
+                     'Operation': correlation.get('operation_state'), 'Action lane': correlation.get('lane_label'),
+                     **{label: fields.get(label) for label in fields},
+                     'Components': '; '.join(f"{name}: {item.get('state')}" for name, item in (correlation.get('components') or {}).items()),
+                     'Next steps': '\n'.join(correlation.get('next_steps') or []), 'Customer narrative': correlation.get('customer_narrative'),
+                     'Correlated events': len(correlation.get('event_correlation') or [])})
+        for event in correlation.get('event_correlation') or []:
+            for policy, facts in (event.get('policies') or {'': {}}).items():
+                events.append({'RecommendationId': row.get('RecommendationId'), 'Event ID': event.get('event_id'),
+                               'Created': event.get('created'), 'User ID': event.get('user_id'), 'Client app': event.get('client_app'),
+                               'Resource': event.get('resource'), 'Outcome': event.get('outcome'), 'Error code': event.get('error_code'),
+                               'Conditional Access status': event.get('conditional_access_status'), 'Category': event.get('category'),
+                               'Policy': policy or None, 'Policy membership': facts.get('membership'),
+                               'Event timing': facts.get('timing'), 'Applied-policy result': facts.get('applied')})
+    return rows, events
+
+
+def _customer_action_rows(result):
+    return [{'Customer action': item['number'], 'Customer action ID': item['customer_action_id'], 'Title': item['title'],
+             'Lane': item['lane_label'], 'Readiness treatment': item['readiness_treatment'], 'Priority': item['priority'],
+             'Readiness effect': item['pilot_impact'], 'Responsible role': item['owner_role'],
+             'Members': '; '.join(member['recommendation_id'] for member in item['members']),
+             'Required decision': item.get('required_decision'), 'Next steps': '\n'.join(item.get('next_steps') or []),
+             'Closure evidence': item.get('closure_evidence'), 'Narrative': item.get('narrative')}
+            for item in result.get('customer_actions') or []]

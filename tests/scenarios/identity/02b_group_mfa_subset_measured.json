@@ -1,0 +1,155 @@
+{
+ "name": "02b_group_mfa_subset_measured",
+ "declared_before_production_change": "2026-11-03",
+ "description": "MFA is enforced only through a group of 6 of the 8 accounts in the complete user inventory; security defaults are disabled. Same semantics as the retained Cavehouse tenant.",
+ "patch": {
+  "client": {
+   "ca_policies": [
+    {
+     "id": "ca-mfa-staff",
+     "displayName": "MFA for staff group",
+     "state": "enabled",
+     "conditions": {
+      "users": {
+       "includeUsers": [],
+       "includeGroups": [
+        "grp-staff"
+       ],
+       "excludeUsers": [],
+       "excludeGroups": []
+      },
+      "applications": {
+       "includeApplications": [
+        "All"
+       ]
+      },
+      "clientAppTypes": [
+       "all"
+      ]
+     },
+     "grantControls": {
+      "operator": "OR",
+      "builtInControls": [
+       "mfa"
+      ]
+     }
+    },
+    {
+     "id": "ca-legacy-block",
+     "displayName": "Block legacy authentication",
+     "state": "enabled",
+     "conditions": {
+      "users": {
+       "includeUsers": [
+        "All"
+       ],
+       "includeGroups": [],
+       "excludeUsers": [],
+       "excludeGroups": []
+      },
+      "applications": {
+       "includeApplications": [
+        "All"
+       ]
+      },
+      "clientAppTypes": [
+       "exchangeActiveSync",
+       "other"
+      ]
+     },
+     "grantControls": {
+      "operator": "OR",
+      "builtInControls": [
+       "block"
+      ]
+     }
+    }
+   ],
+   "assessment_datasets": {
+    "ca_group_members": [
+     {
+      "records": [
+       {
+        "id": "a0000000-0000-4000-8000-000000000001",
+        "@odata.type": "#microsoft.graph.user",
+        "ParentId": "grp-staff"
+       },
+       {
+        "id": "a0000000-0000-4000-8000-000000000002",
+        "@odata.type": "#microsoft.graph.user",
+        "ParentId": "grp-staff"
+       },
+       {
+        "id": "a0000000-0000-4000-8000-000000000003",
+        "@odata.type": "#microsoft.graph.user",
+        "ParentId": "grp-staff"
+       },
+       {
+        "id": "a0000000-0000-4000-8000-000000000004",
+        "@odata.type": "#microsoft.graph.user",
+        "ParentId": "grp-staff"
+       },
+       {
+        "id": "a0000000-0000-4000-8000-000000000005",
+        "@odata.type": "#microsoft.graph.user",
+        "ParentId": "grp-staff"
+       },
+       {
+        "id": "a0000000-0000-4000-8000-000000000006",
+        "@odata.type": "#microsoft.graph.user",
+        "ParentId": "grp-staff"
+       }
+      ],
+      "source": {
+       "available": true,
+       "availability_status": "available",
+       "complete": true,
+       "truncated": false,
+       "records_collected": 6,
+       "pages_collected": 1,
+       "scope": "Parent object grp-staff",
+       "collected_at": "2026-10-30T12:00:00+00:00",
+       "source_api": "https://graph.microsoft.com/v1.0/groups/grp-staff/transitiveMembers"
+      }
+     }
+    ]
+   }
+  }
+ },
+ "expected": {
+  "source_states": {
+   "ca_policies": "available",
+   "ca_group_members": "complete",
+   "security_defaults": "available (disabled)"
+  },
+  "population_scope": "6 of 8 accounts targeted; 2 accounts not targeted",
+  "checks": [
+   {
+    "control": "IDENTITY.AUTH",
+    "finding_key": "baseline.identity.sign_in",
+    "disposition": "Action",
+    "priority": "High",
+    "evidence_status": "supported",
+    "readiness_treatment": "Remediate",
+    "semantic_condition": [
+     "mfa=NotEnforcedForAllUsers"
+    ],
+    "configuration_result": "not_established",
+    "control_actions": 1,
+    "action_types": [
+     "Remediation"
+    ],
+    "blocks_readiness": true,
+    "stable_recommendation_id": true,
+    "required": [
+     "6 of 8 accounts",
+     "security defaults are disabled"
+    ],
+    "prohibited": [
+     "security defaults are off"
+    ],
+    "recommendation_id": "REC-4EFCEE02B8"
+   }
+  ]
+ }
+}

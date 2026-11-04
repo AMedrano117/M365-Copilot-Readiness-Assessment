@@ -1,0 +1,27 @@
+{
+ "name": "14_non_p1_identical_policies",
+ "declared_before_production_change": "2026-11-03",
+ "description": "Identical evidence to scenario 13 in a tenant without any Entra ID P1 or P2 service plan.",
+ "patch": {
+  "license_profile": "none"
+ },
+ "expected": {
+  "source_states": {
+   "ca_policies": "available"
+  },
+  "population_scope": "All users",
+  "checks": [
+   {
+    "control": "IDENTITY.AUTH",
+    "finding_key": "baseline.identity.sign_in",
+    "disposition": "Assurance",
+    "evidence_status": "supported",
+    "readiness_treatment": "Pass",
+    "configuration_result": "supported",
+    "control_actions": 1,
+    "blocks_readiness": false
+   }
+  ],
+  "same_technical_conclusions_as": "13_p1_readable_policies"
+ }
+}

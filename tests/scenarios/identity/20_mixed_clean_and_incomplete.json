@@ -1,0 +1,79 @@
+{
+ "name": "20_mixed_clean_and_incomplete",
+ "declared_before_production_change": "2026-11-03",
+ "description": "Passing Conditional Access and admin-only consent, but the grant inventory read failed and access reviews were partial.",
+ "patch": {
+  "sources": {
+   "oauth_grants": "unavailable:403",
+   "access_reviews": "partial"
+  },
+  "client": {
+   "consent_summary": {
+    "total_apps": 3,
+    "consent_configuration_available": true,
+    "assigned_user_consent_policies": [],
+    "user_consent_allowed": false,
+    "admin_consent_required": true,
+    "high_privilege_apps": null,
+    "unverified_publishers": null,
+    "grant_inventory_available": false
+   }
+  }
+ },
+ "expected": {
+  "source_states": {
+   "ca_policies": "available",
+   "oauth_grants": "unavailable (HTTP 403)",
+   "access_reviews": "partial"
+  },
+  "population_scope": "Tenant",
+  "checks": [
+   {
+    "control": "IDENTITY.AUTH",
+    "finding_key": "baseline.identity.sign_in",
+    "disposition": "Assurance",
+    "readiness_treatment": "Pass",
+    "configuration_result": "supported"
+   },
+   {
+    "control": "APPS.CONSENT",
+    "finding_key": "entra.apps.user_consent_assignment",
+    "disposition": "Assurance",
+    "semantic_condition": [
+     "consent=AdminOnly"
+    ]
+   },
+   {
+    "control": "APPS.CONSENT",
+    "finding_key": "entra.app_consent.grant_inventory_not_assessed",
+    "disposition": "Coverage",
+    "semantic_condition": [
+     "grants=InventoryUnavailable"
+    ],
+    "required": [
+     "HTTP 403"
+    ]
+   },
+   {
+    "control": "APPS.CONSENT",
+    "open_action_types": [
+     "Evidence"
+    ],
+    "control_status": "Not established"
+   },
+   {
+    "finding_key": "entra.access_reviews.definitions",
+    "disposition": "Reference",
+    "semantic_condition": [
+     "access_reviews=SourcePartial"
+    ]
+   }
+  ],
+  "prohibited_anywhere": [
+   "No access review definitions were returned",
+   "No active access reviews were returned"
+  ],
+  "decision_not": "Tenant remediation required"
+ },
+ "expectation_note": "Originally declared \"Not established\". It was relaxed after the first identity run because the shared result then reported a control Observed when one component was supported. The 2026-11-03 methodology reconciliation adopts per-component aggregation, so the original declaration is restored."
+}

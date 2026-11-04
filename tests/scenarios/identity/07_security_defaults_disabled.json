@@ -1,0 +1,70 @@
+{
+ "name": "07_security_defaults_disabled",
+ "declared_before_production_change": "2026-11-03",
+ "description": "Only a legacy-block policy exists; security defaults explicitly read as disabled.",
+ "patch": {
+  "client": {
+   "ca_policies": [
+    {
+     "id": "ca-legacy-block",
+     "displayName": "Block legacy authentication",
+     "state": "enabled",
+     "conditions": {
+      "users": {
+       "includeUsers": [
+        "All"
+       ],
+       "includeGroups": [],
+       "excludeUsers": [],
+       "excludeGroups": []
+      },
+      "applications": {
+       "includeApplications": [
+        "All"
+       ]
+      },
+      "clientAppTypes": [
+       "exchangeActiveSync",
+       "other"
+      ]
+     },
+     "grantControls": {
+      "operator": "OR",
+      "builtInControls": [
+       "block"
+      ]
+     }
+    }
+   ]
+  }
+ },
+ "expected": {
+  "source_states": {
+   "ca_policies": "available",
+   "security_defaults": "available (disabled)"
+  },
+  "population_scope": "No enforced all-users MFA policy",
+  "checks": [
+   {
+    "control": "IDENTITY.AUTH",
+    "finding_key": "baseline.identity.sign_in",
+    "disposition": "Action",
+    "priority": "High",
+    "evidence_status": "supported",
+    "readiness_treatment": "Remediate",
+    "semantic_condition": [
+     "mfa=NoEnforcedPolicy",
+     "legacy=EnforcedForAllUsers"
+    ],
+    "control_actions": 1,
+    "blocks_readiness": true,
+    "required": [
+     "security defaults are disabled"
+    ],
+    "prohibited": [
+     "security defaults are off"
+    ]
+   }
+  ]
+ }
+}

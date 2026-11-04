@@ -1,0 +1,29 @@
+{
+ "name": "14b_pending_p1_identical_policies",
+ "declared_before_production_change": "2026-11-03",
+ "description": "Identical evidence with the Entra ID P1 plan in PendingActivation; license status is capability context only.",
+ "patch": {
+  "license_profile": "p1_pending"
+ },
+ "expected": {
+  "source_states": {
+   "ca_policies": "available"
+  },
+  "population_scope": "All users",
+  "checks": [
+   {
+    "control": "IDENTITY.AUTH",
+    "finding_key": "baseline.identity.sign_in",
+    "disposition": "Assurance",
+    "readiness_treatment": "Pass",
+    "control_actions": 1,
+    "blocks_readiness": false
+   }
+  ],
+  "same_technical_conclusions_as": "13_p1_readable_policies",
+  "no_action_titles": [
+   "^Microsoft Entra ID P[12]$",
+   "PendingActivation"
+  ]
+ }
+}

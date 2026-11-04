@@ -1,0 +1,27 @@
+{
+ "name": "C20_customer_technical_agree",
+ "kind": "outputs",
+ "declared_before_production_change": "2026-11-03",
+ "description": "The excluded-account legacy scenario rendered to HTML, workbooks, a snapshot and an offline replay.",
+ "declaration": {
+  "observed_condition": "As C04",
+  "existing_control": "As C04",
+  "effective_scope": "As C04",
+  "operation_evidence": "As C04",
+  "exclusion_evidence": "As C04",
+  "source_states": "As C04",
+  "expected_technical_result": "Same correlated conclusion in every output",
+  "expected_action_lane": "InvestigateAffectedObjects",
+  "expected_readiness_treatment": "ScopeReviewRequired",
+  "expected_customer_action_count": 1,
+  "prohibited_conclusion": "An output recalculating or contradicting the correlation",
+  "required_qualification": "Same narrative and state"
+ },
+ "base": "C04_successful_events_excluded_accounts",
+ "finding_key": "entra.signins.legacy_auth",
+ "expected": {
+  "rows": [],
+  "customer_actions": [],
+  "controls": []
+ }
+}

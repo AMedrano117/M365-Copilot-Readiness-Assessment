@@ -1,0 +1,65 @@
+{
+ "name": "C19_planning_opportunities_excluded",
+ "kind": "bundle",
+ "declared_before_production_change": "2026-11-03",
+ "description": "One remediation finding and two planning opportunities.",
+ "declaration": {
+  "observed_condition": "1 measured condition; 2 opportunities",
+  "existing_control": "None",
+  "effective_scope": "Tenant",
+  "operation_evidence": "Configuration",
+  "exclusion_evidence": "None",
+  "source_states": "Complete",
+  "expected_technical_result": "Opportunities are planning context",
+  "expected_action_lane": "PlanImprovement",
+  "expected_readiness_treatment": "None",
+  "expected_customer_action_count": 1,
+  "prohibited_conclusion": "Opportunities counted as open actions",
+  "required_qualification": "Planning is not a readiness failure"
+ },
+ "rows": [
+  {
+   "key": "purview.raw.dlp_mode",
+   "feature": "Confirm enforcement of data loss prevention policies",
+   "control": "DATA.DLP",
+   "observation": "All returned data loss prevention policies are in simulation mode."
+  },
+  {
+   "key": "fixture.opportunity.one",
+   "feature": "Passwordless authentication registration",
+   "disposition": "Opportunity",
+   "observation": "80 of 1385 returned users have a passwordless method registered."
+  },
+  {
+   "key": "fixture.opportunity.two",
+   "feature": "Guest invitation settings",
+   "disposition": "Opportunity",
+   "observation": "Guest invitation eligibility is configured as everyone."
+  }
+ ],
+ "expected": {
+  "rows": [
+   {
+    "finding_key": "fixture.opportunity.one",
+    "open_action": false,
+    "lane": "PlanImprovement"
+   },
+   {
+    "finding_key": "fixture.opportunity.two",
+    "open_action": false,
+    "lane": "PlanImprovement"
+   }
+  ],
+  "customer_actions": [
+   {
+    "keys": [
+     "purview.raw.dlp_mode"
+    ],
+    "count": 1,
+    "lane": "FixNow"
+   }
+  ],
+  "planning_total": 2,
+  "controls": []
+ }
+}

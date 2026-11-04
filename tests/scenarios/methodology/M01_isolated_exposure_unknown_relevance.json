@@ -1,0 +1,45 @@
+{
+ "name": "M01_isolated_exposure_unknown_relevance",
+ "declared_before_production_change": "2026-11-03",
+ "description": "One Anyone link on one site with no retained sensitivity label: materiality is not established.",
+ "exposure": {
+  "sam_rows": [
+   {
+    "Report Date": "2026-11-01",
+    "Site Name": "Marketing",
+    "Site URL": "https://contoso.sharepoint.example/sites/marketing",
+    "Primary Admin": "owner@contoso.example",
+    "Anyone link count": "1"
+   }
+  ]
+ },
+ "expected": {
+  "checks": [
+   {
+    "finding_key": "data_exposure.anonymous_links",
+    "disposition": "Action",
+    "evidence_status": "supported",
+    "readiness_treatment": "ScopeReviewRequired",
+    "semantic_condition": [
+     "severity_basis=presence_only"
+    ],
+    "action_type": "Confirmation",
+    "pilot_impact": "Evidence review",
+    "blocks_readiness": false,
+    "component_result": "not_established",
+    "family_actions": 1,
+    "required": [
+     "1 Anyone link",
+     "No exposure threshold is defined"
+    ],
+    "prohibited": [
+     "[Bb]locks readiness"
+    ]
+   },
+   {
+    "control": "CONTENT.PERMISSIONS",
+    "control_status": "Not established"
+   }
+  ]
+ }
+}

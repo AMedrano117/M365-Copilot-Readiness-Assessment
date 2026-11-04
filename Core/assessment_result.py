@@ -560,7 +560,7 @@ GAP_GUIDANCE = {
 }
 
 
-def _gap(question, day, bundle=None):
+def _gap(question, day, bundle=None, operation=None):
     control, domain, title, keys, _, security_gate = question
     identifier = "GAP-" + control.replace(".", "-")
     observation, next_step = GAP_GUIDANCE.get(control, ("The collected evidence does not answer this check.",
@@ -583,7 +583,7 @@ def _gap(question, day, bundle=None):
         "EvidenceId": "", "EvidenceScope": "", "EvidenceComplete": False,
     }
     from .evidence_reconciliation import qualify_gap
-    return qualify_gap(row, bundle or {})
+    return qualify_gap(row, bundle or {}, operation)
 
 
 def _supports_question(row, control):
@@ -603,6 +603,82 @@ def _supports_question(row, control):
     return control not in {"IDENTITY.AUTH", "DATA.PUBLISHING", "DATA.DLP"}
 
 
+# Readiness treatments that ask for a review or evidence rather than a fix.
+REVIEW_TREATMENTS = frozenset({'ScopeReviewRequired', 'ConfirmBeforePilot', 'EvidenceGap'})
+# Severity bases whose observed condition does not establish material impact.
+NON_BLOCKING_SEVERITY_BASES = frozenset({'presence_only', 'confirmed_not_material'})
+
+
+def component_result(row, control):
+    """Technical result of one control component, from structured fields only.
+
+    Returns supported, failed, not_established or not_applicable; lanes outside
+    the control (Reference, Opportunity) return None. Recommendation and
+    renderer wording are never inputs.
+    """
+    if row.get('Disposition') in {'Reference', 'Opportunity'}:
+        return None
+    if (str(row.get('Applicability') or '').strip().lower().replace(' ', '_') == 'not_applicable'
+            or row.get('control_result') == 'not_applicable'):
+        return 'not_applicable'
+    if row.get('EvidenceStatus') == 'conflict':
+        return 'not_established'
+    if row.get('Disposition') == 'Action':
+        confirmed = (row.get('EvidenceStatus') == 'supported' and row.get('ReadinessTreatment') not in REVIEW_TREATMENTS
+                     and row.get('SeverityBasis') != 'presence_only')
+        return 'failed' if confirmed else 'not_established'
+    if row.get('Disposition') == 'Assurance':
+        # An unsupported positive claim (for example a strength summary with an
+        # unknown date) neither supports the control nor opens a gap.
+        return 'supported' if _supports_question(row, control) else None
+    return 'not_established'
+
+
+def _evidence_keys(row):
+    return {key.strip() for key in str(row.get('EvidenceKey') or '').split(';') if key.strip()}
+
+
+def _answers_confirm_row(row, matching, control):
+    """A baseline confirm row for a read source is answered by supported evidence of the same question.
+
+    Unread, partial or scope-review rows (EvidenceGap or ScopeReviewRequired)
+    are never answered by another row's evidence.
+    """
+    if not (row.get('BaselineCheck') and row.get('Disposition') == 'Coverage'
+            and row.get('ReadinessTreatment') not in {'EvidenceGap', 'ScopeReviewRequired'}):
+        return None
+    keys = _evidence_keys(row)
+    return next((other for other in matching if other is not row and other.get('Disposition') == 'Assurance'
+                 and _supports_question(other, control) and keys & _evidence_keys(other)), None)
+
+
+def aggregate_control_status(components, *, conflict=False, known_pass=False, known_fail=False):
+    """Composite control status; component results are never averaged or substituted.
+
+    A confirmed failure of a required component is Action required. Otherwise
+    any unresolved required component (unread, partial, unavailable, stale or
+    with unresolved applicability) is Not established, whatever other components
+    show. A current tenant-wide owner review answers unresolved components but
+    never a confirmed failure. Optional components only add a qualification.
+    """
+    required = [item for item in components if item['required'] and item['result'] != 'not_applicable']
+    optional = [item for item in components if not item['required'] and item['result'] != 'not_applicable']
+    label = lambda item: item['finding_key'] or item['recommendation_id']
+    qualifications = [f"Optional component {label(item)} is {item['result'].replace('_', ' ')}."
+                      for item in optional if item['result'] != 'supported']
+    if conflict:
+        return 'Not established', qualifications
+    if known_fail or any(item['result'] == 'failed' for item in required):
+        return 'Action required', qualifications
+    unresolved = [item for item in required if item['result'] == 'not_established']
+    if known_pass:
+        return 'Observed', qualifications + [f'Component {label(item)} answered by a current tenant-wide owner review.'
+                                             for item in unresolved]
+    if unresolved or not any(item['result'] == 'supported' for item in required):
+        return 'Not established', qualifications
+    return 'Observed', qualifications
+
+
 def _action(row):
     result = dict(row)
     disposition = result.get("Disposition")
@@ -612,6 +688,10 @@ def _action(row):
             result["Feature"] = "Confirm the remaining tenant controls"
             result["Observation"] = "The supplied observations do not cover all controls needed for a deployment decision."
             result["Recommendation"] = "Complete the domain checks listed below and record their scope and observation dates."
+    elif result.get("ReadinessTreatment") in REVIEW_TREATMENTS and result["EvidenceStatus"] == "supported":
+        # A measured condition whose materiality, scope or purpose is unresolved
+        # is reviewed before it is treated as a remediation.
+        result["ActionType"] = "Confirmation"
     elif result["EvidenceStatus"] != "supported":
         result["ActionType"] = "Confirmation"
         original = result.get("Feature") or "the earlier finding"
@@ -820,7 +900,7 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
                 if row.get('Disposition') == 'Assurance' and operation[control]['result'] != 'pass':
                     row['Qualification'] = (str(row.get('Qualification') or '') + ' Configuration component only; operational confirmation remains unresolved.').strip()
             if operation[control]['result'] != 'pass' and not any(row.get('Disposition') in {'Action','Coverage'} for row in matching):
-                gap = _gap(question, day, bundle)
+                gap = _gap(question, day, bundle, operation.get(control))
                 gap.update(FindingKey='coverage.operation.' + control.lower(),
                            Observation=(gap['Observation'] + ' ' if gap.get('ObservedEvidence') or not matching else '') + operation[control]['reason'], EvidenceLevel='observed_operation',
                            Recommendation=gap['Recommendation'] if gap.get('ObservedEvidence') else
@@ -837,14 +917,28 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
         existing_gap = [row for row in matching if row.get("Disposition") == "Coverage"
                         or (row.get('Disposition') == 'Action' and row.get('EvidenceStatus') != 'supported')]
         if not supported and not known_facts and not existing_gap:
-            gap = _gap(question, day, bundle)
+            gap = _gap(question, day, bundle, operation.get(control))
             records.append(gap)
             matching.append(gap)
+        components = []
+        for row in matching:
+            outcome = component_result(row, control)
+            answered = _answers_confirm_row(row, matching, control) if outcome == 'not_established' else None
+            if outcome:
+                components.append({'recommendation_id': row.get('RecommendationId', ''), 'finding_key': row.get('FindingKey', ''),
+                                   'result': 'supported' if answered else outcome,
+                                   'required': str(row.get('OptionalEvidence') or '').lower() != 'yes',
+                                   'evidence_status': row.get('EvidenceStatus', ''),
+                                   **({'answered_by': answered.get('FindingKey') or answered.get('RecommendationId', '')} if answered else {})})
+        status, qualifications = aggregate_control_status(
+            components,
+            conflict=(any(row.get('control_id') == control and row['selection'] == 'conflict' for row in explicit)
+                      or any(row.get('EvidenceStatus') == 'conflict' for row in matching)),
+            known_pass=any(row.get('control_result') == 'pass' for row in known_facts),
+            known_fail=any(row.get('control_result') == 'fail' for row in known_facts))
         controls.append({
             "control_id": control, "title": title, "domain_id": domain,
-            "status": "Not established" if any(row.get('control_id') == control and row['selection'] == 'conflict' for row in explicit) or any(row.get('EvidenceStatus') == 'conflict' for row in matching)
-                      else "Action required" if any(row.get("Disposition") == "Action" for row in supported) or any(row.get("control_result") == "fail" for row in known_facts)
-                      else "Observed" if supported or known_facts else "Not established",
+            "status": status, "component_results": components, "qualifications": qualifications,
             "security_gate": security_gate,
             'configuration_result': 'supported' if any(row.get('Disposition')=='Assurance' and row.get('EvidenceStatus')=='supported' for row in matching) else 'not_established',
             'operational_result': operation.get(control, {}).get('result', 'not_applicable'),
@@ -856,7 +950,11 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
                        and fact["selection"] == "selected" and fact["complete"] and fact["freshness"] == "current"
                        and (fact['control_id'] not in operation or fact.get('evidence_level')=='observed_operation' and operation[fact['control_id']]['result']=='pass')}
     for row in records:
-        if row.get("Disposition") != "Coverage" or row.get("EvidenceStatus") != "gap":
+        # A review answers an evidence gap or an open review question (unresolved
+        # materiality, scope or purpose). It never closes a confirmed failure.
+        review_question = (row.get("Disposition") == "Action" and row.get("EvidenceStatus") == "supported"
+                           and (row.get("ReadinessTreatment") in REVIEW_TREATMENTS or row.get("SeverityBasis") == "presence_only"))
+        if (row.get("Disposition") != "Coverage" or row.get("EvidenceStatus") != "gap") and not review_question:
             continue
         if row.get('DeviceEvidenceVersion'):
             # A broad endpoint-control review does not resolve individual report
@@ -866,13 +964,13 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
         if matching_questions and all(control in reviewed_passes for control in matching_questions):
             # Preserve the original collection diagnostic in the workbook. A
             # scoped review may answer its question; it cannot close an Action.
-            row.update(Disposition="Reference", OriginalDisposition="Coverage", ReviewClosure="Question answered by a current scoped operator review",
+            row.update(Disposition="Reference", OriginalDisposition=row.get("Disposition"), ReviewClosure="Question answered by a current scoped operator review",
                        ReviewEvidenceIds=[reviewed_passes[control]["evidence_id"] for control in matching_questions])
+    # A tenant-wide "confirm" row (for example connectors to review) is answered
+    # by a current owner review or by supported evidence of the same question
+    # (same evidence key). Another component's evidence never fills its gap.
     observed_controls = {control["control_id"] for control in controls if control["status"] == "Observed"}
     for row in records:
-        # A tenant-wide "confirm" row (for example connectors to review) is
-        # answered when other supported evidence, such as a current owner
-        # review, already establishes the same control.
         if row.get("BaselineCheck") and row.get("Disposition") == "Coverage" and row.get("ControlId") in observed_controls:
             row.update(Disposition="Reference", OriginalDisposition="Coverage",
                        ReviewClosure="Answered by other supported evidence for this control")
@@ -886,6 +984,10 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
     from .finding_reconciliation import allocate_display_ids
     collision_diagnostics = allocate_display_ids([*records, *optional_records],
         lambda row: "REC-" + stable_id([_finding_identity(row), row.get("SourceType"), row.get("EvidenceScope")])[:10].upper())
+    from .customer_actions import qualify_capability_claims, qualify_device_protection, retire_superseded
+    qualify_capability_claims(records)
+    retire_superseded(records)
+    qualify_device_protection(records)
     actions = [_action(row) for row in records if row.get("Disposition") in {"Action", "Coverage"}]
     from .evidence_reconciliation import qualify_device_action_titles
     actions = qualify_device_action_titles(actions)
@@ -910,7 +1012,10 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
     from .device_evidence import tenant_blocker_eligible
     # Native device blockers require current explicit security failures and
     # stable identity. Pilot membership does not change tenant eligibility.
-    confirmed_actions = [row for row in actions if row["ActionType"] == "Remediation" and row["SecurityGate"] and tenant_blocker_eligible(row)]
+    # Counts describe scale but never establish material impact. A presence-only
+    # count, or a confirmed condition outside material scope, is not a blocker.
+    confirmed_actions = [row for row in actions if row["ActionType"] == "Remediation" and row["SecurityGate"] and tenant_blocker_eligible(row)
+                         and row.get("SeverityBasis") not in NON_BLOCKING_SEVERITY_BASES]
     critical = [row for row in confirmed_actions if str(row.get("Status", "")).lower() == "critical"]
     high = [row for row in confirmed_actions if row.get("Priority") == "High"]
     medium = [row for row in confirmed_actions if row.get("Priority") == "Medium"]
@@ -929,6 +1034,14 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
                               'Tenant remediation' if row['ActionType'] == 'Remediation' else 'Evidence review')
         row['ReadinessStage'] = 'Tenant remediation' if row['ActionType'] == 'Remediation' else 'Evidence review'
     readiness_conditions = [row for row in actions if row['SecurityGate'] and row not in blockers]
+    # The customer plan is a projection of the decision above: lanes, one action
+    # per semantic condition and decision, and a class for every finding.
+    from .customer_actions import action_lane, build_customer_actions, classify_findings, population_overlaps, readiness_outcome
+    for row in records:
+        row['ActionLane'] = action_lane(row)
+    overlaps = population_overlaps(records)
+    customer_actions = build_customer_actions(actions, blockers, overlaps)
+    finding_classes = classify_findings(records, actions)
     if critical:
         decision, rationale = 'Tenant remediation required', 'Confirmed critical tenant conditions require remediation. Review the affected population and evidence qualifications.'
     elif blockers:
@@ -957,6 +1070,7 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
         "critical": len(critical), "high": sum(row.get("Priority") == "High" for row in actions),
         "medium": sum(row.get("Priority") == "Medium" for row in actions),
         "low": sum(row.get("Priority") == "Low" for row in actions),
+        "customer_actions": len(customer_actions), "planning": len(opportunities),
     }
     domains = []
     for domain, title, owner, why in (*DOMAINS, *OPTIONAL_DOMAINS):
@@ -1027,6 +1141,10 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
         "answered_controls": len(answered), "required_controls": len(gates),
         "evidence": observations, "adoption_metrics": [row for row in metrics if row["selection"] == "selected"],
         "superseded_findings": superseded, "evidence_period": {"start": dates[0] if dates else None, "end": dates[-1] if dates else None},
+        "customer_actions": customer_actions, "population_overlaps": overlaps, "finding_classification": finding_classes,
+        "planning": [{'recommendation_id': row.get('RecommendationId'), 'finding_key': row.get('FindingKey') or '',
+                      'title': row.get('FindingTitle') or row.get('Feature'), 'domain_id': row.get('DomainId')} for row in opportunities],
+        "readiness_outcome": readiness_outcome(controls, blockers, customer_actions, opportunities),
         "rollout_conditions": [
             {'stage': 'Remediate', 'condition': 'Resolve the retained tenant security findings.'},
             {'stage': 'Verify', 'condition': 'Confirm required control coverage with current, scoped evidence.'},

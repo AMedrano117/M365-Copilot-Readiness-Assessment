@@ -1,0 +1,70 @@
+{
+ "name": "C11_license_capacity_pilot_unresolved",
+ "kind": "bundle",
+ "declared_before_production_change": "2026-11-03",
+ "description": "Paid Copilot capacity, licensed users and usage-enabled users are retained from separate sources and differ.",
+ "declaration": {
+  "observed_condition": "30 seats, 29 assigned; 26 licensed users; 25 usage-enabled users",
+  "existing_control": "Paid Copilot subscription",
+  "effective_scope": "Tenant",
+  "operation_evidence": "Usage report D28",
+  "exclusion_evidence": "None",
+  "source_states": "license inventory and usage complete",
+  "expected_technical_result": "ControlScopeUnresolved",
+  "expected_action_lane": "ValidateExistingControl",
+  "expected_readiness_treatment": "None (coverage row)",
+  "expected_customer_action_count": 1,
+  "prohibited_conclusion": "That licenses are unavailable or a pilot roster is required",
+  "required_qualification": "Population differences are a reconciliation question"
+ },
+ "ai_usage": {
+  "license_coverage": {
+   "available": true,
+   "copilot_licensed_users": 26,
+   "copilot_subscription_capacity": {
+    "available": true,
+    "enabled_seats": 30,
+    "assigned_seats": 29
+   }
+  },
+  "copilot_usage": {
+   "available": true,
+   "selected_period": "D28",
+   "periods": {
+    "D28": {
+     "enabled_users": 25
+    }
+   }
+  }
+ },
+ "expected": {
+  "rows": [
+   {
+    "finding_key": "coverage.license.assignment",
+    "correlation_state": "ControlScopeUnresolved",
+    "lane": "ValidateExistingControl",
+    "open_action": true,
+    "components": {
+     "subscription_capacity": "observed",
+     "licensed_users": "observed",
+     "usage_enabled_population": "observed",
+     "population_reconciliation": "unresolved",
+     "pilot_assignment": "not_applicable"
+    },
+    "required": [
+     "30 paid seats",
+     "29 assigned",
+     "26 users",
+     "25",
+     "[Rr]econcile"
+    ],
+    "prohibited": [
+     "authoritative license assignment and entitlement .* were not established",
+     "intended pilot population"
+    ]
+   }
+  ],
+  "customer_actions": [],
+  "controls": []
+ }
+}

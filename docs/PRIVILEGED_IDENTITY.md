@@ -131,6 +131,16 @@ mapping to an existing decision, not a new decision type. Labels, raw approval f
 draft/revoked/expired decisions and forged projections are insufficient. Evaluation
 and rendering create no decision events.
 
+The tenant-wide sign-in check (`IDENTITY.AUTH`) reuses the same `account_purposes` to
+decide whether a Conditional Access exclusion is documented emergency access. An
+excluded account passes only when its `emergency` declaration has the excluded
+principal_id, owner, `authentication_design`, `monitoring`, a `reviewed_at` date or an
+`exception_id`, a configuration, customer_declaration or account_metadata source_type,
+and evidence_refs that resolve to retained records. Any missing element leaves the
+exclusion `ExclusionReviewRequired`. Display names such as "break glass" only identify
+candidates. Excluded groups need complete retained membership; excluded roles and guest
+types cannot be resolved to accounts and stay review-required.
+
 Emergency activity, attempts and retained account-change evidence create separate
 review items. Permanent emergency access is not automatically improper. Service
 and synchronization accounts do not enter ordinary inactivity cleanup; recent
