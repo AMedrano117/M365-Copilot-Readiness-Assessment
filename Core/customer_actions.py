@@ -12,6 +12,7 @@ from hashlib import sha256
 import json
 
 from .control_correlation import LANES, LEGACY_KEY, correlate_device_protection
+from .sharepoint_governance_evidence import PATHS, WORKSTREAMS, governance_workstream
 
 LANE_ORDER = ('FixNow', 'ValidateExistingControl', 'InvestigateAffectedObjects', 'CollectMissingEvidence')
 EVIDENCE_SUFFICIENCY = {'FixNow': 'Remediate now', 'ValidateExistingControl': 'Validate an existing control',
@@ -27,6 +28,7 @@ WORKSTREAM_TITLES = {
     'information_protection.labels': 'Define and publish sensitivity labels for business content',
     'content.broad_access': 'Review anonymous, organization-wide and external access to business content',
     'content.exposure_evidence': 'Refresh and validate the SharePoint exposure evidence',
+    'content.governance_evidence': 'Complete the SharePoint governance evidence',
     'endpoint.evidence_quality': 'Validate device compliance evidence and compliance design',
     ('endpoint.protection_failures', 'FixNow'): 'Remediate confirmed endpoint protection failures',
     ('endpoint.protection_failures', 'InvestigateAffectedObjects'): 'Confirm and remediate failed device compliance settings',
@@ -35,6 +37,7 @@ WORKSTREAM_DECISIONS = {
     'information_protection.labels': 'Agree the classification model and the users who receive each label.',
     'content.broad_access': 'Decide, per site, which anonymous, organization-wide and external access remains justified.',
     'content.exposure_evidence': None,
+    'content.governance_evidence': 'Decide whether the current evidence supports remediation decisions, or supply the missing results.',
 }
 TITLES = {
     'entra.authentication.mfa_registration': 'Register the remaining users for MFA',
@@ -122,8 +125,12 @@ def _workstream(row):
         return 'information_protection.labels'
     if key in {'data_exposure.anonymous_links', 'data_exposure.broad_internal_access', 'data_exposure.external_exposure'}:
         return 'content.broad_access'
-    if key == 'sharepoint.dag.not_assessed' or key.startswith('data_exposure.freshness'):
+    # Missing SharePoint permission and oversharing evidence: one request, whatever produced it.
+    if key in {'sharepoint.dag.not_assessed', 'data_exposure.coverage.sharepoint_oversharing_evidence',
+               'coverage.content.permissions'} or key.startswith('data_exposure.freshness'):
         return 'content.exposure_evidence'
+    if key.startswith('sharepoint_governance.') and row.get('Disposition') == 'Coverage' and key != 'sharepoint_governance.sensitive_content':
+        return 'content.governance_evidence'
     if key.startswith('expanded.device_compliance_settings.') or key == 'expanded.compliance_setting_states.errors':
         return 'endpoint.evidence_quality'
     if key == 'expanded.compliance_setting_states.noncompliant' or key.startswith('expanded.windows_protection.overdue'):
@@ -153,6 +160,31 @@ def _identifier(parts):
 
 def _unique(values):
     return list(dict.fromkeys(str(value) for value in values if value))
+
+
+def sharepoint_fields(members, governance):
+    """Customer fields of a SharePoint action; counts are never added across findings with different units."""
+    if governance not in PATHS:
+        return None
+    dates = sorted({str(row.get('ObservationDate')) for row in members if row.get('ObservationDate')})
+    sources = _unique(row.get('SourceFile') for row in members)
+    affected = [row.get('AffectedSiteCount') for row in members if type(row.get('AffectedSiteCount')) is int]
+    issues = [row.get('IssueCount') for row in members if type(row.get('IssueCount')) is int]
+    complete = {row.get('EvidenceComplete') for row in members}
+    return {
+        'current_condition': '; '.join(_unique(row.get('Observation') for row in members)),
+        'existing_capability': next((row.get('SamCapabilityState') for row in members if row.get('SamCapabilityState')), 'Not recorded'),
+        'source': '; '.join(sources) or 'Not recorded',
+        'evidence_date': (dates[0] if len(dates) == 1 else f'{dates[0]} to {dates[-1]}') if dates else 'Not established',
+        # One finding's distinct-site count; several findings can overlap, so the largest is a lower bound.
+        'affected_sites': affected[0] if len(affected) == 1 else max(affected) if affected else None,
+        'affected_sites_basis': 'distinct sites' if len(affected) == 1 else 'largest single-finding count; findings can overlap' if affected else '',
+        'issue_count': issues[0] if len(issues) == 1 else None,
+        'source_completeness': 'Complete' if complete == {True} else 'Incomplete or not established',
+        'residual_risk': 'Not established until the affected sites are reviewed.' if governance != 'sharepoint.validate_evidence'
+                         else 'Not established; current evidence is required for a remediation decision.',
+        'sam_path': PATHS[governance][0], 'non_sam_path': PATHS[governance][1],
+    }
 
 
 def build_customer_actions(actions, blockers, overlaps=()):
@@ -187,6 +219,7 @@ def build_customer_actions(actions, blockers, overlaps=()):
                              '(matched by stable device identity); reporting errors alone are not confirmed failures.')
         steps = (single.get('next_steps') if single else None) or _unique(row.get('Recommendation') for row in members)
         decision = (single.get('required_decision') if single else WORKSTREAM_DECISIONS.get(workstream))
+        governance = next((value for value in (governance_workstream(row) for row in members) if value), None)
         result.append({
             'customer_action_id': _identifier([workstream or sorted({_key(row) or row.get('RecommendationId') for row in members}), lane]),
             'title': title, 'lane': lane, 'lane_label': LANES[lane][0], 'readiness_treatment': LANES[lane][1],
@@ -202,6 +235,8 @@ def build_customer_actions(actions, blockers, overlaps=()):
             'closure_evidence': ' '.join(_unique((single or {}).get('closure_evidence') and [single['closure_evidence']]
                                                  or [row.get('CompletionEvidence') for row in members])),
             'control_narrative': single.get('narrative_fields') if single else None,
+            'governance_workstream': governance, 'workstream_label': WORKSTREAMS.get(governance, ''),
+            'sharepoint': sharepoint_fields(members, governance),
             'members': [{'recommendation_id': row.get('RecommendationId'), 'finding_key': _key(row), 'title': member_title(row),
                          'action_type': row.get('ActionType'), 'lane': lane, 'priority': row.get('Priority'),
                          'summary': row.get('Observation'), 'next_step': row.get('Recommendation'),
@@ -325,6 +360,16 @@ def readiness_outcome(controls, blockers, customer_actions, planning):
         sentences.append('A confirmed issue blocks the next stage only when its material impact on readiness is established. '
                          f"The other {remaining} {verb(remaining, 'control', 'controls')} with confirmed issues "
                          f"{verb(remaining, 'is', 'are')} tenant remediation work.")
+    # Several confirmed controls can close through fewer customer actions; say so rather than imply a mismatch.
+    confirmed_ids = {rid for row in confirmed for rid in row.get('recommendation_ids') or []}
+    addressing = [item for item in customer_actions if confirmed_ids & {member['recommendation_id'] for member in item['members']}]
+    if confirmed and 0 < len(addressing) < len(confirmed):
+        sentences.append(f"The {len(confirmed)} controls with confirmed issues are addressed by {len(addressing)} customer "
+                         f"{verb(len(addressing), 'action', 'actions')}, because one action can resolve several controls.")
+    priorities = sum(item['lane'] == 'FixNow' and not item['blocks_readiness'] for item in customer_actions)
+    if priorities:
+        sentences.append(f"{priorities} additional remediation {verb(priorities, 'priority does', 'priorities do')} not block "
+                         'the next stage but should be fixed.')
     parts = [f"{lanes[lane]} to {label}" for lane, label in (('FixNow', 'fix now'), ('ValidateExistingControl', 'validate existing controls'),
              ('InvestigateAffectedObjects', 'investigate affected objects'), ('CollectMissingEvidence', 'collect missing evidence')) if lanes[lane]]
     if customer_actions:
@@ -335,5 +380,6 @@ def readiness_outcome(controls, blockers, customer_actions, planning):
                          f"{verb(len(planning), 'is', 'are')} not counted as open actions.")
     return {'required_controls': len(gates), 'supported': supported, 'confirmed_issues': len(confirmed),
             'unresolved': unresolved, 'blocking_conditions': len(blockers), 'controls_with_blockers': len(blocking_controls),
+            'actions_for_confirmed_controls': len(addressing), 'additional_remediation_priorities': priorities,
             'customer_actions': len(customer_actions), 'lanes': {lane: lanes[lane] for lane in LANE_ORDER},
             'planning': len(planning), 'sentences': sentences}

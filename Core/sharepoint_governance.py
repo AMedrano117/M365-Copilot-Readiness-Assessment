@@ -277,8 +277,9 @@ def build_copilot_content_control_recommendations(governance):
             observation=("Restricted access control is enabled for the tenant; sites can limit access to members of specified groups."
                          if enabled else "Restricted access control is not enabled for the tenant."),
             recommendation="" if enabled else (
-                "If SharePoint Advanced Management is licensed, consider restricted access control for sites whose content must stay "
-                "with a defined group regardless of sharing, before Copilot is broadly enabled."),
+                "Where SharePoint Advanced Management is available, consider restricted access control for sites whose content must stay "
+                "with a defined group regardless of sharing, before Copilot is broadly enabled. Without it, limit those sites' "
+                "membership and sharing directly and record a dated owner review."),
             link_text="Restricted access control",
             link_url="https://learn.microsoft.com/sharepoint/restricted-access-control",
             priority="Low", status="Insight", disposition="Reference",
@@ -471,7 +472,9 @@ def build_sharepoint_recommendations(governance, evaluation_date=None):
                 + collection_note
             ),
             recommendation=(
-                "If SharePoint Advanced Management is licensed, open SharePoint admin center > Reports > Data access governance. "
+                "SharePoint Advanced Management is optional. Without it, supply dated site permission and sharing-link inventories "
+                "from SharePoint Online PowerShell or Microsoft Graph, with owner reviews, through the SharePoint governance evidence import. "
+                "Where it is available, open SharePoint admin center > Reports > Data access governance. "
                 "Check only the report types and scope listed in the gaps. Reuse current completed results; let running reports finish without starting duplicates. "
                 "For missing or stale results, ask an administrator to enable activity-data collection where needed and generate the relevant permission-state, Everyone/EEEU or sharing-link reports. "
                 "Do not wait in this tool: Microsoft's first permission-state report can take up to five days; later runs generally complete within 24 hours. "

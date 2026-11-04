@@ -10,7 +10,8 @@ from .data_exposure_assessment import (
 
 
 def route_portal_reports(directories):
-    routed = {"sam": [], "dspm": [], "readiness": [], "ai_baseline": [], "warnings": [], "reference_warnings": []}
+    routed = {"sam": [], "dspm": [], "readiness": [], "ai_baseline": [], "sharepoint_governance": [],
+              "warnings": [], "reference_warnings": []}
     seen = set()
     for directory in directories or []:
         folder = Path(directory)
@@ -22,6 +23,13 @@ def route_portal_reports(directories):
                 if warning not in routed['warnings']:
                     routed['warnings'].append(warning)
                     routed['reference_warnings'].append(warning)
+                continue
+            if path.is_file() and path.suffix.lower() == '.json':
+                # Only the versioned SharePoint governance contract is imported from JSON; its schema field decides.
+                from .sharepoint_governance_evidence import is_governance_evidence
+                if is_governance_evidence(path) and str(path.resolve()).lower() not in seen:
+                    seen.add(str(path.resolve()).lower())
+                    routed['sharepoint_governance'].append(str(path))
                 continue
             if not path.is_file() or path.suffix.lower() not in {".csv", ".tsv", ".xlsx", ".zip"}:
                 continue

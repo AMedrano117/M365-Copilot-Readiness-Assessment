@@ -283,7 +283,9 @@ def _guest_rows(entra_insights, feature):
         rows.append(_structured(new_recommendation(
             service="Entra",
             feature=feature['guests'],
-            observation=f"{total_guests} guest users in tenant, none with M365 licenses - external collaboration isolated from Copilot access",
+            observation=(f"{total_guests} guest users in tenant, none with M365 licenses. Direct Copilot licensing was not observed for "
+                         "the returned guest population. Guest access to shared Microsoft 365 content remains a separate "
+                         "access-governance consideration."),
             recommendation="",
             link_text="External Identities Overview",
             link_url="https://learn.microsoft.com/entra/external-id/",

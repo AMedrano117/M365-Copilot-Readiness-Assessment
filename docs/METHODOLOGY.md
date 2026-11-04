@@ -531,6 +531,123 @@ are never date evidence. Unknown and future source dates remain qualified, and o
 confirmations later than the evaluation date are rejected. Lifecycle freshness does not
 establish item permissions or replace the separate SAM/DSPM coverage requirements.
 
+### SharePoint governance outcomes and SharePoint Advanced Management
+
+SharePoint Advanced Management (SAM) is an optional evidence, governance and remediation
+capability. It is not a prerequisite for Copilot readiness. Its absence never produces a
+technical failure, a failed governance outcome, a readiness blocker, a claim that governance
+cannot be assessed, or a recommendation that SAM licensing is mandatory.
+
+`Core/sharepoint_governance_evidence.py` assesses ten governance outcomes. The SharePoint
+controls answer these outcomes, using whichever evidence is retained:
+
+- `CONTENT.OWNERSHIP`: site owners, inactive-site review, and an operating owner-review or
+  attestation process.
+- `CONTENT.PERMISSIONS`: broad access, anonymous, organization-wide, Everyone and EEEU access,
+  broken inheritance, external access, high-risk site prioritization, and exceptions.
+- `DATA.EXPOSURE`: sensitive content.
+
+The following are kept separate:
+
+- **SAM capability state:** `Available`, `PartiallyAvailable`, `DAGOnly`, `NotLicensed`,
+  `NotRequested`, `Unavailable`, `Unsupported` or `Unknown`.
+- **License evidence and entitlement verification.** Portal visibility never verifies entitlement.
+  A Copilot or E5 license, a Data access governance report or one SAM feature never establishes
+  full SAM availability.
+- **Source availability.**
+- **Evidence sufficiency.**
+- **Technical result:** `Supported`, `Failed`, `NotEstablished` or `EvidenceRequest`.
+- **Readiness treatment.**
+
+| Situation | Technical result |
+| --- | --- |
+| SAM available with complete, current, site-level evidence | Evaluate the evidence |
+| SAM available but reports not run or supplied | `EvidenceRequest` |
+| SAM unavailable with sufficient equivalent evidence | Evaluate the equivalent evidence |
+| SAM unavailable without sufficient equivalent evidence | `NotEstablished` |
+| SAM licensing unknown | Capability result `CapabilityUnknown`; the outcome is not failed |
+| Confirmed exposure from another source | Evaluated independently of SAM |
+
+- **When `Failed` applies.** Only sufficient evidence that the outcome is not satisfied produces
+  `Failed`, for example sites with no owner, or equivalent evidence that records a not-satisfied
+  review result.
+- **Identified sites awaiting review.** These are a `ScopeReviewRequired` investigation, not a
+  failure.
+- **Sufficient equivalent evidence** must record:
+  - the tenant, population and scope;
+  - a current observation date and source completeness;
+  - the outcome-specific dimensions, such as ownership, access condition, activity state,
+    review result, operating process or exceptions;
+  - a satisfied or not-satisfied result.
+
+  A missing dimension leaves the outcome qualified and `NotEstablished`.
+- **Answering a control.** When every outcome of a control is supported by imported evidence and
+  no other source shows an open condition, a canonical pass observation answers the control.
+  It also closes that control's evidence gaps, as a current owner review does.
+
+**Content Management Assessment import.** Microsoft documents no supported API for Content
+Management Assessment results. The assessment therefore accepts a bounded, versioned JSON
+contract (`m365-readiness.sharepoint-governance-evidence`, schema 1.0) from `--reports-dir`.
+The `schema` field identifies it, never the filename. See
+[PORTAL_REPORTS_AND_OFFLINE.md](PORTAL_REPORTS_AND_OFFLINE.md). The same document can carry
+equivalent evidence, site-lifecycle and access policies, and a capability declaration.
+Portal scraping is not an authoritative collector. Screenshots and PDFs remain secondary context.
+
+**Counts:**
+
+- Every count declares its value, a unit (`sites` or `issues`) and its basis (`distinct` or
+  `occurrence`).
+- The normalized metrics keep the numerator, denominator, population, period, source and overlap
+  qualification.
+- Category counts can overlap, so they are never added into a distinct-site total. Lifecycle sites
+  are not inactive plus ownership, and oversharing sites are not broken inheritance plus broad
+  permissions plus links.
+- With site-level records, affected sites are the distinct site IDs.
+- A portal summary without site records keeps its counts as overlapping lower bounds. It never
+  supports or fails an outcome, and it never replaces site-level evidence.
+- Site records alone cannot establish zero, because an export may list only impacted sites.
+
+**Import validation.** Each of the following is retained as a diagnostic and reported once as an
+evidence action; it is never normalized silently:
+
+- a missing or impossible date, a future date, or a date outside the methodology window;
+- missing totals;
+- negative counts, or counts without units;
+- duplicate site records, or conflicting site identifiers;
+- issue totals presented as distinct sites, or conflicting totals;
+- a mismatched tenant or an unknown schema;
+- an incomplete export, or conflicting assessment runs.
+
+Affected values do not support or fail an outcome.
+
+**Customer workstreams.** SharePoint actions carry one of three workstream labels:
+
+- *Validate SharePoint governance evidence*;
+- *Remediate high-risk access*;
+- *Establish ongoing site governance*.
+
+The SharePoint legacy-authentication setting belongs to *Authentication*. Purview planning belongs
+to *Information protection foundation for Copilot*, with its recommended sequence:
+
+1. Determine sensitive-content exposure.
+2. Approve the classification model.
+3. Create and publish labels.
+4. Review Copilot DLP simulation.
+5. Approve enforcement.
+6. Validate representative users and content.
+
+Grouping keeps one semantic condition, scope and decision as one customer action. For example,
+missing Data access governance reports and missing oversharing evidence form one request, and
+insufficient imported evidence forms one request. Each SharePoint action shows:
+
+- the existing capability, source and evidence date;
+- distinct affected sites, and the issue count where different;
+- source completeness and residual risk;
+- a concise SAM-assisted path and a non-SAM alternative.
+
+The technical workbook adds the SharePoint Governance, SharePoint Governance Counts and
+SharePoint Import Diagnostics sheets.
+
 ## Investigation callouts
 
 Every recommended next step receives an investigation status on each report run, including
