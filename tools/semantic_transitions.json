@@ -1,0 +1,83 @@
+{
+  "schema_version": "1.0",
+  "description": "Declared methodology, taxonomy and contract transitions. tools/validate.py classifies a semantic difference as expected only when an entry here matches it exactly and applies: the current source contains introduced_by and the retained package's producing commit does not. A match without from values must be previously_absent, which is verified from the retained result itself. Never add an entry only because current code produced a difference; record the rule or code path responsible.",
+  "transitions": [
+    {
+      "id": "T-2026-10-29-tenant-readiness-decision",
+      "kind": "methodology_rule",
+      "reason": "Assessment decisions are scoped to tenant technical readiness. A confirmed critical tenant condition is reported as 'Tenant remediation required' instead of 'Not ready for pilot'.",
+      "rule": "Core/assessment_result.py (readiness decision); docs/TENANT_READINESS_SCOPE.md",
+      "introduced_by": "6f6f9c09db42d214a5cdb37e5fa385fd4b5cf745",
+      "effective_methodology_version": "4.0.0",
+      "effective_taxonomy_version": "1.1.0",
+      "matches": [
+        {"scope": "decision", "field": "decision", "from": ["Not ready for pilot"], "to": ["Tenant remediation required"]}
+      ]
+    },
+    {
+      "id": "T-2026-10-29-adoption-baseline-not-required",
+      "kind": "required_control_flag",
+      "reason": "Pilot planning is outside the tenant readiness scope. The ADOPTION.BASELINE control is no longer assessed: it and the findings it listed are no longer reported, and its remaining planning rows become Reference context.",
+      "rule": "Core/assessment_result.py (assessment questions exclude ADOPTION.BASELINE; adoption planning rows become Reference); Core/control_reviews.py; docs/TENANT_READINESS_SCOPE.md",
+      "introduced_by": "6f6f9c09db42d214a5cdb37e5fa385fd4b5cf745",
+      "effective_methodology_version": "4.0.0",
+      "effective_taxonomy_version": "1.1.0",
+      "matches": [
+        {"scope": "control", "id": "ADOPTION.BASELINE", "field": "presence", "from": ["present"], "to": ["absent"]},
+        {"scope": "finding", "control": "ADOPTION.BASELINE", "field": "presence", "from": ["present"], "to": ["absent"]},
+        {"scope": "finding", "control": "ADOPTION.BASELINE", "field": "Disposition", "from": ["Action", "Opportunity", "Coverage"], "to": ["Reference"]}
+      ]
+    },
+    {
+      "id": "T-2026-11-03-consent-composite-status",
+      "kind": "corrected_evidence_interpretation",
+      "reason": "Application consent is aggregated from structured component results. An unresolved required component makes the control Not established; another component's evidence never fills the gap.",
+      "rule": "Core/assessment_result.py::aggregate_control_status",
+      "introduced_by": "886a2865c52b0ef00a9dbdb58a9508be7ffd5e21",
+      "effective_methodology_version": "4.0.0",
+      "effective_taxonomy_version": "1.1.0",
+      "matches": [
+        {"scope": "control", "id": "APPS.CONSENT", "field": "status", "from": ["Action required"], "to": ["Not established"]}
+      ]
+    },
+    {
+      "id": "T-2026-11-03-readiness-treatment-field",
+      "kind": "declared_compatibility_transition",
+      "reason": "Findings record a ReadinessTreatment. Results produced before this field existed have no value to compare.",
+      "rule": "Core/assessment_result.py; Core/control_correlation.py; Core/tenant_baseline.py",
+      "introduced_by": "886a2865c52b0ef00a9dbdb58a9508be7ffd5e21",
+      "effective_methodology_version": "4.0.0",
+      "effective_taxonomy_version": "1.1.0",
+      "matches": [
+        {"scope": "finding", "field": "ReadinessTreatment", "previously_absent": true}
+      ]
+    },
+    {
+      "id": "T-2026-11-03-customer-action-plan",
+      "kind": "declared_compatibility_transition",
+      "reason": "Findings record a FindingClass and an ActionLane, and results carry a consolidated customer action plan. Results produced before these existed have no value to compare.",
+      "rule": "Core/customer_actions.py::finding_class, ::action_lane, ::build_customer_actions",
+      "introduced_by": "b7348605dc72ad8009329be49c5c08d91bd747ec",
+      "effective_methodology_version": "4.0.0",
+      "effective_taxonomy_version": "1.1.0",
+      "matches": [
+        {"scope": "finding", "field": "FindingClass", "previously_absent": true},
+        {"scope": "finding", "field": "ActionLane", "previously_absent": true},
+        {"scope": "customer_action", "field": "presence", "previously_absent": true, "to": ["present"]}
+      ]
+    },
+    {
+      "id": "T-2026-11-03-reference-rows-never-actionable",
+      "kind": "methodology_rule",
+      "reason": "A finding classified as Reference inventory or Adoption context never keeps an action status; its status becomes Insight and the original status is retained as OriginalStatus.",
+      "rule": "Core/customer_actions.py::classify_findings",
+      "introduced_by": "b7348605dc72ad8009329be49c5c08d91bd747ec",
+      "effective_methodology_version": "4.0.0",
+      "effective_taxonomy_version": "1.1.0",
+      "matches": [
+        {"scope": "finding", "field": "Status", "from": ["Action Required", "Attention Required", "Critical", "Warning"], "to": ["Insight"],
+         "condition": {"FindingClass": ["Reference inventory", "Adoption context"], "OriginalStatus": "$previous"}}
+      ]
+    }
+  ]
+}

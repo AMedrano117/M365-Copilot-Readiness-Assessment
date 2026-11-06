@@ -1,0 +1,33 @@
+{
+  "schema_version": "1.0",
+  "description": "Fast scenario layer: declared fictional scenarios that run without tenant access. Each entry references an existing declared scenario; expectations live in that scenario's fixture.",
+  "scenarios": [
+    {"name": "Unread source versus complete-empty source", "tests": [
+      "test_identity_scenarios.DeclaredScenarioTests.test_08_security_defaults_unread",
+      "test_identity_scenarios.DeclaredScenarioTests.test_10_ca_complete_empty",
+      "test_methodology_scenarios.MethodologyScenarioTests.test_M15_complete_empty_source",
+      "test_methodology_scenarios.MethodologyScenarioTests.test_M16_failed_or_partial_source"]},
+    {"name": "Conditional Access policy and legacy-authentication events", "tests": [
+      "test_control_correlation_scenarios.CorrelationScenarioTests.test_C01_legacy_events_no_blocking_policy",
+      "test_control_correlation_scenarios.CorrelationScenarioTests.test_C03_policy_blocks_legacy_events",
+      "test_control_correlation_scenarios.CorrelationScenarioTests.test_C05_successful_events_nonexcluded_users",
+      "test_control_correlation_scenarios.CorrelationScenarioTests.test_C08_enforcement_after_events"]},
+    {"name": "License evidence versus entitlement", "tests": [
+      "test_control_correlation_scenarios.CorrelationScenarioTests.test_C11_license_capacity_pilot_unresolved",
+      "test_control_correlation_scenarios.CorrelationScenarioTests.test_C18_license_only_capability",
+      "test_identity_scenarios.DeclaredScenarioTests.test_17_license_inventory_parity"]},
+    {"name": "Device records versus distinct devices", "tests": [
+      "test_control_correlation_scenarios.CorrelationScenarioTests.test_C12_device_failures_overlap_errors",
+      "test_device_evidence_occurrences.DeviceOccurrenceSelectionTests.test_finding_tables_preserve_source_occurrence_counts"]},
+    {"name": "SharePoint Advanced Management unavailable with equivalent evidence", "tests": [
+      "test_sharepoint_governance_scenarios.SharePointGovernanceScenarioTests.test_S05_not_licensed_equivalent_sufficient",
+      "test_sharepoint_governance_scenarios.SharePointGovernanceScenarioTests.test_S20_equivalent_evidence_supports_control"]},
+    {"name": "Supported component plus unread required component", "tests": [
+      "test_methodology_scenarios.MethodologyScenarioTests.test_M11_one_required_component_unread"]},
+    {"name": "Duplicate evidence supporting one action", "tests": [
+      "test_control_correlation_scenarios.CorrelationScenarioTests.test_C17_multiple_findings_one_action",
+      "test_identity_scenarios.DeclaredScenarioTests.test_18_multiple_producers_one_condition"]},
+    {"name": "Presentation-only render change", "tests": [
+      "test_validation_workflow.RenderOnlyTests.test_presentation_only_change_has_no_semantic_difference"]}
+  ]
+}
