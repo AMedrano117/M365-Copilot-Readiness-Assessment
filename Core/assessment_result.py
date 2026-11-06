@@ -470,6 +470,10 @@ def _matches_question(row, question):
     control, domain, _, keys, markers, _ = question
     if row.get("FindingKey") == "data_exposure.coverage.sensitive-data_exposure_evidence":
         return control == "DATA.EXPOSURE"
+    if str(row.get("FindingKey") or "").startswith("sharepoint.dag."):
+        # Data access governance reports measure existing access, not tenant
+        # sharing defaults; one question's evidence gap never opens another.
+        return control == "CONTENT.PERMISSIONS"
     canonical_ids = {item[0] for item in (*QUESTIONS, *OPTIONAL_QUESTIONS)}
     if row.get("ControlId") in canonical_ids:
         return row.get("ControlId") == control

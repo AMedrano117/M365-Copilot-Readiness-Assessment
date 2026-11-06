@@ -641,6 +641,9 @@ def _sharing(sources):
             effective_guests = guest_allowed
             default_link = _value(row, 'DefaultSharingLinkType', 'sharingLinkDefaultType')
             effective_default = default_link
+            from .sharepoint_governance import effective_sharing_capability
+            # A tenant row's effective level is its own returned value.
+            effective_mode = effective_sharing_capability(mode, mode)
             site_quality_note = None
             if name == 'sharepoint_site_settings':
                 # SPO list queries may populate defaults instead of effective
@@ -653,18 +656,27 @@ def _sharing(sources):
                     effective_expiry = None
                     effective_guests = None
                     effective_default = None
+                    effective_mode = None
                     site_quality_note = 'Site settings from an inventory/list query may contain provider defaults; effective site configuration requires a targeted site read or dated review.'
                 elif override is False:
                     effective_expiry = _value(tenant, 'RequireAnonymousLinksExpireInDays')
                     refs = _refs(refs, tenant_ref)
-                elif override is None and _text(native_site_expiry) in {'0', '-1'}:
+                elif override is None and (expiry_basis != 'Site setting' or _text(native_site_expiry) in {'0', '-1'}):
+                    # Without the site value or the override flag, inheritance is
+                    # not established; the tenant value stays a labelled fallback.
                     effective_expiry = None
                 tenant_mode = _norm(_value(tenant, 'SharingCapability'))
                 if tenant_mode in {'disabled', '0'}:
                     effective_guests = False
+                if exact:
+                    # The tenant setting is the ceiling; OneDrive also limits personal sites.
+                    effective_mode = effective_sharing_capability(mode, _value(tenant, 'SharingCapability'))
+                    if '/personal/' in _text(_value(row, 'Url', 'Site URL', 'siteUrl')).lower() and _value(tenant, 'OneDriveSharingCapability') is not None:
+                        effective_mode = effective_sharing_capability(effective_mode, _value(tenant, 'OneDriveSharingCapability'))
             fields = {'siteUrl': _value(row, 'Url', 'Site URL', 'siteUrl'), 'siteId': _value(row, 'Id', 'Site ID'),
                       'title': _value(row, 'Title', 'displayName'), 'scope': 'site' if name == 'sharepoint_site_settings' else 'tenant',
-                      'sharingSetting': mode, 'oneDriveSharingSetting': _value(row, 'OneDriveSharingCapability'),
+                      'sharingSetting': mode, 'effectiveSharingSetting': effective_mode,
+                      'oneDriveSharingSetting': _value(row, 'OneDriveSharingCapability'),
                       'defaultLinkType': default_link, 'effectiveDefaultLinkType': effective_default,
                       'defaultLinkScope': _value(row, 'DefaultShareLinkScope'), 'defaultLinkRole': _value(row, 'DefaultShareLinkRole'),
                       'anyoneLinkExpiryDays': expiry, 'anyoneLinkExpiryBasis': expiry_basis,
@@ -676,7 +688,9 @@ def _sharing(sources):
                       'sharingAllowedDomains': _value(row, 'SharingAllowedDomainList'),
                       'sharingBlockedDomains': _value(row, 'SharingBlockedDomainList')}
             output.append(_record(fields, refs, native_id=fields['siteId'] or fields['siteUrl'],
-                                  derived={'externalGuestsAllowed': 'Configured sharing capability allows/disallows guest sharing; does not establish guest access or bypass domain restrictions.',
+                                  derived={'effectiveSharingSetting': site_quality_note or ('The more restrictive of the site and tenant settings (and the OneDrive setting for personal sites); unknown when either is missing.'
+                                                                                            if name == 'sharepoint_site_settings' else 'The returned tenant setting.'),
+                                           'externalGuestsAllowed': 'Configured sharing capability allows/disallows guest sharing; does not establish guest access or bypass domain restrictions.',
                                            'anyoneLinkExpiryDays': (expiry_basis or 'Neither applicable site nor tenant expiry was retained.') + ' This is a returned configuration value, not independently verified effective site behavior.',
                                            'effectiveDefaultLinkType': site_quality_note or 'Returned effective/default link setting for this source scope.',
                                            'effectiveExternalGuestsAllowed': site_quality_note or 'Configuration permits guest sharing subject to domain restrictions and more restrictive tenant settings.',

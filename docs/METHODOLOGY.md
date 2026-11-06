@@ -531,6 +531,27 @@ are never date evidence. Unknown and future source dates remain qualified, and o
 confirmations later than the evaluation date are rejected. Lifecycle freshness does not
 establish item permissions or replace the separate SAM/DSPM coverage requirements.
 
+### Tenant sharing defaults
+
+`CONTENT.SHARING` is judged from tenant configuration; existing access is `CONTENT.PERMISSIONS`.
+Missing Data access governance reports are a `CONTENT.PERMISSIONS` gap and do not leave the
+sharing-defaults check open.
+
+- A default link of `None` is evaluated as the link it produces: Anyone when Anyone links are
+  permitted, otherwise an organization link (Microsoft documented behavior).
+- A site's effective sharing level is the more restrictive of the site and tenant settings (and the
+  OneDrive setting for personal sites). It is unknown when either value is missing. Tenant values
+  never fill a missing site value unless the site's override state establishes inheritance.
+- The sharing strength requires returned, unconflicted values showing no Anyone links and a
+  Specific people default. It records the observed values, rule, scope, source and date. It
+  describes how new links are created, not who can reach existing content.
+- Guest expiry and preventing guest resharing are recommended hardening. They are reported as
+  results but do not change the control.
+- Current policy and existing exposure are separate conclusions. A restrictive policy does not
+  hide exposure evidence, and exposure evidence does not make a compliant policy fail.
+
+See [Content and sharing: audit and validation](CONTENT_SHARING_VALIDATION.md).
+
 ### SharePoint governance outcomes and SharePoint Advanced Management
 
 SharePoint Advanced Management (SAM) is an optional evidence, governance and remediation
