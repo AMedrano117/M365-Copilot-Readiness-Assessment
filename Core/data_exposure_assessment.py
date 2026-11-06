@@ -1024,7 +1024,8 @@ def _findings_from_scan(scan):
     if anyone:
         findings.append(_risk_finding(
             "Review links that allow access without sign-in",
-            f"The selected reports record {count_text(anyone, 'Anyone link')} allowing access without sign-in."
+            f"The selected reports record {count_text(anyone, 'Anyone link')} allowing access without sign-in, as of each report's date. "
+            "The reports do not establish whether each link still works today."
             + location_text("Anyone links"),
             "Validate business need, remove anonymous links that are not explicitly required, replace them with least-privilege links, and use sensitivity labels or DLP for sensitive content.",
             "High", "anonymous_links", "https://learn.microsoft.com/en-us/sharepoint/data-access-governance-reports", confidence,

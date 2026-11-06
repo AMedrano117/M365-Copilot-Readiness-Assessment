@@ -1,5 +1,6 @@
 """Normalize SharePoint sharing configuration and create evidence-based findings."""
 
+import copy
 import re
 from datetime import datetime, timezone
 
@@ -33,7 +34,8 @@ SHARING_LABELS = {
 
 def setting_name(key, value):
     """Lowercase enum name for a SharePoint sharing setting given as a name or a number."""
-    text = _text(value) if not isinstance(value, bool) else str(value)
+    # Enum member 0 (Disabled, None) is a value; only None is absent.
+    text = "" if value is None else str(value).strip()
     names = SHARING_ENUMS.get(key)
     if names and not isinstance(value, bool) and re.fullmatch(r"[+-]?\d+", text):
         return names.get(int(text), text.lower())
@@ -43,6 +45,225 @@ def setting_name(key, value):
 def setting_label(key, value):
     name = setting_name(key, value)
     return SHARING_LABELS.get(name, name or "not returned")
+
+
+# Breadth of a SharingCapability value, as ordered in Microsoft's "Manage sharing
+# settings": Anyone > New and existing guests > Existing guests > Only people in
+# the organization.
+_CAPABILITY_RANK = {"disabled": 0, "existingexternalusersharingonly": 1, "externalusersharingonly": 2,
+                    "externaluserandguestsharing": 3}
+TENANT_SHARING_SCOPE = "Tenant-wide SharePoint and OneDrive sharing configuration"
+_BOOLEAN_SETTINGS = {"ExternalUserExpirationRequired", "PreventExternalUsersFromResharing", "LegacyAuthProtocolsEnabled",
+                     "RequireAcceptingAccountMatchInvitedAccount"}
+
+
+def _value_text(value):
+    """Text of a returned value; unlike _text, a numeric 0 is kept."""
+    return "" if value is None else str(value).strip()
+
+
+def _capability(value):
+    name = setting_name("SharingCapability", value) if value not in (None, "") and not isinstance(value, bool) else ""
+    return name if name in _CAPABILITY_RANK else None
+
+
+def effective_sharing_capability(site_value, tenant_value):
+    """Effective sharing level of a site under the tenant setting, or None when it is not established.
+
+    Microsoft documents that a site's setting must be the same as or more
+    restrictive than the organization's, and that turning organization-level
+    sharing off makes it unavailable on every site. A stored site value can still
+    be broader. A disabled value at either scope establishes "disabled";
+    otherwise both values are required. Missing evidence is never filled.
+    """
+    site, tenant = _capability(site_value), _capability(tenant_value)
+    if "disabled" in {site, tenant}:
+        return "disabled"
+    if site is None or tenant is None:
+        return None
+    return min((site, tenant), key=_CAPABILITY_RANK.get)
+
+
+def _anyone_permitted(settings):
+    """True or False when the returned boundary establishes it; None otherwise."""
+    values = [_capability(settings.get(key)) for key in ("SharingCapability", "OneDriveSharingCapability") if key in settings]
+    if any(value == "externaluserandguestsharing" for value in values):
+        return True
+    # OneDrive cannot be more permissive than SharePoint, so a known SharePoint
+    # boundary without Anyone establishes that neither workload permits Anyone.
+    sharepoint = _capability(settings.get("SharingCapability"))
+    return False if sharepoint is not None else None
+
+
+def effective_default_link(settings):
+    """Effective tenant default link type, or '' when it is not established.
+
+    Set-SPOTenant documents that DefaultSharingLinkType None uses the widest
+    scope permitted: an Anyone link when Anyone links are enabled, otherwise an
+    organization link.
+    """
+    settings = settings or {}
+    if settings.get("DefaultSharingLinkType") in (None, ""):
+        return ""
+    name = setting_name("DefaultSharingLinkType", settings.get("DefaultSharingLinkType"))
+    name = {"specificpeople": "direct", "anonymous": "anonymousaccess"}.get(name, name)
+    if name == "none":
+        anyone = _anyone_permitted(settings)
+        return "" if anyone is None else "anonymousaccess" if anyone else "internal"
+    return name if name in {"direct", "internal", "anonymousaccess"} else ""
+
+
+def _strict_bool(value):
+    if isinstance(value, bool):
+        return value
+    if type(value) is int and value in (0, 1):
+        return bool(value)
+    return {"true": True, "yes": True, "enabled": True, "1": True,
+            "false": False, "no": False, "disabled": False, "0": False}.get(_text(value).lower())
+
+
+def _comparable(name, value):
+    if name in _BOOLEAN_SETTINGS:
+        parsed = _strict_bool(value)
+        return _text(value).lower() if parsed is None else str(parsed).lower()
+    return setting_name(name, value)
+
+
+# Methodology rules for tenant sharing (docs/CONTENT_SHARING_VALIDATION.md).
+# CONTENT.SHARING requirements decide the sharing-defaults control; hardening
+# results are the recommended baseline and never change a control.
+_EXPECTED = {
+    "SharingCapability": "New and existing guests or more restrictive (no Anyone links)",
+    "OneDriveSharingCapability": "New and existing guests or more restrictive (no Anyone links)",
+    "DefaultSharingLinkType": "Specific people",
+    "RequireAnonymousLinksExpireInDays": "1 to 30 days when Anyone links are permitted",
+    "FileAnonymousLinkType": "View only when Anyone links are permitted",
+    "FolderAnonymousLinkType": "View only when Anyone links are permitted",
+    "ExternalUserExpirationRequired": "Enabled when guest sharing is permitted",
+    "PreventExternalUsersFromResharing": "Enabled when guest sharing is permitted",
+}
+
+
+def evaluate_tenant_sharing(settings, conflicts=()):
+    """Result of each tenant sharing setting against the methodology rule.
+
+    Results are meets, does_not_meet, not_applicable or not_established. A value
+    that is missing, unmapped or reported differently by two sources is never
+    classified as meeting a rule. Every result describes configuration only.
+    """
+    settings = settings or {}
+    conflicted = {item.get("setting") for item in conflicts or [] if isinstance(item, dict)}
+    anyone = _anyone_permitted(settings)
+    sharepoint = _capability(settings.get("SharingCapability"))
+    guests = None if sharepoint is None else sharepoint != "disabled"
+    results = []
+
+    def add(name, observed, result, requirement, *, effective=None, basis="Methodology rule"):
+        if name in conflicted:
+            result, basis = "not_established", "Sources returned different values; neither is selected."
+        results.append({"setting": name, "observed": observed, "effective": effective, "expected": _EXPECTED[name],
+                        "result": result, "requirement": requirement, "basis": basis, "establishes": "configuration"})
+
+    for name in ("SharingCapability", "OneDriveSharingCapability"):
+        raw = settings.get(name)
+        value = _capability(raw)
+        observed = setting_name(name, raw) if raw not in (None, "") else ""
+        if value is None and name == "OneDriveSharingCapability" and raw in (None, "") and sharepoint is not None and sharepoint != "externaluserandguestsharing":
+            add(name, "", "meets", "CONTENT.SHARING", effective=sharepoint,
+                basis="Documented product behavior: OneDrive cannot be more permissive than SharePoint.")
+            continue
+        add(name, observed, "not_established" if value is None else "does_not_meet" if value == "externaluserandguestsharing" else "meets",
+            "CONTENT.SHARING", effective=value)
+
+    raw_default = settings.get("DefaultSharingLinkType")
+    effective = effective_default_link(settings)
+    add("DefaultSharingLinkType", setting_name("DefaultSharingLinkType", raw_default) if raw_default not in (None, "") else "",
+        "not_established" if not effective else "meets" if effective == "direct" else "does_not_meet", "CONTENT.SHARING",
+        effective=effective or None,
+        basis=("Documented product behavior: None uses the widest permitted scope." if setting_name("DefaultSharingLinkType", raw_default) == "none"
+               else "Methodology rule"))
+
+    def anyone_rule(name, evaluate):
+        raw = settings.get(name)
+        if anyone is False:
+            add(name, _value_text(raw), "not_applicable", "CONTENT.SHARING")
+        elif anyone is None or raw in (None, "") or isinstance(raw, bool):
+            add(name, _value_text(raw), "not_established", "CONTENT.SHARING")
+        else:
+            add(name, setting_name(name, raw), evaluate(raw), "CONTENT.SHARING")
+
+    def expiry(raw):
+        if not re.fullmatch(r"[+-]?\d+", _value_text(raw)):
+            return "not_established"
+        days = int(_value_text(raw))
+        return "meets" if 1 <= days <= 30 else "does_not_meet" if days in (0, -1) or 30 < days <= 730 else "not_established"
+
+    anyone_rule("RequireAnonymousLinksExpireInDays", expiry)
+    for name in ("FileAnonymousLinkType", "FolderAnonymousLinkType"):
+        anyone_rule(name, lambda raw, name=name: {"view": "meets", "edit": "does_not_meet"}.get(setting_name(name, raw), "not_established"))
+    for name in ("ExternalUserExpirationRequired", "PreventExternalUsersFromResharing"):
+        raw = settings.get(name)
+        value = _strict_bool(raw)
+        if guests is False:
+            add(name, _value_text(raw), "not_applicable", "hardening")
+        else:
+            add(name, _value_text(raw), "not_established" if guests is None or value is None else "meets" if value else "does_not_meet", "hardening")
+    return results
+
+
+def tenant_settings_source(governance):
+    """Name of the source state that supplied the evaluated tenant settings."""
+    states = governance.get("collection_status") or {}
+    from .sharepoint_graph_settings import GRAPH_SETTINGS_SOURCE, STATUS_KEY
+    if governance.get("source") == GRAPH_SETTINGS_SOURCE:
+        return STATUS_KEY if STATUS_KEY in states else ""
+    return "sharepoint_tenant_settings" if "sharepoint_tenant_settings" in states else ""
+
+
+def sharing_strength(governance):
+    """The verified sharing strength, only when every CONTENT.SHARING requirement is met.
+
+    Collection success, a partial source or conflicting sources never establish it.
+    """
+    governance = governance or {}
+    if not governance.get("available") or governance.get("coverage") == "partial":
+        return None
+    settings = governance.get("settings") or {}
+    conflicts = [item for item in governance.get("conflicts") or [] if item.get("setting") in _EXPECTED]
+    results = evaluate_tenant_sharing(settings, conflicts)
+    required = [item for item in results if item["requirement"] == "CONTENT.SHARING"]
+    if conflicts or not required or any(item["result"] not in {"meets", "not_applicable"} for item in required):
+        return None
+    from .cross_provider_assessment import METHODOLOGY_VERSION
+    observed = {"SharingCapability": setting_name("SharingCapability", settings.get("SharingCapability")),
+                "OneDriveSharingCapability": setting_name("OneDriveSharingCapability", settings.get("OneDriveSharingCapability"))
+                if settings.get("OneDriveSharingCapability") not in (None, "") else "not returned (limited by SharePoint)",
+                "DefaultSharingLinkType": setting_name("DefaultSharingLinkType", settings.get("DefaultSharingLinkType")),
+                "DefaultSharingLinkType (effective)": effective_default_link(settings)}
+    row = {
+        "Area": "SharePoint sharing",
+        "Strength": ("Tenant sharing configuration: new sharing links default to Specific people, and SharePoint and OneDrive do not "
+                     "permit Anyone links. This describes how new links are created; it does not establish who can already reach "
+                     "existing content."),
+        "Evidence": f"Default link type: {settings.get('DefaultSharingLinkType')}; SharePoint sharing level: {settings.get('SharingCapability')}"
+                    + (f"; OneDrive sharing level: {settings.get('OneDriveSharingCapability')}" if settings.get("OneDriveSharingCapability") not in (None, "") else "")
+                    + ".",
+        "Benefit": "This reduces accidental broad access to content that can later ground an AI response.",
+        "Key": "sharepoint-sharing-restricted",
+        "ControlId": "CONTENT.SHARING",
+        "EvidenceKey": "sharepoint_governance_detail",
+        "DomainId": "content",
+        "EvidenceScope": TENANT_SHARING_SCOPE,
+        "ObservedValues": observed,
+        "ExpectedRule": "SharePoint and OneDrive external sharing is New and existing guests or more restrictive (no Anyone links), "
+                        "and the effective default sharing link is Specific people.",
+        "MethodologyRule": f"CONTENT.SHARING tenant sharing defaults, methodology {METHODOLOGY_VERSION}; configuration evidence only.",
+        "SharingSettingResults": results,
+    }
+    source = tenant_settings_source(governance)
+    if source:
+        row["EvidenceSource"] = source
+    return row
 
 
 def _text(value):
@@ -94,7 +315,9 @@ def merge_sharepoint_payloads(graph_payload, spo_payload):
         graph_settings = graph_tenant.get("settings") or {}
         for name, value in graph_settings.items():
             spo_value = (spo_tenant.get("settings") or {}).get(name)
-            if spo_value is not None and _text(spo_value).lower() != _text(value).lower():
+            # SharePoint PowerShell returns enum numbers and Graph returns names;
+            # the same value in two encodings is not a conflict.
+            if spo_value is not None and _comparable(name, spo_value) != _comparable(name, value):
                 conflicts.append({"setting": name, "sharepoint_admin": spo_value, "graph": value})
         if conflicts:
             merged["conflicts"] = conflicts
@@ -129,7 +352,7 @@ def merge_sharepoint_payloads(graph_payload, spo_payload):
     return merged
 
 
-def summarize_sharepoint_governance(payload, evaluation_date=None):
+def summarize_sharepoint_governance(payload, evaluation_date=None, sam_max_age_days=None):
     payload = payload if isinstance(payload, dict) else {}
     tenant = payload.get("tenant") or {}
     sites = payload.get("sites") or {}
@@ -138,8 +361,17 @@ def summarize_sharepoint_governance(payload, evaluation_date=None):
     settings = tenant.get("settings") or {}
     site_items = sites.get("items") or []
     report_items = reports.get("reports") or []
+    from .data_exposure_assessment import DEFAULT_SAM_MAX_AGE_DAYS
+    # The methodology's SAM permission/sharing report threshold (35 days by default).
+    max_age = sam_max_age_days or DEFAULT_SAM_MAX_AGE_DAYS
 
+    # Configured site values can be broader than the tenant setting; the
+    # effective count applies the tenant ceiling and stays unknown without it.
     anyone_sites = [row for row in site_items if setting_name("SharingCapability", row.get("SharingCapability")) in ANYONE_VALUES]
+    tenant_capability = _capability(settings.get("SharingCapability"))
+    effective_anyone_sites = None if tenant_capability is None else sum(
+        effective_sharing_capability(row.get("SharingCapability"), settings.get("SharingCapability")) == "externaluserandguestsharing"
+        for row in site_items)
     completed_reports = [row for row in report_items if _text(row.get("Status")).lower() in {"completed", "complete", "succeeded"}]
     now = _date(evaluation_date) or datetime.now(timezone.utc)
     recent_completed = []
@@ -149,7 +381,7 @@ def summarize_sharepoint_governance(payload, evaluation_date=None):
             "CompletedDateTime", "ReportEndTime", "EndTime", "CreatedDateTime",
             "TriggeredDateTime", "ReportStartTime", "StartTime",
         ) if _date(row.get(key))), None)
-        if completed and 0 <= (now.date() - completed.date()).days <= 30:
+        if completed and 0 <= (now.date() - completed.date()).days <= max_age:
             recent_completed.append(row)
         else:
             stale_completed.append(row)
@@ -206,6 +438,10 @@ def summarize_sharepoint_governance(payload, evaluation_date=None):
         "sites": site_items,
         "site_count": len(site_items),
         "anyone_site_count": len(anyone_sites),
+        "configured_anyone_site_count": len(anyone_sites),
+        "effective_anyone_site_count": effective_anyone_sites,
+        "tenant_settings_source": tenant_settings_source(payload),
+        "source_conflicts_for_sharing": [item for item in payload.get("conflicts") or [] if item.get("setting") in _EXPECTED],
         "dag_available": bool(reports.get("available")),
         "dag_reports": report_items,
         "dag_completed_count": len(completed_reports),
@@ -289,8 +525,8 @@ def build_copilot_content_control_recommendations(governance):
     return rows
 
 
-def build_sharepoint_recommendations(governance, evaluation_date=None):
-    governance = summarize_sharepoint_governance(governance, evaluation_date=evaluation_date)
+def build_sharepoint_recommendations(governance, evaluation_date=None, sam_max_age_days=None):
+    governance = summarize_sharepoint_governance(governance, evaluation_date=evaluation_date, sam_max_age_days=sam_max_age_days)
     if not governance.get("available"):
         excluded = governance.get('availability_status') == 'not_requested'
         needs_admin_url = governance.get('configuration_required') == 'SHAREPOINT_ADMIN_URL'
@@ -324,14 +560,17 @@ def build_sharepoint_recommendations(governance, evaluation_date=None):
     settings = governance.get("settings") or {}
     sharing = setting_label("SharingCapability", settings.get("SharingCapability")) if "SharingCapability" in settings else ""
     onedrive_sharing = setting_label("OneDriveSharingCapability", settings.get("OneDriveSharingCapability")) if "OneDriveSharingCapability" in settings else ""
-    default_link = setting_name("DefaultSharingLinkType", settings.get("DefaultSharingLinkType"))
+    # A default of None is resolved to the link type it produces (Set-SPOTenant).
+    default_link = effective_default_link(settings)
     file_link = setting_name("FileAnonymousLinkType", settings.get("FileAnonymousLinkType"))
     folder_link = setting_name("FolderAnonymousLinkType", settings.get("FolderAnonymousLinkType"))
     expiration = _int(settings.get("RequireAnonymousLinksExpireInDays"), 0)
     permits_anyone = (setting_name("SharingCapability", settings.get("SharingCapability")) in ANYONE_VALUES
                       or setting_name("OneDriveSharingCapability", settings.get("OneDriveSharingCapability")) in ANYONE_VALUES)
-    anonymous_default = default_link in {"anonymousaccess", "anonymous"}
+    anonymous_default = default_link == "anonymousaccess"
     edit_anyone = file_link == "edit" or folder_link == "edit"
+    conflicts = governance.get("source_conflicts_for_sharing") or []
+    setting_results = evaluate_tenant_sharing(settings, conflicts)
     recommendations = []
 
     if permits_anyone and anonymous_default and expiration <= 0:
@@ -364,6 +603,12 @@ def build_sharepoint_recommendations(governance, evaluation_date=None):
         if anonymous_default:
             default_note = (f" Anyone links are the default link type and expire after {expiration} day(s)"
                             + (" with edit access allowed." if edit_anyone else "."))
+        else:
+            # Only returned settings are described; Graph does not return these.
+            if "RequireAnonymousLinksExpireInDays" in settings and expiration <= 0:
+                default_note += " Anyone links have no expiration requirement."
+            if edit_anyone:
+                default_note += " Anyone file or folder links permit edit access."
         recommendations.append(new_recommendation(
             service="M365",
             feature="SharePoint and OneDrive external sharing",
@@ -401,7 +646,8 @@ def build_sharepoint_recommendations(governance, evaluation_date=None):
     for row in recommendations:
         if row.get("FindingKey") in {"sharepoint.sharing.permissive_anonymous_defaults", "sharepoint.sharing.anyone_enabled",
                                      "sharepoint.sharing.organization_default"}:
-            row.update(Disposition="Action", ControlId="CONTENT.SHARING", DomainId="content")
+            row.update(Disposition="Action", ControlId="CONTENT.SHARING", DomainId="content",
+                       SharingSettingResults=copy.deepcopy(setting_results))
 
     if _bool(settings.get("LegacyAuthProtocolsEnabled")):
         recommendations.append(new_recommendation(
@@ -491,6 +737,30 @@ def build_sharepoint_recommendations(governance, evaluation_date=None):
             confidence="High",
         ))
         recommendations[-1]["DagGaps"] = [{"report": row["report"], "status": row["status"]} for row in required_dag_gaps]
+
+    if conflicts:
+        # Appended last so existing SharePoint display IDs keep their positions.
+        described = "; ".join(f"{item['setting']} (SharePoint administration: {item.get('sharepoint_admin')}; "
+                              f"Microsoft Graph: {item.get('graph')})" for item in conflicts)
+        recommendations.append(new_recommendation(
+            service="M365",
+            feature="SharePoint sharing settings (conflicting sources)",
+            observation=("SharePoint administration and Microsoft Graph returned different values for: " + described
+                         + ". Both observations are retained; the assessment does not choose between them."),
+            recommendation=("Confirm the current value in SharePoint admin center > Policies > Sharing and record a dated review, "
+                            "or collect both sources again. The sharing-defaults check stays open until the values agree."),
+            link_text="Manage sharing settings",
+            link_url="https://learn.microsoft.com/sharepoint/turn-external-sharing-on-or-off",
+            priority="Medium",
+            status=NOT_ASSESSED_STATUS,
+            category=CATEGORY_SCAN_COVERAGE,
+            finding_key="sharepoint.sharing.conflicting_sources",
+            evidence_key="sharepoint_governance_detail",
+            evidence_basis="Conflicting tenant configuration",
+            confidence="Unknown",
+        ))
+        recommendations[-1].update(Disposition="Coverage", ControlId="CONTENT.SHARING", DomainId="content",
+                                   SourceConflicts=copy.deepcopy(conflicts))
     return recommendations
 
 

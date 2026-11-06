@@ -66,7 +66,11 @@ The groups cover:
 - SharePoint Advanced Management unavailable, with equivalent evidence;
 - a supported component plus an unread required component;
 - duplicate evidence supporting one action;
-- a presentation-only render change.
+- a presentation-only render change;
+- Content & Sharing: current policy versus existing exposure, an established control with
+  provenance, effective and inherited configuration, conflicting and stale evidence, exposure
+  units and repeated ingestion, and the scorecard render
+  (see [Content and sharing validation](CONTENT_SHARING_VALIDATION.md)).
 
 ## 3. Offline package validation
 

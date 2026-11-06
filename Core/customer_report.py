@@ -1152,8 +1152,13 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None, summ
                            for number in numbers)
         extra = ('<details class="domain-context"' + (' open' if domain['id'] in {'endpoints', 'devices'} else '')
                  + '><summary>Collected settings, metrics and report context</summary>'+extra+'</details>') if extra else ''
+        scorecard = ''
+        if domain['id'] == 'content':
+            # A projection of the shared result; it adds no conclusion or score.
+            from .content_scorecard import build_content_scorecard, render_content_scorecard
+            scorecard = render_content_scorecard(build_content_scorecard(result), prose)
         domain_html.append(f'''<details class="domain domain-panel" data-state="{slug(domain.get('status'))}" id="domain-{escape(domain['id'])}"><summary><span class="domain-index">{domain_index:02d}</span><h2>{prose(domain['title'])}</h2><span class="badge" data-state="{slug(domain.get('status'))}">{prose(domain.get('status'))}</span></summary>
-          {('<ul class="domain-action-links">'+relevant+'</ul>') if relevant else '<p>No action-plan items in this area. Collection and owner reviews still determine coverage.</p>'}{findings_html}{extra}<p><a href="#coverage-{escape(domain['id'])}">Collection coverage and outstanding catalog reviews</a></p></details>''')
+          {scorecard}{('<ul class="domain-action-links">'+relevant+'</ul>') if relevant else '<p>No action-plan items in this area. Collection and owner reviews still determine coverage.</p>'}{findings_html}{extra}<p><a href="#coverage-{escape(domain['id'])}">Collection coverage and outstanding catalog reviews</a></p></details>''')
 
     strength_rows = result.get('strengths') or []
     strengths = ''.join(f'<li>{prose(short_text(r.get("Observation") or r.get("Strength")))} <span class="muted">({prose(_date_text(r))})</span></li>' for r in strength_rows[:4])

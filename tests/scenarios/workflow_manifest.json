@@ -28,6 +28,32 @@
       "test_control_correlation_scenarios.CorrelationScenarioTests.test_C17_multiple_findings_one_action",
       "test_identity_scenarios.DeclaredScenarioTests.test_18_multiple_producers_one_condition"]},
     {"name": "Presentation-only render change", "tests": [
-      "test_validation_workflow.RenderOnlyTests.test_presentation_only_change_has_no_semantic_difference"]}
+      "test_validation_workflow.RenderOnlyTests.test_presentation_only_change_has_no_semantic_difference"]},
+    {"name": "Content sharing: current policy versus existing exposure", "tests": [
+      "test_content_sharing_scenarios.ContentSharingScenarioTests.test_S03_policy_prohibits_anyone_but_exposure_reports_links",
+      "test_content_sharing_scenarios.ContentSharingScenarioTests.test_S02_anyone_prohibited_no_conflicting_exposure",
+      "test_content_sharing_scenarios.ContentSharingScenarioTests.test_S11_organization_wide_links_present"]},
+    {"name": "Content sharing: established control with provenance", "tests": [
+      "test_content_sharing_scenarios.PositiveProvenanceTests.test_S26_established_control_retains_provenance",
+      "test_content_sharing_scenarios.PositiveProvenanceTests.test_established_requires_sufficient_evidence_not_collection_success",
+      "test_content_sharing_scenarios.PositiveProvenanceTests.test_configuration_does_not_establish_operation",
+      "test_content_sharing_scenarios.ContentSharingScenarioTests.test_S27_apparently_positive_configuration_with_insufficient_evidence"]},
+    {"name": "Content sharing: effective and inherited configuration", "tests": [
+      "test_content_sharing_rules.EffectiveSiteConfigurationTests.test_effective_capability",
+      "test_content_sharing_rules.EffectiveSiteConfigurationTests.test_configured_and_effective_site_counts_are_separate",
+      "test_content_sharing_rules.SiteRecordInheritanceTests.test_site_expiry_not_retained_and_override_unknown_stays_unknown"]},
+    {"name": "Content sharing: conflicting, stale and undated evidence", "tests": [
+      "test_content_sharing_scenarios.ContentSharingScenarioTests.test_S21_conflicting_evidence_from_different_sources",
+      "test_content_sharing_scenarios.ContentSharingScenarioTests.test_S22_current_configuration_older_exposure",
+      "test_content_sharing_scenarios.ContentSharingScenarioTests.test_S23_older_configuration_current_exposure",
+      "test_content_sharing_scenarios.ContentSharingScenarioTests.test_S24_evidence_with_unknown_timestamp",
+      "test_content_sharing_scenarios.ContentSharingScenarioTests.test_S17_undated_dag_evidence"]},
+    {"name": "Content sharing: exposure units, overlap and repeated ingestion", "tests": [
+      "test_content_sharing_scenarios.ExposureCountingTests.test_S19_overlapping_measurements_are_not_summed",
+      "test_content_sharing_scenarios.ExposureCountingTests.test_S20_repeated_ingestion_does_not_increase_counts",
+      "test_content_sharing_scenarios.ExposureCountingTests.test_S25_observations_from_different_periods",
+      "test_content_sharing_scenarios.ContentSharingScenarioTests.test_S18_zero_exposure_with_insufficient_completeness"]},
+    {"name": "Content sharing: scorecard render-only change", "tests": [
+      "test_content_sharing_scenarios.ScorecardRenderOnlyTests.test_S28_render_only_has_zero_semantic_change"]}
   ]
 }

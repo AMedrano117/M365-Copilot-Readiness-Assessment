@@ -764,23 +764,12 @@ def _build_verified_strengths(entra_client, purview_client, m365_client=None):
     """Create a short executive list from configured controls, never from licensing alone."""
     rows = []
 
-    sharepoint = _build_sharepoint_governance_summary(m365_client)
-    settings = sharepoint.get("settings", {})
-    if sharepoint.get("available"):
-        from .sharepoint_governance import setting_name
-        default_link = setting_name("DefaultSharingLinkType", settings.get("DefaultSharingLinkType"))
-        sharing = setting_name("SharingCapability", settings.get("SharingCapability"))
-        if default_link in {"direct", "specificpeople"} and sharing not in {"externaluserandguestsharing", "anonymousaccess"}:
-            rows.append({
-                "Area": "SharePoint sharing",
-                "Strength": "New sharing links default to named recipients and tenant-wide Anyone sharing is not enabled.",
-                "Evidence": f"Default link type: {settings.get('DefaultSharingLinkType')}; SharePoint sharing level: {settings.get('SharingCapability')}.",
-                "Benefit": "This reduces accidental broad access to content that can later ground an AI response.",
-                "Key": "sharepoint-sharing-restricted",
-                # Answers the tenant-wide sharing-defaults check (methodology 3.0).
-                "ControlId": "CONTENT.SHARING",
-                "EvidenceKey": "sharepoint_governance_detail",
-            })
+    # Answers the tenant-wide sharing-defaults check only when every requirement
+    # is met by a returned, unconflicted value; it carries its own provenance.
+    from .sharepoint_governance import sharing_strength
+    sharing = sharing_strength(_build_sharepoint_governance_summary(m365_client))
+    if sharing:
+        rows.append(sharing)
 
     if entra_client:
         ca_summary = getattr(entra_client, "ca_summary", {}) or {}
@@ -2562,7 +2551,12 @@ def _build_sharepoint_governance_sheet(m365_client):
             {
                 "RecommendationId": "", "Flagged By": "", "Detail Type": "Site inventory",
                 "Setting or report": "Sites assessed", "Value or status": governance.get("site_count", 0),
-                "Why it matters": f"{governance.get('anyone_site_count', 0)} site(s) permit Anyone sharing.",
+                # A site cannot be more permissive than the tenant setting.
+                "Why it matters": (f"{governance['effective_anyone_site_count']} site(s) can create Anyone links; "
+                                   if governance.get('effective_anyone_site_count') is not None else
+                                   "Whether sites can create Anyone links is not established without the tenant setting; ")
+                                  + f"{governance.get('configured_anyone_site_count', governance.get('anyone_site_count', 0))} site(s) are configured "
+                                    "for Anyone sharing. A site cannot be more permissive than the tenant.",
             },
             {
                 "RecommendationId": "", "Flagged By": "", "Detail Type": "SAM report inventory",

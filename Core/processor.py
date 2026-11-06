@@ -193,7 +193,9 @@ def process_and_print_all_information(m365_result, entra_info,
         from .sharepoint_governance import build_sharepoint_recommendations
         m365_recommendations = [row for row in m365_recommendations
                                 if not str(row.get('FindingKey') or '').startswith('sharepoint.')]
-        m365_recommendations.extend(build_sharepoint_recommendations(sharepoint_payload, evaluation_date=evaluation_date))
+        m365_recommendations.extend(build_sharepoint_recommendations(
+            sharepoint_payload, evaluation_date=evaluation_date,
+            sam_max_age_days=(collection_context or {}).get('assessment_settings', {}).get('sam_report_max_age_days')))
     m365_result = (m365_info, m365_recommendations)
     evidence_bundle = None
     from .portal_review import load_portal_review
@@ -309,7 +311,8 @@ def process_and_print_all_information(m365_result, entra_info,
     from .sharepoint_governance import summarize_sharepoint_governance
     from .sharepoint_governance_evidence import assess_sharepoint_governance, load_governance_evidence
     sharepoint_assessment = assess_sharepoint_governance(
-        summarize_sharepoint_governance(sharepoint_payload or {}, evaluation_date=evaluation_date),
+        summarize_sharepoint_governance(sharepoint_payload or {}, evaluation_date=evaluation_date,
+            sam_max_age_days=(collection_context or {}).get('assessment_settings', {}).get('sam_report_max_age_days')),
         data_exposure_info,
         load_governance_evidence(routed['sharepoint_governance'], evaluation_date=evaluation_date,
                                  expected_tenant_id=expected_tenant_id),
