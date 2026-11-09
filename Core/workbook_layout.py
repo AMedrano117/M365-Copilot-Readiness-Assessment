@@ -248,8 +248,9 @@ def _projection(row, record, devices, compliance=None):
         status = 'Change' if row.get('Disposition') == 'Action' else 'Review'
         if key in SHARING_SETTING_LABELS:
             current = _sharing_setting_value(key, current)
-            recommended, state = _sharing_check(key, current, record.get('anyone', True))
-            status = {'change': 'Change', 'review': 'Review', 'ok': 'Meets'}[state]
+            # A record without a resolved Anyone boundary stays unresolved, never Meets.
+            recommended, state = _sharing_check(key, current, record.get('anyone'))
+            status = {'change': 'Change', 'review': 'Review', 'ok': 'Meets', 'not_applicable': 'Not applicable'}[state]
         setting = SHARING_SETTING_LABELS.get(key) or key or _value(fields, 'displayName', 'Name', 'Setting', 'Policy') or issue
         if current is None:
             # A policy object has no single "value"; show its relevant retained
@@ -625,7 +626,8 @@ def split_workbook_layout(source_workbook, result, bundle, assessment_path, tech
         for record in records:
             native = next((native_fields[value] for value in record['evidence_ids'] if value in native_fields), record['fields'])
             values = {name: _value(native, name) for name in SHARING_SETTING_LABELS if _value(native, name) is not None}
-            anyone = any(_text(values.get(name)).lower() in {'2', 'externaluserandguestsharing'} for name in ('SharingCapability', 'OneDriveSharingCapability'))
+            from .sharepoint_governance import anyone_links_permitted
+            anyone = anyone_links_permitted(values)
             settings = [name for name in SHARING_SETTING_LABELS if name in values and name in relevant]
             if settings:
                 expanded.extend({**record, 'fields': {'setting': name, 'value': values[name]},

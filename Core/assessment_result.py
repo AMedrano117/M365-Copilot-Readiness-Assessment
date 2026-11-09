@@ -813,6 +813,17 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
         }, bundle, day, expected_tenant_id)
         records.append(row)
         observations.append(fact)
+    # Content sub-control strengths use the same qualifier, but stay outside the
+    # records: they are never control components and never change a conclusion.
+    content_strengths = []
+    for original in bundle.get("content_sharing_strengths") or []:
+        row, _ = _qualify_record({
+            **original, "Service": "M365", "Feature": original.get("Area", "SharePoint sharing"),
+            "Observation": original.get("Strength", ""), "Recommendation": "", "Status": "Success",
+            "Disposition": "Assurance", "EvidenceBasis": "Tenant evidence", "EvidenceAvailable": "Yes",
+            "FindingKey": original.get("Key", ""), "Priority": "Low", "DomainId": "content",
+        }, bundle, day, expected_tenant_id)
+        content_strengths.append(row)
     records, superseded = _deduplicate_records(records)
     for row in records:
         if row.get("FindingKey") != "conditional-access-mfa" or row.get("Disposition") != "Assurance":
@@ -1146,6 +1157,7 @@ def build_assessment_result(recommendations, evidence_bundle=None, *, evaluation
         "customer_findings": [row for domain in domains for row in domain["findings"]],
         "actions": actions, "domains": domains, "controls": controls, "control_results": control_results,
         "strengths": strengths, "historical_strengths": historical_strengths, "opportunities": opportunities,
+        "content_strengths": content_strengths,
         "coverage": coverage, "decision_coverage": [row for row in coverage if row["SecurityGate"]],
         "optional_coverage": optional_records, "counts": counts, "critical": critical, "high": high, "medium": medium,
         "blockers": blockers, "pilot_conditions": [], "readiness_conditions": readiness_conditions,

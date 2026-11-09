@@ -76,8 +76,13 @@ def _value(row, *keys):
 def build_configuration_groups(payload):
     """Build from retained selection and source envelopes, never worksheet coordinates."""
     from .customer_report import SHARING_SETTING_LABELS, _sharing_setting_value, _sharing_check
+    from .sharepoint_governance import anyone_links_permitted
     sources = {s['dataset_id']: s for s in payload.get('sources') or []}
     native = {r['record_id']: r for r in payload.get('evidence_records') or []}
+    # The retained tenant setting is the ceiling for every site; unknown when not retained.
+    tenant_raw = next((r.get('raw') for r in native.values() if isinstance(r.get('raw'), dict) and
+                       ((sources.get(r.get('dataset_id')) or {}).get('dataset') or r.get('dataset')) == 'sharepoint_tenant_settings'), None)
+    tenant_settings = (tenant_raw.get('settings') if isinstance((tenant_raw or {}).get('settings'), dict) else tenant_raw) or {}
     observations = []
     for finding in payload.get('findings') or []:
         key = finding.get('finding_key') or ''
@@ -110,8 +115,9 @@ def build_configuration_groups(payload):
                 verified = not site or (capture.get('settings_verified') is True or capture.get('single_site_query') is True or
                                        capture.get('settings_read_mode') == 'per_site_identity') and raw.get('SettingsReadStatus') != 'unavailable'
                 values = {name: _value(settings, name) for name in SHARING_SETTING_LABELS if _value(settings, name) is not None}
-                anyone = any(_sharing_setting_value(name, values[name]).startswith('Anyone links') for name in
-                             ('SharingCapability', 'OneDriveSharingCapability') if name in values)
+                # Effective Anyone boundary of this record's scope: True, False or None (not established).
+                anyone = (anyone_links_permitted(values, tenant_settings, personal='/personal/' in str(_value(raw, 'Url', 'siteUrl') or '').lower())
+                          if site else anyone_links_permitted(values))
                 for name in sorted(set(values) & relevant):
                     observed = _sharing_setting_value(name, values[name])
                     recommended, state = _sharing_check(name, observed, anyone)
@@ -135,7 +141,7 @@ def build_configuration_groups(payload):
                     observations.append(dict(finding_id=finding['finding_id'], configuration_key=name,
                         configuration=SHARING_SETTING_LABELS[name], observed=observed, raw_observed=deepcopy(values[name]),
                         recommended=recommended, assessment='Conflict' if detail.get('conflicts') or capture.get('conflicting') is True else 'Review' if not verified or collection != 'complete' else
-                        {'change': 'Change', 'review': 'Review', 'ok': 'Meets'}[state], object_type=obj_type,
+                        {'change': 'Change', 'review': 'Review', 'ok': 'Meets', 'not_applicable': 'Not applicable'}[state], object_type=obj_type,
                         object_id=str(object_id).casefold().rstrip('/') if object_id is not None else None,
                         object_name=_value(raw, 'Title', 'displayName'), locator=_value(raw, 'Url', 'siteUrl'), scope=scope,
                         environment=capture.get('environment') or capture.get('cloud') or 'not established',
@@ -194,7 +200,7 @@ def customer_rows(model, *, include=None, exclude=()):
         fallback = entry.pop('fallback_objects')
         rows.append(dict(entry, affected_objects=len(objects) or fallback, source_occurrences=entry.pop('occurrences'),
                          findings=len(findings)))
-    order = {'Change': 0, 'Review': 1, 'Conflict': 1, 'Meets': 2}
+    order = {'Change': 0, 'Review': 1, 'Conflict': 1, 'Meets': 2, 'Not applicable': 3}
     return sorted(rows, key=lambda row: (order.get(row['assessment'], 3), str(row['configuration']), str(row['provider'])))
 
 

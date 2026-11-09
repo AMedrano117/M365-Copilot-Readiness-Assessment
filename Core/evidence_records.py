@@ -687,6 +687,14 @@ def _sharing(sources):
                       'sharingDomainRestrictionMode': _value(row, 'SharingDomainRestrictionMode'),
                       'sharingAllowedDomains': _value(row, 'SharingAllowedDomainList'),
                       'sharingBlockedDomains': _value(row, 'SharingBlockedDomainList')}
+            if name == 'sharepoint_site_settings':
+                # Anyone-link settings of a site apply only where its effective
+                # boundary (tenant ceiling included) permits Anyone links. Site
+                # records only: tenant record identities are content hashes.
+                from .sharepoint_governance import anyone_applicability, anyone_links_permitted
+                personal = '/personal/' in _text(fields['siteUrl']).lower()
+                fields['anyoneLinkSettingsApplicability'] = anyone_applicability(
+                    anyone_links_permitted({'SharingCapability': mode}, tenant, personal=personal) if exact else None)
             output.append(_record(fields, refs, native_id=fields['siteId'] or fields['siteUrl'],
                                   derived={'effectiveSharingSetting': site_quality_note or ('The more restrictive of the site and tenant settings (and the OneDrive setting for personal sites); unknown when either is missing.'
                                                                                             if name == 'sharepoint_site_settings' else 'The returned tenant setting.'),
@@ -694,7 +702,8 @@ def _sharing(sources):
                                            'anyoneLinkExpiryDays': (expiry_basis or 'Neither applicable site nor tenant expiry was retained.') + ' This is a returned configuration value, not independently verified effective site behavior.',
                                            'effectiveDefaultLinkType': site_quality_note or 'Returned effective/default link setting for this source scope.',
                                            'effectiveExternalGuestsAllowed': site_quality_note or 'Configuration permits guest sharing subject to domain restrictions and more restrictive tenant settings.',
-                                           'effectiveAnyoneLinkExpiryDays': site_quality_note or 'Effective expiry requires verified site settings and a known tenant-override policy; ambiguous zero/default values remain unknown.'},
+                                           'effectiveAnyoneLinkExpiryDays': site_quality_note or 'Effective expiry requires verified site settings and a known tenant-override policy; ambiguous zero/default values remain unknown.',
+                                           'anyoneLinkSettingsApplicability': site_quality_note or 'Not applicable while the effective site boundary (the tenant setting is the ceiling) does not permit Anyone links; the configured values are preserved.'},
                                   qualifications=['Tenant and site configurations are separate scopes; a permissive site cannot override a more restrictive tenant setting. Anyone links and authenticated guest access are distinct.'] + ([site_quality_note] if site_quality_note else [])))
     return _finish(output, 'sharing_configuration', 'Retained SharePoint tenant, site and Graph sharing settings, preserving source conflicts and expiry scope.',
                    sources, ['sharepoint_tenant_settings', 'sharepoint_site_settings', 'sharepoint_graph_settings'],

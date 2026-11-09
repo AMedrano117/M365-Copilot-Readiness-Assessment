@@ -54,6 +54,19 @@
       "test_content_sharing_scenarios.ExposureCountingTests.test_S25_observations_from_different_periods",
       "test_content_sharing_scenarios.ContentSharingScenarioTests.test_S18_zero_exposure_with_insufficient_completeness"]},
     {"name": "Content sharing: scorecard render-only change", "tests": [
-      "test_content_sharing_scenarios.ScorecardRenderOnlyTests.test_S28_render_only_has_zero_semantic_change"]}
+      "test_content_sharing_scenarios.ScorecardRenderOnlyTests.test_S28_render_only_has_zero_semantic_change",
+      "test_content_sharing_conditional.SubControlStrengthTests.test_render_lists_strengths_with_provenance"]},
+    {"name": "Content sharing: Anyone-link settings inactive, applicable or unresolved", "tests": [
+      "test_content_sharing_conditional.AnyoneDependentApplicabilityTests.test_01_02_09_anyone_disabled_permissions_are_inactive_and_preserved",
+      "test_content_sharing_conditional.AnyoneDependentApplicabilityTests.test_04_05_anyone_enabled_edit_does_not_meet",
+      "test_content_sharing_conditional.AnyoneDependentApplicabilityTests.test_08_unknown_boundary_stays_unresolved",
+      "test_content_sharing_conditional.AnyoneDependentFindingTests.test_dormant_values_create_no_anyone_finding",
+      "test_content_sharing_conditional.SharingTablePresentationTests.test_dormant_value_is_not_labelled_meets",
+      "test_content_sharing_conditional.SiteBoundaryApplicabilityTests.test_narrower_site_boundary_makes_site_anyone_settings_inactive"]},
+    {"name": "Content sharing: sub-control strengths beside an unresolved control", "tests": [
+      "test_content_sharing_conditional.SubControlStrengthTests.test_11_restriction_is_a_strength_while_existing_exposure_stays_separate",
+      "test_content_sharing_conditional.SubControlStrengthTests.test_15_missing_or_conflicting_evidence_yields_no_strength",
+      "test_content_sharing_conditional.SubControlStrengthTests.test_16_corroborating_sources_give_one_strength",
+      "test_content_sharing_conditional.SubControlStrengthTests.test_17_aggregate_not_established_while_strengths_show"]}
   ]
 }
