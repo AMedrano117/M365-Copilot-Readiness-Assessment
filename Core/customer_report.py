@@ -404,17 +404,21 @@ SHARING_SETTING_LABELS = {
 }
 SHARING_FINDINGS = {'sharepoint.sharing.permissive_anonymous_defaults', 'sharepoint.sharing.anyone_enabled',
                     'sharepoint.sharing.organization_default'}
-SETTING_STATES = {'change': 'Change', 'review': 'Review', 'ok': 'Meets recommendation'}
+SETTING_STATES = {'change': 'Change', 'review': 'Review', 'ok': 'Meets recommendation',
+                  'not_applicable': 'Not applicable while Anyone links are off'}
 
 
 def _sharing_check(key, value, anyone):
     """Recommended value and state for one displayed setting.
 
-    Recommendations narrow who a new link reaches, which narrows what Copilot can
-    surface. They describe configuration only, never who has access today.
+    ``anyone`` is the effective Anyone-link boundary of the record's scope: True,
+    False, or None when it is not established
+    (sharepoint_governance.anyone_links_permitted). Recommendations narrow who a
+    new link reaches, which narrows what Copilot can surface. They describe
+    configuration only, never who has access today.
     """
     recommended, state = _sharing_recommendation(key, value, anyone)
-    if value == 'Not reported' or value.startswith('Unmapped value'):
+    if state != 'not_applicable' and (value == 'Not reported' or value.startswith('Unmapped value')):
         state = 'review'
     return recommended, state
 
@@ -428,25 +432,32 @@ def _sharing_recommendation(key, value, anyone):
         return 'Enabled', 'ok' if value == 'Enabled' else 'change'
     if key == 'LegacyAuthProtocolsEnabled':
         return 'Disabled', 'ok' if value == 'Disabled' else 'change'
-    if key == 'RequireAnonymousLinksExpireInDays':
-        if not anyone:
-            return '30 days or fewer if Anyone links are allowed', 'ok'
-        days = re.match(r'(\d+) days?$', value)
-        return '30 days or fewer', 'change' if not days else 'review' if int(days.group(1)) > 30 else 'ok'
-    if key in {'FileAnonymousLinkType', 'FolderAnonymousLinkType'}:
-        return 'View only', 'change' if anyone and value == 'View and edit' else 'ok'
+    from .sharepoint_governance import ANYONE_DEPENDENT_SETTINGS, anyone_applicability
+    if key in ANYONE_DEPENDENT_SETTINGS:
+        expiry = key == 'RequireAnonymousLinksExpireInDays'
+        recommended = '30 days or fewer' if expiry else 'View only'
+        applicability = anyone_applicability(anyone)
+        # An inactive value neither meets nor fails; an unknown boundary stays unresolved.
+        if applicability != 'applicable':
+            return (recommended + ' when Anyone links are permitted',
+                    'not_applicable' if applicability == 'not_applicable' else 'review')
+        if expiry:
+            days = re.match(r'(\d+) days?$', value)
+            return recommended, 'change' if not days else 'review' if int(days.group(1)) > 30 else 'ok'
+        return recommended, 'ok' if value == 'View only' else 'change' if value == 'View and edit' else 'review'
     return 'See Microsoft guidance', 'review'
 
 
 def _sharing_review(bundle):
     settings = (bundle.get('sharepoint_governance') or {}).get('settings') or {}
     values = {key: _sharing_setting_value(key, settings[key]) for key in SHARING_SETTING_LABELS if key in settings}
-    anyone = any(values.get(key, '').startswith('Anyone links') for key in ('SharingCapability', 'OneDriveSharingCapability'))
+    from .sharepoint_governance import anyone_links_permitted
+    anyone = anyone_links_permitted(settings)
     rows = []
     for key, value in values.items():
         recommended, state = _sharing_check(key, value, anyone)
         rows.append({'label': SHARING_SETTING_LABELS[key], 'value': value, 'recommended': recommended, 'state': state})
-    order = {'change': 0, 'review': 1, 'ok': 2}
+    order = {'change': 0, 'review': 1, 'ok': 2, 'not_applicable': 3}
     return sorted(rows, key=lambda row: order[row['state']])
 
 
@@ -464,10 +475,10 @@ def _sharing_changes(bundle):
     grouped = (bundle.get('assessment_result') or {}).get('configuration_groups') or (bundle.get('finding_evidence') or {}).get('configuration_groups')
     if grouped and grouped.get('groups'):
         from .configuration_groups import IDENTITY_SETTINGS, summary_html
-        rows = [g for g in grouped['groups'] if g['assessment'] != 'Meets']
+        rows = [g for g in grouped['groups'] if g['assessment'] not in {'Meets', 'Not applicable'}]
         return summary_html({'groups':rows, 'members':grouped.get('members') or []}, customer=True, exclude=IDENTITY_SETTINGS,
                             title='Settings to review')
-    rows = [row for row in _sharing_review(bundle) if row['state'] != 'ok']
+    rows = [row for row in _sharing_review(bundle) if row['state'] not in {'ok', 'not_applicable'}]
     if not rows:
         return ''
     changes = sum(row['state'] == 'change' for row in rows)
@@ -487,7 +498,10 @@ def _settings(bundle):
     changes = sum(row['state'] == 'change' for row in rows)
     summary = (f'<p class="settings-summary" data-state="change"><strong>{changes} setting{"s" if changes != 1 else ""} '
                f'should be changed</strong> to reduce who new sharing links reach.</p>' if changes else
-               '<p class="settings-summary" data-state="ok"><strong>Collected settings meet the recommended values.</strong></p>')
+               '<p class="settings-summary" data-state="ok"><strong>Collected settings meet the recommended values.</strong></p>'
+               if all(row['state'] == 'ok' for row in rows) else
+               '<p class="settings-summary" data-state="review"><strong>No collected setting needs a change.</strong> '
+               'Settings marked Review or Not applicable are explained in the table.</p>')
     return ('<h3>Tenant sharing settings</h3>' + summary + _sharing_table(rows)
             + '<p class="qualification">Configuration describes permitted behavior; it does not establish who currently has access to each file.</p>')
 

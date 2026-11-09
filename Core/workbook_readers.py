@@ -20,7 +20,8 @@ STATES = {'available': 'Available', 'collected': 'Available', 'reviewed': 'Avail
     'partial': 'Incomplete', 'truncated': 'Incomplete', 'not_established': 'Not established',
     'supported': 'Supported', 'not_applicable': 'Not applicable', 'not_assessed': 'Not assessed',
     'unknown': 'Unknown', 'fail': 'Fail', 'pass': 'Pass', 'conflict': 'Conflicting evidence', 'stale': 'Stale'}
-ASSESSMENTS = {'Meets': 'Meets recommendation', 'Change': 'Change recommended', 'Review': 'Needs validation'}
+ASSESSMENTS = {'Meets': 'Meets recommendation', 'Change': 'Change recommended', 'Review': 'Needs validation',
+               'Not applicable': 'Not applicable while Anyone links are off'}
 SOURCE_LABELS = {'licenses': 'License inventory', 'sensitivity_labels': 'Sensitivity label definitions',
     'label_policies': 'Label publication policies', 'audit_config': 'Audit configuration',
     'copilot_audit': 'Copilot interaction audit records', 'context': 'Assessment scope and owner review',

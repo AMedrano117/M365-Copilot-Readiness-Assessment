@@ -549,6 +549,13 @@ sharing-defaults check open.
   results but do not change the control.
 - Current policy and existing exposure are separate conclusions. A restrictive policy does not
   hide exposure evidence, and exposure evidence does not make a compliant policy fail.
+- Anyone-link expiry and file and folder permission apply only where the effective boundary
+  permits Anyone links. Under a narrower boundary, the configured value is reported as not
+  applicable. It neither meets nor fails, and it creates no remediation. When the boundary is not
+  established, the setting stays unresolved.
+- Individual protective configurations that meet their rule are listed as sub-control strengths in
+  the Content scorecard. They do not establish `CONTENT.SHARING`, which can remain Not established
+  beside them.
 
 See [Content and sharing: audit and validation](CONTENT_SHARING_VALIDATION.md).
 

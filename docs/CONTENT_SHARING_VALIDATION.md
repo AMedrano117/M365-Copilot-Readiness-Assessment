@@ -121,6 +121,67 @@ are established and exposure evidence exists, the summary states that both are r
 neither changes the other. The scorecard is computed at render time and never changes a
 conclusion.
 
+## Conditional Anyone-link settings and sub-control strengths
+
+**Root cause.** `evaluate_tenant_sharing` already returned `not_applicable` for Anyone-link
+settings when Anyone links were off. The customer settings table, the grouped configuration rows
+and the workbook used a separate presentation rule, `customer_report._sharing_recommendation`.
+That rule returned `ok` ("Meets recommendation") for Anyone expiry and file and folder permission
+whenever Anyone links were not detected. That included a boundary that was not returned at all. A
+stored View and edit value under a disabled boundary was therefore shown as meeting a View-only
+recommendation.
+
+**Applicability.** `RequireAnonymousLinksExpireInDays`, `FileAnonymousLinkType` and
+`FolderAnonymousLinkType` (`ANYONE_DEPENDENT_SETTINGS`) apply only where the effective boundary
+permits Anyone links. `anyone_links_permitted` resolves that boundary as True, False or not
+established. At site scope the tenant setting is the ceiling, plus the OneDrive setting for a
+personal site. `anyone_applicability` maps the boundary to `applicable`, `not_applicable` or
+`not_established`.
+
+| Effective boundary | Setting result | Customer state |
+| --- | --- | --- |
+| Anyone not permitted | `not_applicable`; the configured value is kept | Not applicable while Anyone links are off |
+| Anyone permitted | Evaluated against the methodology rule | Meets, Change or Review |
+| Not established or conflicting | `not_established` | Review |
+
+An inactive value is never counted as meeting or failing a rule. It never produces a finding,
+remediation or strength, and it is evaluated normally if Anyone links become permitted. Site
+evidence records carry `anyoneLinkSettingsApplicability`. It is `not_established` when the site
+read was not verified.
+
+**Sub-control strengths.** `sharing_sub_strengths` derives one strength for each protection whose
+returned, unconflicted value meets its rule. Each strength carries the observed value, expected
+rule, scope, source, corroborating sources and methodology rule. Strengths are qualified with the
+same rule as other findings (`_qualify_record`). They are kept in `content_strengths`, outside the
+records, so they are never control components and never change a conclusion. The scorecard shows
+only current, supported strengths. When `CONTENT.SHARING` is Observed, only hardening strengths
+are added, because the control already states the rest.
+
+| Key | Established when |
+| --- | --- |
+| `content.sharing.anyone_creation_restricted` | SharePoint and OneDrive external sharing meet the rule (no Anyone links) |
+| `content.sharing.sharepoint_guest_boundary` / `onedrive_guest_boundary` | Only that workload's setting meets the rule |
+| `content.sharing.default_link_specific_people` | The effective default link is Specific people |
+| `content.sharing.anyone_link_expiry_required` / `anyone_links_view_only` | Anyone links are permitted and the setting meets the rule |
+| `content.sharing.guest_expiration_required` / `guest_resharing_prevented` | The hardening setting is enabled (hardening only) |
+
+When SharePoint administration and Graph return the same value, a single strength is produced and
+both sources are listed. A strength describes configuration only. It never states that existing
+links are absent or that access is effectively governed.
+
+**Validation.** The fail-first tests are in `tests/test_content_sharing_conditional.py`. Before the
+correction, 31 of 32 failed. The one that passed is an invariant that already held: a dormant
+value creates no finding. One existing expectation in
+`tests/test_customer_sharing_settings.py` asserted that a moot expiry was `ok`, which is the
+defect, so it now expects `not_applicable`. The scenario layer passed: 16 groups and 50 tests.
+Render-only from the retained Cavehouse snapshot was an ExactMatch.
+
+The offline Cavehouse rebuild showed presentation-only differences: 0 semantic changes, 0
+display-ID conflicts and no findings added or removed. Control results and the decision are
+unchanged. Cavehouse permits Anyone links, so its Anyone-link settings are applicable, and Graph
+does not return their values, so they stay unresolved. The scorecard adds one supported hardening
+strength, that guests cannot reshare.
+
 ## Validation
 
 | Layer | Result |
@@ -162,3 +223,10 @@ assurance because exports are not complete; undated DAG reports are not recent.
   its "Recent" labels depend on the build date.
 - Graph does not return OneDrive sharing, default link, Anyone expiry or link permission; these
   remain unverified on the Graph-only path.
+- There is no strength for a site with a more restrictive effective boundary than the tenant. It
+  needs verified per-site reads and a population statement.
+- When Anyone links are permitted, the settings table shows an Anyone expiry of 31 to 730 days as
+  Review. The setting evaluator records `does_not_meet`. Neither is shown as Meets, and the
+  difference is unchanged in this pass.
+- The workbook evidence projection resolves the boundary from each record's own values. Site
+  records do not carry the tenant-level Anyone-link settings, so this has no effect today.

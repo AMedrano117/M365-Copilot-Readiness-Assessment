@@ -69,7 +69,8 @@ The groups cover:
 - a presentation-only render change;
 - Content & Sharing: current policy versus existing exposure, an established control with
   provenance, effective and inherited configuration, conflicting and stale evidence, exposure
-  units and repeated ingestion, and the scorecard render
+  units and repeated ingestion, the scorecard render, Anyone-link settings that are inactive,
+  applicable or unresolved, and sub-control strengths beside an unresolved control
   (see [Content and sharing validation](CONTENT_SHARING_VALIDATION.md)).
 
 ## 3. Offline package validation

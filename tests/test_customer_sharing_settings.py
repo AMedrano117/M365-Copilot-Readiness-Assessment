@@ -93,7 +93,8 @@ class CustomerSharingSettingsTests(unittest.TestCase):
     def test_organization_default_needs_review_and_expiry_is_moot_without_anyone_links(self):
         states = {row['label']: row['state'] for row in _sharing_review({'sharepoint_governance': {'settings': {
             'SharingCapability': 1, 'DefaultSharingLinkType': 2, 'RequireAnonymousLinksExpireInDays': 0}}})}
-        self.assertEqual(states, {'SharePoint external sharing': 'ok', 'Default sharing link': 'review', 'Anyone link expiry': 'ok'})
+        # A moot (inactive) value is not applicable; it is never shown as meeting the recommendation.
+        self.assertEqual(states, {'SharePoint external sharing': 'ok', 'Default sharing link': 'review', 'Anyone link expiry': 'not_applicable'})
         self.assertEqual(_sharing_changes({'sharepoint_governance': {'settings': {'SharingCapability': 1, 'DefaultSharingLinkType': 1}}}), '')
 
     def test_missing_and_unknown_values_are_explicit_without_crashing_or_inventing_labels(self):

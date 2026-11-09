@@ -555,6 +555,8 @@ def build_evidence_bundle(
         "purview_label_summary": _build_purview_label_summary(purview_client),
         "purview_collection_status": getattr(purview_client, "collection_status", {}) if purview_client else {},
         "verified_strengths": _build_verified_strengths(entra_client, purview_client, m365_client),
+        # Sub-control configuration strengths; qualified separately and never a control component.
+        "content_sharing_strengths": _build_content_sharing_strengths(m365_client),
         "sharepoint_governance": _build_sharepoint_governance_summary(m365_client),
         "data_exposure": data_exposure_info or {},
     }
@@ -758,6 +760,11 @@ def _build_purview_policy_summary(purview_client):
         "rule_rows": rule_rows,
         "source": "Microsoft Purview compliance PowerShell",
     }
+
+
+def _build_content_sharing_strengths(m365_client):
+    from .sharepoint_governance import sharing_sub_strengths
+    return sharing_sub_strengths(_build_sharepoint_governance_summary(m365_client)) if m365_client else []
 
 
 def _build_verified_strengths(entra_client, purview_client, m365_client=None):

@@ -10,7 +10,8 @@ CONTROLS = ('CONTENT.SHARING', 'CONTENT.PERMISSIONS', 'CONTENT.OWNERSHIP', 'DATA
 EXPOSURE_KEYS = frozenset({'data_exposure.anonymous_links', 'data_exposure.broad_internal_access', 'data_exposure.external_exposure',
                            'data_exposure.potentially_overshared', 'data_exposure.unlabeled_sensitive'})
 SECTIONS = (
-    ('working', "What's working", 'Controls that current, scoped evidence shows meet the methodology rule.'),
+    ('working', "What's working", 'Controls and individual protective configurations that current, scoped evidence shows meet '
+                                  'the methodology rule. A configuration listed here does not by itself establish its control.'),
     ('needs_improvement', 'Needs improvement', 'Configuration or controls that the evidence shows do not meet the methodology baseline.'),
     ('exposure_to_review', 'Exposure to review', 'Existing broad, internal or external access that owners should validate; '
                                                  'it is not automatically inappropriate.'),
@@ -82,6 +83,23 @@ def build_content_scorecard(result):
             card['not_established'].append({'control_id': identifier, 'title': control.get('title'),
                                             'questions': list(dict.fromkeys(item for item in questions if item))})
 
+    # Sub-control strengths: current, supported configuration only, one per
+    # semantic protection. An Observed CONTENT.SHARING already states the
+    # sub-controls it requires, so only hardening strengths are added beside it.
+    sharing_observed = any(item['control_id'] == 'CONTENT.SHARING' for item in card['working'])
+    shown = set()
+    for row in result.get('content_strengths') or []:
+        key = row.get('FindingKey') or ''
+        if (row.get('EvidenceStatus') != 'supported' or key in shown
+                or (sharing_observed and row.get('Requirement') == 'CONTENT.SHARING')):
+            continue
+        shown.add(key)
+        reference = {'control_id': row.get('SubControlOf') or 'CONTENT.SHARING', 'title': row.get('Observation'),
+                     'status': 'Configuration meets the rule', 'evidence_ids': [row['EvidenceId']] if row.get('EvidenceId') else []}
+        card['working'].append({'strength_key': key, 'title': row.get('Observation'), 'requirement': row.get('Requirement'),
+                                'provenance': dict(_provenance(reference, [row], []),
+                                                   corroborating_sources=list(row.get('CorroboratingSources') or []))})
+
     for row in actions:
         key = row.get('FindingKey') or ''
         if row.get('ActionType') == 'Remediation':
@@ -107,7 +125,7 @@ def build_content_scorecard(result):
     counts = Counter(control.get('status') for control in controls)
     control_counts = {'Established': counts.get('Observed', 0), 'Action required': counts.get('Action required', 0),
                       'Not established': counts.get('Not established', 0)}
-    sharing_established = any(item['control_id'] == 'CONTENT.SHARING' for item in card['working'])
+    sharing_established = sharing_observed or 'content.sharing.anyone_creation_restricted' in shown
     if sharing_established and card['exposure_to_review']:
         summary = ('Current sharing policy restricts how new links are created, while retained exposure evidence identifies existing '
                    'access that owners should validate. Both are reported; neither changes the other.')
