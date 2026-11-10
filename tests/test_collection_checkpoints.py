@@ -197,7 +197,7 @@ class CollectionCheckpointTests(unittest.IsolatedAsyncioTestCase):
         saved = load_collection(checkpoint.path)
         packaged = Path(saved['resolved_inputs']['sam_report'][0])
         self.assertEqual(packaged.read_bytes(), export.read_bytes())
-        self.assertIn('Collected/1/', saved['service_results']['m365_result'][0]['_client'].sharepoint_governance['exported_files'][0]['path'])
+        self.assertIn('Collected/SharePoint Advanced Management/', saved['service_results']['m365_result'][0]['_client'].sharepoint_governance['exported_files'][0]['path'])
         self.assertEqual(len(list(Path('Reports/Synthetic tenant').glob('*/collection.json'))), 1)
 
 

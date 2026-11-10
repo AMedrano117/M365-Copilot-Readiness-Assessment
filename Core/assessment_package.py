@@ -23,6 +23,23 @@ INPUT_KEYS = {
     'provider_evidence', 'baseline', 'prior_report', 'purview_cache', 'portal_review', 'ai_baseline_export',
 }
 LIST_INPUTS = {'sam_report', 'dspm_report', 'reports_dir', 'ai_baseline_export'}
+# One descriptive folder per evidence area. Older packages keep the numbered
+# paths their manifests record; only new copies use these names.
+INPUT_FOLDERS = {
+    'sam_report': 'SharePoint Advanced Management',
+    'dspm_report': 'Purview DSPM',
+    'reports_dir': 'Report folders',
+    'copilot_readiness_export': 'Copilot readiness',
+    'copilot_dashboard_export': 'Copilot Dashboard',
+    'power_platform_inventory': 'Power Platform',
+    'assessment_profile': 'Assessment profile',
+    'provider_evidence': 'Provider evidence',
+    'baseline': 'Baseline',
+    'prior_report': 'Prior report',
+    'purview_cache': 'Purview cache',
+    'portal_review': 'Portal review',
+    'ai_baseline_export': 'AI baseline',
+}
 DATA_SUFFIXES = {'.csv', '.tsv', '.xlsx', '.zip', '.json'}
 SETTING_KEYS = {'report_format', 'data_exposure_enabled', 'preview_collectors', 'permission_profile',
                 'include_user_usage_detail', 'provider_evidence_max_age_days',
@@ -156,8 +173,19 @@ def confined_path(root, reference):
     return resolved
 
 
-def package_inputs(folder, supplemental_inputs):
-    """Copy originals, preserve basenames, and record hashes and skipped inputs."""
+def _unused_reference(folder, reference):
+    """Keep the original name; a later file with the same name receives ' (2)', ' (3)'."""
+    reference = Path(reference)
+    number = 1
+    candidate = reference
+    while (Path(folder) / candidate).exists():
+        number += 1
+        candidate = reference.with_name(f'{reference.stem} ({number}){reference.suffix}')
+    return candidate.as_posix()
+
+
+def package_inputs(folder, supplemental_inputs, *, input_root='inputs'):
+    """Copy originals into one folder per evidence area, preserve basenames, and record hashes and skipped inputs."""
     from .repository_provenance import require_publication
     require_publication()
     from .publication_io import validate_container
@@ -180,10 +208,10 @@ def package_inputs(folder, supplemental_inputs):
             if identity in copied:
                 reference = copied[identity]
             else:
-                reference = (Path('inputs') / str(len(copied) + 1) / source.name).as_posix()
-                target = folder / reference
                 if not source.exists():
                     raise ValueError(f'Cannot package missing {role} input: {source.name}')
+                reference = _unused_reference(folder, Path(input_root) / INPUT_FOLDERS[role] / source.name)
+                target = folder / reference
                 visual_assets = []
                 if role == 'portal_review':
                     from .portal_review import load_portal_review

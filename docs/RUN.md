@@ -317,9 +317,10 @@ A default live assessment keeps its collection, original inputs and reports toge
 ```text
 Reports/<customer>/<date>/
   collection.json          saved service evidence and versioned manifest/settings
-  inputs/                  original reports and supplemental inputs, grouped by source
+  inputs/<area>/           original reports and supplemental inputs, one folder per area
+  Collected/<area>/        reports downloaded during the live run, one folder per area
   rebuild.json             latest successful offline build's inputs/settings
-  Rebuilds/<number>/        retained build recipes and subsequently added input files
+  Rebuilds/<number>/        retained build recipes; added files go in inputs/<area>/
   Deliverables/            generated reports; rebuild filenames receive numbered suffixes
   operator-log.jsonl        build receipts and output locations
 ```

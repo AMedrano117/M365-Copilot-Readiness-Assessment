@@ -586,6 +586,8 @@ def _scan_reports(paths, source_kind, evaluation_date=None, max_age_days=None, *
                     # snapshots remain the source for exposure counts.
                     link_type = sharing_link_type(source_file, metadata.get('entity'))
                     count = _number(_value(record, "Links created"))
+                    # Per-report total for presentation; each row is a different site.
+                    block['links_created'] = block.get('links_created', 0) + max(0, count)
                     result['observations'].append({
                         'metric_id': 'sam.links_created.' + _normalized_key(link_type).replace(' ', '_'),
                         'label': link_type + ' created in the report period', 'domain_id': 'content',

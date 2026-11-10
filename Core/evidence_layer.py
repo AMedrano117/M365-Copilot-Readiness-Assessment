@@ -971,11 +971,16 @@ def _build_data_exposure_sheet(data_exposure_info):
             "Records Read": source.get("records_read", 0),
             "Max Age (Days)": source.get("max_age_days", ""),
         })
+        from .sam_report_descriptions import describe_report
         for report in source.get("reports", []) or []:
+            described = describe_report(report)
             rows.append({
                 "RecommendationId": "", "Flagged By": "", "Detail Type": "Source Report",
                 "Source": source_name, "Source File": report.get("source_file", ""),
                 "Source Sheet": report.get("source_sheet", ""),
+                "Report Name": described["name"], "Report Kind": described["kind"],
+                "What It Shows": described["shows"], "Result": described["result"],
+                "Used In Assessment": described["used"],
                 "Report Type": report.get("report_type", ""),
                 "Workload": report.get("workload", ""),
                 "Tenant ID": report.get("tenant_id", ""),
@@ -1009,6 +1014,7 @@ def _build_data_exposure_sheet(data_exposure_info):
     details = [
         "Only explicit fields from Microsoft Purview DSPM and SharePoint Advanced Management exports are treated as exposure evidence; usage volume alone is not a risk signal.",
         "Source Summary rows record overall freshness and volume. Source Report rows retain each file's report date, selection status and coverage. Risk Evidence rows retain the date and signal from their source export.",
+        "Report Kind separates snapshot reports, which show permissions and links as of the report date and supply the exposure counts, from activity reports, which list sites where new sharing links were created in the 28 days before the report date and do not count links that already existed.",
         "Each named signal has its own Count column. Signal Count combines different measures and must not be used to reproduce a specific finding. Overlapping snapshots use the maximum selected measurement for each location and signal; distinct source detail rows are not automatically additive.",
         "Item, recipient, permission and link identifiers are preserved when supplied. Location-level count reports do not contain the individual links or permissions; investigate the named location or obtain the corresponding detailed export. Source Record is a one-based parsed-record ordinal within the source file/archive, not an Excel row number.",
     ]
