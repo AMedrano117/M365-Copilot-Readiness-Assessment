@@ -129,6 +129,13 @@ capture of those same fields.
 
 Report recognition uses column headers, not filenames. Keep the original exports and headers. Explicit `--sam-report PATH` and `--dspm-report PATH` options remain available and can be repeated. SAM/DSPM readers support CSV, TSV, JSON, XLSX and supported ZIP contents; automatic `--reports-dir` discovery scans CSV, TSV, XLSX and ZIP. Copilot readiness requires CSV. Power Platform inventory and Copilot Dashboard exports use their separate existing switches.
 
+The HTML Content section (**SharePoint reports used**) and the Data Exposure workbook sheet name each imported SharePoint report and mark it as one of these:
+
+- **Snapshot reports**, such as site permissions, show permissions and sharing links as of the report date. Exposure counts come from them.
+- **Activity reports**, such as Anyone, People in your organization and Specific people links shared externally, list the sites where new links were created in the 28 days before the report date. They do not count links that already existed. An activity report with no sites means only that no new links of that type were created in that period.
+
+Sharing-link activity uses one header for all three link types. The collector's report binding names the type; otherwise Microsoft's original download name does. A renamed file without that binding is shown as "link type not identified".
+
 ### SharePoint governance evidence import
 
 SharePoint Advanced Management is optional. Content Management Assessment results have no

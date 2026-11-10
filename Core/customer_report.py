@@ -336,6 +336,25 @@ def _lifecycle(bundle):
       {table(rows, [('Measure', 'label'), ('Sites', 'value')])}</section>'''
 
 
+SHAREPOINT_REPORT_LIMIT = 12
+
+
+def _sharepoint_reports(bundle):
+    """Name each imported SharePoint/Purview report and say whether it is a snapshot or activity report."""
+    from .sam_report_descriptions import EXPLANATION, describe_reports
+    rows = describe_reports(bundle.get('data_exposure'))
+    if not rows:
+        return ''
+    remainder = len(rows) - SHAREPOINT_REPORT_LIMIT
+    more = (f'<p class="muted">{remainder} more report{"" if remainder == 1 else "s"} '
+            'are listed in the technical workbook.</p>') if remainder > 0 else ''
+    return ('<section id="sharepoint-report-sources"><h3>SharePoint reports used</h3><p>' + prose(EXPLANATION) + '</p>'
+            + table(rows[:SHAREPOINT_REPORT_LIMIT], [('Report', 'name'), ('Type', 'kind'), ('What it shows', 'shows'),
+                                                     ('Report date', 'date'), ('Result', 'result'),
+                                                     ('Used in this assessment', 'used')], mobile_labels=True)
+            + more + '</section>')
+
+
 def _sharing_setting_value(key, value):
     """Translate by property type; bool keys must never consume enum values 0/1.
 
@@ -1144,7 +1163,7 @@ def render_customer_report(result, bundle, tenant_name, workbook_path=None, summ
             summary = result['device_compliance']['summary']
             extra = '<h3>Device compliance at a glance</h3><ul class="device-summary">' + ''.join('<li>' + prose(line) + '</li>' for line in summary['lines']) + '</ul>'
         if domain['id'] == 'content':
-            extra = _settings(bundle) + _lifecycle(bundle) + _governance_outcomes(result, table)
+            extra = _settings(bundle) + _sharepoint_reports(bundle) + _lifecycle(bundle) + _governance_outcomes(result, table)
         if domain['id'] in {'data_protection','classification'}:
             extra = _purview_policy_table(bundle, technical_url or workbook_url)
         if domain['id'] in {'licensing','scope'}:

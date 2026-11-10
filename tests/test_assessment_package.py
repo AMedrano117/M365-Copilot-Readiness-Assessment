@@ -64,7 +64,7 @@ class AssessmentPackageTests(unittest.TestCase):
         self.assertFalse((root / 'output').exists())
         payload = load_collection(collection)
         self.assertEqual(payload['package']['directory'], '.')
-        self.assertEqual(payload['package']['files'][0]['path'], 'inputs/1/source.csv')
+        self.assertEqual(payload['package']['files'][0]['path'], 'inputs/SharePoint Advanced Management/source.csv')
         self.assertEqual(payload['package']['files'][0]['source_file'], 'source.csv')
         self.assertEqual(Path(payload['package_directory']), collection.parent)
         moved = root / 'approved customer storage'

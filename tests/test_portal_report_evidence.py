@@ -163,7 +163,8 @@ class PortalReportEvidenceTests(unittest.TestCase):
         self.assertIn("Imported report dates", html)
         self.assertNotIn("older-sites.csv", html)
         self.assertIn("2026-09-12", html)
-        self.assertIn("superseded", html)
+        # The excluded report stays visible, in plain language rather than its status code.
+        self.assertIn("Not used: a newer report of the same sites replaces it", html)
 
     def test_offline_provenance_follows_decision_and_preserves_original_collection(self):
         bundle = self.bundle(self.readiness())

@@ -188,10 +188,10 @@ def render_technical_appendix(result, bundle, workbook_url, technical_url, model
         metadata += table(historical[:3], [('Historical input', 'source_type'), ('Original date', 'reported_at')])
         if len(historical) > 3:
             metadata += '<p>Additional historical input dates are retained in the workbook.</p>'
-    reports = [row for source in (bundle.get('data_exposure') or {}).get('sources', {}).values()
-               for row in source.get('reports', [])]
+    from .sam_report_descriptions import describe_reports
+    reports = describe_reports(bundle.get('data_exposure'))
     if reports:
-        metadata += '<h3>Imported report dates</h3>' + table(reports[:5], [('Report type', 'report_type'), ('Original date', 'report_date'), ('Selection', 'status')])
+        metadata += '<h3>Imported report dates</h3>' + table(reports[:5], [('Report', 'name'), ('Type', 'kind'), ('Original date', 'date'), ('Used', 'used')])
         metadata += '<p>Complete source filenames, dates and selection records are retained in the workbook.</p>'
     return ('<details class="appendix-panel" id="engineer-appendix"><summary>Technical appendix and evidence workbook</summary>'
         '<p>Review up to three named examples per finding. Use the technical workbook for all devices, users, policies and source records.</p>'

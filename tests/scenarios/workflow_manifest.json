@@ -67,6 +67,16 @@
       "test_content_sharing_conditional.SubControlStrengthTests.test_11_restriction_is_a_strength_while_existing_exposure_stays_separate",
       "test_content_sharing_conditional.SubControlStrengthTests.test_15_missing_or_conflicting_evidence_yields_no_strength",
       "test_content_sharing_conditional.SubControlStrengthTests.test_16_corroborating_sources_give_one_strength",
-      "test_content_sharing_conditional.SubControlStrengthTests.test_17_aggregate_not_established_while_strengths_show"]}
+      "test_content_sharing_conditional.SubControlStrengthTests.test_17_aggregate_not_established_while_strengths_show"]},
+    {"name": "SharePoint reports: snapshot and activity reports named in the deliverables", "tests": [
+      "test_sam_report_clarity.ScannerTotalsTests.test_activity_does_not_change_exposure_counts_or_findings",
+      "test_sam_report_clarity.DeliverableTests.test_content_section_explains_snapshot_versus_activity",
+      "test_sam_report_clarity.DeliverableTests.test_no_internal_codes_or_raw_timestamps_reach_the_html",
+      "test_sam_report_clarity.DeliverableTests.test_workbook_source_rows_carry_plain_descriptions_and_keep_codes"]},
+    {"name": "Assessment package: one named input folder per evidence area", "tests": [
+      "test_input_folders.PackageInputFolderTests.test_all_sam_reports_share_one_named_folder_with_original_names",
+      "test_input_folders.PackageInputFolderTests.test_same_name_from_different_reports_keeps_both_files",
+      "test_input_folders.PackageInputFolderTests.test_older_numbered_layout_still_validates",
+      "test_input_folders.CollectedFolderTests.test_downloaded_sam_reports_are_consolidated_in_one_named_folder"]}
   ]
 }
